@@ -1,0 +1,196 @@
+{
+  "metadata": {
+    "id": "text_to_image_v0",
+    "name": "Text to Image",
+    "version": "0.1.0",
+    "description": "Milestone 1 text-to-image workflow package.",
+    "author": "Local AI Workflow Desktop App"
+  },
+  "engine": "comfyui",
+  "required_models": [
+    {
+      "folder": "checkpoints",
+      "filename": "v1-5-pruned-emaonly-fp16.safetensors",
+      "source_url": null,
+      "checksum": null
+    }
+  ],
+  "comfyui_graph": {
+    "3": {
+      "class_type": "KSampler",
+      "inputs": {
+        "cfg": 8,
+        "denoise": 1,
+        "latent_image": ["5", 0],
+        "model": ["4", 0],
+        "negative": ["7", 0],
+        "positive": ["6", 0],
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 5,
+        "steps": 20
+      }
+    },
+    "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "v1-5-pruned-emaonly-fp16.safetensors"
+      }
+    },
+    "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "batch_size": 1,
+        "height": 512,
+        "width": 512
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": ["4", 1],
+        "text": "a cinematic photo of a mountain lake"
+      }
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": ["4", 1],
+        "text": "low quality, blurry"
+      }
+    },
+    "8": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["3", 0],
+        "vae": ["4", 2]
+      }
+    },
+    "9": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "local_ai_workflow",
+        "images": ["8", 0]
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "prompt",
+      "label": "Prompt",
+      "control": "textarea",
+      "binding": {
+        "node_id": "6",
+        "input_name": "text"
+      },
+      "default": "a cinematic photo of a mountain lake",
+      "validation": {
+        "required": true
+      }
+    },
+    {
+      "id": "seed",
+      "label": "Seed",
+      "control": "number",
+      "binding": {
+        "node_id": "3",
+        "input_name": "seed"
+      },
+      "default": 5,
+      "validation": {
+        "min": 0
+      }
+    },
+    {
+      "id": "width",
+      "label": "Width",
+      "control": "slider",
+      "binding": {
+        "node_id": "5",
+        "input_name": "width"
+      },
+      "default": 512,
+      "validation": {
+        "min": 256,
+        "max": 1024,
+        "step": 64
+      }
+    },
+    {
+      "id": "height",
+      "label": "Height",
+      "control": "slider",
+      "binding": {
+        "node_id": "5",
+        "input_name": "height"
+      },
+      "default": 512,
+      "validation": {
+        "min": 256,
+        "max": 1024,
+        "step": 64
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "label": "Generated Image",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "dashboard": {
+    "version": "0.1.0",
+    "sections": [
+      {
+        "id": "generation",
+        "title": "Generation",
+        "controls": [
+          {
+            "id": "prompt",
+            "type": "textarea",
+            "label": "Prompt",
+            "input_id": "prompt"
+          },
+          {
+            "id": "seed",
+            "type": "number",
+            "label": "Seed",
+            "input_id": "seed"
+          },
+          {
+            "id": "size",
+            "type": "group",
+            "label": "Size"
+          },
+          {
+            "id": "width",
+            "type": "slider",
+            "label": "Width",
+            "input_id": "width"
+          },
+          {
+            "id": "height",
+            "type": "slider",
+            "label": "Height",
+            "input_id": "height"
+          },
+          {
+            "id": "run",
+            "type": "run_button",
+            "label": "Run"
+          },
+          {
+            "id": "cancel",
+            "type": "cancel_button",
+            "label": "Cancel",
+            "enabled_if": {
+              "job_status": "running"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

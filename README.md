@@ -1,0 +1,56 @@
+# Local AI Workflow Desktop App
+
+A desktop app for running local AI workflows on macOS and Windows.
+
+The goal is to make powerful AI tools easy for beginners: users choose a ready-made workflow, press a simple button, and the app runs the AI process in the background.
+
+## Core Idea
+
+This project will provide a clean desktop interface for local AI tasks such as:
+
+- Text-to-image generation
+- Background removal
+- Image erasing / inpainting
+- Image editing workflows
+- Future local AI utilities built on reusable workflows
+
+## Planned Architecture
+
+- Frontend: TypeScript + React
+- Desktop shell: Tauri / Rust
+- Backend: Python
+- AI engine: ComfyUI-based workflow engine
+- Communication: local HTTP + WebSocket API
+
+The desktop app will start and manage the local Python backend, then communicate with it through a local API.
+
+For product v1, ComfyUI should run as an app-managed hidden sidecar with its own isolated Python environment. Users should not need to manually launch ComfyUI or install its Python dependencies.
+
+## Project Direction
+
+Version 1 will focus on a reliable cross-platform desktop app for Windows and macOS using a Python/ComfyUI backend.
+
+In a later macOS-focused phase, the AI inference layer should be upgraded to support native macOS inference libraries where appropriate, such as Apple-native acceleration through Core ML, Metal, or MLX. This should improve performance and integration on Apple Silicon Macs while keeping the general workflow system flexible.
+
+## Future Workflow Creator Mode
+
+A later phase may add a creator-focused workflow packaging system.
+
+Workflow creators will be able to build a workflow in ComfyUI, then export it through a custom ComfyUI node or extension made for this project. That exported workflow package will include the ComfyUI graph, required model information, metadata, and the controls that should appear in the desktop app.
+
+Inside the desktop app, the creator will be able to turn selected workflow inputs into a simple modular dashboard. For example, a creator could expose only the prompt field, strength slider, image upload, style selector, or run button while hiding the full node graph from the end user.
+
+The end user would then open the workflow as a clean, intuitive interface designed by the creator. The app would detect missing models, show what needs to be downloaded, ask for user approval, and then download the required models from verified sources automatically.
+
+## Developer Docs
+
+- [Agent entry point](AGENTS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Engine contract](docs/ENGINE_CONTRACT.md)
+- [Workflow packages](docs/WORKFLOW_PACKAGES.md)
+- [Milestone 1](docs/MILESTONE_1.md)
+- [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
+
+## Main Goal
+
+Make local AI workflows feel simple, private, and approachable without requiring users to understand ComfyUI, Python, model folders, or complex node graphs.

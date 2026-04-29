@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Python virtual environments
+.venv/
+backend/.venv/
+
+# Local backend/runtime state
+backend/.env
