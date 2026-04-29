@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import CommandResult, RuntimeEnvironment
+from app.runtime.hardware import plan_torch_install
 
 
 def create_repo(tmp_path: Path, *, requirements: bool = True) -> Path:
@@ -123,3 +125,90 @@ async def test_bootstrap_failure_is_logged(tmp_path: Path) -> None:
     assert result.status == "bootstrap_failed"
     assert log_store.latest_error() is not None
     assert log_store.latest_error().message == "Create ComfyUI runtime virtual environment failed"
+
+
+@pytest.mark.anyio
+async def test_bootstrap_installs_torch_before_comfyui_requirements(tmp_path: Path) -> None:
+    repo_dir = create_repo(tmp_path)
+    command_calls: list[list[str]] = []
+    runtime_dir = tmp_path / "runtime"
+
+    async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
+        command_calls.append(command)
+        if command[1:3] == ["-m", "venv"]:
+            python = runtime_dir / "comfyui-venv" / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("", encoding="utf-8")
+        return CommandResult(returncode=0)
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=runtime_dir,
+        bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Darwin",
+            os_version="14.0",
+            machine="x86_64",
+            architecture="i386",
+            accelerator="cpu",
+        ),
+        command_runner=command_runner,
+    )
+
+    result = await environment.bootstrap()
+
+    torch_install_index = next(index for index, command in enumerate(command_calls) if "torch" in command)
+    requirements_index = next(index for index, command in enumerate(command_calls) if "-r" in command)
+    assert result.status == "prepared"
+    assert torch_install_index < requirements_index
+
+
+def test_torch_plan_uses_standard_macos_wheels_for_intel_mac() -> None:
+    plan = plan_torch_install(
+        RuntimeHardwareProfile(
+            os_name="Darwin",
+            os_version="14.0",
+            machine="x86_64",
+            architecture="i386",
+            accelerator="cpu",
+        )
+    )
+
+    assert plan.accelerator == "cpu"
+    assert plan.index_url is None
+    assert plan.pip_args == []
+
+
+def test_torch_plan_uses_cuda_wheels_for_nvidia_gpu() -> None:
+    plan = plan_torch_install(
+        RuntimeHardwareProfile(
+            os_name="Windows",
+            os_version="11",
+            machine="AMD64",
+            architecture="AMD64",
+            accelerator="nvidia_cuda",
+            gpu_names=["NVIDIA GeForce RTX"],
+            cuda_version="12.8",
+        ),
+        cuda_index_url="https://download.pytorch.org/whl/cu128",
+    )
+
+    assert plan.accelerator == "nvidia_cuda"
+    assert plan.pip_args == ["--index-url", "https://download.pytorch.org/whl/cu128"]
+
+
+def test_torch_plan_selects_cuda_wheel_from_driver_capability() -> None:
+    plan = plan_torch_install(
+        RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="nvidia_cuda",
+            gpu_names=["NVIDIA GeForce RTX"],
+            cuda_version="12.4",
+        )
+    )
+
+    assert plan.accelerator == "nvidia_cuda"
+    assert plan.pip_args == ["--index-url", "https://download.pytorch.org/whl/cu124"]

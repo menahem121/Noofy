@@ -159,6 +159,9 @@ class EngineService:
             latest_error=self.log_store.latest_error(),
         )
 
+    async def runtime_status(self):
+        return await self.runtime_manager.status()
+
     async def start_comfyui(self):
         result = await self.runtime_manager.start()
         self._configure_adapter_endpoint()
@@ -169,6 +172,10 @@ class EngineService:
 
     async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
         return await self.runtime_manager.bootstrap_environment()
+
+    async def shutdown(self) -> None:
+        if self.runtime_manager.mode == "managed":
+            await self.runtime_manager.stop()
 
     async def _validate_package(self, package: WorkflowPackage) -> WorkflowValidationResult:
         structure_result = self.workflow_validator.validate_structure(package)
@@ -212,6 +219,8 @@ def create_default_engine_service() -> EngineService:
         runtime_dir=settings.runtime_dir,
         bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
         python_executable_override=settings.comfyui_python_executable,
+        torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
+        torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
         log_store=log_store,
     )
     runtime_manager = RuntimeManager(

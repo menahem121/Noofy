@@ -25,8 +25,10 @@ The backend is intentionally separate from `ComfyUI-official-repo/`. ComfyUI is 
 ## Useful Endpoints
 
 - `GET /api/health`: backend status, ComfyUI reachability, workflow package count, and missing model summary.
+- `GET /api/runtime`: lightweight runtime status for UI polling without workflow validation.
 - `GET /api/logs`: list recent backend, engine, ComfyUI, and workflow diagnostics.
 - `POST /api/engine/comfyui/bootstrap`: create the app-owned ComfyUI virtual environment and install `requirements.txt`.
+- `GET /api/engine/comfyui/status`: lightweight ComfyUI runtime status for UI polling.
 - `POST /api/engine/comfyui/start`: request startup of the local ComfyUI sidecar.
 - `POST /api/engine/comfyui/stop`: stop the ComfyUI process if this backend started it.
 - `GET /api/workflows`: list available workflow packages.
@@ -46,11 +48,13 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `NOOFY_RUNTIME_DIR`: app-owned runtime directory. Defaults to `.noofy-runtime` under the repo root.
 - `COMFYUI_PYTHON_EXECUTABLE`: optional runtime Python override. When unset, managed mode uses the app-owned virtual environment under `NOOFY_RUNTIME_DIR`.
 - `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE`: Python used to create the managed virtual environment. Defaults to `python3`.
+- `COMFYUI_TORCH_CUDA_INDEX_URL`: optional override for the PyTorch CUDA wheel index. When unset, the backend chooses from detected NVIDIA CUDA capability.
+- `COMFYUI_TORCH_CPU_INDEX_URL`: PyTorch CPU wheel index for CPU-only Linux/Windows installs. Defaults to `https://download.pytorch.org/whl/cpu`.
 - `COMFYUI_MANAGED_HOST`: managed sidecar bind host, default `127.0.0.1`
 - `COMFYUI_MANAGED_PORT`: optional managed sidecar port. When unset, the backend selects a free localhost port.
 - `COMFYUI_STARTUP_TIMEOUT_SECONDS`: managed startup health polling timeout, default `60`
 - `COMFYUI_HEALTH_POLL_INTERVAL_SECONDS`: managed startup health polling interval, default `0.5`
 
-External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed startup checks the ComfyUI repo, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
+External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. macOS Intel gets standard CPU-capable macOS wheels, Apple Silicon gets standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI repo, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
 
 Workflow model validation uses the active `EngineAdapter`. In ComfyUI dev mode, that means the backend asks the forwarded/running ComfyUI API which models are available instead of reading a hardcoded local models folder.

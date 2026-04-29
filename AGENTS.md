@@ -13,6 +13,7 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 ## Documentation Index
 
 - [README.md](README.md): public project introduction and high-level vision.
+- [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md): frontend visual direction, component rules, UI copy guidance, and interaction principles.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stack, process boundaries, and major architecture decisions.
 - [docs/ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md): app-owned engine operations and job lifecycle.
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
@@ -23,6 +24,8 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 ## Working Guidance
 
 When adding frontend features, preserve the backend API boundary.
+
+When adding or changing frontend UI, follow [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for visual direction, component behavior, interaction states, and beginner-friendly copy.
 
 When adding engine behavior, implement it through an `EngineAdapter`.
 

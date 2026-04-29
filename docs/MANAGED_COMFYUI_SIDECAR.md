@@ -26,12 +26,14 @@ ComfyUI must run from an app-managed isolated Python environment, with its own d
 
 The backend now has two layers:
 
-- `RuntimeEnvironment`: resolves the ComfyUI repo, app-owned runtime directory, virtual environment Python, logs/cache directories, `requirements.txt`, and required import status.
+- `RuntimeEnvironment`: resolves the ComfyUI repo, app-owned runtime directory, virtual environment Python, logs/cache directories, `requirements.txt`, detected hardware profile, PyTorch install plan, and required import status.
 - `RuntimeManager`: owns runtime mode, free-port selection, process startup, health polling, stdout/stderr capture, failure reporting, and stop behavior.
 
 Managed startup checks the environment before spawning ComfyUI. If the repo, entrypoint, requirements file, Python executable, runtime directory, or required imports are missing, `/api/health` includes the environment failure and `/api/logs` records the state transition.
 
-`POST /api/engine/comfyui/bootstrap` creates the app-owned virtual environment and installs `ComfyUI-official-repo/requirements.txt`. This is the first bootstrap pass; platform-specific GPU dependency packaging is still intentionally deferred.
+`POST /api/engine/comfyui/bootstrap` creates the app-owned virtual environment, installs PyTorch for the detected machine, then installs `ComfyUI-official-repo/requirements.txt`. macOS Intel uses standard macOS PyTorch wheels without CUDA, Apple Silicon uses standard macOS wheels with MPS available when PyTorch supports it, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use `nvidia-smi` CUDA capability to choose a CUDA wheel index. Exact CUDA policy remains overrideable through `COMFYUI_TORCH_CUDA_INDEX_URL` as PyTorch support changes.
+
+`GET /api/runtime` and `GET /api/engine/comfyui/status` return lightweight runtime status for UI polling without running workflow validation or model checks. FastAPI shutdown stops a managed ComfyUI process so the backend does not leave an owned sidecar running after app exit.
 
 ## Implementation Tasks
 

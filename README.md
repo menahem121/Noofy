@@ -45,6 +45,7 @@ The end user would then open the workflow as a clean, intuitive interface design
 ## Developer Docs
 
 - [Agent entry point](AGENTS.md)
+- [Design system](DESIGN_SYSTEM.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Engine contract](docs/ENGINE_CONTRACT.md)
 - [Workflow packages](docs/WORKFLOW_PACKAGES.md)

@@ -1,10 +1,12 @@
 import socket
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.manager import RuntimeManager, select_free_port
 
@@ -198,3 +200,77 @@ async def test_managed_stop_terminates_process(tmp_path: Path) -> None:
     assert result.status == "stopped"
     assert fake_process.terminated
     assert manager._process is None
+
+
+@pytest.mark.anyio
+async def test_managed_runtime_smoke_starts_health_checks_and_stops_fake_comfyui(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
+    (repo_dir / "main.py").write_text(
+        """
+import argparse
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/system_stats":
+            payload = json.dumps({"system": "ok"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        return
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--listen", default="127.0.0.1")
+parser.add_argument("--port", type=int, required=True)
+args = parser.parse_args()
+HTTPServer((args.listen, args.port), Handler).serve_forever()
+        """,
+        encoding="utf-8",
+    )
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=tmp_path / "runtime",
+        python_executable_override=sys.executable,
+        required_imports=("json",),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Darwin",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="cpu",
+        ),
+    )
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        startup_timeout_seconds=5,
+        health_poll_interval_seconds=0.05,
+        environment=environment,
+    )
+
+    start_result = await manager.start()
+    status = await manager.status()
+    stop_result = await manager.stop()
+
+    assert start_result.status == "started"
+    assert status.reachable
+    assert status.pid is not None
+    assert status.managed_process_running
+    assert status.environment is not None
+    assert status.environment.prepared
+    assert stop_result.status == "stopped"
+    assert not stop_result.comfyui.managed_process_running

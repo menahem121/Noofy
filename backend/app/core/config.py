@@ -17,6 +17,11 @@ class Settings:
     )
     comfyui_startup_timeout_seconds: float = float(os.environ.get("COMFYUI_STARTUP_TIMEOUT_SECONDS", "60"))
     comfyui_health_poll_interval_seconds: float = float(os.environ.get("COMFYUI_HEALTH_POLL_INTERVAL_SECONDS", "0.5"))
+    comfyui_torch_cuda_index_url: str | None = os.environ.get("COMFYUI_TORCH_CUDA_INDEX_URL")
+    comfyui_torch_cpu_index_url: str = os.environ.get(
+        "COMFYUI_TORCH_CPU_INDEX_URL",
+        "https://download.pytorch.org/whl/cpu",
+    )
     runtime_dir: Path = field(
         default_factory=lambda: Path(os.environ.get("NOOFY_RUNTIME_DIR", Path(__file__).resolve().parents[3] / ".noofy-runtime"))
     )

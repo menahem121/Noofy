@@ -77,6 +77,26 @@ class RuntimeDependencyStatus(BaseModel):
     error: str | None = None
 
 
+class RuntimeHardwareProfile(BaseModel):
+    os_name: str
+    os_version: str | None = None
+    machine: str
+    architecture: str
+    accelerator: str
+    gpu_names: list[str] = Field(default_factory=list)
+    cuda_version: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class TorchInstallPlan(BaseModel):
+    accelerator: str
+    packages: list[str] = Field(default_factory=list)
+    index_url: str | None = None
+    pip_args: list[str] = Field(default_factory=list)
+    reason: str
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RuntimeEnvironmentStatus(BaseModel):
     repo_dir: str
     main_py_exists: bool
@@ -88,6 +108,8 @@ class RuntimeEnvironmentStatus(BaseModel):
     cache_dir: str
     python_executable: str
     python_exists: bool
+    hardware: RuntimeHardwareProfile
+    torch_install_plan: TorchInstallPlan
     dependencies: list[RuntimeDependencyStatus] = Field(default_factory=list)
     prepared: bool = False
     error: str | None = None

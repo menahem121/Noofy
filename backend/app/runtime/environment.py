@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.engine.diagnostics import LogStore
-from app.engine.models import RuntimeBootstrapResult, RuntimeDependencyStatus, RuntimeEnvironmentStatus
+from app.engine.models import (
+    RuntimeBootstrapResult,
+    RuntimeDependencyStatus,
+    RuntimeEnvironmentStatus,
+    RuntimeHardwareProfile,
+)
+from app.runtime.hardware import detect_hardware, plan_torch_install
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,9 @@ class RuntimeEnvironment:
         bootstrap_python_executable: str = "python3",
         python_executable_override: str | None = None,
         required_imports: tuple[str, ...] = ("torch", "aiohttp"),
+        torch_cuda_index_url: str | None = None,
+        torch_cpu_index_url: str = "https://download.pytorch.org/whl/cpu",
+        hardware_profile: RuntimeHardwareProfile | None = None,
         log_store: LogStore | None = None,
         command_runner: CommandRunner | None = None,
     ) -> None:
@@ -36,6 +45,9 @@ class RuntimeEnvironment:
         self.bootstrap_python_executable = bootstrap_python_executable
         self.python_executable_override = python_executable_override
         self.required_imports = required_imports
+        self.torch_cuda_index_url = torch_cuda_index_url
+        self.torch_cpu_index_url = torch_cpu_index_url
+        self._hardware_profile = hardware_profile
         self.log_store = log_store or LogStore()
         self._command_runner = command_runner or self._run_command
 
@@ -72,6 +84,12 @@ class RuntimeEnvironment:
         python_exists = self._executable_exists(self.python_executable)
         dependencies = await self._check_dependencies() if python_exists else []
         error = self._status_error(runtime_dir_writable, python_exists, dependencies)
+        hardware = await self._detect_hardware()
+        torch_install_plan = plan_torch_install(
+            hardware,
+            cuda_index_url=self.torch_cuda_index_url,
+            cpu_index_url=self.torch_cpu_index_url,
+        )
 
         return RuntimeEnvironmentStatus(
             repo_dir=str(self.repo_dir),
@@ -84,6 +102,8 @@ class RuntimeEnvironment:
             cache_dir=str(self.cache_dir),
             python_executable=self.python_executable,
             python_exists=python_exists,
+            hardware=hardware,
+            torch_install_plan=torch_install_plan,
             dependencies=dependencies,
             prepared=error is None,
             error=error,
@@ -129,6 +149,27 @@ class RuntimeEnvironment:
             action="Create ComfyUI runtime virtual environment",
         )
         if venv_result.returncode != 0:
+            return RuntimeBootstrapResult(status="bootstrap_failed", environment=await self.status())
+
+        torch_plan = (await self.status()).torch_install_plan
+        torch_result = await self._run_logged(
+            [
+                self.python_executable,
+                "-m",
+                "pip",
+                "install",
+                *torch_plan.pip_args,
+                *torch_plan.packages,
+            ],
+            cwd=None,
+            action=f"Install PyTorch runtime ({torch_plan.accelerator})",
+            details={
+                "accelerator": torch_plan.accelerator,
+                "reason": torch_plan.reason,
+                "warnings": torch_plan.warnings,
+            },
+        )
+        if torch_result.returncode != 0:
             return RuntimeBootstrapResult(status="bootstrap_failed", environment=await self.status())
 
         install_result = await self._run_logged(
@@ -191,12 +232,27 @@ class RuntimeEnvironment:
             )
         return dependencies
 
-    async def _run_logged(self, command: list[str], *, cwd: Path | None, action: str) -> CommandResult:
+    async def _detect_hardware(self) -> RuntimeHardwareProfile:
+        if self._hardware_profile is None:
+            self._hardware_profile = await detect_hardware(self._command_runner)
+        return self._hardware_profile
+
+    async def _run_logged(
+        self,
+        command: list[str],
+        *,
+        cwd: Path | None,
+        action: str,
+        details: dict[str, object] | None = None,
+    ) -> CommandResult:
+        log_details = {"command": self._redacted_command(command)}
+        if details is not None:
+            log_details.update(details)
         self.log_store.add(
             "info",
             action,
             "runtime.environment",
-            details={"command": self._redacted_command(command)},
+            details=log_details,
         )
         result = await self._command_runner(command, cwd)
         for line in result.stdout.splitlines():
@@ -213,12 +269,15 @@ class RuntimeEnvironment:
         return result
 
     async def _run_command(self, command: list[str], cwd: Path | None) -> CommandResult:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            return CommandResult(returncode=127, stderr=str(exc))
         stdout, stderr = await process.communicate()
         return CommandResult(
             returncode=process.returncode,

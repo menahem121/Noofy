@@ -18,6 +18,16 @@ async def list_logs(level: str | None = None, limit: int = 200):
     return engine_service.list_logs(level=level, limit=limit)
 
 
+@router.get("/runtime")
+async def runtime_status():
+    return await engine_service.runtime_status()
+
+
+@router.get("/engine/comfyui/status")
+async def comfyui_status():
+    return await engine_service.runtime_status()
+
+
 @router.post("/engine/comfyui/start")
 async def start_comfyui():
     return await engine_service.start_comfyui()
