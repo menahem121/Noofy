@@ -1,19 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  AlertCircle,
-  ArrowRight,
-  CheckCircle2,
-  Download,
-  FileUp,
-  Loader2,
-  Menu,
-  PackagePlus,
-  Plus,
-  Search,
-  Settings,
-  ShieldCheck,
-  SlidersHorizontal,
-} from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus } from "lucide-react";
 
 import {
   fetchRuntimeStatus,
@@ -21,10 +7,11 @@ import {
   type RuntimeStatus,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
+import { AppLayout, type AppRouteId } from "../app/AppLayout";
+import { runtimeStatusCopy } from "../app/status";
 import {
   fallbackWorkflow,
   recentWorkflows,
-  sidebarItems,
   starterWorkflows,
   type WorkflowCard,
   type WorkflowStatus,
@@ -64,46 +51,6 @@ function workflowIconStatus(status: WorkflowStatus) {
   return AlertCircle;
 }
 
-function runtimeCopy(state: HomeDataState) {
-  if (state.loading) {
-    return {
-      label: "Checking backend",
-      description: "Looking for the local app service",
-      tone: "info",
-    };
-  }
-
-  if (!state.runtime) {
-    return {
-      label: "Backend offline",
-      description: "Start the Noofy backend to load live workflows",
-      tone: "error",
-    };
-  }
-
-  if (state.runtime.reachable) {
-    return {
-      label: "Engine ready",
-      description: "Local workflow engine is reachable",
-      tone: "success",
-    };
-  }
-
-  if (state.runtime.managed_process_running) {
-    return {
-      label: "Engine starting",
-      description: "The local engine process is still warming up",
-      tone: "info",
-    };
-  }
-
-  return {
-    label: "Engine offline",
-    description: "Open settings to start or repair the local engine",
-    tone: "warning",
-  };
-}
-
 function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] {
   return workflows.map((workflow) => ({
     id: workflow.id,
@@ -117,7 +64,12 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
   }));
 }
 
-export function HomePage() {
+interface HomePageProps {
+  onOpenWorkflow: (workflowId: string) => void;
+  onNavigate: (route: AppRouteId) => void;
+}
+
+export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
 
   useEffect(() => {
@@ -157,7 +109,7 @@ export function HomePage() {
     };
   }, []);
 
-  const status = runtimeCopy(homeData);
+  const status = runtimeStatusCopy(homeData);
 
   const workflowCards = useMemo(() => {
     const backendCards = workflowCardsFromBackend(homeData.workflows);
@@ -172,76 +124,7 @@ export function HomePage() {
   const installedCount = homeData.workflows.length;
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="topbar__brand">
-          <button className="icon-button topbar__menu" type="button" aria-label="Open navigation" title="Open navigation">
-            <Menu size={20} aria-hidden="true" />
-          </button>
-          <div className="brand-mark" aria-hidden="true">
-            <ShieldCheck size={17} />
-          </div>
-          <span className="brand-name">Noofy</span>
-        </div>
-
-        <label className="search-field">
-          <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Search workflows</span>
-          <input type="search" placeholder="Search workflows..." />
-        </label>
-
-        <div className="topbar__actions">
-          <div className={`status-pill status-pill--${status.tone}`}>
-            {homeData.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
-            <span>{status.label}</span>
-          </div>
-          <button className="icon-button" type="button" aria-label="Open settings" title="Open settings">
-            <Settings size={19} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
-      <aside className="sidebar">
-        <div className="workspace-card">
-          <div className="workspace-card__avatar" aria-hidden="true">
-            <ShieldCheck size={19} />
-          </div>
-          <div>
-            <p>AI Workspace</p>
-            <span>{status.label}</span>
-          </div>
-        </div>
-
-        <nav className="sidebar-nav" aria-label="Main navigation">
-          {sidebarItems.map(({ label, Icon, active }) => (
-            <button
-              className={active ? "sidebar-nav__item sidebar-nav__item--active" : "sidebar-nav__item"}
-              type="button"
-              key={label}
-            >
-              <Icon size={19} aria-hidden="true" />
-              <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar__spacer" />
-
-        <div className="engine-card">
-          <div className="engine-card__header">
-            <span className={`engine-dot engine-dot--${status.tone}`} />
-            <span>Local engine</span>
-          </div>
-          <p>{status.description}</p>
-          <button className="secondary-button secondary-button--full" type="button">
-            <SlidersHorizontal size={16} aria-hidden="true" />
-            Engine Settings
-          </button>
-        </div>
-      </aside>
-
-      <main className="main-workspace">
-        <div className="workspace-content">
+    <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
           <section className="page-heading" aria-labelledby="home-title">
             <div>
               <p className="eyebrow">Private local workflows</p>
@@ -315,7 +198,7 @@ export function HomePage() {
 
           <section className="workflow-grid" aria-label="Built-in workflows">
             {workflowCards.map((workflow) => (
-              <WorkflowCardView key={workflow.id} workflow={workflow} />
+              <WorkflowCardView key={workflow.id} workflow={workflow} onOpenWorkflow={onOpenWorkflow} />
             ))}
           </section>
 
@@ -346,21 +229,30 @@ export function HomePage() {
                     </p>
                   </div>
                   <span className="mini-status">{recent.statusLabel}</span>
-                  <button className="secondary-button secondary-button--small" type="button">
+                  <button
+                    className="secondary-button secondary-button--small"
+                    type="button"
+                    onClick={() => onOpenWorkflow("text_to_image_v0")}
+                  >
                     Open
                   </button>
                 </article>
               ))}
             </div>
           </section>
-        </div>
-      </main>
-    </div>
+    </AppLayout>
   );
 }
 
-function WorkflowCardView({ workflow }: { workflow: WorkflowCard }) {
+function WorkflowCardView({
+  workflow,
+  onOpenWorkflow,
+}: {
+  workflow: WorkflowCard;
+  onOpenWorkflow: (workflowId: string) => void;
+}) {
   const StatusIcon = workflowIconStatus(workflow.status);
+  const canOpen = workflow.source === "backend" || workflow.id === "text_to_image_v0";
 
   return (
     <article className={`workflow-card workflow-card--${workflow.status}`}>
@@ -377,7 +269,13 @@ function WorkflowCardView({ workflow }: { workflow: WorkflowCard }) {
           <StatusIcon size={14} aria-hidden="true" />
           {workflow.statusLabel}
         </span>
-        <button className="icon-button icon-button--card" type="button" aria-label={`Open ${workflow.title}`}>
+        <button
+          className="icon-button icon-button--card"
+          type="button"
+          aria-label={`Open ${workflow.title}`}
+          disabled={!canOpen}
+          onClick={() => canOpen && onOpenWorkflow(workflow.id)}
+        >
           <ArrowRight size={17} aria-hidden="true" />
         </button>
       </div>

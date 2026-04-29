@@ -5,6 +5,8 @@ export interface WorkflowSummary {
   description: string;
 }
 
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled" | "missing_models" | "unknown";
+
 export interface RuntimeDependencyStatus {
   name: string;
   available: boolean;
@@ -28,6 +30,65 @@ export interface RuntimeStatus {
   environment: RuntimeEnvironmentStatus | null;
 }
 
+export interface WorkflowHealthSummary {
+  workflow_id: string;
+  valid: boolean;
+  missing_model_count: number;
+  error_count: number;
+}
+
+export interface BackendHealthReport {
+  status: string;
+  comfyui: RuntimeStatus;
+  workflow_package_count: number;
+  workflows: WorkflowHealthSummary[];
+  latest_error: unknown | null;
+}
+
+export interface MissingModel {
+  folder: string;
+  filename: string;
+  source_url: string | null;
+  checksum: string | null;
+}
+
+export interface WorkflowValidationResult {
+  workflow_id: string;
+  valid: boolean;
+  missing_models: MissingModel[];
+  errors: string[];
+}
+
+export interface EngineJob {
+  job_id: string;
+  workflow_id: string;
+  engine: string;
+  status: JobStatus;
+}
+
+export interface JobProgress {
+  job_id: string;
+  status: JobStatus;
+  value: number | null;
+  max: number | null;
+  current_node: string | null;
+  message: string | null;
+}
+
+export interface JobResult {
+  job_id: string;
+  status: JobStatus;
+  outputs: Array<Record<string, unknown>>;
+  error: string | null;
+}
+
+export interface WorkflowRunPayload {
+  inputs: Record<string, unknown>;
+  options?: Record<string, unknown>;
+}
+
+export type WorkflowRunResponse = EngineJob | WorkflowValidationResult;
+
 const DEFAULT_API_BASE_URL = "/api";
 const configuredApiBaseUrl = import.meta.env.VITE_NOOFY_API_BASE_URL as string | undefined;
 
@@ -47,10 +108,67 @@ async function getJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Noofy backend returned ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export function fetchRuntimeStatus() {
   return getJson<RuntimeStatus>("/runtime");
 }
 
+export function fetchHealth() {
+  return getJson<BackendHealthReport>("/health");
+}
+
 export function fetchWorkflows() {
   return getJson<WorkflowSummary[]>("/workflows");
+}
+
+export function validateWorkflow(workflowId: string) {
+  return postJson<WorkflowValidationResult>(`/workflows/${workflowId}/validate`);
+}
+
+export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {
+  return postJson<WorkflowRunResponse>(`/workflows/${workflowId}/run`, payload);
+}
+
+export function fetchJobProgress(jobId: string) {
+  return getJson<JobProgress>(`/jobs/${jobId}/progress`);
+}
+
+export function fetchJobResult(jobId: string) {
+  return getJson<JobResult>(`/jobs/${jobId}/result`);
+}
+
+export function cancelJob(jobId: string) {
+  return postJson<JobProgress>(`/jobs/${jobId}/cancel`);
+}
+
+export function bootstrapEngine() {
+  return postJson<unknown>("/engine/comfyui/bootstrap");
+}
+
+export function startEngine() {
+  return postJson<unknown>("/engine/comfyui/start");
+}
+
+export function stopEngine() {
+  return postJson<unknown>("/engine/comfyui/stop");
+}
+
+export function isEngineJob(response: WorkflowRunResponse): response is EngineJob {
+  return "job_id" in response;
 }

@@ -14,6 +14,8 @@ function jsonResponse(data: unknown, status = 200) {
 
 describe("HomePage", () => {
   const fetchMock = vi.fn();
+  const onOpenWorkflow = vi.fn();
+  const onNavigate = vi.fn();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
@@ -22,6 +24,8 @@ describe("HomePage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    onOpenWorkflow.mockReset();
+    onNavigate.mockReset();
   });
 
   it("loads backend runtime and workflow summaries through the Noofy API", async () => {
@@ -59,7 +63,7 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<HomePage />);
+    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
 
     expect(await screen.findAllByText("Engine ready")).toHaveLength(2);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
@@ -70,7 +74,7 @@ describe("HomePage", () => {
   it("shows starter content and a clear status when the backend is unavailable", async () => {
     fetchMock.mockRejectedValue(new Error("connect failed"));
 
-    render(<HomePage />);
+    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
 
     expect(await screen.findByText("Backend is not reachable")).toBeInTheDocument();
     expect(screen.getAllByText("Backend offline")).toHaveLength(2);
