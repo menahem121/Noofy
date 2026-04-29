@@ -54,7 +54,14 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `COMFYUI_MANAGED_PORT`: optional managed sidecar port. When unset, the backend selects a free localhost port.
 - `COMFYUI_STARTUP_TIMEOUT_SECONDS`: managed startup health polling timeout, default `60`
 - `COMFYUI_HEALTH_POLL_INTERVAL_SECONDS`: managed startup health polling interval, default `0.5`
+- `NOOFY_API_TOKEN`: optional local API bearer token. When set, every `/api/*` request must include `Authorization: Bearer <token>`, except job event streams may pass `?token=<token>` for browser `EventSource` support.
 
 External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. macOS Intel gets standard CPU-capable macOS wheels, Apple Silicon gets standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI repo, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
 
 Workflow model validation uses the active `EngineAdapter`. In ComfyUI dev mode, that means the backend asks the forwarded/running ComfyUI API which models are available instead of reading a hardcoded local models folder.
+
+## Local API Token
+
+During browser development, `NOOFY_API_TOKEN` can be left unset and the backend will accept localhost API requests without a token.
+
+For desktop builds, the Tauri shell should generate a random per-launch token, pass it to the backend as `NOOFY_API_TOKEN`, and inject the same value into the frontend runtime config. The token should never be stored or logged.

@@ -26,6 +26,27 @@ For product v1, ComfyUI is a managed sidecar. The app must start it as a hidden 
 
 External ComfyUI URLs such as `http://127.0.0.1:8188` are development mode only.
 
+## Local API Security
+
+The backend must bind only to localhost for product builds. The frontend must continue to call only the app backend API, never ComfyUI directly.
+
+When the desktop shell is added, Tauri owns the local API session token:
+
+- Generate a cryptographically random token for each app launch.
+- Start the backend with `NOOFY_API_TOKEN` set to that token.
+- Inject the same token into the frontend runtime config before React starts:
+
+```ts
+window.__NOOFY_RUNTIME_CONFIG__ = {
+  apiBaseUrl: "http://127.0.0.1:<port>/api",
+  apiToken: "<per-launch-token>"
+}
+```
+
+The token is not user authentication. It is local API hardening so unrelated webpages cannot freely control the local workflow backend. It must not be persisted to disk or written to logs.
+
+For browser development, token enforcement is optional. The backend only requires a token when `NOOFY_API_TOKEN` is set.
+
 ## Key Decisions
 
 - Wrap ComfyUI first. Do not fork ComfyUI now.

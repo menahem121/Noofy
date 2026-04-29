@@ -12,8 +12,8 @@ import {
 } from "lucide-react";
 
 import {
-  apiBaseUrl,
   cancelJob,
+  createJobEventsUrl,
   fetchJobProgress,
   fetchJobResult,
   fetchRuntimeStatus,
@@ -171,7 +171,7 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
       return;
     }
 
-    const source = new EventSource(`${apiBaseUrl}/jobs/${jobId}/events`);
+    const source = new EventSource(createJobEventsUrl(jobId));
     eventSourceRef.current = source;
     source.addEventListener("progress", (event) => {
       setState((current) => ({ ...current, progress: JSON.parse(event.data) as JobProgress }));

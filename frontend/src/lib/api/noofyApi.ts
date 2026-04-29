@@ -89,16 +89,58 @@ export interface WorkflowRunPayload {
 
 export type WorkflowRunResponse = EngineJob | WorkflowValidationResult;
 
+declare global {
+  interface Window {
+    __NOOFY_RUNTIME_CONFIG__?: {
+      apiBaseUrl?: string;
+      apiToken?: string;
+    };
+  }
+}
+
 const DEFAULT_API_BASE_URL = "/api";
 const configuredApiBaseUrl = import.meta.env.VITE_NOOFY_API_BASE_URL as string | undefined;
+const configuredApiToken = import.meta.env.VITE_NOOFY_API_TOKEN as string | undefined;
 
-export const apiBaseUrl = configuredApiBaseUrl ? configuredApiBaseUrl.replace(/\/$/, "") : DEFAULT_API_BASE_URL;
+export function getApiBaseUrl() {
+  const runtimeBaseUrl = window.__NOOFY_RUNTIME_CONFIG__?.apiBaseUrl;
+  const baseUrl = runtimeBaseUrl || configuredApiBaseUrl || DEFAULT_API_BASE_URL;
+  return baseUrl.replace(/\/$/, "");
+}
+
+export function getApiToken() {
+  return window.__NOOFY_RUNTIME_CONFIG__?.apiToken || configuredApiToken || null;
+}
+
+function apiHeaders(contentType?: string) {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  const token = getApiToken();
+
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  }
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+export function createJobEventsUrl(jobId: string) {
+  const url = `${getApiBaseUrl()}/jobs/${encodeURIComponent(jobId)}/events`;
+  const token = getApiToken();
+  if (!token) {
+    return url;
+  }
+  return `${url}?token=${encodeURIComponent(token)}`;
+}
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: {
-      Accept: "application/json",
-    },
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    headers: apiHeaders(),
   });
 
   if (!response.ok) {
@@ -109,12 +151,9 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
+    headers: apiHeaders("application/json"),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 

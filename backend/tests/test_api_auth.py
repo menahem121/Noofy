@@ -1,0 +1,89 @@
+from fastapi.testclient import TestClient
+
+from app.api import routes
+from app.engine.models import ComfyUIRuntimeStatus
+from app.main import create_app
+
+
+class FakeEngineService:
+    async def health(self):
+        return {"status": "ok"}
+
+    async def runtime_status(self) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="managed",
+            reachable=True,
+            base_url="http://127.0.0.1:9000",
+            repo_dir="/tmp/ComfyUI",
+            managed_process_running=True,
+            pid=123,
+        )
+
+    async def stream_progress_events(self, job_id: str):
+        yield 'event: progress\ndata: {"job_id":"' + job_id + '","status":"running"}\n\n'
+
+    async def shutdown(self) -> None:
+        return None
+
+
+def test_api_requests_succeed_without_configured_token(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/runtime")
+
+    assert response.status_code == 200
+
+
+def test_api_rejects_missing_token_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/runtime")
+
+    assert response.status_code == 401
+
+
+def test_api_rejects_wrong_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/runtime", headers={"Authorization": "Bearer wrong-token"})
+
+    assert response.status_code == 401
+
+
+def test_api_accepts_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/runtime", headers={"Authorization": "Bearer secret-token"})
+
+    assert response.status_code == 200
+
+
+def test_job_event_stream_accepts_query_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/jobs/job-1/events?token=secret-token")
+
+    assert response.status_code == 200
+    assert "event: progress" in response.text
+
+
+def test_job_event_stream_rejects_missing_or_wrong_query_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        missing = client.get("/api/jobs/job-1/events")
+        wrong = client.get("/api/jobs/job-1/events?token=wrong-token")
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401

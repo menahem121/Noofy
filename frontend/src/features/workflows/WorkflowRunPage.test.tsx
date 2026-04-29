@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowRunPage } from "./WorkflowRunPage";
@@ -45,6 +45,7 @@ describe("WorkflowRunPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
   it("validates requirements, starts a run, polls progress, and shows the result", async () => {
@@ -280,5 +281,62 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
     expect(await screen.findByText("Run canceled.")).toBeInTheDocument();
+  });
+
+  it("passes the runtime token to the job event stream URL", async () => {
+    const eventSourceMock = vi.fn(function (this: { addEventListener: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }) {
+      this.addEventListener = vi.fn();
+      this.close = vi.fn();
+    });
+    vi.stubGlobal("EventSource", eventSourceMock);
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiToken: "runtime-secret",
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse(validWorkflow));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-4",
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/jobs/job-4/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-4",
+            status: "running",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Preparing workflow...",
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    await waitFor(() => {
+      expect(eventSourceMock).toHaveBeenCalledWith("/api/jobs/job-4/events?token=runtime-secret");
+    });
   });
 });

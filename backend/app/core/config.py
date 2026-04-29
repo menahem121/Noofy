@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 @dataclass(frozen=True)
 class Settings:
+    noofy_api_token: str | None = os.environ.get("NOOFY_API_TOKEN")
     comfyui_runtime_mode: str = os.environ.get("COMFYUI_RUNTIME_MODE", "external")
     comfyui_base_url: str = os.environ.get("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
     comfyui_ws_url: str | None = os.environ.get("COMFYUI_WS_URL")
