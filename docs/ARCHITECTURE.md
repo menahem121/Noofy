@@ -56,6 +56,59 @@ For browser development, token enforcement is optional. The backend only require
 - Keep the app API stable enough that future adapters can replace or supplement ComfyUI.
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
 
+## App Data Directories
+
+The backend owns a canonical set of per-user directories so the app never relies on repo-local runtime/model/output folders.
+
+### Platform defaults
+
+| Platform | Default base |
+|----------|-------------|
+| macOS | `~/Library/Application Support/Noofy` |
+| Windows | `%APPDATA%\Noofy` |
+| Linux | `~/.local/share/noofy` |
+
+### Directory layout
+
+| Name | Default path | Purpose |
+|------|-------------|---------|
+| `data_dir` | *base* | Root app-data directory |
+| `runtime_dir` | `data_dir/runtime` | venv, process state |
+| `models_dir` | `data_dir/models` | Downloaded AI models |
+| `user_workflows_dir` | `data_dir/workflows` | User-imported workflow packages |
+| `outputs_dir` | `data_dir/outputs` | Generated output files |
+| `logs_dir` | `data_dir/logs` | Diagnostic logs |
+| `cache_dir` | `data_dir/cache` | Transient cache |
+| `temp_dir` | `data_dir/temp` | Temporary files |
+| `bundled_workflows_dir` | `backend/app/workflows/packages` | Read-only starter workflows |
+| `comfyui_repo_dir` | `ComfyUI-official-repo` (project root) | ComfyUI source / checkout |
+
+### Environment variable overrides
+
+| Variable | Scope |
+|----------|-------|
+| `NOOFY_DATA_DIR` | Overrides the base directory; all sub-dirs follow |
+| `NOOFY_RUNTIME_DIR` | Overrides only `runtime_dir` (backward-compatible) |
+| `NOOFY_MODELS_DIR` | Overrides only `models_dir` |
+| `NOOFY_WORKFLOWS_DIR` | Overrides only `user_workflows_dir` |
+| `NOOFY_OUTPUTS_DIR` | Overrides only `outputs_dir` |
+| `NOOFY_LOGS_DIR` | Overrides only `logs_dir` |
+| `NOOFY_CACHE_DIR` | Overrides only `cache_dir` |
+| `NOOFY_TEMP_DIR` | Overrides only `temp_dir` |
+| `COMFYUI_REPO_DIR` | Overrides ComfyUI checkout location |
+
+### Bundled vs user workflows
+
+Bundled starter workflows are read-only and ship inside the repo at `backend/app/workflows/packages`. User-imported or user-created workflow packages live in `user_workflows_dir`. If both contain a package with the same `metadata.id`, the user copy wins so imports can intentionally replace a starter.
+
+### Diagnostics
+
+`GET /api/paths` returns all resolved directory paths with `exists` and `writable` status. It is protected by the same optional `NOOFY_API_TOKEN` as all other `/api/*` routes.
+
+### Tauri integration (future)
+
+When Tauri owns the process lifecycle, it will pass `NOOFY_DATA_DIR` only if it needs a custom location. Otherwise the backend resolves platform defaults at startup.
+
 ## Future Engine Direction
 
 The first adapter is `ComfyUIEngineAdapter`.

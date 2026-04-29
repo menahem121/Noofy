@@ -1,11 +1,17 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, create_default_engine_service
 
 router = APIRouter()
 engine_service: EngineService = create_default_engine_service()
+
+
+@router.get("/paths")
+async def resolved_paths():
+    return settings.paths.writable_status()
 
 
 @router.get("/health")

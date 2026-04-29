@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from app.core.paths import NoofyPaths, resolve_paths
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -23,18 +25,29 @@ class Settings:
         "COMFYUI_TORCH_CPU_INDEX_URL",
         "https://download.pytorch.org/whl/cpu",
     )
-    runtime_dir: Path = field(
-        default_factory=lambda: Path(os.environ.get("NOOFY_RUNTIME_DIR", Path(__file__).resolve().parents[3] / ".noofy-runtime"))
-    )
-    workflows_dir: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[1] / "workflows" / "packages"
-    )
-    comfyui_repo_dir: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[3] / "ComfyUI-official-repo"
-    )
-    comfyui_models_dir: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[3] / "ComfyUI-official-repo" / "models"
-    )
+
+    # Resolved app-owned directory contract.
+    paths: NoofyPaths = field(default_factory=resolve_paths)
+
+    # --- Convenience accessors (backward-compatible) ---
+
+    @property
+    def runtime_dir(self) -> Path:
+        return self.paths.runtime_dir
+
+    @property
+    def workflows_dir(self) -> Path:
+        """Bundled (read-only) starter workflows."""
+        return self.paths.bundled_workflows_dir
+
+    @property
+    def comfyui_repo_dir(self) -> Path:
+        return self.paths.comfyui_repo_dir
+
+    @property
+    def comfyui_models_dir(self) -> Path:
+        """App-owned models directory (not ComfyUI-official-repo/models)."""
+        return self.paths.models_dir
 
     @property
     def comfyui_host(self) -> str:

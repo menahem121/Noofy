@@ -211,7 +211,13 @@ class EngineService:
 
 
 def create_default_engine_service() -> EngineService:
-    loader = WorkflowPackageLoader(settings.workflows_dir)
+    paths = settings.paths
+    paths.ensure_directories()
+
+    loader = WorkflowPackageLoader(
+        settings.workflows_dir,
+        user_packages_dir=paths.user_workflows_dir,
+    )
     validator = WorkflowPackageValidator()
     log_store = LogStore()
     runtime_environment = RuntimeEnvironment(
@@ -222,6 +228,8 @@ def create_default_engine_service() -> EngineService:
         torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
         torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
         log_store=log_store,
+        logs_dir=paths.logs_dir,
+        cache_dir=paths.cache_dir,
     )
     runtime_manager = RuntimeManager(
         mode=settings.comfyui_runtime_mode,
@@ -246,6 +254,7 @@ def create_default_engine_service() -> EngineService:
         "info",
         "Backend engine service initialized",
         "engine.service",
-        details={"runtime_mode": runtime_manager.mode},
+        details={"runtime_mode": runtime_manager.mode, "data_dir": str(paths.data_dir)},
     )
     return EngineService(loader, validator, adapter, runtime_manager, log_store)
+

@@ -39,9 +39,13 @@ class RuntimeEnvironment:
         hardware_profile: RuntimeHardwareProfile | None = None,
         log_store: LogStore | None = None,
         command_runner: CommandRunner | None = None,
+        logs_dir: Path | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         self.repo_dir = repo_dir
         self.runtime_dir = runtime_dir
+        self._logs_dir = logs_dir
+        self._cache_dir = cache_dir
         self.bootstrap_python_executable = bootstrap_python_executable
         self.python_executable_override = python_executable_override
         self.required_imports = required_imports
@@ -65,11 +69,11 @@ class RuntimeEnvironment:
 
     @property
     def log_dir(self) -> Path:
-        return self.runtime_dir / "logs"
+        return self._logs_dir if self._logs_dir is not None else self.runtime_dir / "logs"
 
     @property
     def cache_dir(self) -> Path:
-        return self.runtime_dir / "cache"
+        return self._cache_dir if self._cache_dir is not None else self.runtime_dir / "cache"
 
     @property
     def python_executable(self) -> str:
