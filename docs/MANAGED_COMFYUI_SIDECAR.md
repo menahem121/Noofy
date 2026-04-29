@@ -38,16 +38,47 @@ Managed startup checks the environment before spawning ComfyUI. If the repo, ent
 ## Implementation Tasks
 
 - Create an app-managed ComfyUI Python environment. Initial backend support exists through `RuntimeEnvironment` and the bootstrap endpoint.
-- Add startup logic that chooses a free localhost port. Initial backend support lives in `RuntimeManager`.
-- Start ComfyUI hidden as a subprocess. Initial backend support exists for managed mode.
-- Capture and expose ComfyUI stdout/stderr through backend diagnostics. Initial backend support exists.
-- Add health checks and startup timeout handling. Initial backend support exists.
+- ~~Add startup logic that chooses a free localhost port.~~ ✅ Implemented in `RuntimeManager`.
+- ~~Start ComfyUI hidden as a subprocess.~~ ✅ Implemented for managed mode.
+- ~~Capture and expose ComfyUI stdout/stderr through backend diagnostics.~~ ✅ Implemented.
+- ~~Add health checks and startup timeout handling.~~ ✅ Implemented.
 - Validate workflow models against the running sidecar through `ComfyUIEngineAdapter`.
-- Add crash detection and controlled restart behavior.
-- Stop ComfyUI when the app exits.
+- ~~Add crash detection and controlled restart behavior.~~ ✅ Implemented (see below).
+- ~~Stop ComfyUI when the app exits.~~ ✅ FastAPI lifespan shutdown calls `EngineService.shutdown()`.
 - Keep `COMFYUI_BASE_URL` support as development mode only.
 
 The first runtime foundation supports `external` and `managed` modes. `external` observes a manually launched development ComfyUI URL. `managed` selects a localhost port when one is not configured, starts `main.py`, polls `/system_stats` until ready or timed out, records startup failures in `/api/health` and `/api/logs`, and stops the process it started.
+
+## Crash Detection and Restart
+
+`RuntimeManager` runs a background watchdog `asyncio.Task` that awaits the managed ComfyUI process. When the process exits unexpectedly (not due to an explicit `stop()` call):
+
+1. The crash is recorded: `crash_count` increments, `last_crash_at` is set.
+2. A controlled restart loop begins with exponential backoff: `base * 2^(attempt-1)`.
+3. Each restart attempt selects a new free port (unless a port was explicitly configured) and notifies the `EngineAdapter` of the new endpoint via an `on_restart` callback.
+4. On successful restart (health check passes), `restart_attempt` resets to 0. `crash_count` remains cumulative.
+5. If `max_restart_attempts` is exhausted, the manager records a terminal error and stops retrying.
+
+Configuration (environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `COMFYUI_MAX_RESTART_ATTEMPTS` | `3` | Maximum restart attempts before giving up |
+| `COMFYUI_RESTART_BACKOFF_BASE` | `2.0` | Base seconds for exponential backoff |
+
+## Orphan Process Cleanup
+
+`RuntimeManager` writes the managed process PID to `<runtime_dir>/comfyui.pid` on start and removes it on stop. If the backend was killed (e.g., SIGKILL) and left an orphan ComfyUI process, the next startup detects the stale PID file, checks whether the process is still alive, and terminates it before starting a new instance.
+
+## Crash State in API
+
+`GET /api/runtime` and `GET /api/engine/comfyui/status` include:
+
+- `crash_count`: cumulative crashes since last backend start
+- `restart_attempt`: current restart attempt (0 when stable)
+- `max_restart_attempts`: configured limit
+- `uptime_seconds`: seconds since last successful start (null when not running)
+- `last_crash_at`: ISO timestamp of last crash (null if no crashes)
 
 ## Acceptance Check
 

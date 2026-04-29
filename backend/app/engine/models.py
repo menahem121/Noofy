@@ -129,6 +129,11 @@ class ComfyUIRuntimeStatus(BaseModel):
     pid: int | None = None
     error: str | None = None
     environment: RuntimeEnvironmentStatus | None = None
+    crash_count: int = 0
+    restart_attempt: int = 0
+    max_restart_attempts: int = 0
+    uptime_seconds: float | None = None
+    last_crash_at: str | None = None
 
 
 class ProcessActionResult(BaseModel):

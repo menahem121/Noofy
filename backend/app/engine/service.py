@@ -241,8 +241,11 @@ def create_default_engine_service() -> EngineService:
         managed_port=settings.comfyui_managed_port,
         startup_timeout_seconds=settings.comfyui_startup_timeout_seconds,
         health_poll_interval_seconds=settings.comfyui_health_poll_interval_seconds,
+        max_restart_attempts=settings.comfyui_max_restart_attempts,
+        restart_backoff_base_seconds=settings.comfyui_restart_backoff_base,
         log_store=log_store,
         environment=runtime_environment,
+        pid_dir=paths.runtime_dir,
     )
     adapter = ComfyUIEngineAdapter(
         runtime_manager.base_url,
@@ -250,6 +253,16 @@ def create_default_engine_service() -> EngineService:
         runtime_manager.ws_url,
         log_store=log_store,
     )
+
+    # Wire the on_restart callback so the adapter learns the new URL after
+    # a crash-restart that picked a new port.
+    def _reconfigure_adapter() -> None:
+        configure = getattr(adapter, "configure_endpoint", None)
+        if configure is not None:
+            configure(runtime_manager.base_url, runtime_manager.ws_url)
+
+    runtime_manager._on_restart = _reconfigure_adapter
+
     log_store.add(
         "info",
         "Backend engine service initialized",
@@ -257,4 +270,3 @@ def create_default_engine_service() -> EngineService:
         details={"runtime_mode": runtime_manager.mode, "data_dir": str(paths.data_dir)},
     )
     return EngineService(loader, validator, adapter, runtime_manager, log_store)
-

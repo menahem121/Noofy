@@ -1,7 +1,10 @@
 import asyncio
 import contextlib
+import os
+import signal
 import socket
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
@@ -14,6 +17,7 @@ from app.runtime.environment import RuntimeEnvironment
 
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
 ProcessFactory = Callable[..., Awaitable[Any]]
+OnRestartCallback = Callable[[], None]
 
 
 def select_free_port(host: str = "127.0.0.1") -> int:
@@ -36,10 +40,14 @@ class RuntimeManager:
         external_ws_url: str | None = None,
         startup_timeout_seconds: float = 60,
         health_poll_interval_seconds: float = 0.5,
+        max_restart_attempts: int = 3,
+        restart_backoff_base_seconds: float = 2.0,
         log_store: LogStore | None = None,
         environment: RuntimeEnvironment | None = None,
         process_factory: ProcessFactory | None = None,
         health_check: HealthCheck | None = None,
+        on_restart: OnRestartCallback | None = None,
+        pid_dir: Path | None = None,
     ) -> None:
         if mode not in {"external", "managed"}:
             raise ValueError(f"Unsupported ComfyUI runtime mode: {mode}")
@@ -52,13 +60,25 @@ class RuntimeManager:
         self.managed_port = managed_port or select_free_port(managed_host)
         self.startup_timeout_seconds = startup_timeout_seconds
         self.health_poll_interval_seconds = health_poll_interval_seconds
+        self.max_restart_attempts = max_restart_attempts
+        self.restart_backoff_base_seconds = restart_backoff_base_seconds
         self.log_store = log_store or LogStore()
         self.environment = environment
         self._process_factory = process_factory or self._create_process
         self._health_check = health_check or self._default_health_check
+        self._on_restart = on_restart
+        self._pid_dir = pid_dir
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
         self._last_error: str | None = None
+
+        # Crash / restart state
+        self._crash_count: int = 0
+        self._restart_attempt: int = 0
+        self._started_at: datetime | None = None
+        self._last_crash_at: datetime | None = None
+        self._stopping: bool = False
 
         self.external_base_url = external_base_url.rstrip("/")
         self.external_ws_url = external_ws_url
@@ -69,11 +89,20 @@ class RuntimeManager:
             else self._default_ws_url(self.base_url)
         )
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     async def status(self) -> ComfyUIRuntimeStatus:
         self._record_process_exit_if_needed()
         reachable, reachability_error = await self._health_check(self.base_url)
         environment_status = await self.environment.status() if self.environment is not None else None
         error = None if reachable else self._last_error or reachability_error
+
+        uptime: float | None = None
+        if self._started_at is not None and self._is_managed_process_running():
+            uptime = (datetime.now(timezone.utc) - self._started_at).total_seconds()
+
         return ComfyUIRuntimeStatus(
             mode=self.mode,
             reachable=reachable,
@@ -83,6 +112,11 @@ class RuntimeManager:
             pid=self._process.pid if self._is_managed_process_running() else None,
             error=error,
             environment=environment_status,
+            crash_count=self._crash_count,
+            restart_attempt=self._restart_attempt,
+            max_restart_attempts=self.max_restart_attempts,
+            uptime_seconds=uptime,
+            last_crash_at=self._last_crash_at.isoformat() if self._last_crash_at else None,
         )
 
     async def start(self) -> ProcessActionResult:
@@ -137,12 +171,19 @@ class RuntimeManager:
                 )
                 return ProcessActionResult(status="environment_not_ready", comfyui=(await self.status()))
 
+        # Clean up any orphan from a previous backend crash.
+        self._cleanup_stale_pid()
+
+        self._stopping = False
+        self._restart_attempt = 0
+
         if not self._is_managed_process_running():
             await self._start_process()
 
         started = await self._poll_until_reachable(self.startup_timeout_seconds)
         if started:
             self._last_error = None
+            self._started_at = datetime.now(timezone.utc)
             status = await self.status()
             self.log_store.add(
                 "info",
@@ -185,8 +226,10 @@ class RuntimeManager:
             )
             return ProcessActionResult(status="not_running", comfyui=await self.status())
 
+        self._stopping = True
         await self._stop_managed_process()
         self._last_error = None
+        self._started_at = None
         self.log_store.add("info", "Managed ComfyUI stopped", "runtime.manager")
         return ProcessActionResult(status="stopped", comfyui=await self.status())
 
@@ -200,7 +243,11 @@ class RuntimeManager:
             )
         return await self.environment.bootstrap()
 
-    async def _start_process(self) -> None:
+    # ------------------------------------------------------------------
+    # Process lifecycle
+    # ------------------------------------------------------------------
+
+    async def _start_process(self, *, start_watchdog: bool = True) -> None:
         if not self._managed_port_configured:
             self.managed_port = select_free_port(self.managed_host)
             self.base_url = self._managed_base_url()
@@ -227,9 +274,18 @@ class RuntimeManager:
             "runtime.manager",
             details={"pid": self._process.pid, "host": self.managed_host, "port": self.managed_port},
         )
+        self._write_pid_file(self._process.pid)
         self._log_task = asyncio.create_task(self._capture_process_output(self._process))
+        if start_watchdog:
+            self._start_watchdog()
 
     async def _stop_managed_process(self) -> None:
+        # Cancel watchdog first to prevent restart during teardown.
+        self._cancel_watchdog()
+        await self._cleanup_process()
+
+    async def _cleanup_process(self) -> None:
+        """Terminate/kill the process and clean up. Does NOT cancel the watchdog."""
         process = self._process
         if process is None:
             return
@@ -248,6 +304,201 @@ class RuntimeManager:
                 await self._log_task
         self._log_task = None
         self._process = None
+        self._remove_pid_file()
+
+    # ------------------------------------------------------------------
+    # Crash watchdog
+    # ------------------------------------------------------------------
+
+    def _start_watchdog(self) -> None:
+        self._cancel_watchdog()
+        self._watchdog_task = asyncio.create_task(self._watchdog())
+
+    def _cancel_watchdog(self) -> None:
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                pass  # Fire and forget – the task will clean up.
+            self._watchdog_task = None
+
+    async def _watchdog(self) -> None:
+        """Await the managed process; on unexpected exit, attempt restart."""
+        process = self._process
+        if process is None:
+            return
+
+        try:
+            await process.wait()
+        except asyncio.CancelledError:
+            return
+
+        # Process has exited.
+        returncode = getattr(process, "returncode", None)
+
+        # If we are stopping intentionally, do not restart.
+        if self._stopping:
+            return
+
+        self._crash_count += 1
+        self._last_crash_at = datetime.now(timezone.utc)
+        self._record_process_exit_if_needed()
+        self.log_store.add(
+            "error",
+            "Managed ComfyUI crashed",
+            "runtime.manager",
+            details={
+                "returncode": returncode,
+                "crash_count": self._crash_count,
+                "restart_attempt": self._restart_attempt,
+            },
+        )
+
+        # Attempt controlled restart.
+        while self._restart_attempt < self.max_restart_attempts and not self._stopping:
+            self._restart_attempt += 1
+            delay = self.restart_backoff_base_seconds * (2 ** (self._restart_attempt - 1))
+            self.log_store.add(
+                "info",
+                f"Scheduling ComfyUI restart (attempt {self._restart_attempt}/{self.max_restart_attempts})",
+                "runtime.manager",
+                details={"delay_seconds": delay},
+            )
+
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                return
+
+            if self._stopping:
+                return
+
+            # Clean up the dead process state.
+            self._process = None
+            self._remove_pid_file()
+
+            try:
+                await self._start_process(start_watchdog=False)
+            except Exception as exc:
+                self.log_store.add(
+                    "error",
+                    "ComfyUI restart process spawn failed",
+                    "runtime.manager",
+                    details={"error": str(exc), "restart_attempt": self._restart_attempt},
+                )
+                continue
+
+            reachable = await self._poll_until_reachable(self.startup_timeout_seconds)
+            if reachable:
+                self._last_error = None
+                self._started_at = datetime.now(timezone.utc)
+                self._restart_attempt = 0  # Reset attempt counter on success.
+                self.log_store.add(
+                    "info",
+                    "Managed ComfyUI restarted successfully",
+                    "runtime.manager",
+                    details={
+                        "base_url": self.base_url,
+                        "pid": self._process.pid if self._process else None,
+                        "crash_count": self._crash_count,
+                    },
+                )
+                # Notify the engine service to reconfigure adapter endpoint.
+                if self._on_restart is not None:
+                    self._on_restart()
+                # Start a fresh watchdog for the newly spawned process.
+                self._start_watchdog()
+                return
+
+            # Restart attempt failed – loop to next attempt.
+            self.log_store.add(
+                "error",
+                "ComfyUI restart failed (not reachable after startup timeout)",
+                "runtime.manager",
+                details={"restart_attempt": self._restart_attempt},
+            )
+            await self._cleanup_process()
+
+        # Exhausted all restart attempts.
+        if not self._stopping:
+            self._last_error = (
+                f"ComfyUI crashed and exhausted {self.max_restart_attempts} restart attempts"
+            )
+            self.log_store.add(
+                "error",
+                "ComfyUI restart attempts exhausted",
+                "runtime.manager",
+                details={
+                    "crash_count": self._crash_count,
+                    "max_restart_attempts": self.max_restart_attempts,
+                },
+            )
+
+    # ------------------------------------------------------------------
+    # PID file management
+    # ------------------------------------------------------------------
+
+    @property
+    def _pid_file(self) -> Path | None:
+        if self._pid_dir is None:
+            return None
+        return self._pid_dir / "comfyui.pid"
+
+    def _write_pid_file(self, pid: int) -> None:
+        pid_file = self._pid_file
+        if pid_file is None:
+            return
+        try:
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            pid_file.write_text(str(pid), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _remove_pid_file(self) -> None:
+        pid_file = self._pid_file
+        if pid_file is None:
+            return
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _cleanup_stale_pid(self) -> None:
+        """Kill an orphan ComfyUI process left by a previous backend crash."""
+        pid_file = self._pid_file
+        if pid_file is None or not pid_file.exists():
+            return
+        try:
+            stale_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            self._remove_pid_file()
+            return
+
+        if self._is_pid_alive(stale_pid):
+            self.log_store.add(
+                "warning",
+                "Killing orphan ComfyUI process from previous run",
+                "runtime.manager",
+                details={"pid": stale_pid},
+            )
+            try:
+                os.kill(stale_pid, signal.SIGTERM)
+            except OSError:
+                pass
+        self._remove_pid_file()
+
+    @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # Process exists but we can't signal it.
+        return True
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     async def _capture_process_output(self, process: Any) -> None:
         stream = getattr(process, "stdout", None)

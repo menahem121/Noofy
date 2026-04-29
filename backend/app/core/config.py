@@ -25,6 +25,8 @@ class Settings:
         "COMFYUI_TORCH_CPU_INDEX_URL",
         "https://download.pytorch.org/whl/cpu",
     )
+    comfyui_max_restart_attempts: int = int(os.environ.get("COMFYUI_MAX_RESTART_ATTEMPTS", "3"))
+    comfyui_restart_backoff_base: float = float(os.environ.get("COMFYUI_RESTART_BACKOFF_BASE", "2.0"))
 
     # Resolved app-owned directory contract.
     paths: NoofyPaths = field(default_factory=resolve_paths)
