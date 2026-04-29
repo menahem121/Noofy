@@ -13,9 +13,19 @@ async def health():
     return await engine_service.health()
 
 
+@router.get("/logs")
+async def list_logs(level: str | None = None, limit: int = 200):
+    return engine_service.list_logs(level=level, limit=limit)
+
+
 @router.post("/engine/comfyui/start")
 async def start_comfyui():
     return await engine_service.start_comfyui()
+
+
+@router.post("/engine/comfyui/bootstrap")
+async def bootstrap_comfyui_runtime():
+    return await engine_service.bootstrap_comfyui_runtime()
 
 
 @router.post("/engine/comfyui/stop")
@@ -46,6 +56,11 @@ async def run_workflow(workflow_id: str, request: WorkflowRunRequest):
 @router.get("/jobs/{job_id}/progress")
 async def get_progress(job_id: str):
     return await engine_service.get_progress(job_id)
+
+
+@router.get("/jobs/{job_id}/logs")
+async def list_job_logs(job_id: str, level: str | None = None, limit: int = 200):
+    return engine_service.list_job_logs(job_id, level=level, limit=limit)
 
 
 @router.get("/jobs/{job_id}/events")

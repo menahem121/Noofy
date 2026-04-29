@@ -10,6 +10,7 @@ import httpx
 import websockets
 
 from app.engine.job_store import JobStore
+from app.engine.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.workflows.package import WorkflowPackage
 
@@ -21,12 +22,19 @@ class ComfyUIEngineAdapter:
         models_dir: Path,
         ws_url: str | None = None,
         job_store: JobStore | None = None,
+        log_store: LogStore | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
         self.models_dir = models_dir
         self.job_store = job_store or JobStore()
+        self.log_store = log_store or LogStore()
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
+        self._terminal_log_job_ids: set[str] = set()
+
+    def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.ws_url = ws_url or self._default_ws_url(self.base_url)
 
     async def run_workflow(
         self,
@@ -39,6 +47,14 @@ class ComfyUIEngineAdapter:
         client_id = options.get("client_id") or f"local-ai-workflow-{uuid4()}"
         job = EngineJob(job_id=job_id, workflow_id=workflow_package.metadata.id, engine="comfyui", status="queued")
         self.job_store.add_job(job)
+        self.log_store.add(
+            "info",
+            "Created ComfyUI job",
+            "comfyui.adapter",
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+            details={"client_id": client_id},
+        )
 
         if options.get("listen_for_events", True):
             await self._start_event_listener(
@@ -57,10 +73,31 @@ class ComfyUIEngineAdapter:
             },
         }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(f"{self.base_url}/prompt", json=payload)
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(f"{self.base_url}/prompt", json=payload)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            self._stop_event_listener(job_id)
+            self.job_store.set_progress(JobProgress(job_id=job_id, status="failed", message=str(exc)))
+            self.job_store.set_result(JobResult(job_id=job_id, status="failed", error=str(exc)))
+            self.log_store.add(
+                "error",
+                "Failed to submit workflow to ComfyUI",
+                "comfyui.adapter",
+                job_id=job_id,
+                workflow_id=workflow_package.metadata.id,
+                details={"error": str(exc)},
+            )
+            raise
 
+        self.log_store.add(
+            "info",
+            "Submitted workflow to ComfyUI",
+            "comfyui.adapter",
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+        )
         return job
 
     async def get_progress(self, job_id: str) -> JobProgress:
@@ -69,6 +106,7 @@ class ComfyUIEngineAdapter:
             progress = self._progress_from_history(job_id, history_entry)
             self.job_store.set_progress(progress)
             self.job_store.set_result(self._result_from_history(job_id, history_entry))
+            self._log_terminal_progress_once(progress)
             return progress
 
         queue_status = await self._get_queue_status(job_id)
@@ -89,6 +127,8 @@ class ComfyUIEngineAdapter:
         self.job_store.set_progress(progress)
         self.job_store.set_result(JobResult(job_id=job_id, status="canceled"))
         self._stop_event_listener(job_id)
+        self.log_store.add("info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id)
+        self._terminal_log_job_ids.add(job_id)
         return progress
 
     async def get_result(self, job_id: str) -> JobResult:
@@ -98,7 +138,9 @@ class ComfyUIEngineAdapter:
 
         result = self._result_from_history(job_id, history_entry)
         self.job_store.set_result(result)
-        self.job_store.set_progress(self._progress_from_history(job_id, history_entry))
+        progress = self._progress_from_history(job_id, history_entry)
+        self.job_store.set_progress(progress)
+        self._log_terminal_progress_once(progress)
         return result
 
     async def list_available_models(self) -> list[ModelInfo]:
@@ -114,6 +156,11 @@ class ComfyUIEngineAdapter:
                 folders_response.raise_for_status()
                 folders = folders_response.json()
         except httpx.HTTPError:
+            self.log_store.add(
+                "warning",
+                "Could not list models from ComfyUI API; falling back to filesystem",
+                "comfyui.adapter",
+            )
             return []
 
         if not isinstance(folders, list):
@@ -126,6 +173,12 @@ class ComfyUIEngineAdapter:
                     models_response = await client.get(f"{self.base_url}/models/{folder}")
                     models_response.raise_for_status()
                 except httpx.HTTPError:
+                    self.log_store.add(
+                        "warning",
+                        "Could not list ComfyUI model folder",
+                        "comfyui.adapter",
+                        details={"folder": folder},
+                    )
                     continue
 
                 filenames = models_response.json()
@@ -162,6 +215,14 @@ class ComfyUIEngineAdapter:
         self._listener_tasks[job_id] = task
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(ready_event.wait(), timeout=connect_timeout)
+        if not ready_event.is_set():
+            self.log_store.add(
+                "warning",
+                "Timed out waiting for ComfyUI WebSocket listener",
+                "comfyui.adapter",
+                job_id=job_id,
+                details={"timeout_seconds": connect_timeout},
+            )
 
     def _stop_event_listener(self, job_id: str) -> None:
         task = self._listener_tasks.pop(job_id, None)
@@ -173,6 +234,7 @@ class ComfyUIEngineAdapter:
         try:
             async with websockets.connect(ws_url) as websocket:
                 ready_event.set()
+                self.log_store.add("debug", "Connected to ComfyUI WebSocket", "comfyui.adapter", job_id=job_id)
                 async for raw_message in websocket:
                     if not isinstance(raw_message, str):
                         continue
@@ -193,6 +255,13 @@ class ComfyUIEngineAdapter:
                         message=f"ComfyUI WebSocket listener stopped: {exc}",
                     )
                 )
+                self.log_store.add(
+                    "warning",
+                    "ComfyUI WebSocket listener stopped",
+                    "comfyui.adapter",
+                    job_id=job_id,
+                    details={"error": str(exc)},
+                )
 
     def _handle_ws_message(self, job_id: str, raw_message: str) -> bool:
         with contextlib.suppress(json.JSONDecodeError):
@@ -202,12 +271,20 @@ class ComfyUIEngineAdapter:
                 self.job_store.set_progress(progress)
                 if progress.status == "failed":
                     self.job_store.set_result(JobResult(job_id=job_id, status="failed", error=progress.message))
+                self._log_terminal_progress_once(progress)
                 if progress.status in {"completed", "failed", "canceled"}:
                     return True
 
             result = self._result_from_ws_message(job_id, message)
             if result is not None:
                 self.job_store.set_result(result)
+                self.log_store.add(
+                    "debug",
+                    "ComfyUI node output received",
+                    "comfyui.adapter",
+                    job_id=job_id,
+                    details={"output_count": len(result.outputs)},
+                )
                 return result.status in {"completed", "failed", "canceled"}
         return False
 
@@ -335,6 +412,26 @@ class ComfyUIEngineAdapter:
 
     def _has_progress_detail(self, progress: JobProgress) -> bool:
         return progress.value is not None or progress.max is not None or progress.current_node is not None or progress.message is not None
+
+    def _log_terminal_progress_once(self, progress: JobProgress) -> None:
+        if progress.status not in {"completed", "failed", "canceled"}:
+            return
+        if progress.job_id in self._terminal_log_job_ids:
+            return
+        self._terminal_log_job_ids.add(progress.job_id)
+
+        if progress.status == "completed":
+            self.log_store.add("info", "ComfyUI execution completed", "comfyui.adapter", job_id=progress.job_id)
+        elif progress.status == "failed":
+            self.log_store.add(
+                "error",
+                "ComfyUI execution failed",
+                "comfyui.adapter",
+                job_id=progress.job_id,
+                details={"message": progress.message, "node": progress.current_node},
+            )
+        elif progress.status == "canceled":
+            self.log_store.add("warning", "ComfyUI execution interrupted", "comfyui.adapter", job_id=progress.job_id)
 
     def _progress_from_history(self, job_id: str, history_entry: dict[str, Any]) -> JobProgress:
         status = history_entry.get("status", {})

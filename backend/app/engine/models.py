@@ -1,8 +1,11 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 JobStatus = Literal["queued", "running", "completed", "failed", "canceled", "missing_models", "unknown"]
+LogLevel = Literal["debug", "info", "warning", "error"]
+RuntimeMode = Literal["external", "managed"]
 
 
 class WorkflowRunRequest(BaseModel):
@@ -53,13 +56,57 @@ class JobResult(BaseModel):
     error: str | None = None
 
 
+class DiagnosticEvent(BaseModel):
+    id: int
+    timestamp: datetime
+    level: LogLevel
+    message: str
+    source: str
+    job_id: str | None = None
+    workflow_id: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiagnosticLogResponse(BaseModel):
+    events: list[DiagnosticEvent] = Field(default_factory=list)
+
+
+class RuntimeDependencyStatus(BaseModel):
+    name: str
+    available: bool
+    error: str | None = None
+
+
+class RuntimeEnvironmentStatus(BaseModel):
+    repo_dir: str
+    main_py_exists: bool
+    requirements_file: str
+    requirements_file_exists: bool
+    runtime_dir: str
+    runtime_dir_writable: bool
+    log_dir: str
+    cache_dir: str
+    python_executable: str
+    python_exists: bool
+    dependencies: list[RuntimeDependencyStatus] = Field(default_factory=list)
+    prepared: bool = False
+    error: str | None = None
+
+
+class RuntimeBootstrapResult(BaseModel):
+    status: str
+    environment: RuntimeEnvironmentStatus | None = None
+
+
 class ComfyUIRuntimeStatus(BaseModel):
+    mode: RuntimeMode = "external"
     reachable: bool
     base_url: str
     repo_dir: str
     managed_process_running: bool = False
     pid: int | None = None
     error: str | None = None
+    environment: RuntimeEnvironmentStatus | None = None
 
 
 class ProcessActionResult(BaseModel):
@@ -79,3 +126,4 @@ class BackendHealthReport(BaseModel):
     comfyui: ComfyUIRuntimeStatus
     workflow_package_count: int
     workflows: list[WorkflowHealthSummary] = Field(default_factory=list)
+    latest_error: DiagnosticEvent | None = None

@@ -3,6 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.engine.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 
 
@@ -30,6 +31,19 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert result.outputs[0]["node_id"] == "9"
     assert "sample+image.png" in result.outputs[0]["output"]["images"][0]["view_url"]
+
+
+def test_terminal_progress_logs_once(tmp_path: Path) -> None:
+    log_store = LogStore()
+    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path, log_store=log_store)
+    progress = adapter._progress_from_history("job-1", {"status": {"completed": True}})
+
+    adapter._log_terminal_progress_once(progress)
+    adapter._log_terminal_progress_once(progress)
+
+    events = log_store.list_events(job_id="job-1").events
+    assert len(events) == 1
+    assert events[0].message == "ComfyUI execution completed"
 
 
 def test_progress_from_failed_history(tmp_path: Path) -> None:
@@ -85,6 +99,29 @@ def test_progress_from_comfyui_error_ws_message(tmp_path: Path) -> None:
     assert progress.status == "failed"
     assert progress.current_node == "3"
     assert progress.message == "model failed"
+
+
+def test_handle_ws_error_message_logs_failure(tmp_path: Path) -> None:
+    log_store = LogStore()
+    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path, log_store=log_store)
+
+    should_stop = adapter._handle_ws_message(
+        "job-1",
+        """
+        {
+          "type": "execution_error",
+          "data": {
+            "prompt_id": "job-1",
+            "node_id": "3",
+            "exception_message": "model failed"
+          }
+        }
+        """,
+    )
+
+    assert should_stop
+    assert log_store.latest_error() is not None
+    assert log_store.latest_error().message == "ComfyUI execution failed"
 
 
 def test_result_from_comfyui_executed_ws_message(tmp_path: Path) -> None:

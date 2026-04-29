@@ -5,8 +5,20 @@ from typing import Any
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.models import BackendHealthReport, JobProgress, JobResult, ModelInfo, WorkflowHealthSummary, WorkflowValidationResult
-from app.engine.process_manager import ComfyUIProcessManager
+from app.engine.diagnostics import LogStore
+from app.engine.models import (
+    BackendHealthReport,
+    DiagnosticLogResponse,
+    JobProgress,
+    JobResult,
+    LogLevel,
+    ModelInfo,
+    RuntimeBootstrapResult,
+    WorkflowHealthSummary,
+    WorkflowValidationResult,
+)
+from app.runtime.environment import RuntimeEnvironment
+from app.runtime.manager import RuntimeManager
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
@@ -18,12 +30,14 @@ class EngineService:
         workflow_loader: WorkflowPackageLoader,
         workflow_validator: WorkflowPackageValidator,
         engine_adapter: EngineAdapter,
-        process_manager: ComfyUIProcessManager,
+        runtime_manager: RuntimeManager,
+        log_store: LogStore,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
         self.engine_adapter = engine_adapter
-        self.process_manager = process_manager
+        self.runtime_manager = runtime_manager
+        self.log_store = log_store
 
     def list_workflows(self) -> list[dict[str, str]]:
         return [
@@ -38,21 +52,61 @@ class EngineService:
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
-        return await self._validate_package(package)
+        validation = await self._validate_package(package)
+        if validation.valid:
+            self.log_store.add("info", "Workflow validation passed", "engine.service", workflow_id=workflow_id)
+        else:
+            self.log_store.add(
+                "warning",
+                "Workflow validation failed",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "missing_models": [model.model_dump() for model in validation.missing_models],
+                    "errors": validation.errors,
+                },
+            )
+        return validation
 
     async def run_workflow(self, workflow_id: str, inputs: dict[str, Any], options: dict[str, Any]):
         package = self.workflow_loader.get_package(workflow_id)
         validation = await self._validate_package(package)
         if not validation.valid:
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by validation failure",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "missing_models": [model.model_dump() for model in validation.missing_models],
+                    "errors": validation.errors,
+                },
+            )
             return validation
 
         graph = self._apply_input_bindings(package, inputs)
-        return await self.engine_adapter.run_workflow(package, graph, inputs, options)
+        self.log_store.add(
+            "info",
+            "Submitting workflow run",
+            "engine.service",
+            workflow_id=workflow_id,
+            details={"input_keys": sorted(inputs.keys())},
+        )
+        job = await self.engine_adapter.run_workflow(package, graph, inputs, options)
+        self.log_store.add(
+            "info",
+            "Workflow run queued",
+            "engine.service",
+            job_id=job.job_id,
+            workflow_id=workflow_id,
+        )
+        return job
 
     async def get_progress(self, job_id: str) -> JobProgress:
         return await self.engine_adapter.get_progress(job_id)
 
     async def cancel_job(self, job_id: str) -> JobProgress:
+        self.log_store.add("info", "Cancel requested", "engine.service", job_id=job_id)
         return await self.engine_adapter.cancel_job(job_id)
 
     async def get_result(self, job_id: str) -> JobResult:
@@ -73,6 +127,12 @@ class EngineService:
     async def list_available_models(self):
         return await self.engine_adapter.list_available_models()
 
+    def list_logs(self, *, level: LogLevel | None = None, limit: int = 200) -> DiagnosticLogResponse:
+        return self.log_store.list_events(level=level, limit=limit)
+
+    def list_job_logs(self, job_id: str, *, level: LogLevel | None = None, limit: int = 200) -> DiagnosticLogResponse:
+        return self.log_store.list_events(job_id=job_id, level=level, limit=limit)
+
     async def health(self) -> BackendHealthReport:
         packages = self.workflow_loader.list_packages()
         workflow_summaries: list[WorkflowHealthSummary] = []
@@ -88,7 +148,7 @@ class EngineService:
                 )
             )
 
-        comfyui_status = await self.process_manager.status()
+        comfyui_status = await self.runtime_manager.status()
         status = "ok" if comfyui_status.reachable and all(item.valid for item in workflow_summaries) else "degraded"
 
         return BackendHealthReport(
@@ -96,13 +156,19 @@ class EngineService:
             comfyui=comfyui_status,
             workflow_package_count=len(packages),
             workflows=workflow_summaries,
+            latest_error=self.log_store.latest_error(),
         )
 
     async def start_comfyui(self):
-        return await self.process_manager.start()
+        result = await self.runtime_manager.start()
+        self._configure_adapter_endpoint()
+        return result
 
     async def stop_comfyui(self):
-        return await self.process_manager.stop()
+        return await self.runtime_manager.stop()
+
+    async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
+        return await self.runtime_manager.bootstrap_environment()
 
     async def _validate_package(self, package: WorkflowPackage) -> WorkflowValidationResult:
         structure_result = self.workflow_validator.validate_structure(package)
@@ -131,16 +197,46 @@ class EngineService:
             node_inputs[input_name] = inputs[exposed_input.id]
         return graph
 
+    def _configure_adapter_endpoint(self) -> None:
+        configure_endpoint = getattr(self.engine_adapter, "configure_endpoint", None)
+        if configure_endpoint is not None:
+            configure_endpoint(self.runtime_manager.base_url, self.runtime_manager.ws_url)
+
 
 def create_default_engine_service() -> EngineService:
     loader = WorkflowPackageLoader(settings.workflows_dir)
     validator = WorkflowPackageValidator()
-    adapter = ComfyUIEngineAdapter(settings.comfyui_base_url, settings.comfyui_models_dir, settings.comfyui_ws_url)
-    process_manager = ComfyUIProcessManager(
-        base_url=settings.comfyui_base_url,
+    log_store = LogStore()
+    runtime_environment = RuntimeEnvironment(
         repo_dir=settings.comfyui_repo_dir,
-        python_executable=settings.comfyui_python_executable,
-        host=settings.comfyui_host,
-        port=settings.comfyui_port,
+        runtime_dir=settings.runtime_dir,
+        bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
+        python_executable_override=settings.comfyui_python_executable,
+        log_store=log_store,
     )
-    return EngineService(loader, validator, adapter, process_manager)
+    runtime_manager = RuntimeManager(
+        mode=settings.comfyui_runtime_mode,
+        external_base_url=settings.comfyui_base_url,
+        external_ws_url=settings.comfyui_ws_url,
+        repo_dir=settings.comfyui_repo_dir,
+        python_executable=runtime_environment.python_executable,
+        managed_host=settings.comfyui_managed_host,
+        managed_port=settings.comfyui_managed_port,
+        startup_timeout_seconds=settings.comfyui_startup_timeout_seconds,
+        health_poll_interval_seconds=settings.comfyui_health_poll_interval_seconds,
+        log_store=log_store,
+        environment=runtime_environment,
+    )
+    adapter = ComfyUIEngineAdapter(
+        runtime_manager.base_url,
+        settings.comfyui_models_dir,
+        runtime_manager.ws_url,
+        log_store=log_store,
+    )
+    log_store.add(
+        "info",
+        "Backend engine service initialized",
+        "engine.service",
+        details={"runtime_mode": runtime_manager.mode},
+    )
+    return EngineService(loader, validator, adapter, runtime_manager, log_store)

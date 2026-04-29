@@ -11,6 +11,8 @@ The app owns the engine contract. UI code should depend on this contract, not on
 - `getResult(jobId)`: return final outputs, errors, and generated files.
 - `listAvailableModels()`: report models available to the active engine.
 - `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability.
+- `listLogs(level?, limit?)`: return recent backend and engine diagnostic events.
+- `listJobLogs(jobId, level?, limit?)`: return diagnostic events for a specific job.
 
 ## Adapter Boundary
 
@@ -31,6 +33,7 @@ Load workflow package
   -> check required models against active engine
   -> submit graph to active EngineAdapter
   -> stream progress
+  -> record diagnostics and errors
   -> collect outputs
   -> return result to frontend
 ```
@@ -42,6 +45,19 @@ For the first adapter:
 - Submit workflow graph through ComfyUI `/prompt`.
 - Track progress through ComfyUI `/ws`.
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
+
+## Diagnostics
+
+The backend should record app-readable diagnostic events for:
+
+- workflow validation success/failure
+- workflow submission and queueing
+- missing models
+- ComfyUI HTTP and WebSocket failures
+- job completion, cancellation, and execution errors
+- managed sidecar lifecycle events
+
+Diagnostics are for both the desktop UI and future agents. Prefer structured events over ad hoc print output.
 - Read queue and job state through `/queue` and `/history`.
 - Retrieve generated files through `/view`.
 - Inspect models and node information through `/models` and `/object_info`.

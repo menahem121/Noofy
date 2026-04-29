@@ -18,6 +18,7 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
 - [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.
 - [docs/MANAGED_COMFYUI_SIDECAR.md](docs/MANAGED_COMFYUI_SIDECAR.md): v1 requirement for app-managed ComfyUI startup, isolation, logs, health, and shutdown.
+- [docs/FEEDBACK_TESTING_MONITORING.md](docs/FEEDBACK_TESTING_MONITORING.md): diagnostics, automated tests, progress feedback, logs, and monitoring direction.
 
 ## Working Guidance
 
@@ -28,6 +29,10 @@ When adding engine behavior, implement it through an `EngineAdapter`.
 External ComfyUI URLs are development mode only. The v1 product must use an app-managed, isolated ComfyUI sidecar so users do not manually launch ComfyUI or install its Python dependencies.
 
 Workflow model validation must use the active `EngineAdapter`. Do not validate required models by reading a hardcoded local `ComfyUI-official-repo/models` folder.
+
+When adding backend behavior, add structured diagnostics for success, failure, and important state transitions so the UI and future agents can understand what happened.
+
+When adding or changing meaningful behavior, add automated tests for the success path and the likely failure path. Also add or update feedback/monitoring surfaces when the behavior affects workflow execution, model validation, ComfyUI communication, sidecar lifecycle, progress, errors, or user-visible state.
 
 When adding workflow behavior, prefer workflow packages and dashboard schema over hardcoded single-purpose flows.
 
