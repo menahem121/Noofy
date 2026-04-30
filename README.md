@@ -49,6 +49,7 @@ The end user would then open the workflow as a clean, intuitive interface design
 - [Architecture](docs/ARCHITECTURE.md)
 - [Engine contract](docs/ENGINE_CONTRACT.md)
 - [Workflow packages](docs/WORKFLOW_PACKAGES.md)
+- [Runtime isolation architecture](docs/RUNTIME_ISOLATION_ARCHITECTURE.md)
 - [Milestone 1](docs/MILESTONE_1.md)
 - [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
 
