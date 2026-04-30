@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Bash(.venv/bin/python -c \"from app.engine.service import create_default_engine_service; from app.runtime.capsule_installer import CapsuleInstaller; from app.runtime.model_store import ModelStore; from app.runtime.install_state import InstallStateStore; from app.workflows.capsule import CapsuleLockLoader; print\\('imports ok'\\)\")",
+      "Bash(.venv/bin/python -m pytest tests/test_capsule_loader.py tests/test_install_state_store.py tests/test_model_store.py tests/test_capsule_installer.py tests/test_engine_service_install.py -v)"
+    ]
+  }
+}

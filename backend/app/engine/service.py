@@ -17,8 +17,25 @@ from app.engine.models import (
     WorkflowHealthSummary,
     WorkflowValidationResult,
 )
+from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.environment import RuntimeEnvironment
+from app.runtime.install_state import (
+    InstallStateStore,
+    user_facing_install_message,
+)
+from app.runtime.isolation import CapsuleLock, InstallState, InstallStatus, TrustLevel
 from app.runtime.manager import RuntimeManager
+from app.runtime.model_store import ModelStore, http_streaming_downloader
+from app.runtime.supervisor import (
+    CORE_RUNNER_FINGERPRINT,
+    CORE_RUNNER_ID,
+    JobRunnerNotFoundError,
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerStatus,
+    RunnerSupervisor,
+)
+from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
@@ -29,15 +46,19 @@ class EngineService:
         self,
         workflow_loader: WorkflowPackageLoader,
         workflow_validator: WorkflowPackageValidator,
-        engine_adapter: EngineAdapter,
+        runner_supervisor: RunnerSupervisor,
         runtime_manager: RuntimeManager,
         log_store: LogStore,
+        capsule_loader: CapsuleLockLoader | None = None,
+        capsule_installer: CapsuleInstaller | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
-        self.engine_adapter = engine_adapter
+        self.runner_supervisor = runner_supervisor
         self.runtime_manager = runtime_manager
         self.log_store = log_store
+        self.capsule_loader = capsule_loader
+        self.capsule_installer = capsule_installer
 
     def list_workflows(self) -> list[dict[str, str]]:
         return [
@@ -50,11 +71,78 @@ class EngineService:
             for package in self.workflow_loader.list_packages()
         ]
 
+    def list_runners(self) -> list[RunnerDescriptor]:
+        return self.runner_supervisor.list_runners()
+
+    # ------------------------------------------------------------------
+    # Capsule install pipeline (Phase 3)
+    # ------------------------------------------------------------------
+
+    def get_install_state(self, workflow_id: str) -> dict[str, object]:
+        """Return the user-facing install state for a workflow.
+
+        Workflows that ship a Noofy Verified capsule lock surface an
+        InstallState record; workflows without a lock return an
+        unsupported-shaped payload so the UI can render gracefully.
+        """
+        if self.capsule_loader is None or self.capsule_installer is None:
+            return self._unsupported_install_payload(workflow_id)
+        capsule_lock = self._phase3_verified_capsule_lock(workflow_id)
+        if capsule_lock is None:
+            return self._unsupported_install_payload(workflow_id)
+
+        state = self.capsule_installer.get_state(capsule_lock)
+        return self._install_payload(workflow_id, state)
+
+    async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
+        if self.capsule_loader is None or self.capsule_installer is None:
+            self.log_store.add(
+                "warning",
+                "Workflow prepare requested but capsule installer is not configured",
+                "engine.service",
+                workflow_id=workflow_id,
+            )
+            return self._unsupported_install_payload(workflow_id)
+
+        capsule_lock = self._phase3_verified_capsule_lock(workflow_id)
+        if capsule_lock is None:
+            self.log_store.add(
+                "warning",
+                "Workflow prepare requested but no verified bundled capsule is available",
+                "engine.service",
+                workflow_id=workflow_id,
+            )
+            return self._unsupported_install_payload(workflow_id)
+
+        try:
+            state = await self.capsule_installer.prepare(capsule_lock)
+        except CapsuleInstallError as exc:
+            self.log_store.add(
+                "error",
+                "Capsule preparation failed",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "error": str(exc),
+                },
+            )
+            return self._install_payload(workflow_id, exc.state)
+        return self._install_payload(workflow_id, state)
+
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
-        validation = await self._validate_package(package)
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+        validation = await self._validate_package(package, adapter)
         if validation.valid:
-            self.log_store.add("info", "Workflow validation passed", "engine.service", workflow_id=workflow_id)
+            self.log_store.add(
+                "info",
+                "Workflow validation passed",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={"runner_id": runner.runner_id},
+            )
         else:
             self.log_store.add(
                 "warning",
@@ -62,6 +150,7 @@ class EngineService:
                 "engine.service",
                 workflow_id=workflow_id,
                 details={
+                    "runner_id": runner.runner_id,
                     "missing_models": [model.model_dump() for model in validation.missing_models],
                     "errors": validation.errors,
                 },
@@ -70,7 +159,10 @@ class EngineService:
 
     async def run_workflow(self, workflow_id: str, inputs: dict[str, Any], options: dict[str, Any]):
         package = self.workflow_loader.get_package(workflow_id)
-        validation = await self._validate_package(package)
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+
+        validation = await self._validate_package(package, adapter)
         if not validation.valid:
             self.log_store.add(
                 "warning",
@@ -78,6 +170,7 @@ class EngineService:
                 "engine.service",
                 workflow_id=workflow_id,
                 details={
+                    "runner_id": runner.runner_id,
                     "missing_models": [model.model_dump() for model in validation.missing_models],
                     "errors": validation.errors,
                 },
@@ -90,27 +183,32 @@ class EngineService:
             "Submitting workflow run",
             "engine.service",
             workflow_id=workflow_id,
-            details={"input_keys": sorted(inputs.keys())},
+            details={"runner_id": runner.runner_id, "input_keys": sorted(inputs.keys())},
         )
-        job = await self.engine_adapter.run_workflow(package, graph, inputs, options)
+        job = await adapter.run_workflow(package, graph, inputs, options)
+        self.runner_supervisor.register_job(job.job_id, runner.runner_id)
         self.log_store.add(
             "info",
             "Workflow run queued",
             "engine.service",
             job_id=job.job_id,
             workflow_id=workflow_id,
+            details={"runner_id": runner.runner_id},
         )
         return job
 
     async def get_progress(self, job_id: str) -> JobProgress:
-        return await self.engine_adapter.get_progress(job_id)
+        adapter = self._adapter_for_job(job_id)
+        return await adapter.get_progress(job_id)
 
     async def cancel_job(self, job_id: str) -> JobProgress:
         self.log_store.add("info", "Cancel requested", "engine.service", job_id=job_id)
-        return await self.engine_adapter.cancel_job(job_id)
+        adapter = self._adapter_for_job(job_id)
+        return await adapter.cancel_job(job_id)
 
     async def get_result(self, job_id: str) -> JobResult:
-        return await self.engine_adapter.get_result(job_id)
+        adapter = self._adapter_for_job(job_id)
+        return await adapter.get_result(job_id)
 
     async def stream_progress_events(self, job_id: str):
         while True:
@@ -125,7 +223,8 @@ class EngineService:
             await asyncio.sleep(1)
 
     async def list_available_models(self):
-        return await self.engine_adapter.list_available_models()
+        adapter = self._core_adapter()
+        return await adapter.list_available_models()
 
     def list_logs(self, *, level: LogLevel | None = None, limit: int = 200) -> DiagnosticLogResponse:
         return self.log_store.list_events(level=level, limit=limit)
@@ -138,7 +237,9 @@ class EngineService:
         workflow_summaries: list[WorkflowHealthSummary] = []
 
         for package in packages:
-            validation = await self._validate_package(package)
+            runner = self.runner_supervisor.acquire_runner(package)
+            adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+            validation = await self._validate_package(package, adapter)
             workflow_summaries.append(
                 WorkflowHealthSummary(
                     workflow_id=package.metadata.id,
@@ -164,7 +265,7 @@ class EngineService:
 
     async def start_comfyui(self):
         result = await self.runtime_manager.start()
-        self._configure_adapter_endpoint()
+        self._reconfigure_core_runner_endpoint()
         return result
 
     async def stop_comfyui(self):
@@ -177,14 +278,76 @@ class EngineService:
         if self.runtime_manager.mode == "managed":
             await self.runtime_manager.stop()
 
-    async def _validate_package(self, package: WorkflowPackage) -> WorkflowValidationResult:
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    async def _validate_package(
+        self,
+        package: WorkflowPackage,
+        adapter: EngineAdapter,
+    ) -> WorkflowValidationResult:
         structure_result = self.workflow_validator.validate_structure(package)
         if not structure_result.valid:
             return structure_result
 
-        available_models = self._available_model_keys(await self.engine_adapter.list_available_models())
+        available_models = self._available_model_keys(await adapter.list_available_models())
         missing_models = self.workflow_validator.validate_models(package, available_models)
         return self.workflow_validator.combine(package, structure_result, missing_models)
+
+    def _install_payload(self, workflow_id: str, state: InstallState) -> dict[str, object]:
+        return {
+            "workflow_id": workflow_id,
+            "capsule_fingerprint": state.capsule_fingerprint,
+            "status": state.status.value,
+            "user_facing_message": user_facing_install_message(state.status),
+            "installed_at": state.installed_at,
+            "last_used_at": state.last_used_at,
+            "smoke_test_status": state.smoke_test_status.value,
+            "last_error": state.last_error,
+        }
+
+    def _phase3_verified_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
+        if self.capsule_loader is None:
+            return None
+        try:
+            capsule_lock = self.capsule_loader.get_bundled_capsule_lock(workflow_id)
+        except KeyError:
+            return None
+        if capsule_lock.workflow.package_id != workflow_id:
+            return None
+        if capsule_lock.workflow.trust_level is not TrustLevel.NOOFY_VERIFIED:
+            return None
+        if capsule_lock.trust.level is not TrustLevel.NOOFY_VERIFIED:
+            return None
+        if capsule_lock.custom_nodes:
+            return None
+        return capsule_lock
+
+    def _unsupported_install_payload(self, workflow_id: str) -> dict[str, object]:
+        return {
+            "workflow_id": workflow_id,
+            "capsule_fingerprint": None,
+            "status": InstallStatus.UNSUPPORTED.value,
+            "user_facing_message": user_facing_install_message(InstallStatus.UNSUPPORTED),
+            "installed_at": None,
+            "last_used_at": None,
+            "smoke_test_status": "not_run",
+            "last_error": None,
+        }
+
+    def _adapter_for_job(self, job_id: str) -> EngineAdapter:
+        try:
+            return self.runner_supervisor.adapter_for_job(job_id)
+        except JobRunnerNotFoundError:
+            # The job was either submitted before the registry existed or the
+            # registry was reset. Fall back to the core runner so existing API
+            # responses keep working while later phases tighten this contract.
+            return self._core_adapter()
+
+    def _core_adapter(self) -> EngineAdapter:
+        descriptor = self.runner_supervisor.core_runner()
+        return self.runner_supervisor.get_adapter(descriptor.runner_id)
 
     def _available_model_keys(self, models: list[ModelInfo]) -> set[tuple[str, str]]:
         return {(model.folder, model.filename) for model in models}
@@ -204,8 +367,16 @@ class EngineService:
             node_inputs[input_name] = inputs[exposed_input.id]
         return graph
 
-    def _configure_adapter_endpoint(self) -> None:
-        self.engine_adapter.configure_endpoint(self.runtime_manager.base_url, self.runtime_manager.ws_url)
+    def _reconfigure_core_runner_endpoint(self) -> None:
+        try:
+            descriptor = self.runner_supervisor.core_runner()
+        except LookupError:
+            return
+        self.runner_supervisor.update_runner_endpoint(
+            descriptor.runner_id,
+            self.runtime_manager.base_url,
+            self.runtime_manager.ws_url,
+        )
 
 
 def create_default_engine_service() -> EngineService:
@@ -252,10 +423,46 @@ def create_default_engine_service() -> EngineService:
         log_store=log_store,
     )
 
-    # Wire the on_restart callback so the adapter learns the new URL after
-    # a crash-restart that picked a new port.
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        RunnerDescriptor(
+            runner_id=CORE_RUNNER_ID,
+            kind=RunnerKind.CORE_COMFYUI,
+            base_url=runtime_manager.base_url,
+            ws_url=runtime_manager.ws_url,
+            fingerprint=CORE_RUNNER_FINGERPRINT,
+            status=RunnerStatus.UNKNOWN,
+        ),
+        adapter,
+    )
+
+    capsule_loader = CapsuleLockLoader(
+        settings.workflows_dir,
+        user_packages_dir=paths.user_workflows_dir,
+    )
+    install_state_store = InstallStateStore(paths.workflow_store_dir / "install-state")
+    model_store = ModelStore(
+        blobs_dir=paths.model_blobs_dir,
+        refs_dir=paths.model_refs_dir,
+        materialized_dir=paths.model_materialized_dir,
+        transactions_dir=paths.install_transactions_dir,
+        log_store=log_store,
+        downloader=http_streaming_downloader,
+    )
+    capsule_installer = CapsuleInstaller(
+        install_state_store=install_state_store,
+        model_store=model_store,
+        log_store=log_store,
+    )
+
+    # Wire the on_restart callback so the supervisor (and its adapter) learn
+    # the new URL after a crash-restart that picked a new port.
     def _reconfigure_adapter() -> None:
-        adapter.configure_endpoint(runtime_manager.base_url, runtime_manager.ws_url)
+        supervisor.update_runner_endpoint(
+            CORE_RUNNER_ID,
+            runtime_manager.base_url,
+            runtime_manager.ws_url,
+        )
 
     runtime_manager._on_restart = _reconfigure_adapter
 
@@ -263,6 +470,18 @@ def create_default_engine_service() -> EngineService:
         "info",
         "Backend engine service initialized",
         "engine.service",
-        details={"runtime_mode": runtime_manager.mode, "data_dir": str(paths.data_dir)},
+        details={
+            "runtime_mode": runtime_manager.mode,
+            "data_dir": str(paths.data_dir),
+            "core_runner_id": CORE_RUNNER_ID,
+        },
     )
-    return EngineService(loader, validator, adapter, runtime_manager, log_store)
+    return EngineService(
+        loader,
+        validator,
+        supervisor,
+        runtime_manager,
+        log_store,
+        capsule_loader=capsule_loader,
+        capsule_installer=capsule_installer,
+    )

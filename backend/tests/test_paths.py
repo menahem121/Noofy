@@ -54,6 +54,18 @@ class TestNoofyDataDirOverride:
         assert paths.logs_dir == Path("/tmp/noofy-test/logs")
         assert paths.cache_dir == Path("/tmp/noofy-test/cache")
         assert paths.temp_dir == Path("/tmp/noofy-test/temp")
+        assert paths.runtime_store_dir == Path("/tmp/noofy-test/runtime-store")
+        assert paths.dependency_envs_dir == Path("/tmp/noofy-test/runtime-store/envs")
+        assert paths.runner_workspaces_dir == Path("/tmp/noofy-test/runtime-store/runner-workspaces")
+        assert paths.install_transactions_dir == Path("/tmp/noofy-test/runtime-store/transactions")
+        assert paths.workflow_store_dir == Path("/tmp/noofy-test/workflow-store")
+        assert paths.workflow_packages_store_dir == Path("/tmp/noofy-test/workflow-store/packages")
+        assert paths.custom_node_cache_dir == Path("/tmp/noofy-test/custom-node-cache")
+        assert paths.wheel_cache_dir == Path("/tmp/noofy-test/wheel-cache")
+        assert paths.model_store_dir == Path("/tmp/noofy-test/model-store")
+        assert paths.model_blobs_dir == Path("/tmp/noofy-test/model-store/blobs/sha256")
+        assert paths.model_refs_dir == Path("/tmp/noofy-test/model-store/refs")
+        assert paths.model_materialized_dir == Path("/tmp/noofy-test/model-store/materialized")
 
 
 class TestTargetedOverrides:
@@ -130,6 +142,18 @@ class TestEnsureDirectories:
         assert paths.logs_dir.is_dir()
         assert paths.cache_dir.is_dir()
         assert paths.temp_dir.is_dir()
+        assert paths.runtime_store_dir.is_dir()
+        assert paths.dependency_envs_dir.is_dir()
+        assert paths.runner_workspaces_dir.is_dir()
+        assert paths.install_transactions_dir.is_dir()
+        assert paths.workflow_store_dir.is_dir()
+        assert paths.workflow_packages_store_dir.is_dir()
+        assert paths.custom_node_cache_dir.is_dir()
+        assert paths.wheel_cache_dir.is_dir()
+        assert paths.model_store_dir.is_dir()
+        assert paths.model_blobs_dir.is_dir()
+        assert paths.model_refs_dir.is_dir()
+        assert paths.model_materialized_dir.is_dir()
         # bundled/repo are NOT created
         assert not paths.bundled_workflows_dir.exists()
         assert not paths.comfyui_repo_dir.exists()
@@ -153,6 +177,14 @@ class TestWritableStatus:
         status = paths.writable_status()
 
         assert "data_dir" in status
+        assert "runtime_store_dir" in status
+        assert "dependency_envs_dir" in status
+        assert "runner_workspaces_dir" in status
+        assert "install_transactions_dir" in status
+        assert "workflow_store_dir" in status
+        assert "custom_node_cache_dir" in status
+        assert "wheel_cache_dir" in status
+        assert "model_store_dir" in status
         assert "models_dir" in status
         assert "comfyui_repo_dir" in status
         # data_dir exists (it's tmp_path)

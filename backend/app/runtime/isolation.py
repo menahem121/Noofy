@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+SHA256_PATTERN = r"^(sha256:)?[0-9a-fA-F]{64}$"
+
+
+def _validate_relative_path(value: str, *, field_name: str, allow_nested: bool) -> str:
+    if "\\" in value:
+        raise ValueError(f"{field_name} must not contain path separators")
+    parts = value.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"{field_name} must be a safe relative path")
+    if not allow_nested and len(parts) != 1:
+        raise ValueError(f"{field_name} must be a filename, not a path")
+    return value
+
+
+class TrustLevel(StrEnum):
+    NOOFY_VERIFIED = "noofy_verified"
+    REGISTRY_LOCKED = "registry_locked"
+    QUARANTINED_COMMUNITY = "quarantined_community"
+    UNSUPPORTED = "unsupported"
+
+
+class InstallStatus(StrEnum):
+    PENDING = "pending"
+    PREPARING = "preparing"
+    DOWNLOADING = "downloading"
+    CHECKING_COMPATIBILITY = "checking_compatibility"
+    READY = "ready"
+    FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+
+
+class SmokeTestStatus(StrEnum):
+    NOT_RUN = "not_run"
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class PackageIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    publisher_id: str = Field(min_length=1)
+    package_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    trust_level: TrustLevel
+    source: str | None = None
+    signature: str | None = None
+
+
+class RuntimeIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    dependency_env_fingerprint: str = Field(min_length=1)
+    runner_fingerprint: str = Field(min_length=1)
+    capsule_fingerprint: str = Field(min_length=1)
+    os: str = Field(min_length=1)
+    architecture: str = Field(min_length=1)
+    python_version: str = Field(min_length=1)
+    gpu_backend: str = Field(min_length=1)
+    dependency_lock_hash: str = Field(min_length=1)
+    runner_workspace_hash: str = Field(min_length=1)
+
+
+class EngineIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["comfyui"]
+    comfyui_version: str = Field(min_length=1)
+    core_source_hash: str = Field(min_length=1)
+
+
+class CustomNodeLock(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    package_id: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    commit: str | None = None
+    version: str | None = None
+    trust_level: TrustLevel
+    node_types: list[str] = Field(default_factory=list)
+
+
+class DependencyLock(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lock_file: str = Field(min_length=1)
+    install_policy: str = Field(min_length=1)
+
+
+class ModelLock(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(min_length=1)
+    sha256: str = Field(pattern=SHA256_PATTERN)
+    size_bytes: int = Field(gt=0)
+    source_urls: list[str] = Field(default_factory=list)
+    comfyui_folder: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+
+    @field_validator("comfyui_folder")
+    @classmethod
+    def _validate_comfyui_folder(cls, value: str) -> str:
+        return _validate_relative_path(value, field_name="comfyui_folder", allow_nested=True)
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        return _validate_relative_path(value, field_name="filename", allow_nested=False)
+
+
+class HardwareObservations(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observed_peak_vram_mb: int | None = Field(default=None, ge=0)
+    observed_peak_ram_mb: int | None = Field(default=None, ge=0)
+    tested_resolution: str | None = None
+    tested_batch_size: int | None = Field(default=None, ge=1)
+    gpu_name: str | None = None
+    os: str | None = None
+    backend: str | None = None
+    precision: str | None = None
+    recommended_vram_mb: int | None = Field(default=None, ge=0)
+    recommended_ram_mb: int | None = Field(default=None, ge=0)
+
+
+class TrustMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    level: TrustLevel
+    publisher: str | None = None
+    signatures: list[str] = Field(default_factory=list)
+
+
+class CapsuleLock(BaseModel):
+    """Immutable resolved runtime facts for a workflow capsule."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: str = Field(min_length=1)
+    workflow: PackageIdentity
+    engine: EngineIdentity
+    runtime: RuntimeIdentity
+    custom_nodes: list[CustomNodeLock] = Field(default_factory=list)
+    dependencies: DependencyLock
+    models: list[ModelLock] = Field(default_factory=list)
+    hardware_observations: HardwareObservations = Field(default_factory=HardwareObservations)
+    trust: TrustMetadata
+
+
+class InstallState(BaseModel):
+    """Mutable local state for a workflow capsule installed on this machine."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = Field(min_length=1)
+    capsule_fingerprint: str = Field(min_length=1)
+    status: InstallStatus
+    installed_at: str | None = None
+    last_used_at: str | None = None
+    dependency_env_path: str | None = None
+    runner_workspace_path: str | None = None
+    smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN
+    last_error: str | None = None
+
+
+class DependencyEnvManifest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: str = Field(min_length=1)
+    fingerprint: str = Field(min_length=1)
+    python_version: str = Field(min_length=1)
+    python_build_id: str = Field(min_length=1)
+    os: str = Field(min_length=1)
+    architecture: str = Field(min_length=1)
+    gpu_backend: str = Field(min_length=1)
+    dependency_lock_hash: str = Field(min_length=1)
+    install_policy_version: str = Field(min_length=1)
+    status: InstallStatus
+    smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN
+
+
+class RunnerWorkspaceManifest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
+
+    schema_version: str = Field(min_length=1)
+    fingerprint: str = Field(min_length=1)
+    dependency_env_fingerprint: str = Field(min_length=1)
+    comfyui_version: str = Field(min_length=1)
+    comfyui_source_hash: str = Field(min_length=1)
+    enabled_custom_node_hash: str = Field(min_length=1)
+    launch_config_hash: str = Field(min_length=1)
+    model_view_hash: str | None = None
+    status: InstallStatus
+    smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN

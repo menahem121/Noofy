@@ -1,0 +1,47 @@
+{
+  "schema_version": "0.1.0",
+  "workflow": {
+    "publisher_id": "noofy",
+    "package_id": "text_to_image_v0",
+    "version": "0.1.0",
+    "trust_level": "noofy_verified",
+    "source": "bundled"
+  },
+  "engine": {
+    "type": "comfyui",
+    "comfyui_version": "milestone-1",
+    "core_source_hash": "phase3-placeholder-core-source"
+  },
+  "runtime": {
+    "dependency_env_fingerprint": "phase3-placeholder-core-deps",
+    "runner_fingerprint": "phase3-placeholder-core-runner",
+    "capsule_fingerprint": "phase3-text_to_image_v0-0.1.0",
+    "os": "any",
+    "architecture": "any",
+    "python_version": "3.11",
+    "gpu_backend": "any",
+    "dependency_lock_hash": "phase3-placeholder-no-deps",
+    "runner_workspace_hash": "phase3-placeholder-core-workspace"
+  },
+  "custom_nodes": [],
+  "dependencies": {
+    "lock_file": "phase3-placeholder",
+    "install_policy": "core_only_no_community"
+  },
+  "models": [
+    {
+      "id": "comfy-org/stable-diffusion-v1-5-archive/v1-5-pruned-emaonly-fp16",
+      "sha256": "e9476a13728cd75d8279f6ec8bad753a66a1957ca375a1464dc63b37db6e3916",
+      "size_bytes": 2132696762,
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors"
+      ],
+      "comfyui_folder": "checkpoints",
+      "filename": "v1-5-pruned-emaonly-fp16.safetensors"
+    }
+  ],
+  "trust": {
+    "level": "noofy_verified",
+    "publisher": "Noofy"
+  }
+}

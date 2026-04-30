@@ -49,14 +49,32 @@ async def stop_comfyui():
     return await engine_service.stop_comfyui()
 
 
+@router.get("/runners")
+async def list_runners():
+    return [descriptor.model_dump() for descriptor in engine_service.list_runners()]
+
+
 @router.get("/workflows")
 async def list_workflows() -> list[dict[str, str]]:
     return engine_service.list_workflows()
 
 
+@router.get("/workflows/{workflow_id}/install-state")
+async def get_workflow_install_state(workflow_id: str):
+    return engine_service.get_install_state(workflow_id)
+
+
+@router.post("/workflows/{workflow_id}/prepare")
+async def prepare_workflow(workflow_id: str):
+    return await engine_service.prepare_workflow(workflow_id)
+
+
 @router.post("/workflows/{workflow_id}/validate")
 async def validate_workflow(workflow_id: str):
-    return await engine_service.validate_workflow(workflow_id)
+    try:
+        return await engine_service.validate_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/workflows/{workflow_id}/run")

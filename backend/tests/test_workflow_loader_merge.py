@@ -53,13 +53,25 @@ def test_loader_merges_user_and_bundled(tmp_path: Path) -> None:
     assert ids == ["wf_a", "wf_c"]
 
 
-def test_user_workflow_overrides_bundled_by_id(tmp_path: Path) -> None:
+def test_user_workflow_does_not_silently_override_bundled_by_id(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled"
     user = tmp_path / "user"
     _write_package(bundled, "wf_a", name="Bundled A")
     _write_package(user, "wf_a", name="User Override A")
 
     loader = WorkflowPackageLoader(bundled, user_packages_dir=user)
+
+    package = loader.get_package("wf_a")
+    assert package.metadata.name == "Bundled A"
+
+
+def test_development_loader_can_allow_user_overrides(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    user = tmp_path / "user"
+    _write_package(bundled, "wf_a", name="Bundled A")
+    _write_package(user, "wf_a", name="User Override A")
+
+    loader = WorkflowPackageLoader(bundled, user_packages_dir=user, allow_user_overrides=True)
 
     package = loader.get_package("wf_a")
     assert package.metadata.name == "User Override A"

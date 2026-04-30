@@ -5,6 +5,13 @@ import pytest
 from app.engine.diagnostics import LogStore
 from app.engine.models import ModelInfo
 from app.engine.service import EngineService
+from app.runtime.supervisor import (
+    CORE_RUNNER_FINGERPRINT,
+    CORE_RUNNER_ID,
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerSupervisor,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -20,6 +27,24 @@ class StubEngineAdapter:
 
     async def list_available_models(self) -> list[ModelInfo]:
         return self.models
+
+    def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
+        pass
+
+
+def _supervisor_with(adapter: StubEngineAdapter) -> RunnerSupervisor:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        RunnerDescriptor(
+            runner_id=CORE_RUNNER_ID,
+            kind=RunnerKind.CORE_COMFYUI,
+            base_url=StubRuntimeManager.base_url,
+            ws_url=StubRuntimeManager.ws_url,
+            fingerprint=CORE_RUNNER_FINGERPRINT,
+        ),
+        adapter,
+    )
+    return supervisor
 
 
 def test_text_to_image_package_loads() -> None:
@@ -51,7 +76,7 @@ def test_input_bindings_are_applied() -> None:
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
         workflow_validator=WorkflowPackageValidator(),
-        engine_adapter=StubEngineAdapter([]),
+        runner_supervisor=_supervisor_with(StubEngineAdapter([])),
         runtime_manager=StubRuntimeManager(),
         log_store=LogStore(),
     )
@@ -77,13 +102,15 @@ async def test_engine_service_validates_models_from_adapter() -> None:
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
         workflow_validator=WorkflowPackageValidator(),
-        engine_adapter=StubEngineAdapter(
-            [
-                ModelInfo(
-                    folder="checkpoints",
-                    filename="v1-5-pruned-emaonly-fp16.safetensors",
-                )
-            ]
+        runner_supervisor=_supervisor_with(
+            StubEngineAdapter(
+                [
+                    ModelInfo(
+                        folder="checkpoints",
+                        filename="v1-5-pruned-emaonly-fp16.safetensors",
+                    )
+                ]
+            )
         ),
         runtime_manager=StubRuntimeManager(),
         log_store=LogStore(),
@@ -101,7 +128,7 @@ async def test_engine_service_logs_validation_failure() -> None:
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
         workflow_validator=WorkflowPackageValidator(),
-        engine_adapter=StubEngineAdapter([]),
+        runner_supervisor=_supervisor_with(StubEngineAdapter([])),
         runtime_manager=StubRuntimeManager(),
         log_store=log_store,
     )

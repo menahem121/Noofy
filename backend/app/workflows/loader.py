@@ -8,18 +8,20 @@ class WorkflowPackageLoader:
     """Load workflow packages from bundled and user directories.
 
     Bundled workflows are read-only starter packages shipped with the app.
-    User workflows live in the app-data directory.  If both directories
-    contain a package with the same ``metadata.id``, the user copy wins so
-    that imports or edits can intentionally replace a starter package.
+    User workflows live in the app-data directory. Product behavior must not
+    silently let a user package shadow a bundled workflow by matching
+    ``metadata.id``. Development tooling can opt into overrides explicitly.
     """
 
     def __init__(
         self,
         packages_dir: Path,
         user_packages_dir: Path | None = None,
+        allow_user_overrides: bool = False,
     ) -> None:
         self.packages_dir = packages_dir
         self.user_packages_dir = user_packages_dir
+        self.allow_user_overrides = allow_user_overrides
 
     def list_packages(self) -> list[WorkflowPackage]:
         by_id: dict[str, WorkflowPackage] = {}
@@ -28,9 +30,12 @@ class WorkflowPackageLoader:
         for package in self._load_from(self.packages_dir):
             by_id[package.metadata.id] = package
 
-        # User (higher priority – overrides bundled by ID)
+        # User packages cannot shadow bundled packages unless a development
+        # caller opts into that behavior explicitly.
         if self.user_packages_dir is not None:
             for package in self._load_from(self.user_packages_dir):
+                if package.metadata.id in by_id and not self.allow_user_overrides:
+                    continue
                 by_id[package.metadata.id] = package
 
         return sorted(by_id.values(), key=lambda p: p.metadata.id)

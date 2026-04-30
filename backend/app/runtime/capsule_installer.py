@@ -1,0 +1,131 @@
+"""Capsule install pipeline for Noofy Verified workflows.
+
+The installer drives an `InstallState` through preparing -> downloading
+required models -> checking compatibility -> ready, persisting after every
+transition. A failure in any stage records the error on the install state
+and leaves the status as `FAILED`; the workflow is never marked READY when
+any prerequisite (model, env, smoke check) failed.
+"""
+
+from __future__ import annotations
+
+from app.engine.diagnostics import LogStore
+from app.runtime.install_state import (
+    InstallStateStore,
+    now_iso,
+    user_facing_install_message,
+)
+from app.runtime.isolation import (
+    CapsuleLock,
+    InstallState,
+    InstallStatus,
+    SmokeTestStatus,
+    TrustLevel,
+)
+from app.runtime.model_store import ModelDownloadError, ModelStore
+
+
+class CapsuleInstallError(RuntimeError):
+    """Raised when the installer cannot prepare a capsule automatically."""
+
+    def __init__(self, message: str, *, state: InstallState) -> None:
+        super().__init__(message)
+        self.state = state
+
+
+class CapsuleInstaller:
+    def __init__(
+        self,
+        *,
+        install_state_store: InstallStateStore,
+        model_store: ModelStore,
+        log_store: LogStore | None = None,
+    ) -> None:
+        self.install_state_store = install_state_store
+        self.model_store = model_store
+        self.log_store = log_store or LogStore()
+
+    async def prepare(self, capsule_lock: CapsuleLock) -> InstallState:
+        fingerprint = capsule_lock.runtime.capsule_fingerprint
+        workflow_id = capsule_lock.workflow.package_id
+
+        self._transition(fingerprint, InstallStatus.PREPARING, workflow_id, last_error=None)
+        if (
+            capsule_lock.workflow.trust_level is not TrustLevel.NOOFY_VERIFIED
+            or capsule_lock.trust.level is not TrustLevel.NOOFY_VERIFIED
+            or capsule_lock.custom_nodes
+        ):
+            state = self._transition(
+                fingerprint,
+                InstallStatus.FAILED,
+                workflow_id,
+                last_error="This workflow cannot be prepared by the verified core installer.",
+            )
+            raise CapsuleInstallError(state.last_error or "Unsupported capsule", state=state)
+
+        self._transition(fingerprint, InstallStatus.DOWNLOADING, workflow_id)
+
+        try:
+            for model_lock in capsule_lock.models:
+                self.log_store.add(
+                    "info",
+                    "Preparing model",
+                    "capsule.installer",
+                    workflow_id=workflow_id,
+                    details={
+                        "model_id": model_lock.id,
+                        "comfyui_folder": model_lock.comfyui_folder,
+                        "filename": model_lock.filename,
+                    },
+                )
+                await self.model_store.materialize(model_lock)
+        except ModelDownloadError as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.FAILED,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
+
+        self._transition(fingerprint, InstallStatus.CHECKING_COMPATIBILITY, workflow_id)
+        # Phase 3 keeps compatibility checking minimal: the existence of the
+        # core runner is verified by the engine service before this is called.
+        # Phase 4 will run smoke tests in an isolated runner workspace.
+
+        return self._transition(
+            fingerprint,
+            InstallStatus.READY,
+            workflow_id,
+            installed_at=now_iso(),
+            smoke_test_status=SmokeTestStatus.NOT_RUN,
+        )
+
+    def get_state(self, capsule_lock: CapsuleLock) -> InstallState:
+        return self.install_state_store.get_or_create(capsule_lock.runtime.capsule_fingerprint)
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _transition(
+        self,
+        fingerprint: str,
+        status: InstallStatus,
+        workflow_id: str,
+        **fields,
+    ) -> InstallState:
+        state = self.install_state_store.update(fingerprint, status=status, **fields)
+        level = "error" if status is InstallStatus.FAILED else "info"
+        self.log_store.add(
+            level,
+            f"Capsule install: {user_facing_install_message(status)}",
+            "capsule.installer",
+            workflow_id=workflow_id,
+            details={
+                "capsule_fingerprint": fingerprint,
+                "status": status.value,
+                "last_error": state.last_error,
+            },
+        )
+        return state

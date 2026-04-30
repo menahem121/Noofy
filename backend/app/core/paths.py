@@ -55,6 +55,54 @@ class NoofyPaths:
     bundled_workflows_dir: Path
     comfyui_repo_dir: Path
 
+    @property
+    def runtime_store_dir(self) -> Path:
+        return self.data_dir / "runtime-store"
+
+    @property
+    def dependency_envs_dir(self) -> Path:
+        return self.runtime_store_dir / "envs"
+
+    @property
+    def runner_workspaces_dir(self) -> Path:
+        return self.runtime_store_dir / "runner-workspaces"
+
+    @property
+    def install_transactions_dir(self) -> Path:
+        return self.runtime_store_dir / "transactions"
+
+    @property
+    def workflow_store_dir(self) -> Path:
+        return self.data_dir / "workflow-store"
+
+    @property
+    def workflow_packages_store_dir(self) -> Path:
+        return self.workflow_store_dir / "packages"
+
+    @property
+    def custom_node_cache_dir(self) -> Path:
+        return self.data_dir / "custom-node-cache"
+
+    @property
+    def wheel_cache_dir(self) -> Path:
+        return self.data_dir / "wheel-cache"
+
+    @property
+    def model_store_dir(self) -> Path:
+        return self.data_dir / "model-store"
+
+    @property
+    def model_blobs_dir(self) -> Path:
+        return self.model_store_dir / "blobs" / "sha256"
+
+    @property
+    def model_refs_dir(self) -> Path:
+        return self.model_store_dir / "refs"
+
+    @property
+    def model_materialized_dir(self) -> Path:
+        return self.model_store_dir / "materialized"
+
     def ensure_directories(self) -> None:
         """Lazily create all app-owned writable directories.
 
@@ -64,6 +112,18 @@ class NoofyPaths:
         for directory in (
             self.data_dir,
             self.runtime_dir,
+            self.runtime_store_dir,
+            self.dependency_envs_dir,
+            self.runner_workspaces_dir,
+            self.install_transactions_dir,
+            self.workflow_store_dir,
+            self.workflow_packages_store_dir,
+            self.custom_node_cache_dir,
+            self.wheel_cache_dir,
+            self.model_store_dir,
+            self.model_blobs_dir,
+            self.model_refs_dir,
+            self.model_materialized_dir,
             self.models_dir,
             self.user_workflows_dir,
             self.outputs_dir,
@@ -88,6 +148,18 @@ class NoofyPaths:
         return [
             ("data_dir", self.data_dir),
             ("runtime_dir", self.runtime_dir),
+            ("runtime_store_dir", self.runtime_store_dir),
+            ("dependency_envs_dir", self.dependency_envs_dir),
+            ("runner_workspaces_dir", self.runner_workspaces_dir),
+            ("install_transactions_dir", self.install_transactions_dir),
+            ("workflow_store_dir", self.workflow_store_dir),
+            ("workflow_packages_store_dir", self.workflow_packages_store_dir),
+            ("custom_node_cache_dir", self.custom_node_cache_dir),
+            ("wheel_cache_dir", self.wheel_cache_dir),
+            ("model_store_dir", self.model_store_dir),
+            ("model_blobs_dir", self.model_blobs_dir),
+            ("model_refs_dir", self.model_refs_dir),
+            ("model_materialized_dir", self.model_materialized_dir),
             ("models_dir", self.models_dir),
             ("user_workflows_dir", self.user_workflows_dir),
             ("outputs_dir", self.outputs_dir),

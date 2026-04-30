@@ -11,8 +11,8 @@
     {
       "folder": "checkpoints",
       "filename": "v1-5-pruned-emaonly-fp16.safetensors",
-      "source_url": null,
-      "checksum": null
+      "source_url": "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
+      "checksum": "sha256:e9476a13728cd75d8279f6ec8bad753a66a1957ca375a1464dc63b37db6e3916"
     }
   ],
   "comfyui_graph": {
