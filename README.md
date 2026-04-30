@@ -30,6 +30,12 @@ For product v1, ComfyUI should run as an app-managed hidden sidecar with its own
 
 Version 1 will focus on a reliable cross-platform desktop app for Windows and macOS using a Python/ComfyUI backend.
 
+Noofy should support community workflows from the internet as a first-class product direction. Users should be able to import workflows made by other people without manually installing Python packages, copying custom node folders, editing ComfyUI paths, or troubleshooting dependency conflicts.
+
+Community workflows must be prepared through isolated workflow capsules and runner environments. Noofy should automatically resolve, download, install, and smoke-test custom nodes and normal Python dependencies when technically possible, including common custom-node repositories that declare dependencies in `requirements.txt`. Those installs must never mutate the trusted core runtime or another installed workflow.
+
+Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible. Noofy protects the app architecture from dependency conflicts and broken installs; it does not claim arbitrary Python code from the internet is secure.
+
 In a later macOS-focused phase, the AI inference layer should be upgraded to support native macOS inference libraries where appropriate, such as Apple-native acceleration through Core ML, Metal, or MLX. This should improve performance and integration on Apple Silicon Macs while keeping the general workflow system flexible.
 
 ## Future Workflow Creator Mode
@@ -50,6 +56,7 @@ The end user would then open the workflow as a clean, intuitive interface design
 - [Engine contract](docs/ENGINE_CONTRACT.md)
 - [Workflow packages](docs/WORKFLOW_PACKAGES.md)
 - [Runtime isolation architecture](docs/RUNTIME_ISOLATION_ARCHITECTURE.md)
+- [Runtime isolation implementation plan](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md)
 - [Milestone 1](docs/MILESTONE_1.md)
 - [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
 

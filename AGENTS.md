@@ -17,6 +17,8 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stack, process boundaries, and major architecture decisions.
 - [docs/ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md): app-owned engine operations and job lifecycle.
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
+- [docs/RUNTIME_ISOLATION_ARCHITECTURE.md](docs/RUNTIME_ISOLATION_ARCHITECTURE.md): accepted runtime isolation architecture for community workflows, workflow capsules, runner processes, and trust boundaries.
+- [docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md): phased implementation plan for runtime-store paths, schemas, runner supervision, verified installs, custom node resolution, and trust/marketplace readiness.
 - [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.
 - [docs/MANAGED_COMFYUI_SIDECAR.md](docs/MANAGED_COMFYUI_SIDECAR.md): v1 requirement for app-managed ComfyUI startup, isolation, logs, health, and shutdown.
 - [docs/FEEDBACK_TESTING_MONITORING.md](docs/FEEDBACK_TESTING_MONITORING.md): diagnostics, automated tests, progress feedback, logs, and monitoring direction.
@@ -30,6 +32,12 @@ When adding or changing frontend UI, follow [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md)
 When adding engine behavior, implement it through an `EngineAdapter`.
 
 External ComfyUI URLs are development mode only. The v1 product must use an app-managed, isolated ComfyUI sidecar so users do not manually launch ComfyUI or install its Python dependencies.
+
+Community workflows from the internet are a first-class product direction. When adding community workflow behavior, follow the accepted runtime isolation architecture: install custom nodes and Python dependencies only into isolated dependency environments and runner workspaces, never into the trusted core runtime.
+
+The trusted backend process must never import community custom node modules or execute custom node setup code. Custom node imports, compatibility checks, and smoke tests must happen only inside isolated runner processes.
+
+Unverified community workflows may be prepared automatically only when Noofy can resolve them into isolated workflow capsules. Noofy protects the app from dependency conflicts and broken installs, but it must not claim arbitrary community Python code is safe or trustworthy.
 
 Workflow model validation must use the active `EngineAdapter`. Do not validate required models by reading a hardcoded local `ComfyUI-official-repo/models` folder.
 

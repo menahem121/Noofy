@@ -26,6 +26,8 @@ For product v1, ComfyUI is a managed sidecar. The app must start it as a hidden 
 
 External ComfyUI URLs such as `http://127.0.0.1:8188` are development mode only.
 
+Community workflows from the internet are a first-class product direction. Noofy should automatically prepare custom nodes and normal Python dependencies when they can be resolved into isolated workflow capsules. These installs must never mutate the trusted core runtime or another installed workflow. Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible.
+
 ## Local API Security
 
 The backend must bind only to localhost for product builds. The frontend must continue to call only the app backend API, never ComfyUI directly.
@@ -69,6 +71,8 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Treat ComfyUI graphs as opaque execution data where possible.
 - Keep the app API stable enough that future adapters can replace or supplement ComfyUI.
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
+- Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation.
+- Implement runtime isolation through the phased [runtime isolation implementation plan](RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md).
 
 ## App Data Directories
 
@@ -113,7 +117,9 @@ The backend owns a canonical set of per-user directories so the app never relies
 
 ### Bundled vs user workflows
 
-Bundled starter workflows are read-only and ship inside the repo at `backend/app/workflows/packages`. User-imported or user-created workflow packages live in `user_workflows_dir`. If both contain a package with the same `metadata.id`, the user copy wins so imports can intentionally replace a starter.
+Bundled starter workflows are read-only and ship inside the repo at `backend/app/workflows/packages`. User-imported or user-created workflow packages live in `user_workflows_dir`.
+
+Development tooling may allow local overrides during iteration. Product workflow identity must include namespace/publisher and trust metadata. User-imported packages must not silently replace Noofy Verified built-ins by matching `metadata.id`; conflicts must install under a distinct namespace or require an explicit replacement action.
 
 ### Diagnostics
 
