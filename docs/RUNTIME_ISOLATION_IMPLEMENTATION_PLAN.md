@@ -157,6 +157,19 @@ Acceptance criteria:
 - Runner startup and shutdown are covered by tests.
 - Product shutdown strategy can terminate backend-owned runner processes.
 
+Current implementation notes:
+
+- Runtime artifact manifests are staged during preparation and promoted to `ready` only after the runner smoke test succeeds.
+- The runner smoke test starts from the prepared runner workspace, waits for health, and stops the process before install state becomes `ready`.
+- Smoke-test failure leaves the workflow install state failed and does not promote staged dependency-env or runner-workspace manifests.
+- A later successful prepare can reuse the staged workspace and promote it after smoke succeeds.
+- Different runner workspaces can reuse the same ready dependency-env manifest.
+- Install-state API payloads expose prepared runtime artifact paths for diagnostics and UI feedback.
+- Runner smoke tests emit structured start, pass, and failure diagnostics.
+- Workflow runner startup validates persisted dependency-env and runner-workspace manifests with the manifest schemas, requires `ready` status, and checks capsule fingerprint identity before launching.
+- Workflow runner startup also requires install-state `smoke_test_status=passed`, so stale ready records cannot launch without a successful smoke result.
+- The bundled verified starter capsule uses deterministic Phase 4 `sha256:` dependency, runner, and capsule fingerprints.
+
 ## Phase 5: Community Custom Node Resolver
 
 Goal: support community custom-node workflows when Noofy can resolve them into isolated runtime capsules without mutating the trusted core runtime or existing workflows.

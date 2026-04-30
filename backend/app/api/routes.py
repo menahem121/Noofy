@@ -69,6 +69,16 @@ async def prepare_workflow(workflow_id: str):
     return await engine_service.prepare_workflow(workflow_id)
 
 
+@router.post("/workflows/{workflow_id}/runner/start")
+async def start_workflow_runner(workflow_id: str):
+    return await engine_service.start_workflow_runner(workflow_id)
+
+
+@router.post("/workflows/{workflow_id}/runner/stop")
+async def stop_workflow_runner(workflow_id: str):
+    return await engine_service.stop_workflow_runner(workflow_id)
+
+
 @router.post("/workflows/{workflow_id}/validate")
 async def validate_workflow(workflow_id: str):
     try:

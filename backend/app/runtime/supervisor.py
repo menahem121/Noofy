@@ -111,6 +111,7 @@ class RunnerSupervisor:
         self._descriptors: dict[str, RunnerDescriptor] = {}
         self._adapters: dict[str, EngineAdapter] = {}
         self._core_runner_id: str | None = None
+        self._workflow_runners: dict[str, str] = {}
         self._registry = JobRunnerRegistry()
 
     # ------------------------------------------------------------------
@@ -126,6 +127,16 @@ class RunnerSupervisor:
             self._descriptors[descriptor.runner_id] = descriptor
             self._adapters[descriptor.runner_id] = adapter
             self._core_runner_id = descriptor.runner_id
+
+    def upsert_runner(self, descriptor: RunnerDescriptor, adapter: EngineAdapter) -> None:
+        """Register or replace a non-core runner descriptor and adapter."""
+        if descriptor.kind is RunnerKind.CORE_COMFYUI:
+            raise ValueError("Core runner must be registered with register_core_runner")
+        with self._lock:
+            if descriptor.runner_id == self._core_runner_id:
+                raise ValueError("Cannot replace the core runner through upsert_runner")
+            self._descriptors[descriptor.runner_id] = descriptor
+            self._adapters[descriptor.runner_id] = adapter
 
     # ------------------------------------------------------------------
     # Lookup
@@ -163,11 +174,23 @@ class RunnerSupervisor:
     def acquire_runner(self, workflow_package: object) -> RunnerDescriptor:
         """Return the runner that should host `workflow_package`.
 
-        Phase 2 always resolves to the single core runner. Later phases pick
-        an isolated runner workspace that matches the workflow capsule.
+        A workflow can be explicitly bound to a ready runner. If no binding
+        exists, or the bound runner is not ready, the core runner remains the
+        conservative fallback so existing behavior stays unchanged.
         """
-        del workflow_package  # Reserved for later phases.
+        workflow_id = self._workflow_id(workflow_package)
+        if workflow_id is not None:
+            bound_runner = self.runner_for_workflow(workflow_id)
+            if bound_runner is not None and bound_runner.status is RunnerStatus.READY:
+                return bound_runner
         return self.core_runner()
+
+    def runner_for_workflow(self, workflow_id: str) -> RunnerDescriptor | None:
+        with self._lock:
+            runner_id = self._workflow_runners.get(workflow_id)
+        if runner_id is None:
+            return None
+        return self.get_runner(runner_id)
 
     # ------------------------------------------------------------------
     # Mutations
@@ -195,6 +218,24 @@ class RunnerSupervisor:
             self._descriptors[runner_id] = new_descriptor
         return new_descriptor
 
+    def bind_workflow_runner(self, workflow_id: str, runner_id: str) -> RunnerDescriptor:
+        descriptor = self.get_runner(runner_id)
+        with self._lock:
+            self._workflow_runners[workflow_id] = runner_id
+        return descriptor
+
+    def unbind_workflow_runner(self, workflow_id: str) -> None:
+        with self._lock:
+            self._workflow_runners.pop(workflow_id, None)
+
+    def unbind_runner(self, runner_id: str) -> None:
+        with self._lock:
+            self._workflow_runners = {
+                workflow_id: bound_runner_id
+                for workflow_id, bound_runner_id in self._workflow_runners.items()
+                if bound_runner_id != runner_id
+            }
+
     # ------------------------------------------------------------------
     # Job routing
     # ------------------------------------------------------------------
@@ -216,3 +257,9 @@ class RunnerSupervisor:
 
     def forget_job(self, job_id: str) -> None:
         self._registry.unregister(job_id)
+
+    @staticmethod
+    def _workflow_id(workflow_package: object) -> str | None:
+        metadata = getattr(workflow_package, "metadata", None)
+        workflow_id = getattr(metadata, "id", None)
+        return workflow_id if isinstance(workflow_id, str) else None

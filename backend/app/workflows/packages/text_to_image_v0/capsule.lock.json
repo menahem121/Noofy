@@ -10,22 +10,22 @@
   "engine": {
     "type": "comfyui",
     "comfyui_version": "milestone-1",
-    "core_source_hash": "phase3-placeholder-core-source"
+    "core_source_hash": "sha256:776f51bf72aa09231f0c8c27d964e29120781c4ac2fe3d15cc8367d8479f5a4f"
   },
   "runtime": {
-    "dependency_env_fingerprint": "phase3-placeholder-core-deps",
-    "runner_fingerprint": "phase3-placeholder-core-runner",
-    "capsule_fingerprint": "phase3-text_to_image_v0-0.1.0",
+    "dependency_env_fingerprint": "sha256:cbfdf2287fe055e85e28a74fa0d3b45ecc0bd40df228d2d578ce3c4c439020ea",
+    "runner_fingerprint": "sha256:1bf2dcb7f804d0bb053ee0ae68351f3785a8247039e2230f53886ea0d51bc351",
+    "capsule_fingerprint": "sha256:eeab24611d07ed77380890e2ddafa5eb95b8d90e6208bf1e3e7f148e2d6b874c",
     "os": "any",
     "architecture": "any",
     "python_version": "3.11",
     "gpu_backend": "any",
-    "dependency_lock_hash": "phase3-placeholder-no-deps",
-    "runner_workspace_hash": "phase3-placeholder-core-workspace"
+    "dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+    "runner_workspace_hash": "sha256:1bf2dcb7f804d0bb053ee0ae68351f3785a8247039e2230f53886ea0d51bc351"
   },
   "custom_nodes": [],
   "dependencies": {
-    "lock_file": "phase3-placeholder",
+    "lock_file": "core_only_no_community",
     "install_policy": "core_only_no_community"
   },
   "models": [

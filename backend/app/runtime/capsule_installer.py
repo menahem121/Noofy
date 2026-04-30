@@ -9,6 +9,8 @@ any prerequisite (model, env, smoke check) failed.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from app.engine.diagnostics import LogStore
 from app.runtime.install_state import (
     InstallStateStore,
@@ -23,6 +25,9 @@ from app.runtime.isolation import (
     TrustLevel,
 )
 from app.runtime.model_store import ModelDownloadError, ModelStore
+from app.runtime.workspace_preparer import PreparedRuntimeWorkspace, RuntimeWorkspacePreparer
+
+WorkspaceSmokeTest = Callable[[CapsuleLock, PreparedRuntimeWorkspace], Awaitable[None]]
 
 
 class CapsuleInstallError(RuntimeError):
@@ -39,10 +44,14 @@ class CapsuleInstaller:
         *,
         install_state_store: InstallStateStore,
         model_store: ModelStore,
+        workspace_preparer: RuntimeWorkspacePreparer | None = None,
+        workspace_smoke_test: WorkspaceSmokeTest | None = None,
         log_store: LogStore | None = None,
     ) -> None:
         self.install_state_store = install_state_store
         self.model_store = model_store
+        self.workspace_preparer = workspace_preparer
+        self.workspace_smoke_test = workspace_smoke_test
         self.log_store = log_store or LogStore()
 
     async def prepare(self, capsule_lock: CapsuleLock) -> InstallState:
@@ -89,16 +98,54 @@ class CapsuleInstaller:
             raise CapsuleInstallError(str(exc), state=state) from exc
 
         self._transition(fingerprint, InstallStatus.CHECKING_COMPATIBILITY, workflow_id)
-        # Phase 3 keeps compatibility checking minimal: the existence of the
-        # core runner is verified by the engine service before this is called.
-        # Phase 4 will run smoke tests in an isolated runner workspace.
+        prepared_workspace = None
+        try:
+            if self.workspace_preparer is not None:
+                prepared_workspace = self.workspace_preparer.prepare(capsule_lock)
+        except Exception as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.FAILED,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
+
+        smoke_test_status = SmokeTestStatus.NOT_RUN
+        if prepared_workspace is not None and self.workspace_smoke_test is not None:
+            try:
+                await self.workspace_smoke_test(capsule_lock, prepared_workspace)
+            except Exception as exc:
+                state = self._transition(
+                    fingerprint,
+                    InstallStatus.FAILED,
+                    workflow_id,
+                    last_error=str(exc),
+                    smoke_test_status=SmokeTestStatus.FAILED,
+                )
+                raise CapsuleInstallError(str(exc), state=state) from exc
+            smoke_test_status = SmokeTestStatus.PASSED
+
+        if prepared_workspace is not None and self.workspace_preparer is not None:
+            prepared_workspace = self.workspace_preparer.mark_ready(
+                prepared_workspace,
+                smoke_test_status=smoke_test_status,
+                workflow_id=workflow_id,
+            )
+
+        ready_fields = {
+            "installed_at": now_iso(),
+            "smoke_test_status": smoke_test_status,
+        }
+        if prepared_workspace is not None:
+            ready_fields["dependency_env_path"] = str(prepared_workspace.dependency_env_path)
+            ready_fields["runner_workspace_path"] = str(prepared_workspace.runner_workspace_path)
 
         return self._transition(
             fingerprint,
             InstallStatus.READY,
             workflow_id,
-            installed_at=now_iso(),
-            smoke_test_status=SmokeTestStatus.NOT_RUN,
+            **ready_fields,
         )
 
     def get_state(self, capsule_lock: CapsuleLock) -> InstallState:

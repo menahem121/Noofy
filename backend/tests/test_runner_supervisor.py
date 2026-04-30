@@ -30,14 +30,14 @@ class StubRuntimeManager:
 class RecordingAdapter:
     """In-memory adapter that records routed calls per job_id."""
 
-    def __init__(self, models: list[ModelInfo] | None = None) -> None:
+    def __init__(self, models: list[ModelInfo] | None = None, *, next_job_id: str = "job-1") -> None:
         self.models = models or []
         self.endpoint_updates: list[tuple[str, str | None]] = []
         self.run_calls: list[tuple[str, dict[str, Any]]] = []
         self.progress_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.result_calls: list[str] = []
-        self._next_job_id = "job-1"
+        self._next_job_id = next_job_id
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         self.endpoint_updates.append((base_url, ws_url))
@@ -191,6 +191,109 @@ def test_supervisor_update_status_returns_new_descriptor() -> None:
     assert supervisor.get_runner(CORE_RUNNER_ID).status is RunnerStatus.READY
 
 
+def test_supervisor_upserts_isolated_runner() -> None:
+    supervisor = RunnerSupervisor()
+    adapter = RecordingAdapter()
+    descriptor = RunnerDescriptor(
+        runner_id="isolated-1",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=RunnerStatus.READY,
+    )
+
+    supervisor.upsert_runner(descriptor, adapter)
+
+    assert supervisor.get_runner("isolated-1") == descriptor
+    assert supervisor.get_adapter("isolated-1") is adapter
+
+
+def test_supervisor_upsert_rejects_core_runner_kind() -> None:
+    supervisor = RunnerSupervisor()
+
+    with pytest.raises(ValueError):
+        supervisor.upsert_runner(_core_descriptor(), RecordingAdapter())
+
+
+def test_supervisor_acquires_ready_bound_workflow_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = RunnerDescriptor(
+        runner_id="isolated-1",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=RunnerStatus.READY,
+    )
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    assert supervisor.acquire_runner(package).runner_id == "isolated-1"
+    assert supervisor.runner_for_workflow("text_to_image_v0").runner_id == "isolated-1"
+
+
+def test_supervisor_falls_back_to_core_when_bound_runner_is_not_ready() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = RunnerDescriptor(
+        runner_id="isolated-1",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=RunnerStatus.STOPPED,
+    )
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    assert supervisor.acquire_runner(package).runner_id == CORE_RUNNER_ID
+
+
+def test_supervisor_unbind_workflow_runner_restores_core_selection() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = RunnerDescriptor(
+        runner_id="isolated-1",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=RunnerStatus.READY,
+    )
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+    supervisor.unbind_workflow_runner("text_to_image_v0")
+
+    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    assert supervisor.acquire_runner(package).runner_id == CORE_RUNNER_ID
+
+
+def test_supervisor_unbind_runner_removes_all_workflow_bindings_for_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = RunnerDescriptor(
+        runner_id="isolated-1",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=RunnerStatus.READY,
+    )
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+    supervisor.bind_workflow_runner("workflow-a", "isolated-1")
+    supervisor.bind_workflow_runner("workflow-b", "isolated-1")
+
+    supervisor.unbind_runner("isolated-1")
+
+    assert supervisor.runner_for_workflow("workflow-a") is None
+    assert supervisor.runner_for_workflow("workflow-b") is None
+
+
 # ----------------------------------------------------------------------
 # Job routing through the supervisor
 # ----------------------------------------------------------------------
@@ -315,3 +418,41 @@ async def test_run_workflow_blocked_by_validation_does_not_register_job() -> Non
     assert hasattr(result, "valid") and not result.valid
     assert adapter.run_calls == []
     assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_engine_service_routes_bound_workflow_to_isolated_runner() -> None:
+    core_adapter = RecordingAdapter(models=[])
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-isolated",
+    )
+    service, supervisor = _build_service(core_adapter)
+    supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="isolated-1",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9001",
+            ws_url="ws://127.0.0.1:9001/ws",
+            fingerprint="sha256:" + ("a" * 64),
+            status=RunnerStatus.READY,
+        ),
+        isolated_adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    validation = await service.validate_workflow("text_to_image_v0")
+    job = await service.run_workflow("text_to_image_v0", inputs={"prompt": "hello"}, options={})
+    await service.get_progress(job.job_id)
+
+    assert validation.valid
+    assert job.job_id == "job-isolated"
+    assert isolated_adapter.run_calls == [("job-isolated", {"prompt": "hello"})]
+    assert isolated_adapter.progress_calls == ["job-isolated"]
+    assert core_adapter.run_calls == []
+    assert supervisor.runner_for_job("job-isolated").runner_id == "isolated-1"

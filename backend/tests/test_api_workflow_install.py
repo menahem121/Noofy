@@ -8,6 +8,8 @@ from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
 class FakeEngineService:
     def __init__(self) -> None:
         self.prepared_workflows: list[str] = []
+        self.started_workflow_runners: list[str] = []
+        self.stopped_workflow_runners: list[str] = []
 
     def list_runners(self):
         return [
@@ -30,6 +32,8 @@ class FakeEngineService:
                 "user_facing_message": "Unsupported",
                 "installed_at": None,
                 "last_used_at": None,
+                "dependency_env_path": None,
+                "runner_workspace_path": None,
                 "smoke_test_status": "not_run",
                 "last_error": None,
             }
@@ -40,6 +44,8 @@ class FakeEngineService:
             "user_facing_message": "Not started",
             "installed_at": None,
             "last_used_at": None,
+            "dependency_env_path": "/tmp/noofy/dep-env",
+            "runner_workspace_path": "/tmp/noofy/runner-workspace",
             "smoke_test_status": "not_run",
             "last_error": None,
         }
@@ -53,8 +59,38 @@ class FakeEngineService:
             "user_facing_message": "Ready",
             "installed_at": "2026-04-30T00:00:00+00:00",
             "last_used_at": None,
+            "dependency_env_path": "/tmp/noofy/dep-env",
+            "runner_workspace_path": "/tmp/noofy/runner-workspace",
             "smoke_test_status": "not_run",
             "last_error": None,
+        }
+
+    async def start_workflow_runner(self, workflow_id: str):
+        self.started_workflow_runners.append(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "ready",
+            "runner": {
+                "runner_id": f"runner-{workflow_id}",
+                "kind": "isolated_comfyui",
+                "base_url": "http://127.0.0.1:9100",
+                "ws_url": "ws://127.0.0.1:9100/ws",
+                "fingerprint": "runner-fp",
+                "status": "ready",
+            },
+            "pid": 4242,
+            "install_status": "ready",
+            "error": None,
+        }
+
+    async def stop_workflow_runner(self, workflow_id: str):
+        self.stopped_workflow_runners.append(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "stopped",
+            "runner": None,
+            "pid": None,
+            "error": None,
         }
 
     async def validate_workflow(self, workflow_id: str):
@@ -92,6 +128,8 @@ def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
     assert payload["workflow_id"] == "text_to_image_v0"
     assert payload["status"] == "pending"
     assert payload["user_facing_message"] == "Not started"
+    assert payload["dependency_env_path"] == "/tmp/noofy/dep-env"
+    assert payload["runner_workspace_path"] == "/tmp/noofy/runner-workspace"
 
 
 def test_install_state_unknown_workflow_uses_unsupported_payload(monkeypatch) -> None:
@@ -116,6 +154,33 @@ def test_prepare_endpoint_calls_service(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
     assert fake_service.prepared_workflows == ["text_to_image_v0"]
+
+
+def test_start_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.post("/api/workflows/text_to_image_v0/runner/start")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["runner"]["kind"] == "isolated_comfyui"
+    assert fake_service.started_workflow_runners == ["text_to_image_v0"]
+
+
+def test_stop_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.post("/api/workflows/text_to_image_v0/runner/stop")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert fake_service.stopped_workflow_runners == ["text_to_image_v0"]
 
 
 def test_validate_unknown_workflow_returns_404(monkeypatch) -> None:

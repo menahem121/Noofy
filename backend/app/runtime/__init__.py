@@ -1,5 +1,14 @@
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.environment import CommandResult, RuntimeEnvironment
+from app.runtime.fingerprints import (
+    FINGERPRINT_SCHEMA_VERSION,
+    canonical_json_bytes,
+    capsule_fingerprint,
+    capsule_lock_content_hash,
+    dependency_env_fingerprint,
+    runner_workspace_fingerprint,
+    sha256_fingerprint,
+)
 from app.runtime.install_state import (
     INSTALL_STATE_SCHEMA_VERSION,
     InstallStateStore,
@@ -22,6 +31,17 @@ from app.runtime.model_store import (
     ModelMaterialization,
     ModelStore,
 )
+from app.runtime.runner_process import (
+    RunnerLaunchSpec,
+    RunnerProcessHandle,
+    RunnerProcessStatus,
+    RunnerProcessSupervisor,
+)
+from app.runtime.smoke_test import RunnerSmokeTester
+from app.runtime.runner_coordinator import (
+    RunnerProcessCoordinator,
+    comfyui_adapter_factory,
+)
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
@@ -34,6 +54,16 @@ from app.runtime.supervisor import (
     RunnerStatus,
     RunnerSupervisor,
 )
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    ManifestStoreError,
+    RunnerWorkspaceManifestStore,
+    RuntimeManifestStore,
+)
+from app.runtime.workspace_preparer import (
+    PreparedRuntimeWorkspace,
+    RuntimeWorkspacePreparer,
+)
 
 __all__ = [
     "AsyncDownloader",
@@ -44,27 +74,47 @@ __all__ = [
     "CapsuleLock",
     "CommandResult",
     "DependencyEnvManifest",
+    "DependencyEnvManifestStore",
     "DuplicateJobRegistrationError",
+    "FINGERPRINT_SCHEMA_VERSION",
     "INSTALL_STATE_SCHEMA_VERSION",
     "InstallState",
     "InstallStateStore",
     "InstallStatus",
     "JobRunnerNotFoundError",
     "JobRunnerRegistry",
+    "ManifestStoreError",
     "ModelDownloadError",
     "ModelMaterialization",
     "ModelStore",
+    "PreparedRuntimeWorkspace",
     "RunnerDescriptor",
     "RunnerKind",
+    "RunnerLaunchSpec",
     "RunnerNotFoundError",
+    "RunnerProcessHandle",
+    "RunnerProcessCoordinator",
+    "RunnerProcessStatus",
+    "RunnerProcessSupervisor",
+    "RunnerSmokeTester",
     "RunnerStatus",
+    "RunnerWorkspaceManifestStore",
     "RunnerSupervisor",
     "RunnerWorkspaceManifest",
     "RuntimeEnvironment",
+    "RuntimeManifestStore",
     "RuntimeManager",
+    "RuntimeWorkspacePreparer",
     "SmokeTestStatus",
     "TrustLevel",
+    "canonical_json_bytes",
+    "capsule_fingerprint",
+    "capsule_lock_content_hash",
+    "comfyui_adapter_factory",
+    "dependency_env_fingerprint",
     "now_iso",
+    "runner_workspace_fingerprint",
     "select_free_port",
+    "sha256_fingerprint",
     "user_facing_install_message",
 ]

@@ -3,6 +3,12 @@ from pathlib import Path
 
 import pytest
 
+from app.runtime.fingerprints import (
+    capsule_fingerprint,
+    dependency_env_fingerprint,
+    runner_workspace_fingerprint,
+    sha256_fingerprint,
+)
 from app.runtime.isolation import TrustLevel
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 
@@ -50,9 +56,72 @@ def test_loader_reads_bundled_capsule_for_text_to_image_v0() -> None:
 
     assert lock.workflow.package_id == "text_to_image_v0"
     assert lock.workflow.trust_level is TrustLevel.NOOFY_VERIFIED
-    assert lock.runtime.capsule_fingerprint == "phase3-text_to_image_v0-0.1.0"
+    assert lock.runtime.capsule_fingerprint.startswith("sha256:")
+    assert lock.runtime.dependency_env_fingerprint.startswith("sha256:")
+    assert lock.runtime.runner_fingerprint.startswith("sha256:")
+    assert lock.engine.core_source_hash.startswith("sha256:")
+    assert lock.runtime.dependency_lock_hash.startswith("sha256:")
     assert [model.filename for model in lock.models] == ["v1-5-pruned-emaonly-fp16.safetensors"]
     assert lock.models[0].sha256 == "e9476a13728cd75d8279f6ec8bad753a66a1957ca375a1464dc63b37db6e3916"
+
+
+def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
+    packages_dir = Path("app/workflows/packages")
+    package = json.loads((packages_dir / "text_to_image_v0" / "package.json").read_text(encoding="utf-8"))
+    lock = CapsuleLockLoader(packages_dir).get_capsule_lock("text_to_image_v0")
+
+    expected_dependency_lock_hash = sha256_fingerprint(
+        {
+            "kind": "core_dependency_lock",
+            "lock_file": lock.dependencies.lock_file,
+            "dependencies": [],
+        }
+    )
+    expected_core_source_hash = sha256_fingerprint(
+        {
+            "kind": "comfyui_core_source",
+            "comfyui_version": lock.engine.comfyui_version,
+            "source": "managed-core",
+        }
+    )
+    expected_dependency_fingerprint = dependency_env_fingerprint(
+        os_name=lock.runtime.os,
+        architecture=lock.runtime.architecture,
+        python_build_id=lock.runtime.python_version,
+        torch_backend=lock.runtime.gpu_backend,
+        dependency_lock_hash=expected_dependency_lock_hash,
+        native_dependency_constraints={},
+        install_policy_version=lock.dependencies.install_policy,
+    )
+    expected_runner_fingerprint = runner_workspace_fingerprint(
+        dependency_env_fingerprint=expected_dependency_fingerprint,
+        comfyui_source_hash=expected_core_source_hash,
+        enabled_custom_node_manifest_hash=sha256_fingerprint(lock.custom_nodes),
+        launch_config_hash=sha256_fingerprint(
+            {
+                "engine": lock.engine.type,
+                "runner": "core_comfyui",
+                "phase": "phase4-runner-workspace",
+            }
+        ),
+        model_view_hash=sha256_fingerprint(lock.models),
+    )
+    expected_capsule_fingerprint = capsule_fingerprint(
+        workflow_package_hash=sha256_fingerprint(package),
+        graph_hash=sha256_fingerprint(package["comfyui_graph"]),
+        dashboard_schema_hash=sha256_fingerprint(package["dashboard"]),
+        model_requirements=lock.models,
+        custom_nodes=lock.custom_nodes,
+        trust=lock.trust,
+        runner_fingerprint=expected_runner_fingerprint,
+    )
+
+    assert lock.runtime.dependency_lock_hash == expected_dependency_lock_hash
+    assert lock.engine.core_source_hash == expected_core_source_hash
+    assert lock.runtime.dependency_env_fingerprint == expected_dependency_fingerprint
+    assert lock.runtime.runner_workspace_hash == expected_runner_fingerprint
+    assert lock.runtime.runner_fingerprint == expected_runner_fingerprint
+    assert lock.runtime.capsule_fingerprint == expected_capsule_fingerprint
 
 
 def test_loader_raises_for_unknown_workflow(tmp_path: Path) -> None:

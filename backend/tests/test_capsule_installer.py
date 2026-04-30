@@ -13,6 +13,8 @@ from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.install_state import InstallStateStore
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.model_store import ModelStore
+from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
 
 def _capsule_lock_data(
@@ -135,6 +137,202 @@ async def test_prepare_with_model_download_succeeds(tmp_path: Path) -> None:
     materialized = tmp_path / "materialized" / "checkpoints" / "m.safetensors"
     assert materialized.exists()
     assert materialized.read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_prepare_records_runtime_workspace_paths_when_preparer_is_configured(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-workspace", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.READY
+    assert state.dependency_env_path is not None
+    assert state.runner_workspace_path is not None
+    assert (Path(state.dependency_env_path) / "manifest.json").exists()
+    assert (Path(state.runner_workspace_path) / "manifest.json").exists()
+
+
+@pytest.mark.anyio
+async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+    smoke_calls = []
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+        smoke_calls.append((capsule_lock, prepared_workspace))
+        assert capsule_lock == capsule
+        assert (prepared_workspace.dependency_env_path / "manifest.json").exists()
+        assert (prepared_workspace.runner_workspace_path / "manifest.json").exists()
+        assert state_store.get(capsule.runtime.capsule_fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert len(smoke_calls) == 1
+    assert state.status is InstallStatus.READY
+    assert state.smoke_test_status is SmokeTestStatus.PASSED
+    persisted = state_store.get("fp-smoke")
+    assert persisted is not None
+    assert persisted.status is InstallStatus.READY
+    assert persisted.smoke_test_status is SmokeTestStatus.PASSED
+    runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
+    assert runner_manifest.status is InstallStatus.READY
+    assert runner_manifest.smoke_test_status is SmokeTestStatus.PASSED
+
+
+@pytest.mark.anyio
+async def test_prepare_smoke_failure_marks_state_failed_and_not_ready(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-fail", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+        raise RuntimeError("runner never became healthy")
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError, match="runner never became healthy") as exc_info:
+        await installer.prepare(capsule)
+
+    state = exc_info.value.state
+    assert state.status is InstallStatus.FAILED
+    assert state.smoke_test_status is SmokeTestStatus.FAILED
+    assert state.installed_at is None
+    persisted = state_store.get("fp-smoke-fail")
+    assert persisted is not None
+    assert persisted.status is InstallStatus.FAILED
+    assert persisted.smoke_test_status is SmokeTestStatus.FAILED
+    runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
+    assert runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
+    assert runner_manifest.smoke_test_status is SmokeTestStatus.NOT_RUN
+
+
+@pytest.mark.anyio
+async def test_prepare_can_retry_after_smoke_failure_and_promote_staged_workspace(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-retry", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+    attempts = {"count": 0}
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("runner never became healthy")
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError):
+        await installer.prepare(capsule)
+    first_runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
+    assert first_runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
+
+    second = await installer.prepare(capsule)
+
+    assert attempts["count"] == 2
+    assert second.status is InstallStatus.READY
+    assert second.smoke_test_status is SmokeTestStatus.PASSED
+    runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
+    assert runner_manifest.status is InstallStatus.READY
+    assert runner_manifest.smoke_test_status is SmokeTestStatus.PASSED
+    assert Path(second.runner_workspace_path) == workspace_preparer.runner_workspace_store.artifact_dir(
+        capsule.runtime.runner_fingerprint
+    )
 
 
 @pytest.mark.anyio
