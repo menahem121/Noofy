@@ -64,6 +64,21 @@ describe("noofyApi", () => {
     });
   });
 
+  it("uses runtime API base URL for backend requests", async () => {
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiBaseUrl: "http://127.0.0.1:9123/api/",
+    };
+    fetchMock.mockResolvedValue(jsonResponse({}));
+
+    await fetchRuntimeStatus();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:9123/api/runtime", {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+  });
+
   it("uses runtime API base URL and token for job event streams", () => {
     window.__NOOFY_RUNTIME_CONFIG__ = {
       apiBaseUrl: "http://127.0.0.1:9123/api/",

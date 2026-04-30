@@ -47,6 +47,20 @@ The token is not user authentication. It is local API hardening so unrelated web
 
 For browser development, token enforcement is optional. The backend only requires a token when `NOOFY_API_TOKEN` is set.
 
+## Desktop Runtime Config
+
+Tauri must not create or navigate the main webview until the backend API base URL and launch token are known.
+
+Startup order:
+
+1. Generate the per-launch API token.
+2. Start the backend with `NOOFY_API_TOKEN` and a free localhost port.
+3. Read the backend API base URL from the backend startup handoff.
+4. Inject `window.__NOOFY_RUNTIME_CONFIG__` as an initialization script before the frontend entry module runs.
+5. Load the Vite dev server in development or the built frontend assets in production.
+
+The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If the initialization script is unavailable for a dev-server webview, the frontend asks Tauri for the same config through the `noofy_runtime_config` command before rendering React. If both desktop config paths are absent, browser development falls back to `/api` and the Vite proxy.
+
 ## Key Decisions
 
 - Wrap ComfyUI first. Do not fork ComfyUI now.

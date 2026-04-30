@@ -28,6 +28,11 @@ export interface RuntimeStatus {
   pid: number | null;
   error: string | null;
   environment: RuntimeEnvironmentStatus | null;
+  crash_count: number;
+  restart_attempt: number;
+  max_restart_attempts: number;
+  uptime_seconds: number | null;
+  last_crash_at: string | null;
 }
 
 export interface WorkflowHealthSummary {

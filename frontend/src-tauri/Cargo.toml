@@ -1,0 +1,15 @@
+[package]
+name = "noofy"
+version = "0.1.0"
+description = "Noofy desktop shell"
+authors = ["Noofy"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }

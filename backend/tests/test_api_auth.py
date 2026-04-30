@@ -66,6 +66,24 @@ def test_api_accepts_bearer_token(monkeypatch) -> None:
     assert response.status_code == 200
 
 
+def test_cors_preflight_for_tauri_origin_succeeds_with_token_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.options(
+            "/api/runtime",
+            headers={
+                "Origin": "tauri://localhost",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "tauri://localhost"
+
+
 def test_job_event_stream_accepts_query_token(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
     monkeypatch.setattr(routes, "engine_service", FakeEngineService())

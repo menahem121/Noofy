@@ -205,9 +205,7 @@ class EngineService:
         return graph
 
     def _configure_adapter_endpoint(self) -> None:
-        configure_endpoint = getattr(self.engine_adapter, "configure_endpoint", None)
-        if configure_endpoint is not None:
-            configure_endpoint(self.runtime_manager.base_url, self.runtime_manager.ws_url)
+        self.engine_adapter.configure_endpoint(self.runtime_manager.base_url, self.runtime_manager.ws_url)
 
 
 def create_default_engine_service() -> EngineService:
@@ -257,9 +255,7 @@ def create_default_engine_service() -> EngineService:
     # Wire the on_restart callback so the adapter learns the new URL after
     # a crash-restart that picked a new port.
     def _reconfigure_adapter() -> None:
-        configure = getattr(adapter, "configure_endpoint", None)
-        if configure is not None:
-            configure(runtime_manager.base_url, runtime_manager.ws_url)
+        adapter.configure_endpoint(runtime_manager.base_url, runtime_manager.ws_url)
 
     runtime_manager._on_restart = _reconfigure_adapter
 

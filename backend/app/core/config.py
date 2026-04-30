@@ -5,10 +5,29 @@ from urllib.parse import urlparse
 
 from app.core.paths import NoofyPaths, resolve_paths
 
+DEFAULT_CORS_ORIGINS = (
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+)
+
+
+def _csv_env(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip().rstrip("/") for item in value.split(",") if item.strip())
+
 
 @dataclass(frozen=True)
 class Settings:
     noofy_api_token: str | None = os.environ.get("NOOFY_API_TOKEN")
+    noofy_cors_origins: tuple[str, ...] = field(
+        default_factory=lambda: _csv_env(os.environ.get("NOOFY_CORS_ORIGINS")) or DEFAULT_CORS_ORIGINS
+    )
     comfyui_runtime_mode: str = os.environ.get("COMFYUI_RUNTIME_MODE", "external")
     comfyui_base_url: str = os.environ.get("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
     comfyui_ws_url: str | None = os.environ.get("COMFYUI_WS_URL")

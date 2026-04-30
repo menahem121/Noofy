@@ -20,6 +20,12 @@ python -m pip install -e ".[dev]"
 python -m uvicorn app.main:app --reload
 ```
 
+For the desktop shell handoff, the backend can also be started as a module. Port `0` selects a free localhost port and prints the API base URL on stdout for the shell to inject into `window.__NOOFY_RUNTIME_CONFIG__`:
+
+```bash
+python -m app --port 0
+```
+
 The backend is intentionally separate from `ComfyUI-official-repo/`. ComfyUI is treated as the first sidecar engine, not as the public API of this app.
 
 ## Useful Endpoints
@@ -55,6 +61,10 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `COMFYUI_STARTUP_TIMEOUT_SECONDS`: managed startup health polling timeout, default `60`
 - `COMFYUI_HEALTH_POLL_INTERVAL_SECONDS`: managed startup health polling interval, default `0.5`
 - `NOOFY_API_TOKEN`: optional local API bearer token. When set, every `/api/*` request must include `Authorization: Bearer <token>`, except job event streams may pass `?token=<token>` for browser `EventSource` support.
+- `NOOFY_CORS_ORIGINS`: optional comma-separated list of allowed frontend origins. Defaults include Vite dev/preview and Tauri app origins.
+- `NOOFY_BACKEND_HOST`: host used by `python -m app`, default `127.0.0.1`.
+- `NOOFY_BACKEND_PORT`: port used by `python -m app`, default `0` for a free port.
+- `NOOFY_BACKEND_LOG_LEVEL`: uvicorn log level used by `python -m app`, default `info`.
 
 External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. macOS Intel gets standard CPU-capable macOS wheels, Apple Silicon gets standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI repo, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
 

@@ -14,5 +14,6 @@ backend/.env
 # Frontend dependencies and build outputs
 frontend/node_modules/
 frontend/dist/
+frontend/src-tauri/target/
 frontend/coverage/
 *.tsbuildinfo

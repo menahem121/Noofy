@@ -25,3 +25,6 @@ class EngineAdapter(Protocol):
 
     async def list_available_models(self) -> list[ModelInfo]:
         """Return models visible to this engine implementation."""
+
+    def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
+        """Update this adapter's active engine endpoint."""
