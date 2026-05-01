@@ -644,8 +644,14 @@ button:disabled {
 }
 
 .workflow-status--download,
-.workflow-status--planned {
+.workflow-status--planned,
+.workflow-status--needs_input_setup,
+.workflow-status--cannot_prepare_automatically {
   color: var(--warning);
+}
+
+.workflow-status--imported {
+  color: var(--info);
 }
 
 .workflow-status--offline {

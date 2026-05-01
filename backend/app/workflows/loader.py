@@ -17,10 +17,12 @@ class WorkflowPackageLoader:
         self,
         packages_dir: Path,
         user_packages_dir: Path | None = None,
+        imported_packages_dir: Path | None = None,
         allow_user_overrides: bool = False,
     ) -> None:
         self.packages_dir = packages_dir
         self.user_packages_dir = user_packages_dir
+        self.imported_packages_dir = imported_packages_dir
         self.allow_user_overrides = allow_user_overrides
 
     def list_packages(self) -> list[WorkflowPackage]:
@@ -32,8 +34,8 @@ class WorkflowPackageLoader:
 
         # User packages cannot shadow bundled packages unless a development
         # caller opts into that behavior explicitly.
-        if self.user_packages_dir is not None:
-            for package in self._load_from(self.user_packages_dir):
+        for user_dir in self._user_search_dirs():
+            for package in self._load_from(user_dir):
                 if package.metadata.id in by_id and not self.allow_user_overrides:
                     continue
                 by_id[package.metadata.id] = package
@@ -54,9 +56,21 @@ class WorkflowPackageLoader:
         packages: list[WorkflowPackage] = []
         if not directory.exists():
             return packages
-        for package_file in sorted(directory.glob("*/package.json")):
+        package_files = {
+            *directory.glob("*/package.json"),
+            *directory.glob("*/*/*/package.json"),
+        }
+        for package_file in sorted(package_files):
             packages.append(self._load_file(package_file))
         return packages
+
+    def _user_search_dirs(self) -> list[Path]:
+        directories: list[Path] = []
+        if self.user_packages_dir is not None:
+            directories.append(self.user_packages_dir)
+        if self.imported_packages_dir is not None and self.imported_packages_dir not in directories:
+            directories.append(self.imported_packages_dir)
+        return directories
 
     def _load_file(self, package_file: Path) -> WorkflowPackage:
         with package_file.open("r", encoding="utf-8") as file:

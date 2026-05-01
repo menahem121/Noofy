@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus } from "lucide-react";
 
 import {
   fetchRuntimeStatus,
   fetchWorkflows,
+  importWorkflowPackage,
   type RuntimeStatus,
+  type WorkflowImportResponse,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -22,6 +24,9 @@ interface HomeDataState {
   runtime: RuntimeStatus | null;
   workflows: WorkflowSummary[];
   error: string | null;
+  importing: boolean;
+  importResult: WorkflowImportResponse | null;
+  importError: string | null;
 }
 
 const initialHomeState: HomeDataState = {
@@ -29,6 +34,9 @@ const initialHomeState: HomeDataState = {
   runtime: null,
   workflows: [],
   error: null,
+  importing: false,
+  importResult: null,
+  importError: null,
 };
 
 function friendlyDescription(workflow: WorkflowSummary) {
@@ -56,12 +64,44 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
     id: workflow.id,
     title: workflow.name,
     description: friendlyDescription(workflow),
-    category: "Installed",
-    status: "installed",
-    statusLabel: "Installed",
+    category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
+    status: workflowStatusFromSummary(workflow),
+    statusLabel: workflow.status_label ?? workflowStatusLabel(workflowStatusFromSummary(workflow)),
     Icon: fallbackWorkflow.Icon,
     source: "backend",
   }));
+}
+
+function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
+  if (workflow.status === "needs_input_setup") {
+    return "needs_input_setup";
+  }
+
+  if (workflow.status === "cannot_prepare_automatically") {
+    return "cannot_prepare_automatically";
+  }
+
+  if (workflow.status === "imported") {
+    return "imported";
+  }
+
+  return "installed";
+}
+
+function workflowStatusLabel(status: WorkflowStatus) {
+  if (status === "needs_input_setup") {
+    return "Needs input setup";
+  }
+
+  if (status === "cannot_prepare_automatically") {
+    return "Cannot prepare";
+  }
+
+  if (status === "imported") {
+    return "Imported";
+  }
+
+  return "Installed";
 }
 
 interface HomePageProps {
@@ -99,6 +139,9 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
         runtime,
         workflows,
         error: firstError instanceof Error ? firstError.message : firstError ? String(firstError) : null,
+        importing: false,
+        importResult: null,
+        importError: null,
       });
     }
 
@@ -122,6 +165,40 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
   }, [homeData.workflows]);
 
   const installedCount = homeData.workflows.length;
+
+  async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+
+    setHomeData((current) => ({
+      ...current,
+      importing: true,
+      importResult: null,
+      importError: null,
+    }));
+
+    try {
+      const importResult = await importWorkflowPackage(file);
+      const workflows = await fetchWorkflows();
+      setHomeData((current) => ({
+        ...current,
+        workflows,
+        importing: false,
+        importResult,
+        importError: null,
+      }));
+    } catch (error) {
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        importResult: null,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
 
   return (
     <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
@@ -150,6 +227,26 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
             </div>
           ) : null}
 
+          {homeData.importResult ? (
+            <div className="notice" role="status">
+              <CheckCircle2 size={18} aria-hidden="true" />
+              <div>
+                <strong>{homeData.importResult.user_facing_message}</strong>
+                <span>{homeData.importResult.workflow.name} was added to your local workflows.</span>
+              </div>
+            </div>
+          ) : null}
+
+          {homeData.importError ? (
+            <div className="notice notice--error" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Workflow could not be imported</strong>
+                <span>{homeData.importError}</span>
+              </div>
+            </div>
+          ) : null}
+
           <section className="action-grid" aria-label="Workflow actions">
             <article className="action-card">
               <div className="action-card__icon">
@@ -160,9 +257,15 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
                 <p>Choose a saved workflow package and run it through Noofy.</p>
               </div>
               <label className="secondary-button action-card__button">
-                <input className="sr-only" type="file" accept=".json,.noofy" />
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept=".noofy"
+                  disabled={homeData.importing}
+                  onChange={(event) => void handleWorkflowFileSelected(event)}
+                />
                 <FileUp size={16} aria-hidden="true" />
-                Choose File
+                {homeData.importing ? "Importing..." : "Choose File"}
               </label>
             </article>
 

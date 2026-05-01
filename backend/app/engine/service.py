@@ -55,6 +55,7 @@ from app.runtime.workspace_store import (
     RunnerWorkspaceManifestStore,
 )
 from app.workflows.capsule import CapsuleLockLoader
+from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
@@ -71,6 +72,7 @@ class EngineService:
         capsule_loader: CapsuleLockLoader | None = None,
         capsule_installer: CapsuleInstaller | None = None,
         runner_process_coordinator: RunnerProcessCoordinator | None = None,
+        imported_package_store: ImportedWorkflowPackageStore | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -80,20 +82,44 @@ class EngineService:
         self.capsule_loader = capsule_loader
         self.capsule_installer = capsule_installer
         self.runner_process_coordinator = runner_process_coordinator
+        self.imported_package_store = imported_package_store
 
-    def list_workflows(self) -> list[dict[str, str]]:
+    def list_workflows(self) -> list[dict[str, object]]:
         return [
-            {
-                "id": package.metadata.id,
-                "name": package.metadata.name,
-                "version": package.metadata.version,
-                "description": package.metadata.description,
-            }
+            self._workflow_summary(package)
             for package in self.workflow_loader.list_packages()
         ]
 
     def list_runners(self) -> list[RunnerDescriptor]:
         return self.runner_supervisor.list_runners()
+
+    def get_workflow_package(self, workflow_id: str) -> dict[str, object]:
+        package = self.workflow_loader.get_package(workflow_id)
+        return package.model_dump()
+
+    def import_workflow_archive(
+        self,
+        data: bytes,
+        *,
+        original_filename: str | None = None,
+    ) -> dict[str, object]:
+        if self.imported_package_store is None:
+            raise NoofyImportError("Workflow import is not configured.")
+        package = self.imported_package_store.import_archive(
+            data,
+            original_filename=original_filename,
+        )
+        status = package.import_metadata.status if package.import_metadata else "imported"
+        message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
+        return {
+            "workflow_id": package.metadata.id,
+            "status": status,
+            "user_facing_message": message,
+            "workflow": self._workflow_summary(package),
+            "required_model_count": len(package.required_models),
+            "custom_node_count": len(package.custom_nodes),
+            "unresolved_input_count": len(package.unresolved_runtime_inputs),
+        }
 
     # ------------------------------------------------------------------
     # Capsule install pipeline (Phase 3)
@@ -506,6 +532,28 @@ class EngineService:
             "last_error": state.last_error,
         }
 
+    def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
+        status = package.import_metadata.status if package.import_metadata else "installed"
+        user_facing_status = (
+            package.import_metadata.user_facing_message
+            if package.import_metadata
+            else "Installed"
+        )
+        return {
+            "id": package.metadata.id,
+            "name": package.metadata.name,
+            "version": package.metadata.version,
+            "description": package.metadata.description,
+            "publisher_id": package.identity.publisher_id if package.identity else package.metadata.author,
+            "package_id": package.identity.package_id if package.identity else package.metadata.id,
+            "trust_level": package.identity.trust_level if package.identity else "noofy_verified",
+            "status": status,
+            "status_label": user_facing_status,
+            "unresolved_input_count": len(package.unresolved_runtime_inputs),
+            "custom_node_count": len(package.custom_nodes),
+            "required_model_count": len(package.required_models),
+        }
+
     def _phase3_verified_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
         if self.capsule_loader is None:
             return None
@@ -710,6 +758,7 @@ def create_default_engine_service() -> EngineService:
     loader = WorkflowPackageLoader(
         settings.workflows_dir,
         user_packages_dir=paths.user_workflows_dir,
+        imported_packages_dir=paths.workflow_packages_store_dir,
     )
     validator = WorkflowPackageValidator()
     log_store = LogStore()
@@ -744,6 +793,10 @@ def create_default_engine_service() -> EngineService:
         runtime_manager.base_url,
         settings.comfyui_models_dir,
         runtime_manager.ws_url,
+        log_store=log_store,
+    )
+    imported_package_store = ImportedWorkflowPackageStore(
+        paths.workflow_packages_store_dir,
         log_store=log_store,
     )
 
@@ -842,4 +895,5 @@ def create_default_engine_service() -> EngineService:
         capsule_loader=capsule_loader,
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
+        imported_package_store=imported_package_store,
     )

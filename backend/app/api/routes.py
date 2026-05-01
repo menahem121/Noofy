@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, create_default_engine_service
+from app.workflows.importer import NoofyImportError
 
 router = APIRouter()
 engine_service: EngineService = create_default_engine_service()
@@ -55,8 +56,27 @@ async def list_runners():
 
 
 @router.get("/workflows")
-async def list_workflows() -> list[dict[str, str]]:
+async def list_workflows() -> list[dict[str, object]]:
     return engine_service.list_workflows()
+
+
+@router.post("/workflows/import")
+async def import_workflow(request: Request, filename: str | None = None):
+    try:
+        return engine_service.import_workflow_archive(
+            await request.body(),
+            original_filename=filename,
+        )
+    except NoofyImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/package")
+async def get_workflow_package(workflow_id: str):
+    try:
+        return engine_service.get_workflow_package(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/workflows/{workflow_id}/install-state")

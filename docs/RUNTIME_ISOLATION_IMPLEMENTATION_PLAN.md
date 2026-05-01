@@ -170,38 +170,156 @@ Current implementation notes:
 - Workflow runner startup also requires install-state `smoke_test_status=passed`, so stale ready records cannot launch without a successful smoke result.
 - The bundled verified starter capsule uses deterministic Phase 4 `sha256:` dependency, runner, and capsule fingerprints.
 
-## Phase 5: Community Custom Node Resolver
+## Phase 4.5: Imported Package Foundation
 
-Goal: support community custom-node workflows when Noofy can resolve them into isolated runtime capsules without mutating the trusted core runtime or existing workflows.
+Status: Complete
+
+Goal: make exported `.noofy` workflow packages inspectable and storable as Noofy-owned data before attempting community custom-node installation.
+
+This phase prepares the backend and API surface for community workflows without executing custom-node code, installing community dependencies, or changing the trusted core runtime. Phase 5 starts only after imported packages can be safely normalized and inspected.
+
+Current test artifact:
+
+- `exported-workflow-for-testing.noofy` is a real exported workflow package from the ComfyUI export node.
+- It contains `package.json`, `comfyui_graph.json`, `dashboard.json`, `capsule.lock.json`, `export-report.json`, `assets/thumbnail.png`, and bundled `custom_nodes/`.
+- It includes both standard ComfyUI nodes and custom nodes.
+- It records two required models with their normal ComfyUI folders:
+  - checkpoint model: `DreamShaperXL_Lightning.safetensors` in `checkpoints`
+  - ControlNet model: `diffusion_pytorch_model_promax.safetensors` in `controlnet`
+- It records observed run metrics, including peak RAM, peak VRAM, backend, GPU name, run duration, batch size, and successful export status.
+- It does not provide dashboard/input bindings yet. The `LoadImage` node still references the creator-side ComfyUI input image, which is intentionally not bundled.
+- The current backend package schemas do not consume this archive shape directly. A `.noofy` importer/normalizer is required before runtime preparation.
 
 Tasks:
 
+- Add a root-level or documented project test command so backend tests run from the expected working directory and phase-specific test failures are not confused with invocation-path failures.
+- Add backend-owned imported package storage under `workflow-store/packages/<publisher-id>/<package-id>/<version>/`, or a clearly named successor that preserves publisher, package, version, and trust identity.
+- Update workflow package loading so imported packages can be discovered from the package store without silently shadowing Noofy Verified built-ins.
+- Extend normalized package schemas for:
+  - publisher/package/version identity
+  - trust level and source metadata
+  - exported package metadata
+  - ComfyUI API graph
+  - dashboard schema
+  - required model records
+  - custom node records
+  - unresolved runtime inputs
+  - thumbnail/assets metadata
+  - export report and observed hardware metadata
+- Add a `.noofy` archive importer that safely inspects package files as data:
+  - validate zip paths before extraction
+  - reject absolute paths and `..` traversal
+  - enforce required top-level files
+  - enforce reasonable file count and archive size limits
+  - parse JSON through schema models
+  - never import or execute bundled Python modules
+- Normalize the archive into Noofy-owned package records and preserve the original exported files for diagnostics.
+- Convert exported model records into Noofy model requirements while preserving:
+  - model filename
+  - model type
+  - expected ComfyUI folder
+  - SHA-256 hash and size when present
+  - source URLs when present
+- Add an import-time placeholder dashboard for workflows without configured controls.
+- Detect `LoadImage` / `LoadImageMask` nodes that reference creator-local inputs and mark them as unresolved runtime image inputs until creator-mode/dashboard binding exists.
+- Add backend API endpoints for importing a `.noofy` archive and inspecting the normalized package record.
+- Wire the frontend file picker only to the Noofy backend import API, never to ComfyUI.
+- Add user-facing states for imported workflow preparation:
+  - imported
+  - needs input setup
+  - cannot prepare automatically
+- Keep the existing Noofy Verified installer restricted to bundled verified capsules; do not broaden it to custom-node or unverified community capsules.
+
+Acceptance criteria:
+
+- Noofy can import the test `.noofy` archive without importing or executing custom node Python code in the trusted backend.
+- Imported package metadata, graph, dashboard, capsule/export metadata, model records, custom-node records, assets, and observed hardware metadata are inspectable through backend-owned data structures.
+- The imported workflow records both required models and their expected ComfyUI folders: `checkpoints` and `controlnet`.
+- The importer detects creator-local `LoadImage` inputs and marks the workflow as needing input setup rather than pretending the original image is available.
+- Imported packages are stored under app-owned workflow-store paths with publisher/package/version identity.
+- Imported packages cannot silently replace Noofy Verified built-ins by reusing an ID.
+- The frontend import control calls only the Noofy backend API.
+- Unsupported or incomplete imports produce beginner-friendly states and structured diagnostics.
+- No bundled custom node source is materialized into runner workspaces in this phase.
+- No normal Python dependencies are installed in this phase.
+- The trusted backend does not import custom node modules.
+- Backend and frontend tests pass through the documented project test commands.
+
+Current implementation notes:
+
+- A root `make test` command runs backend tests from `backend/` and frontend tests from `frontend/`.
+- `.noofy` imports are inspected as zip data with path traversal, absolute path, symlink, required-file, file-count, and size checks before persistence.
+- Imported packages are normalized into app-owned `WorkflowPackage` records with identity, trust/source metadata, required model records, custom-node records, unresolved runtime inputs, assets, export metadata, observed hardware, and import status.
+- Imported packages are stored under `workflow-store/packages/<publisher-id>/<package-id>/<version>/` with the original archive and extracted source files preserved for diagnostics.
+- The test archive imports as a Quarantined Community workflow and is marked `needs_input_setup` because its `LoadImage` input points to a creator-local image that is not bundled.
+- Workflow summaries expose imported package status, trust level, unresolved input count, custom-node count, and required model count so the UI can avoid presenting imported workflows as simply installed.
+- The frontend file picker posts `.noofy` bytes only to the Noofy backend import API.
+- The Noofy Verified installer remains restricted to bundled verified capsules and still rejects custom-node or unverified community capsules.
+- Failed imports return a beginner-facing error through the API and emit structured diagnostics without executing archive code.
+- No bundled custom node source is materialized into runner workspaces and no Python dependencies are installed in this phase.
+
+## Phase 5: `.noofy` Import And Community Custom Node Preparation
+
+Goal: make exported `.noofy` workflow packages usable by Noofy when they include community custom nodes, without mutating the trusted core runtime or existing workflows.
+
+Phase 5 assumes Phase 4.5 has already produced normalized imported package records. This phase turns those records into isolated prepared runtimes when policy allows it.
+
+Next implementation slice:
+
+1. Resolve custom-node requirements from normalized imported package records.
+2. Materialize bundled custom node sources into staged runner workspaces only.
+3. Install normal dependency declarations only into isolated dependency envs.
+4. Run custom-node import checks only inside staged runner processes.
+5. Run workflow smoke tests only inside staged runner processes.
+6. Promote dependency envs and runner workspaces to ready only after smoke tests pass.
+7. Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
+8. Surface observed hardware metrics as compatibility guidance, not guaranteed minimum requirements.
+
+Custom-node preparation tasks:
+
 - Add pinned core-node manifest for the supported ComfyUI version.
+- Distinguish standard ComfyUI nodes from custom nodes by comparing graph node types to the pinned core-node manifest and the package's custom-node records.
+- Materialize bundled custom node sources from `.noofy` archives only into staged runner workspaces.
+- Do not copy bundled custom nodes into the trusted core runtime.
+- Record custom-node file manifests and dependency marker files as resolver inputs.
+- Support normal dependency marker files bundled with custom nodes:
+  - `requirements.txt`
+  - `pyproject.toml`
+  - `setup.py`
+- Do not execute arbitrary `install.py` or custom setup scripts for one-click installs.
+- Install normal Python dependencies only into isolated dependency envs.
+- Run custom-node import checks only in staged runner processes.
+- Run workflow smoke tests only in staged runner processes.
+- Promote dependency envs and runner workspaces to ready only after smoke tests pass.
+- Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
+- Add diagnostics that keep technical errors behind developer details.
+
+Registry/source-resolution tasks:
+
 - Add Noofy node registry schema.
-- Resolve non-core node types through:
+- Resolve non-bundled or future package custom node sources through:
   - explicit Noofy metadata
   - registry metadata
   - Noofy-maintained node-type mappings
   - allowed community source-resolution mechanisms
-- Support the common custom node pattern where repositories declare dependencies in `requirements.txt`.
+- Download/cache custom node source at resolved refs.
 - Apply stricter policy to Noofy Verified and Registry Locked workflows.
 - Allow Quarantined Community workflows only when the user explicitly opts in and Noofy can isolate the install.
-- Download/cache custom node source at resolved refs.
-- Install normal Python dependencies only into isolated dependency envs.
-- Materialize required custom nodes into staged runner workspaces only.
-- Run custom-node import checks only in staged runner processes.
-- Reject unresolvable or unsafe packages with user-friendly unsupported status.
-- Add diagnostics that keep technical errors behind developer details.
 
 Acceptance criteria:
 
+- Noofy can import the test `.noofy` archive without importing or executing custom node Python code in the trusted backend.
+- Imported package metadata, graph, dashboard, capsule/export metadata, model records, and custom-node records are inspectable through backend-owned data structures.
+- The imported workflow records both required models and their expected ComfyUI folders: `checkpoints` and `controlnet`.
+- The importer detects creator-local `LoadImage` inputs and marks the workflow as needing input setup rather than pretending the original image is available.
 - Unknown custom nodes do not mutate the trusted core runtime or ready workflow environments.
-- Noofy can automatically install custom nodes only when their source can be resolved.
+- Bundled custom nodes are materialized only into staged runner workspaces.
 - Normal Python dependencies such as `requirements.txt` are installed only inside isolated dependency envs.
 - Arbitrary install scripts are not executed for one-click installs unless a future explicit policy allows them.
 - The trusted backend does not import custom node modules.
-- Failed custom-node install does not mutate core runtime, ready envs, or ready runner workspaces.
+- Failed custom-node install or smoke test does not mutate core runtime, ready envs, or ready runner workspaces.
 - Community custom-node workflows can become ready only after staged runner smoke tests pass.
+- Observed hardware metrics from `export-report.json` and `capsule.lock.json` are surfaced as compatibility guidance, not as guaranteed minimum requirements.
 
 ## Phase 6: Trust, Signing, Marketplace Readiness
 

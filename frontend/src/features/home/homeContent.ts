@@ -12,7 +12,15 @@ import {
   Wand2,
 } from "lucide-react";
 
-export type WorkflowStatus = "installed" | "ready" | "download" | "planned" | "offline";
+export type WorkflowStatus =
+  | "installed"
+  | "ready"
+  | "download"
+  | "planned"
+  | "offline"
+  | "imported"
+  | "needs_input_setup"
+  | "cannot_prepare_automatically";
 
 export interface WorkflowCard {
   id: string;

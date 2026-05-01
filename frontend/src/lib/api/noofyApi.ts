@@ -3,6 +3,14 @@ export interface WorkflowSummary {
   name: string;
   version: string;
   description: string;
+  publisher_id?: string;
+  package_id?: string;
+  trust_level?: string;
+  status?: string;
+  status_label?: string;
+  unresolved_input_count?: number;
+  custom_node_count?: number;
+  required_model_count?: number;
 }
 
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled" | "missing_models" | "unknown";
@@ -94,6 +102,16 @@ export interface WorkflowRunPayload {
 
 export type WorkflowRunResponse = EngineJob | WorkflowValidationResult;
 
+export interface WorkflowImportResponse {
+  workflow_id: string;
+  status: "imported" | "needs_input_setup" | "cannot_prepare_automatically" | string;
+  user_facing_message: string;
+  workflow: WorkflowSummary;
+  required_model_count: number;
+  custom_node_count: number;
+  unresolved_input_count: number;
+}
+
 declare global {
   interface Window {
     __NOOFY_RUNTIME_CONFIG__?: {
@@ -169,6 +187,20 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function postBytes<T>(path: string, body: ArrayBuffer): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "POST",
+    headers: apiHeaders("application/octet-stream"),
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Noofy backend returned ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export function fetchRuntimeStatus() {
   return getJson<RuntimeStatus>("/runtime");
 }
@@ -179,6 +211,33 @@ export function fetchHealth() {
 
 export function fetchWorkflows() {
   return getJson<WorkflowSummary[]>("/workflows");
+}
+
+export async function importWorkflowPackage(file: File) {
+  const data = await readFileAsArrayBuffer(file);
+  return postBytes<WorkflowImportResponse>(
+    `/workflows/import?filename=${encodeURIComponent(file.name)}`,
+    data,
+  );
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === "function") {
+    return file.arrayBuffer();
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Workflow file could not be read."));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Workflow file could not be read."));
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 export function validateWorkflow(workflowId: string) {
