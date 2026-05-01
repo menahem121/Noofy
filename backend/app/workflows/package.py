@@ -2,6 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.artifacts import AssetOwnership, ModelVerificationLevel
+
 
 class WorkflowPackageIdentity(BaseModel):
     publisher_id: str
@@ -29,6 +31,12 @@ class RequiredModel(BaseModel):
     model_type: str | None = None
     size_bytes: int | None = None
     source_urls: list[str] = Field(default_factory=list)
+    verification_level: ModelVerificationLevel = ModelVerificationLevel.FILENAME_ONLY
+    identity_verified_by_exporter: bool | None = None
+    local_file_available_at_export: bool | None = None
+    bundled: bool = False
+    asset_ownership: AssetOwnership = AssetOwnership.EXTERNAL_REFERENCE
+    identity_warnings: list[str] = Field(default_factory=list)
 
 
 class InputBinding(BaseModel):

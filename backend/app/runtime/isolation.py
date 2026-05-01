@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.artifacts import AssetOwnership, ModelVerificationLevel
+
 SHA256_PATTERN = r"^(sha256:)?[0-9a-fA-F]{64}$"
 
 
@@ -114,6 +116,41 @@ class ModelLock(BaseModel):
         return _validate_relative_path(value, field_name="filename", allow_nested=False)
 
 
+class InstalledModelReference(BaseModel):
+    """Mutable local reference from an installed workflow to a model asset.
+
+    This records what the current machine resolved for a model requirement.
+    It is intentionally separate from immutable capsule model locks so later
+    install and cleanup code can distinguish Noofy-owned blobs from user-owned
+    local files.
+    """
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    requirement_id: str = Field(min_length=1)
+    comfyui_folder: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+    verification_level: ModelVerificationLevel
+    asset_ownership: AssetOwnership
+    model_id: str | None = None
+    sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    size_bytes: int | None = Field(default=None, gt=0)
+    store_ref: str | None = None
+    blob_path: str | None = None
+    materialized_path: str | None = None
+    source_path: str | None = None
+
+    @field_validator("comfyui_folder")
+    @classmethod
+    def _validate_comfyui_folder(cls, value: str) -> str:
+        return _validate_relative_path(value, field_name="comfyui_folder", allow_nested=True)
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        return _validate_relative_path(value, field_name="filename", allow_nested=False)
+
+
 class HardwareObservations(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -156,7 +193,7 @@ class CapsuleLock(BaseModel):
 class InstallState(BaseModel):
     """Mutable local state for a workflow capsule installed on this machine."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     schema_version: str = Field(min_length=1)
     capsule_fingerprint: str = Field(min_length=1)
@@ -165,6 +202,7 @@ class InstallState(BaseModel):
     last_used_at: str | None = None
     dependency_env_path: str | None = None
     runner_workspace_path: str | None = None
+    model_references: list[InstalledModelReference] = Field(default_factory=list)
     smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN
     last_error: str | None = None
 

@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
 from app.workflows.package import (
     DashboardSchema,
@@ -339,6 +340,15 @@ def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
         checksum = None
         if isinstance(sha256, str) and sha256:
             checksum = sha256 if sha256.startswith("sha256:") else f"sha256:{sha256}"
+        size_bytes_value = model.get("size_bytes")
+        size_bytes = size_bytes_value if isinstance(size_bytes_value, int) else None
+        model_type = model.get("model_type")
+        identity_verified = model.get("identity_verified_by_exporter")
+        local_file_available = model.get("local_file_available_at_export")
+        bundled = model.get("bundled")
+        identity_warnings = [
+            item for item in model.get("identity_warnings", []) if isinstance(item, str)
+        ]
         normalized.append(
             RequiredModel(
                 folder=folder,
@@ -346,11 +356,47 @@ def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
                 source_url=source_urls[0] if source_urls else None,
                 source_urls=source_urls,
                 checksum=checksum,
-                model_type=model.get("model_type") if isinstance(model.get("model_type"), str) else None,
-                size_bytes=model.get("size_bytes") if isinstance(model.get("size_bytes"), int) else None,
+                model_type=model_type if isinstance(model_type, str) else None,
+                size_bytes=size_bytes,
+                verification_level=_normalize_model_verification_level(
+                    model,
+                    checksum=checksum,
+                    size_bytes=size_bytes,
+                ),
+                identity_verified_by_exporter=identity_verified
+                if isinstance(identity_verified, bool)
+                else checksum is not None and size_bytes is not None,
+                local_file_available_at_export=local_file_available
+                if isinstance(local_file_available, bool)
+                else None,
+                bundled=bundled if isinstance(bundled, bool) else False,
+                asset_ownership=_normalize_asset_ownership(model.get("asset_ownership")),
+                identity_warnings=identity_warnings,
             )
         )
     return normalized
+
+
+def _normalize_model_verification_level(
+    model: dict[str, Any],
+    *,
+    checksum: str | None,
+    size_bytes: int | None,
+) -> str:
+    value = model.get("verification_level")
+    if value in {item.value for item in ModelVerificationLevel}:
+        return str(value)
+    if checksum is not None and size_bytes is not None:
+        return ModelVerificationLevel.SHA256_SIZE.value
+    if size_bytes is not None:
+        return ModelVerificationLevel.FILENAME_SIZE.value
+    return ModelVerificationLevel.FILENAME_ONLY.value
+
+
+def _normalize_asset_ownership(value: Any) -> str:
+    if value in {item.value for item in AssetOwnership}:
+        return str(value)
+    return AssetOwnership.EXTERNAL_REFERENCE.value
 
 
 def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustomNodeRecord]:

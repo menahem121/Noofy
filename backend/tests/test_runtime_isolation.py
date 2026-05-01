@@ -2,10 +2,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.runtime.isolation import (
+    AssetOwnership,
     CapsuleLock,
     DependencyEnvManifest,
+    InstalledModelReference,
     InstallState,
     InstallStatus,
+    ModelVerificationLevel,
     RunnerWorkspaceManifest,
     SmokeTestStatus,
     TrustLevel,
@@ -137,6 +140,43 @@ def test_install_state_is_mutable_local_state() -> None:
     assert state.status is InstallStatus.READY
     assert state.dependency_env_path is not None
     assert state.runner_workspace_path is not None
+
+
+def test_install_state_can_record_local_model_references() -> None:
+    state = InstallState(
+        schema_version="0.1.0",
+        capsule_fingerprint="sha256:capsule",
+        status=InstallStatus.READY,
+        smoke_test_status=SmokeTestStatus.PASSED,
+        model_references=[
+            InstalledModelReference(
+                requirement_id="checkpoints/model.safetensors",
+                model_id="model-id",
+                comfyui_folder="checkpoints",
+                filename="model.safetensors",
+                sha256="sha256:" + ("b" * 64),
+                size_bytes=123,
+                verification_level=ModelVerificationLevel.SHA256_SIZE,
+                asset_ownership=AssetOwnership.NOOFY_DOWNLOADED,
+                store_ref="model-id",
+                materialized_path="model-store/materialized/checkpoints/model.safetensors",
+            )
+        ],
+    )
+
+    assert state.model_references[0].asset_ownership is AssetOwnership.NOOFY_DOWNLOADED
+    assert state.model_references[0].verification_level is ModelVerificationLevel.SHA256_SIZE
+
+
+def test_install_state_rejects_unsafe_model_reference_paths() -> None:
+    with pytest.raises(ValidationError):
+        InstalledModelReference(
+            requirement_id="bad",
+            comfyui_folder="checkpoints",
+            filename="../escape.safetensors",
+            verification_level=ModelVerificationLevel.FILENAME_ONLY,
+            asset_ownership=AssetOwnership.USER_LOCAL,
+        )
 
 
 def test_install_state_rejects_unknown_fields() -> None:

@@ -220,6 +220,8 @@ Tasks:
   - expected ComfyUI folder
   - SHA-256 hash and size when present
   - source URLs when present
+  - identity verification level
+  - asset ownership policy
 - Add an import-time placeholder dashboard for workflows without configured controls.
 - Detect `LoadImage` / `LoadImageMask` nodes that reference creator-local inputs and mark them as unresolved runtime image inputs until creator-mode/dashboard binding exists.
 - Add backend API endpoints for importing a `.noofy` archive and inspecting the normalized package record.
@@ -250,6 +252,16 @@ Current implementation notes:
 - A root `make test` command runs backend tests from `backend/` and frontend tests from `frontend/`.
 - `.noofy` imports are inspected as zip data with path traversal, absolute path, symlink, required-file, file-count, and size checks before persistence.
 - Imported packages are normalized into app-owned `WorkflowPackage` records with identity, trust/source metadata, required model records, custom-node records, unresolved runtime inputs, assets, export metadata, observed hardware, and import status.
+- Imported model records preserve the strongest exported identity available:
+  - `sha256_size`
+  - `filename_size`
+  - `filename_only`
+- Imported model records normalize asset ownership to the explicit cleanup policy values:
+  - `noofy_downloaded`
+  - `noofy_imported`
+  - `user_local`
+  - `external_reference`
+- `install-state.json` has a typed `model_references` foundation so Phase 5 can record resolved model blobs, materialized model-view paths, verification level, and ownership without mutating immutable capsule locks.
 - Imported packages are stored under `workflow-store/packages/<publisher-id>/<package-id>/<version>/` with the original archive and extracted source files preserved for diagnostics.
 - The test archive imports as a Quarantined Community workflow and is marked `needs_input_setup` because its `LoadImage` input points to a creator-local image that is not bundled.
 - Workflow summaries expose imported package status, trust level, unresolved input count, custom-node count, and required model count so the UI can avoid presenting imported workflows as simply installed.
@@ -266,14 +278,38 @@ Phase 5 assumes Phase 4.5 has already produced normalized imported package recor
 
 Next implementation slice:
 
-1. Resolve custom-node requirements from normalized imported package records.
-2. Materialize bundled custom node sources into staged runner workspaces only.
-3. Install normal dependency declarations only into isolated dependency envs.
-4. Run custom-node import checks only inside staged runner processes.
-5. Run workflow smoke tests only inside staged runner processes.
-6. Promote dependency envs and runner workspaces to ready only after smoke tests pass.
-7. Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
-8. Surface observed hardware metrics as compatibility guidance, not guaranteed minimum requirements.
+1. Resolve required model records through the shared model store before smoke tests.
+2. Reuse required models by SHA-256 and size when available; treat filename and size as an unverified local candidate only.
+3. Record resolved model references, materialized model-view paths, verification level, and asset ownership in install state.
+4. Resolve custom-node requirements from normalized imported package records.
+5. Materialize bundled custom node sources into staged runner workspaces only.
+6. Install normal dependency declarations only into isolated dependency envs.
+7. Run custom-node import checks only inside staged runner processes.
+8. Run workflow smoke tests only inside staged runner processes.
+9. Promote dependency envs and runner workspaces to ready only after smoke tests pass.
+10. Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
+11. Surface observed hardware metrics as compatibility guidance, not guaranteed minimum requirements.
+
+Model preparation tasks:
+
+- Resolve imported workflow model requirements from normalized package records before custom-node import checks or workflow smoke tests.
+- Match existing shared model-store blobs by SHA-256 and byte size when exported identity is available.
+- Treat filename and byte size matches as unverified local candidates only when exported hash identity is unavailable.
+- Do not treat filename-only matches as trusted model resolution.
+- Compute and record local SHA-256 identity for reused local candidates when Noofy reads the file.
+- Record resolved model references in `install-state.json`, including:
+  - model requirement id
+  - ComfyUI folder
+  - filename
+  - SHA-256 when known
+  - byte size when known
+  - verification level
+  - asset ownership
+  - model-store reference or source path
+  - materialized model-view path
+- Materialize runner-visible model views from the shared model store before runner smoke tests.
+- Preserve the cleanup boundary: Noofy-owned blobs or copies may be tracked for future garbage collection, but user-local source files must not be marked as auto-deletable.
+- Emit structured diagnostics for model reuse, unverified local candidate reuse, download needed, download failure, hash mismatch, size mismatch, and materialization failure.
 
 Custom-node preparation tasks:
 
@@ -312,6 +348,9 @@ Acceptance criteria:
 - Imported package metadata, graph, dashboard, capsule/export metadata, model records, and custom-node records are inspectable through backend-owned data structures.
 - The imported workflow records both required models and their expected ComfyUI folders: `checkpoints` and `controlnet`.
 - The importer detects creator-local `LoadImage` inputs and marks the workflow as needing input setup rather than pretending the original image is available.
+- Imported workflow preparation resolves required models before smoke tests or marks the workflow as not automatically preparable with a beginner-friendly reason.
+- Model reuse follows the verification hierarchy: SHA-256 plus size is trusted, filename plus size is unverified, and filename-only is not trusted.
+- Install state records resolved model references without mutating immutable capsule locks.
 - Unknown custom nodes do not mutate the trusted core runtime or ready workflow environments.
 - Bundled custom nodes are materialized only into staged runner workspaces.
 - Normal Python dependencies such as `requirements.txt` are installed only inside isolated dependency envs.
@@ -335,12 +374,6 @@ Tasks:
   - Quarantined Community
   - Unsupported
 - Add explicit opt-in policy for unverified/community workflows.
-- Add storage management UI for models, envs, runner workspaces, and caches.
-- Add garbage-collection implementation:
-  - reference tracking
-  - last-used tracking
-  - failed transaction retention
-  - cache size limits
 - Add marketplace/package source policy.
 - Evaluate OS-level sandboxing feasibility for macOS and Windows.
 
@@ -348,8 +381,6 @@ Acceptance criteria:
 
 - Trust level is visible in workflow install and detail surfaces.
 - Unsupported workflows fail gracefully without technical setup language by default.
-- Ready workflows protect referenced model blobs and runtime artifacts from automatic GC.
-- Unreferenced dependency envs and runner workspaces can be removed safely.
 - Unverified workflows require explicit user opt-in and can still be prepared automatically when Noofy can resolve them into isolated runtime capsules.
 
 ## Cross-Phase Requirements

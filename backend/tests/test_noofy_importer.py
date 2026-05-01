@@ -10,7 +10,12 @@ import pytest
 from app.engine.diagnostics import LogStore
 from app.engine.service import EngineService
 from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerSupervisor
-from app.workflows.importer import ImportedWorkflowPackageStore, NoofyArchiveImporter, NoofyImportError
+from app.workflows.importer import (
+    ImportedWorkflowPackageStore,
+    NoofyArchiveImporter,
+    NoofyImportError,
+    _normalize_models,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -55,6 +60,10 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
         "DreamShaperXL_Lightning.safetensors",
         "diffusion_pytorch_model_promax.safetensors",
     }
+    assert {model.verification_level for model in package.required_models} == {"sha256_size"}
+    assert all(model.identity_verified_by_exporter for model in package.required_models)
+    assert all(model.bundled is False for model in package.required_models)
+    assert {model.asset_ownership for model in package.required_models} == {"external_reference"}
     assert package.unresolved_runtime_inputs
     assert package.unresolved_runtime_inputs[0].node_type == "LoadImage"
     assert package.unresolved_runtime_inputs[0].reason == "creator_local_image_not_bundled"
@@ -91,6 +100,25 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     assert loaded.import_metadata is not None
     assert loaded.import_metadata.status == "needs_input_setup"
     assert log_store.list_events().events[-1].message == "Imported workflow package"
+
+
+def test_importer_normalizes_untrusted_model_identity_and_ownership_values() -> None:
+    models = _normalize_models(
+        {
+            "models": [
+                {
+                    "comfyui_folder": "checkpoints",
+                    "filename": "model.safetensors",
+                    "size_bytes": 123,
+                    "verification_level": "creator_claimed_verified",
+                    "asset_ownership": "delete_anyway",
+                }
+            ]
+        }
+    )
+
+    assert models[0].verification_level == "filename_size"
+    assert models[0].asset_ownership == "external_reference"
 
 
 def test_imported_package_cannot_shadow_bundled_workflow_by_id(tmp_path: Path) -> None:

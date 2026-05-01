@@ -14,7 +14,12 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.runtime.isolation import InstallState, InstallStatus, SmokeTestStatus
+from app.runtime.isolation import (
+    InstallState,
+    InstallStatus,
+    InstalledModelReference,
+    SmokeTestStatus,
+)
 
 INSTALL_STATE_SCHEMA_VERSION = "0.1.0"
 
@@ -85,6 +90,7 @@ class InstallStateStore:
         last_error: str | None | object = _UNSET,
         dependency_env_path: str | None | object = _UNSET,
         runner_workspace_path: str | None | object = _UNSET,
+        model_references: list[InstalledModelReference] | object = _UNSET,
         smoke_test_status: SmokeTestStatus | None = None,
         installed_at: str | None | object = _UNSET,
         last_used_at: str | None | object = _UNSET,
@@ -106,6 +112,8 @@ class InstallStateStore:
             updates["dependency_env_path"] = dependency_env_path
         if runner_workspace_path is not _UNSET:
             updates["runner_workspace_path"] = runner_workspace_path
+        if model_references is not _UNSET:
+            updates["model_references"] = model_references
         if installed_at is not _UNSET:
             updates["installed_at"] = installed_at
         if last_used_at is not _UNSET:

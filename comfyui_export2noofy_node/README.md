@@ -18,7 +18,8 @@ The package is designed for Noofy’s runtime isolation model: Noofy treats the 
 - Records ComfyUI, Python, platform, GPU backend, and PyTorch metadata.
 - Samples RAM and VRAM usage while the test run is active.
 - Detects model references from common ComfyUI loader nodes.
-- Hashes model files when ComfyUI can resolve them locally.
+- Hashes model files and records file size when ComfyUI can resolve them locally.
+- Tags each model reference with an explicit identity verification level.
 - Detects custom-node packages used by the workflow.
 - Bundles custom-node folders when their source folders can be located.
 - Records dependency marker files such as `requirements.txt`, `pyproject.toml`, `setup.py`, and `install.py`.
@@ -168,9 +169,20 @@ Each model record includes:
 - filename
 - SHA-256 hash when the local file can be resolved
 - file size when available
+- identity verification level
+- whether the model file was locally available at export time
+- asset ownership hint
 - source URLs, empty by default
 
+The verification levels are:
+
+- `sha256_size`: the exporter resolved the local model file, recorded its byte size, and hashed its contents with SHA-256. Noofy can treat this as the strongest identity for future reuse checks.
+- `filename_size`: the exporter recorded the filename and byte size but could not record a SHA-256 hash. Noofy may use this only as an unverified local candidate and should compute its own local content identity before relying on the file.
+- `filename_only`: the exporter only knows the ComfyUI model reference string. Noofy should not treat this as a trusted match by itself.
+
 Models are not bundled into `.noofy` packages. They are usually too large, and Noofy’s import flow validates or resolves models separately.
+
+Exported model records use `asset_ownership: "external_reference"` and `bundled: false`. During Noofy installation, files that already exist on the user’s machine may be reused when they match the exported identity rules, but they should not become Noofy-owned files. Future uninstall and cleanup logic should only auto-delete assets that Noofy downloaded or created itself and that are not referenced by any other installed workflow.
 
 ## Custom Node Bundling
 

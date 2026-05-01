@@ -20,6 +20,10 @@ SCHEMA_VERSION = "0.1.0"
 TRUST_LEVEL = "public_unverified"
 TEST_INPUT_MODE = "workflow_current_load_image_inputs"
 TEST_BATCH_SIZE = 1
+MODEL_VERIFICATION_HASH_AND_SIZE = "sha256_size"
+MODEL_VERIFICATION_FILENAME_AND_SIZE = "filename_size"
+MODEL_VERIFICATION_FILENAME_ONLY = "filename_only"
+MODEL_ASSET_OWNERSHIP_EXTERNAL = "external_reference"
 
 
 MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
@@ -464,16 +468,64 @@ def detect_model_references(
                 "filename": value,
                 "sha256": None,
                 "size_bytes": None,
+                "verification_level": MODEL_VERIFICATION_FILENAME_ONLY,
+                "identity_verified_by_exporter": False,
+                "local_file_available_at_export": False,
+                "bundled": False,
+                "asset_ownership": MODEL_ASSET_OWNERSHIP_EXTERNAL,
+                "identity_warnings": [],
                 "source_urls": [],
             }
             if resolved_path:
-                path = Path(resolved_path)
-                if path.is_file():
-                    record["sha256"] = sha256_file(path)
-                    record["size_bytes"] = path.stat().st_size
+                annotate_model_identity(record, Path(resolved_path))
+            else:
+                record["identity_warnings"].append(
+                    "ComfyUI did not resolve this model file at export time."
+                )
             records.append(record)
 
     return records
+
+
+def annotate_model_identity(record: dict[str, Any], path: Path) -> None:
+    if not path.is_file():
+        record["identity_warnings"].append(
+            "ComfyUI resolved the model reference, but it was not a readable file."
+        )
+        return
+
+    record["local_file_available_at_export"] = True
+    try:
+        record["size_bytes"] = path.stat().st_size
+    except OSError as exc:
+        record["identity_warnings"].append(f"Could not read model file size: {exc}")
+
+    try:
+        record["sha256"] = sha256_file(path)
+    except OSError as exc:
+        record["identity_warnings"].append(
+            f"Could not hash model file at export time: {exc}"
+        )
+
+    if record["sha256"] and isinstance(record["size_bytes"], int):
+        record["verification_level"] = MODEL_VERIFICATION_HASH_AND_SIZE
+        record["identity_verified_by_exporter"] = True
+    elif isinstance(record["size_bytes"], int):
+        record["verification_level"] = MODEL_VERIFICATION_FILENAME_AND_SIZE
+    else:
+        record["verification_level"] = MODEL_VERIFICATION_FILENAME_ONLY
+
+
+def collect_model_warnings(models: Iterable[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    for model in models:
+        filename = model.get("filename")
+        if not isinstance(filename, str):
+            filename = "unknown"
+        for warning in model.get("identity_warnings", []):
+            if isinstance(warning, str) and warning:
+                warnings.append(f"Model {filename}: {warning}")
+    return warnings
 
 
 def collect_runtime_metadata(

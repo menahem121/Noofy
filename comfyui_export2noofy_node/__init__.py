@@ -40,6 +40,7 @@ if PromptServer is not None:
         build_export_filename,
         build_package_documents,
         collect_history_output_paths,
+        collect_model_warnings,
         collect_runtime_metadata,
         create_memory_sampler,
         create_thumbnail_bytes,
@@ -193,7 +194,7 @@ if PromptServer is not None:
             from noofy_exporter import utc_now_iso
 
             finished_at_iso = utc_now_iso()
-            warnings = flatten_warnings(custom_nodes, [])
+            warnings = flatten_warnings(custom_nodes, collect_model_warnings(models))
             hardware = sampler.observation(runtime)
             documents = build_package_documents(
                 graph=graph,

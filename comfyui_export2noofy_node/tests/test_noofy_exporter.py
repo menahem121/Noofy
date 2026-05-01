@@ -6,6 +6,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "noofy_exporter.py"
 SPEC = importlib.util.spec_from_file_location("noofy_exporter_test_module", MODULE_PATH)
@@ -75,8 +77,73 @@ def test_detect_model_references_hashes_existing_models(tmp_path: Path) -> None:
             "filename": "model.safetensors",
             "sha256": hashlib.sha256(b"fake model").hexdigest(),
             "size_bytes": len(b"fake model"),
+            "verification_level": "sha256_size",
+            "identity_verified_by_exporter": True,
+            "local_file_available_at_export": True,
+            "bundled": False,
+            "asset_ownership": "external_reference",
+            "identity_warnings": [],
             "source_urls": [],
         }
+    ]
+
+
+def test_detect_model_references_marks_unresolved_models_as_filename_only() -> None:
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "missing.safetensors"},
+        }
+    }
+
+    records = exporter.detect_model_references(prompt, lambda _folder, _filename: None)
+
+    assert records[0]["filename"] == "missing.safetensors"
+    assert records[0]["sha256"] is None
+    assert records[0]["size_bytes"] is None
+    assert records[0]["verification_level"] == "filename_only"
+    assert records[0]["identity_verified_by_exporter"] is False
+    assert records[0]["local_file_available_at_export"] is False
+    assert records[0]["bundled"] is False
+    assert records[0]["asset_ownership"] == "external_reference"
+    assert records[0]["identity_warnings"] == [
+        "ComfyUI did not resolve this model file at export time."
+    ]
+    assert exporter.collect_model_warnings(records) == [
+        "Model missing.safetensors: ComfyUI did not resolve this model file at export time."
+    ]
+
+
+def test_detect_model_references_keeps_size_when_hash_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = tmp_path / "checkpoints" / "model.safetensors"
+    model.parent.mkdir()
+    model.write_bytes(b"fake model")
+
+    def fail_hash(_path: Path) -> str:
+        raise OSError("locked")
+
+    monkeypatch.setattr(exporter, "sha256_file", fail_hash)
+
+    records = exporter.detect_model_references(
+        {
+            "12": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "model.safetensors"},
+            }
+        },
+        lambda folder, filename: str(tmp_path / folder / filename),
+    )
+
+    assert records[0]["sha256"] is None
+    assert records[0]["size_bytes"] == len(b"fake model")
+    assert records[0]["verification_level"] == "filename_size"
+    assert records[0]["identity_verified_by_exporter"] is False
+    assert records[0]["local_file_available_at_export"] is True
+    assert records[0]["identity_warnings"] == [
+        "Could not hash model file at export time: locked"
     ]
 
 

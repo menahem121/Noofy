@@ -261,12 +261,29 @@ Large models are not duplicated per capsule. Capsules reference models by conten
   "last_used_at": null,
   "dependency_env_path": "runtime-store/envs/dep-env-...",
   "runner_workspace_path": "runtime-store/runner-workspaces/runner-workspace-...",
+  "model_references": [
+    {
+      "requirement_id": "checkpoints/model.safetensors",
+      "model_id": "model-id",
+      "comfyui_folder": "checkpoints",
+      "filename": "model.safetensors",
+      "sha256": "sha256:...",
+      "size_bytes": 0,
+      "verification_level": "sha256_size",
+      "asset_ownership": "noofy_downloaded",
+      "store_ref": "model-id",
+      "blob_path": "runtime-store/model-store/blobs/sha256/...",
+      "materialized_path": "runtime-store/model-store/materialized/checkpoints/model.safetensors",
+      "source_path": null
+    }
+  ],
   "smoke_test_status": "passed",
   "last_error": null
 }
 ```
 
 The lock file is not updated for progress, timestamps, local paths, smoke-test failures, or retry state.
+Model references in install state describe what this machine resolved for a workflow requirement; they do not change the creator's immutable model requirement.
 
 ## Package Identity And Precedence
 
@@ -491,9 +508,17 @@ Model record:
   "source_urls": ["https://..."],
   "license": "unknown",
   "comfyui_folder": "checkpoints",
-  "recommended_filename": "v1-5-pruned-emaonly-fp16.safetensors"
+  "recommended_filename": "v1-5-pruned-emaonly-fp16.safetensors",
+  "asset_ownership": "noofy_downloaded"
 }
 ```
+
+Asset ownership values are:
+
+- `noofy_downloaded`: Noofy downloaded the blob and may garbage-collect it when unreferenced.
+- `noofy_imported`: Noofy copied/imported the file into app-owned storage and may garbage-collect that copy when unreferenced.
+- `user_local`: Noofy may reuse the user's local file, but must not delete the original.
+- `external_reference`: Noofy only knows about the reference or source and must not delete the source.
 
 ComfyUI still expects folder/name paths. Noofy materializes a runner-visible model view from the hash store through hardlinks, symlinks, or shared ComfyUI model path configuration. Copying is a last resort because models are large. Windows symlink behavior must be tested for non-developer users.
 

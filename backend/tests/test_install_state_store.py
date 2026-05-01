@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from app.runtime.install_state import (
@@ -5,7 +6,13 @@ from app.runtime.install_state import (
     InstallStateStore,
     user_facing_install_message,
 )
-from app.runtime.isolation import InstallStatus, SmokeTestStatus
+from app.runtime.isolation import (
+    AssetOwnership,
+    InstalledModelReference,
+    InstallStatus,
+    ModelVerificationLevel,
+    SmokeTestStatus,
+)
 
 
 def test_get_or_create_persists_pending_record(tmp_path: Path) -> None:
@@ -52,6 +59,51 @@ def test_update_distinguishes_unset_from_explicit_none(tmp_path: Path) -> None:
     # Passing last_error=None explicitly clears it:
     cleared = store.update("phase3-fp", status=InstallStatus.PREPARING, last_error=None)
     assert cleared.last_error is None
+
+
+def test_update_round_trips_model_references(tmp_path: Path) -> None:
+    store = InstallStateStore(tmp_path)
+    model_ref = InstalledModelReference(
+        requirement_id="checkpoints/model.safetensors",
+        comfyui_folder="checkpoints",
+        filename="model.safetensors",
+        sha256="sha256:" + ("c" * 64),
+        size_bytes=456,
+        verification_level=ModelVerificationLevel.SHA256_SIZE,
+        asset_ownership=AssetOwnership.NOOFY_IMPORTED,
+        store_ref="model-ref",
+    )
+
+    updated = store.update(
+        "phase3-fp",
+        status=InstallStatus.READY,
+        model_references=[model_ref],
+    )
+
+    assert updated.model_references == [model_ref]
+    reloaded = InstallStateStore(tmp_path).get("phase3-fp")
+    assert reloaded is not None
+    assert reloaded.model_references[0].asset_ownership is AssetOwnership.NOOFY_IMPORTED
+
+
+def test_existing_install_state_without_model_references_still_loads(tmp_path: Path) -> None:
+    path = tmp_path / "phase3-fp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": INSTALL_STATE_SCHEMA_VERSION,
+                "capsule_fingerprint": "phase3-fp",
+                "status": "ready",
+                "smoke_test_status": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = InstallStateStore(tmp_path).get("phase3-fp")
+
+    assert state is not None
+    assert state.model_references == []
 
 
 def test_failed_record_never_appears_as_ready(tmp_path: Path) -> None:
