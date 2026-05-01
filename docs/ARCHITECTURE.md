@@ -73,6 +73,7 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
 - Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation.
 - Implement runtime isolation through the phased [runtime isolation implementation plan](RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md).
+- Use the [ComfyUI runtime strategy](COMFYUI_RUNTIME_STRATEGY.md) for runtime profiles, compatibility fingerprints, runner switching, idle-warm behavior, and model-view rules.
 
 ## App Data Directories
 
@@ -99,7 +100,9 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `cache_dir` | `data_dir/cache` | Transient cache |
 | `temp_dir` | `data_dir/temp` | Temporary files |
 | `bundled_workflows_dir` | `backend/app/workflows/packages` | Read-only starter workflows |
-| `comfyui_repo_dir` | `ComfyUI-official-repo` (project root) | ComfyUI source / checkout |
+| `comfyui_repo_dir` | `ComfyUI-official-repo` (project root) | Development/reference ComfyUI copy; not the product runtime source |
+
+`ComfyUI-official-repo/` is useful for local inspection and development-mode experiments, but product runtime profiles must use clean reproducible ComfyUI source artifacts materialized under the app runtime store, for example `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`. Local ignored folders in the reference copy, such as `models/`, `custom_nodes/`, `input/`, and `output/`, must not affect product runtime identity.
 
 ### Environment variable overrides
 

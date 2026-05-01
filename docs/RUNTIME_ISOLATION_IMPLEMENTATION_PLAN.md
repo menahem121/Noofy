@@ -27,7 +27,7 @@ Acceptance criteria:
 - Runtime isolation architecture is documented as accepted.
 - Implementation plan is documented separately.
 - Main architecture docs point to the runtime isolation architecture.
-- Product Python and process-tree cleanup are tracked as follow-up decisions.
+- Product Python must be Noofy-managed. Process-tree cleanup is tracked as a follow-up decision and must be designed before deeper Phase 5 runner switching work.
 - No custom-node install behavior is implemented in this phase.
 
 ## Phase 1: Runtime-Store Paths And Schemas
@@ -270,95 +270,542 @@ Current implementation notes:
 - Failed imports return a beginner-facing error through the API and emit structured diagnostics without executing archive code.
 - No bundled custom node source is materialized into runner workspaces and no Python dependencies are installed in this phase.
 
-## Phase 5: `.noofy` Import And Community Custom Node Preparation
+## Phase 5: Runtime-Profiled Community Workflow Preparation
 
-Goal: make exported `.noofy` workflow packages usable by Noofy when they include community custom nodes, without mutating the trusted core runtime or existing workflows.
+Goal: make imported `.noofy` workflow packages preparable and runnable when they include community custom nodes, without mutating the trusted core runtime, existing ready workflow environments, or another workflow's installed artifacts.
 
-Phase 5 assumes Phase 4.5 has already produced normalized imported package records. This phase turns those records into isolated prepared runtimes when policy allows it.
+Phase 5 implements the strategy in [COMFYUI_RUNTIME_STRATEGY.md](COMFYUI_RUNTIME_STRATEGY.md). It assumes Phase 4.5 has already produced normalized imported package records. Phase 5 turns those records into isolated prepared runtimes only when Noofy can resolve the package under policy.
 
-Next implementation slice:
+Phase 5 product scope:
 
-1. Resolve required model records through the shared model store before smoke tests.
-2. Reuse required models by SHA-256 and size when available; treat filename and size as an unverified local candidate only.
-3. Record resolved model references, materialized model-view paths, verification level, and asset ownership in install state.
-4. Resolve custom-node requirements from normalized imported package records.
-5. Materialize bundled custom node sources into staged runner workspaces only.
-6. Install normal dependency declarations only into isolated dependency envs.
-7. Run custom-node import checks only inside staged runner processes.
-8. Run workflow smoke tests only inside staged runner processes.
-9. Promote dependency envs and runner workspaces to ready only after smoke tests pass.
-10. Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
-11. Surface observed hardware metrics as compatibility guidance, not guaranteed minimum requirements.
+- Use reusable compatibility-group runtimes, not one global mutable runtime and not one full runtime per workflow.
+- Ship one pinned Noofy-owned ComfyUI runtime profile family in v1, with explicit platform/backend variants in schema.
+- Keep `ComfyUI-official-repo/` as a local development and source-reference copy only. It must not be treated automatically as the product runtime source.
+- Base the v1 product runtime profile on a clean reproducible ComfyUI source artifact, preferably the most recent stable upstream release at profile-generation time, materialized under Noofy's runtime store.
+- Use ComfyUI README guidance for Python, PyTorch, CUDA, and backend support when selecting runtime profile variants.
+- Do not use a floating "latest ComfyUI" as the runtime contract. Runtime profiles record exact source and dependency hashes.
+- Do not silently fall back to a close-enough runtime profile.
+- Support bundled custom node source from imported `.noofy` packages first.
+- Defer registry lookup, non-bundled custom-node source resolution, and broad candidate lock generation until the locked/bundled path works end to end.
+- Keep at most one GPU-heavy runner resident by default.
+- Keep loaded runners and models warm while a compatible workflow is currently open in Noofy and there is no memory pressure.
+- Queue incompatible workflow runs while another job is running.
+- Expose normal job cancellation, but do not add a dedicated "cancel and switch" action in v1.
+- Do not implement a multi-runner warm pool in v1.
+- Treat dependency environments as conflict isolation, not as a security sandbox.
+- Product builds must use Noofy-managed Python.
+- Process-tree cleanup must be designed before deeper runner switching work: process groups on macOS/Linux, and Job Objects or equivalent on Windows.
+- Phase 5 development uses `exported-workflow-for-testing.noofy` as the only real `.noofy` package fixture for now. Current development hardware is not expected to run the workflow; real ComfyUI execution smoke tests remain optional/local until suitable hardware is available.
+- Keep unverified community workflow opt-in and trust UI aligned with Phase 6; Phase 5 may expose backend states before the full marketplace/trust UI exists.
 
-Model preparation tasks:
+Phase 5 status vocabulary:
 
-- Resolve imported workflow model requirements from normalized package records before custom-node import checks or workflow smoke tests.
-- Match existing shared model-store blobs by SHA-256 and byte size when exported identity is available.
-- Treat filename and byte size matches as unverified local candidates only when exported hash identity is unavailable.
-- Do not treat filename-only matches as trusted model resolution.
-- Compute and record local SHA-256 identity for reused local candidates when Noofy reads the file.
-- Record resolved model references in `install-state.json`, including:
-  - model requirement id
+- `imported`
+- `needs_input_setup`
+- `preparing`
+- `resolving_runtime_profile`
+- `resolving_models`
+- `resolving_dependencies`
+- `materializing_custom_nodes`
+- `materializing_model_view`
+- `checking_compatibility`
+- `smoke_testing`
+- `ready`
+- `prepared_needs_input_setup`
+- `cannot_prepare_automatically`
+- `unsupported_runtime_profile`
+- `blocked_by_policy`
+- `failed`
+
+Workflows with unresolved runtime inputs can have prepared runtime artifacts, but they must not be presented as `ready` to run. They remain `prepared_needs_input_setup` or `needs_input_setup` until the missing inputs and a workflow-level smoke test are resolved.
+
+### Phase 5a: Runtime Profile Catalog, Schema Versioning, And Fingerprints
+
+Goal: make the runtime profile and fingerprint boundaries explicit before installing or running community code.
+
+Tasks:
+
+- Add `COMFYUI_RUNTIME_STRATEGY.md` to the developer documentation index.
+- Add a runtime profile catalog schema with:
+  - `runtime_profile_id`
+  - `runtime_profile_manifest_hash`
+  - `runtime_profile_variant_id`
+  - ComfyUI core version and source hash
+  - ComfyUI frontend package name and version
+  - Noofy-managed Python build ID
+  - Torch version and wheel build tag
+  - GPU backend profile
+  - core dependency lock hash
+  - allowlisted launch configuration defaults
+  - supported OS/architecture/backend matrix
+  - install policy version
+  - profile signature or signed manifest reference
+- Ship exactly one v1 runtime profile family in the catalog, with explicit variants for the supported development/product backends.
+- Add product ComfyUI source acquisition/materialization under `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`.
+- Product runtime sources may come from:
+  - an upstream stable Git tag
+  - a verified upstream source archive
+  - a Noofy-vendored source snapshot with an explicit source manifest
+- Keep `ComfyUI-official-repo/` available as a dev/reference source only. A runtime profile generated from it must be marked development-only.
+- Generate the v1 product profile from the clean runtime-store source artifact and record:
+  - source origin kind and reference
+  - ComfyUI source hash
+  - source manifest hash
+  - source cleanliness and reproducibility status (`clean_reproducible` for product profiles)
+  - README-derived Python/PyTorch/backend guidance used for the selected variant
+- Reject product runtime profile generation from `ComfyUI-official-repo/`, dirty source trees, ignored runtime folders, or source artifacts with missing/ambiguous provenance.
+- Ensure local runtime artifacts such as `models/`, `custom_nodes/`, `input/`, `output/`, and test-only files are excluded from product ComfyUI source identity.
+- Add schema support for multiple profile families and variants even though v1 ships one family.
+- Update capsule lock schemas so workflow capsules reference `runtime_profile_id`.
+- Update install-state schemas so local resolution records:
+  - selected `runtime_profile_variant_id`
+  - `runtime_profile_manifest_hash`
+  - runtime profile catalog version
+  - dependency environment fingerprint
+  - runner workspace fingerprint
+  - runner process compatibility key when model-view startup behavior requires it
+  - capsule fingerprint
+- Define byte-stable canonical serialization for all Phase 5 fingerprints.
+- Add a fingerprint schema version and require schema-version bumps when fingerprint inputs change.
+- Include `runtime_profile_manifest_hash` and selected `runtime_profile_variant_id` in dependency-env and runner-workspace fingerprints.
+- Keep machine-local paths, hardlink/symlink/copy materialization choices, and user-local source paths out of fingerprints.
+- Add unsupported states for:
+  - missing runtime profile
+  - unsupported profile variant on the current OS/backend
+  - profile manifest hash mismatch
+  - unsupported fingerprint schema version
+- Update the bundled verified starter capsule and tests to keep working with the new profile fields.
+
+Acceptance criteria:
+
+- Runtime profile catalog parsing has success and failure tests.
+- Fingerprint calculation is stable across dictionary ordering and process restarts.
+- Missing, mismatched, or unsupported runtime profiles fail before dependency or custom-node preparation starts.
+- Product profile generation rejects dirty ComfyUI source trees; development profiles may record dirty state explicitly.
+- Fingerprints include profile manifest hash and selected variant ID.
+- Fingerprints do not include local absolute paths.
+- Existing verified starter workflow behavior still works.
+
+### Phase 5b: Dependency Lock Policy And Dependency Environment Preparation
+
+Goal: install normal Python dependencies into reusable immutable dependency environments using a deterministic lock, without executing arbitrary custom-node setup code.
+
+Tasks:
+
+- Use `uv` as the primary resolver, wheel cache manager, and dependency environment installer.
+- Persist a Noofy-owned JSON dependency lock as the app contract. The lock records resolved wheel facts and `uv` resolver metadata; raw `uv.lock` is not the long-term public schema.
+- Keep `pip` only as a compatibility fallback for existing managed-core bootstrap paths unless it can enforce the same wheels-only, hash-required community policy.
+- Add a resolved dependency lock schema containing, for each wheel:
+  - normalized package name
+  - exact version
+  - wheel filename
+  - SHA-256 hash
+  - source index URL or approved cache reference
+  - platform tags and environment markers
+  - direct/transitive dependency relationship
+  - resolver name and version
+  - runtime profile ID, variant ID, and manifest hash
+  - install policy version
+- Merge the runtime profile core dependency lock with custom-node dependency locks into one dependency-env lock.
+- Compute dependency-env fingerprints only from resolved lock facts and runtime profile facts, not from raw dependency declarations.
+- Support pre-resolved locks first. For bundled custom-node sources, allow local lock generation only from normal dependency marker files under the strict community policy.
+- Inspect `requirements.txt`, `pyproject.toml`, and `setup.py` as data. Do not execute custom-node `setup.py`, editable installs, project build hooks, arbitrary install scripts, or custom setup commands.
+- If `pyproject.toml` or `setup.py` dependency extraction requires executing project code, mark the workflow unsupported under the default community policy.
+- Enforce default Quarantined Community dependency policy:
+  - wheels only
+  - hash required for every wheel
+  - no sdists
+  - no native source builds
+  - no arbitrary install scripts
+  - no downloads outside Noofy's approved resolver/materializer path
+- Use the shared wheel cache, but verify wheel hashes before install.
+- Create dependency environments only under staged transaction paths.
+- Reuse a ready dependency environment when its manifest and fingerprint match exactly.
+- Never mutate an existing ready dependency environment in place.
+- Record dependency install diagnostics without exposing raw stack traces by default.
+
+Acceptance criteria:
+
+- Identical resolved locks reuse the same ready dependency environment.
+- Conflicting dependency requirements produce `cannot_prepare_automatically` or `blocked_by_policy`, not a mutated existing env.
+- Missing wheel, hash mismatch, sdist-only package, native build requirement, and setup-code execution attempts have failure tests.
+- Failed dependency installation leaves no ready dependency-env manifest.
+- The trusted backend never imports custom node modules during dependency resolution.
+
+### Phase 5c: Core Node Manifest And Custom-Node Workspace Materialization
+
+Goal: materialize only the custom nodes required by a workflow into a staged runner workspace with deterministic manifests and no trusted-core mutation.
+
+Tasks:
+
+- Add a pinned core-node manifest for each runtime profile variant.
+- Distinguish standard ComfyUI nodes from custom nodes by comparing graph node types to the pinned core-node manifest and normalized custom-node records.
+- Treat unknown non-core node types as unsupported until they are resolved by bundled metadata or a later registry phase.
+- Materialize bundled custom node sources from `.noofy` archives only into staged runner workspaces.
+- Do not copy bundled custom node source into the trusted core runtime.
+- Do not install custom node source into `site-packages` as editable packages under the default community policy.
+- Build a deterministic custom node workspace manifest with:
+  - custom node package ID
+  - source kind (`bundled_archive`, later `registry`, etc.)
+  - source ref or exported archive identity
+  - source content hash
+  - materialized relative path
+  - deterministic import order index
+  - dependency marker file hashes
+  - package trust level
+  - policy-relevant flags when known
+- Reject materialization if bundled source contains:
+  - absolute paths
+  - `..` traversal
+  - symlinks or junctions that escape the staged workspace
+  - duplicate paths that collide on case-insensitive filesystems
+  - file count or file size above policy limits
+  - names that shadow protected Noofy or ComfyUI runtime paths
+- Define and hash the allowlisted launch configuration surface:
+  - preview method
+  - VRAM mode
+  - attention backend
+  - precision policy
+  - enabled custom node set
+  - extra model paths mode
+  - Noofy-controlled environment variables
+- Reject unsupported launch options rather than folding them into the runner silently.
+
+Acceptance criteria:
+
+- Built-in nodes are recognized from the profile's pinned core-node manifest.
+- Bundled custom nodes materialize only into staged runner workspaces.
+- Custom node materialization is deterministic across filesystem ordering.
+- Path traversal, symlink escape, case-insensitive collision, oversized source, unknown node, and protected path shadowing failures are covered by tests.
+- Ready trusted core runtime files are unchanged after custom-node preparation.
+
+### Phase 5d: Shared Model Store And Runner Model-View Materialization
+
+Goal: resolve required models through the shared model store and create runner-visible model views without duplicating or deleting user assets incorrectly.
+
+Tasks:
+
+- Resolve imported workflow model requirements before custom-node import checks or workflow smoke tests.
+- Reuse existing model-store blobs by SHA-256 and byte size when exported identity is available.
+- Treat filename plus byte size as an unverified local candidate only when exported hash identity is unavailable.
+- Never treat filename-only matches as trusted model resolution.
+- Compute and record local SHA-256 identity when Noofy reads a reused local candidate.
+- Record model references in `install-state.json`, including:
+  - model requirement ID
   - ComfyUI folder
-  - filename
+  - expected filename
   - SHA-256 when known
   - byte size when known
   - verification level
   - asset ownership
-  - model-store reference or source path
+  - model-store reference or user-local source path
   - materialized model-view path
-- Materialize runner-visible model views from the shared model store before runner smoke tests.
-- Preserve the cleanup boundary: Noofy-owned blobs or copies may be tracked for future garbage collection, but user-local source files must not be marked as auto-deletable.
-- Emit structured diagnostics for model reuse, unverified local candidate reuse, download needed, download failure, hash mismatch, size mismatch, and materialization failure.
+  - materialization strategy (`hardlink`, `symlink`, `copy`)
+  - materialized file verification result
+- Materialize model views outside immutable runner workspaces, for example under `runtime-store/model-store/materialized/views/model-view-<fingerprint>/`.
+- Use a per-capsule or per-compatible-view materialized model view by default. Do not overwrite a shared folder/name when two workflows require different blobs at the same ComfyUI folder/name.
+- Do not implement graph rewriting to collision-free aliases in Phase 5. Use separate model views for folder/name collisions. Graph rewriting may be revisited later only through a tested `ComfyUIEngineAdapter` rewrite layer.
+- Generate runner process configuration from the selected model view without mutating a ready runner workspace.
+- Use the materialization fallback ladder:
+  1. hardlink when source and destination are on the same volume and supported
+  2. symlink when hardlink is unavailable and symlink permissions are available
+  3. copy as a last resort
+- Probe Windows symlink capability during preparation and fall back cleanly.
+- Handle case-insensitive filename collisions, Windows path length limits, cross-volume hardlink failures, stale links, antivirus/file-lock copy failures, and missing target blobs.
+- Preserve cleanup boundaries:
+  - `noofy_downloaded` and `noofy_imported` app-owned copies may be garbage-collected when unreferenced
+  - `user_local` originals must never be deleted
+  - `external_reference` sources must never be deleted
+- Emit structured diagnostics for model reuse, unverified candidate reuse, download needed, download failure, hash mismatch, size mismatch, materialization fallback, and materialization failure.
 
-Custom-node preparation tasks:
+Acceptance criteria:
 
-- Add pinned core-node manifest for the supported ComfyUI version.
-- Distinguish standard ComfyUI nodes from custom nodes by comparing graph node types to the pinned core-node manifest and the package's custom-node records.
-- Materialize bundled custom node sources from `.noofy` archives only into staged runner workspaces.
-- Do not copy bundled custom nodes into the trusted core runtime.
-- Record custom-node file manifests and dependency marker files as resolver inputs.
-- Support normal dependency marker files bundled with custom nodes:
-  - `requirements.txt`
-  - `pyproject.toml`
-  - `setup.py`
-- Do not execute arbitrary `install.py` or custom setup scripts for one-click installs.
-- Install normal Python dependencies only into isolated dependency envs.
-- Run custom-node import checks only in staged runner processes.
-- Run workflow smoke tests only in staged runner processes.
-- Promote dependency envs and runner workspaces to ready only after smoke tests pass.
-- Reject unresolvable, platform-incompatible, or policy-blocked packages with user-friendly unsupported status.
-- Add diagnostics that keep technical errors behind developer details.
+- Model reuse follows the verification hierarchy: SHA-256 plus size is trusted, filename plus size is unverified, filename-only is not trusted.
+- Install state records resolved model references without mutating capsule locks.
+- Materialized model views present the exact files expected by the runner before smoke tests.
+- Name collision, missing blob, stale symlink, Windows symlink-denied, cross-volume hardlink, and copy failure cases have tests or platform-specific test fixtures.
+- User-local model source files are never marked auto-deletable.
 
-Registry/source-resolution tasks:
+### Phase 5e: Runner Smoke Tests And Minimal Graph Execution
+
+Goal: promote runtime artifacts only after the staged environment and runner prove they can import, start, and execute real work.
+
+Tasks:
+
+- Split smoke status into:
+  - dependency-env smoke
+  - custom-node import smoke
+  - runner health smoke
+  - workflow execution smoke
+- Run dependency import checks inside the staged dependency environment.
+- Run custom-node import checks only inside a staged runner process started from the staged dependency env and staged runner workspace.
+- Start the staged ComfyUI runner on a selected localhost port and wait for health.
+- Verify `/object_info` or equivalent node metadata includes required core and custom node types after import.
+- Run a minimal real graph execution test. It must execute real nodes, not only check registration.
+- Prefer package-provided smoke fixtures when present. Otherwise generate a tiny graph only when Noofy can do so without changing workflow semantics or requiring missing user inputs.
+- On current development hardware, do not attempt to execute `exported-workflow-for-testing.noofy` as a real graph. Use fake or lightweight runner tests for implementation coverage until suitable hardware is available.
+- Product readiness still requires real smoke execution before a workflow is marked `ready`. If real execution cannot be run, report `prepared_needs_input_setup`, `cannot_prepare_automatically`, or a developer-only skipped-smoke state rather than `ready`.
+- If unresolved runtime inputs prevent workflow execution smoke, keep the workflow out of `ready` and report `prepared_needs_input_setup`.
+- Use minimal resolution, minimal step count, and bounded timeouts for smoke graphs.
+- Collect runner logs and smoke-test outputs into transaction diagnostics.
+- Require all applicable smoke stages to pass before marking a workflow `ready`.
+- Quarantine failed staging directories for a bounded retention window; do not promote them.
+
+Acceptance criteria:
+
+- Import-only checks are not sufficient for `ready`.
+- Dependency import, custom-node import, runner health, and tiny execution success paths are tested with fake/lightweight runners where real ComfyUI execution is unavailable.
+- Dependency import failure, custom node import failure, runner startup timeout, node registration missing, workflow execution failure, and unresolved input cases are tested.
+- A workflow with unresolved `LoadImage` or `LoadImageMask` input is not presented as ready to run.
+- Failed smoke tests do not mutate trusted core runtime, ready dependency environments, ready runner workspaces, or existing install states.
+
+### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Safety
+
+Goal: make runtime switching predictable without accidentally unloading expensive models or exhausting RAM/VRAM.
+
+Tasks:
+
+- Design process-tree cleanup before implementing deeper runner switching:
+  - use process groups or equivalent process-tree termination on macOS/Linux
+  - use Windows Job Objects or equivalent containment on Windows
+  - verify child custom-node processes do not survive runner stop or app shutdown
+- Extend runner descriptors with:
+  - runner ID
+  - runner workspace fingerprint
+  - dependency environment fingerprint
+  - runner process compatibility key
+  - model-view fingerprint when required
+  - runtime profile ID and variant ID
+  - memory class (`gpu_heavy`, `gpu_light`, `cpu_only`, `unknown`)
+  - base URL and WebSocket URL
+  - process ID
+  - state
+  - current job ID
+  - last used timestamp
+  - open workflow lease count or lease IDs
+  - closed-view cooldown expiry when no compatible workflow view remains open
+- Add runner states:
+  - `missing_runtime`
+  - `preparing`
+  - `starting`
+  - `idle`
+  - `running`
+  - `queued`
+  - `queued_pending_switch`
+  - `idle_warm`
+  - `stopping`
+  - `switching`
+  - `failed`
+  - `blocked_by_memory`
+- Make workflow run requests ask `RunnerSupervisor` for the correct runner. The frontend must not choose runner endpoints.
+- Add backend APIs for workflow-open leases so the frontend can report when a workflow view opens and closes. The backend remains authoritative and may evict runners for memory pressure, process failure, shutdown, or explicit cancellation.
+- Reuse the current runner when the requested workflow is compatible with the current runner process key.
+- If an incompatible runner is requested while the current runner is running a job, queue the new job as `queued_pending_switch` by default.
+- Add a normal Cancel action for the currently running job. Do not add a dedicated "cancel current and switch" action in v1.
+- Keep at most one resident GPU-heavy runner by default. Treat unknown memory class as GPU-heavy.
+- Keep a compatible runner `idle_warm` while at least one compatible workflow view is open and no incompatible GPU-heavy runner or memory-pressure condition requires eviction.
+- When the last compatible workflow view closes, start a closed-view cooldown. Default closed-view cooldown is 90 seconds and is configurable.
+- Evict idle-warm GPU-heavy runners before starting an incompatible GPU-heavy runner.
+- Allow co-resident CPU-only or GPU-light runners only when explicitly classified and memory policy allows it.
+- Before starting a new GPU-heavy runner, stop the evicted runner process tree and wait for bounded VRAM/RAM release checks. The check may be heuristic but must time out and produce diagnostics.
+- Record observed startup time, stop time, crash count, restart count, idle-warm evictions, and blocked-by-memory events.
+
+Acceptance criteria:
+
+- Switching tabs does not start or stop runners.
+- Running an incompatible workflow while another job is active queues by default.
+- Cancel stops the currently running job through the job registry. There is no dedicated cancel-and-switch action in v1.
+- At most one GPU-heavy runner remains resident by default.
+- Idle-warm reuse while a workflow remains open, closed-view cooldown expiry, memory-pressure eviction, process crash, process-tree cleanup, and VRAM-release timeout cases are tested.
+- Job progress, cancellation, and result lookup continue to route through `job_id -> runner_id`.
+
+### Phase 5g: Transactional Install Promotion, Rollback, Quarantine, And Startup Sweep
+
+Goal: make preparation atomic and recoverable across failures, restarts, crashes, and concurrent installs.
+
+Tasks:
+
+- Create every preparation under `runtime-store/transactions/install-<id>/`.
+- Write staged dependency envs, staged runner workspaces, staged model views, smoke logs, and candidate manifests under the transaction first.
+- Use per-fingerprint locks so concurrent installs do not race to promote the same dependency env or runner workspace.
+- Re-check for an already-ready artifact after acquiring the lock; reuse it when manifests match.
+- Promote dependency envs and runner workspaces only after required smoke tests pass.
+- Promote by atomic move or atomic manifest registration. Do not partially mark artifacts ready.
+- Update `install-state.json` last, after ready artifacts exist and have been verified.
+- Do not mutate `capsule.lock.json` during local install progress.
+- On failure, mark install state failed or unsupported with a beginner-friendly reason and developer diagnostics.
+- Quarantine failed transactions and staged artifacts for diagnostics for a bounded retention window.
+- Add startup sweep on backend boot to:
+  - find stale install transactions
+  - identify unpromoted staged envs/workspaces/model views
+  - terminate orphaned runner processes owned by Noofy
+  - remove stale PID files
+  - remove orphan materialized links whose target blobs are gone
+  - preserve recent quarantined failures until their retention window expires
+- Ensure product shutdown terminates the full backend/runner process tree.
+
+Acceptance criteria:
+
+- Killing the backend during dependency install, custom-node materialization, model-view materialization, smoke test, and promotion leaves no artifact falsely marked ready.
+- Startup sweep is idempotent.
+- Concurrent preparation of two workflows with the same dependency lock reuses or promotes exactly one dependency environment.
+- Failed preparation does not mutate trusted core runtime or any ready artifact.
+- Install state is updated atomically and remains readable after interrupted writes.
+
+### Phase 5h: Reference Tracking And Garbage Collection
+
+Goal: prevent runtime-store growth without deleting assets still needed by installed workflows or active runners.
+
+Tasks:
+
+- Implement a derived reference index from installed workflow package records and `install-state.json`.
+- Do not maintain separate reference-count files in v1.
+- Track metadata for dependency envs, runner workspaces, custom-node source cache entries, wheel cache entries, model blobs, materialized model views, transactions, and package archives:
+  - created timestamp
+  - last used timestamp
+  - referenced workflows
+  - size bytes
+  - status
+  - trust level
+- Define GC roots:
+  - installed ready workflows
+  - workflows in `prepared_needs_input_setup`
+  - open workflow leases
+  - active runners
+  - idle-warm runners retained by an open workflow lease or closed-view cooldown
+  - pinned runtime profile artifacts
+  - Noofy Verified bundled assets
+  - protected user-local models
+- Never delete active or idle-warm runner artifacts.
+- Never delete user-local source files.
+- Never silently delete model blobs referenced by installed workflows.
+- Delete failed transactions and quarantined staging directories only after the retention window.
+- Default retention windows:
+  - failed transactions and quarantined staging: 7 days
+  - unreferenced dependency envs and runner workspaces: 14 days
+  - orphan materialized model views: 7 days
+- Add configurable LRU caps:
+  - wheel cache default: 5 GB
+  - custom-node source cache default: 2 GB
+  - downloaded package archive cache default: 2 GB
+- Require user confirmation before deleting Noofy-owned model blobs larger than 1 GB during manual cleanup.
+- Expose storage diagnostics for developer details and future UI.
+
+Acceptance criteria:
+
+- Derived reference index correctly keeps artifacts referenced by multiple workflows.
+- Removing one workflow does not delete shared artifacts still referenced by another workflow.
+- GC skips active and idle-warm runners.
+- GC never deletes `user_local` originals.
+- Quarantine retention, LRU cap, orphan materialized view, and large-model confirm behavior are tested.
+
+### Phase 5i: Diagnostics, API States, And Frontend-Readable Status
+
+Goal: make preparation, runtime switching, and failure modes understandable to the UI and useful to developers without exposing raw technical noise by default.
+
+Tasks:
+
+- Add backend API endpoints or extend existing endpoints so the frontend can:
+  - start workflow preparation
+  - inspect install/preparation state
+  - inspect required action states such as missing model or input setup
+  - inspect runner lifecycle state
+  - report workflow view open/close leases for warm runner retention
+  - cancel preparation when cancellation is safe
+  - cancel the currently running job
+- Ensure the frontend continues to call only the Noofy backend API.
+- Add structured diagnostic events for:
+  - runtime profile resolution success/failure
+  - dependency lock resolution success/failure
+  - dependency env reuse/build/failure
+  - custom-node source classification/materialization/failure
+  - model resolution/materialization/failure
+  - smoke test start/pass/failure by stage
+  - install promotion/rollback/quarantine
+  - runner queue/switch/start/stop/idle-warm/eviction
+  - memory pressure and blocked-by-memory cases
+  - garbage collection decisions
+- Use beginner-friendly status summaries by default. Keep `pip`, `venv`, `site-packages`, stack traces, raw Python exceptions, and raw node import errors behind developer details.
+- Ensure runner processes do not receive the frontend/backend API token.
+- Redact secrets, local API tokens, signed URLs, and user-private paths from default diagnostics.
+- Surface observed hardware metrics as compatibility guidance, not guaranteed minimum requirements.
+
+Acceptance criteria:
+
+- API payloads distinguish `ready`, `prepared_needs_input_setup`, `cannot_prepare_automatically`, `blocked_by_policy`, `unsupported_runtime_profile`, and `failed`.
+- Diagnostic events are structured and include correlation IDs for workflow ID, install transaction ID, runner ID, and job ID where relevant.
+- Technical failure details are available behind developer details.
+- User-facing status text avoids Python setup terminology by default.
+- Tests verify that runner environment variables do not include the frontend/backend API token.
+
+### Phase 5j: Integration Tests And Phase Acceptance Gate
+
+Goal: prove the locked/bundled community workflow path works end to end and fails safely.
+
+Tasks:
+
+- Use `exported-workflow-for-testing.noofy` as the only real `.noofy` archive fixture for now.
+- Do not add new real `.noofy` archive fixtures until this fixture is fully covered or product needs require another archive.
+- For failure paths, use unit fixtures, temporary normalized records, or controlled mutations derived from `exported-workflow-for-testing.noofy`, rather than maintaining additional `.noofy` files.
+- Cover:
+  - import and inspection of `exported-workflow-for-testing.noofy`
+  - bundled custom node source discovery and materialization planning
+  - unresolved `LoadImage` input status
+  - dependency lock success and policy failure with derived records
+  - model hash match, filename-size unverified match, filename-only non-match, and hash mismatch with derived records
+  - model-view collision requiring separate views with derived records
+  - runner smoke success and failure through fake/lightweight runner adapters
+  - runner switching between compatible and incompatible workflows through fake/lightweight runner adapters
+  - interrupted transaction and startup sweep
+  - GC with shared references
+- Add unit tests for schemas, fingerprint canonicalization, policy decisions, path validation, dependency lock parsing, manifest parsing, and install-state parsing.
+- Add integration tests using fake or lightweight runner adapters where real ComfyUI startup is too expensive for normal CI.
+- Add at least one real ComfyUI smoke test path that can be run locally or in an optional CI job, but mark it skipped by default on current development hardware.
+- Add macOS and Windows filesystem behavior tests or documented manual test scripts for hardlink, symlink, copy fallback, long paths, and case-insensitive collisions.
+- Keep `make test` as the documented root test command and ensure backend/frontend tests still run from the expected directories.
+
+Phase 5 locked/bundled acceptance criteria:
+
+- Noofy can prepare the supported portions of `exported-workflow-for-testing.noofy` into isolated staged/runtime artifacts without importing custom node Python in the trusted backend.
+- Dependency envs, runner workspaces, model views, and install state are reusable where fingerprints and manifests match.
+- Failed dependency install, custom-node materialization, model materialization, runner start, or smoke execution does not mutate trusted core runtime or ready artifacts.
+- Workflows become `ready` only after required smoke stages pass. On current development hardware, the test archive must not be marked `ready` without a real smoke run.
+- Workflows with unresolved runtime inputs remain not-ready with beginner-friendly required-action status.
+- Runner switching honors queueing, normal cancellation, workflow-open warm retention, closed-view cooldown, and one GPU-heavy resident runner policy.
+- Reference tracking and GC do not delete assets still referenced by installed workflows or active runners.
+- Backend and frontend tests pass through the documented project test commands.
+
+### Phase 5k: Community Registry And Non-Bundled Source Resolution
+
+Goal: expand beyond bundled custom node source only after locked/bundled preparation is stable.
+
+This sub-phase is intentionally last. Do not begin it until Phases 5a through 5j are implemented and tested.
+
+Tasks:
 
 - Add Noofy node registry schema.
-- Resolve non-bundled or future package custom node sources through:
+- Resolve non-bundled custom node sources through:
   - explicit Noofy metadata
   - registry metadata
   - Noofy-maintained node-type mappings
   - allowed community source-resolution mechanisms
+- Require pinned source refs and source content hashes before materialization.
 - Download/cache custom node source at resolved refs.
+- Generate candidate locks for Quarantined Community workflows only when:
+  - the user has explicitly allowed unverified community workflow preparation
+  - all custom-node sources are resolved
+  - dependencies can be locked under policy
+  - all downloads happen through Noofy's approved resolver/materializer path
 - Apply stricter policy to Noofy Verified and Registry Locked workflows.
-- Allow Quarantined Community workflows only when the user explicitly opts in and Noofy can isolate the install.
+- Mark packages unsupported when source resolution, dependency locking, platform compatibility, or trust policy cannot be satisfied.
+- Add diagnostics that explain registry and resolution failures behind developer details.
 
 Acceptance criteria:
 
-- Noofy can import the test `.noofy` archive without importing or executing custom node Python code in the trusted backend.
-- Imported package metadata, graph, dashboard, capsule/export metadata, model records, and custom-node records are inspectable through backend-owned data structures.
-- The imported workflow records both required models and their expected ComfyUI folders: `checkpoints` and `controlnet`.
-- The importer detects creator-local `LoadImage` inputs and marks the workflow as needing input setup rather than pretending the original image is available.
-- Imported workflow preparation resolves required models before smoke tests or marks the workflow as not automatically preparable with a beginner-friendly reason.
-- Model reuse follows the verification hierarchy: SHA-256 plus size is trusted, filename plus size is unverified, and filename-only is not trusted.
-- Install state records resolved model references without mutating immutable capsule locks.
-- Unknown custom nodes do not mutate the trusted core runtime or ready workflow environments.
-- Bundled custom nodes are materialized only into staged runner workspaces.
-- Normal Python dependencies such as `requirements.txt` are installed only inside isolated dependency envs.
-- Arbitrary install scripts are not executed for one-click installs unless a future explicit policy allows them.
-- The trusted backend does not import custom node modules.
-- Failed custom-node install or smoke test does not mutate core runtime, ready envs, or ready runner workspaces.
-- Community custom-node workflows can become ready only after staged runner smoke tests pass.
-- Observed hardware metrics from `export-report.json` and `capsule.lock.json` are surfaced as compatibility guidance, not as guaranteed minimum requirements.
+- Non-bundled custom-node source resolution never mutates the trusted core runtime.
+- Unpinned repositories, unknown sources, blocked install behavior, missing hashes, and policy-blocked dependencies fail before runner execution.
+- Quarantined Community workflows require explicit opt-in before automatic preparation.
+- Registry resolution failures produce beginner-friendly unsupported states and structured developer diagnostics.
 
 ## Phase 6: Trust, Signing, Marketplace Readiness
 

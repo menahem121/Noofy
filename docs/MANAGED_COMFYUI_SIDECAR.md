@@ -31,7 +31,9 @@ The backend now has two layers:
 
 Managed startup checks the environment before spawning ComfyUI. If the repo, entrypoint, requirements file, Python executable, runtime directory, or required imports are missing, `/api/health` includes the environment failure and `/api/logs` records the state transition.
 
-`POST /api/engine/comfyui/bootstrap` creates the app-owned virtual environment, installs PyTorch for the detected machine, then installs `ComfyUI-official-repo/requirements.txt`. macOS Intel uses standard macOS PyTorch wheels without CUDA, Apple Silicon uses standard macOS wheels with MPS available when PyTorch supports it, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use `nvidia-smi` CUDA capability to choose a CUDA wheel index. Exact CUDA policy remains overrideable through `COMFYUI_TORCH_CUDA_INDEX_URL` as PyTorch support changes.
+`POST /api/engine/comfyui/bootstrap` currently creates the app-owned virtual environment, installs PyTorch for the detected machine, then installs `ComfyUI-official-repo/requirements.txt` in development-mode managed runtime flows. macOS Intel uses standard macOS PyTorch wheels without CUDA, Apple Silicon uses standard macOS wheels with MPS available when PyTorch supports it, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use `nvidia-smi` CUDA capability to choose a CUDA wheel index. Exact CUDA policy remains overrideable through `COMFYUI_TORCH_CUDA_INDEX_URL` as PyTorch support changes.
+
+For product runtime profiles, `ComfyUI-official-repo/` is a development/reference copy only. Product managed sidecars must launch from a clean reproducible ComfyUI source artifact under the app runtime store, such as `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`, so local ignored folders like `models/`, `custom_nodes/`, `input/`, and `output/` cannot affect product runtime identity.
 
 `GET /api/runtime` and `GET /api/engine/comfyui/status` return lightweight runtime status for UI polling without running workflow validation or model checks. FastAPI shutdown stops a managed ComfyUI process so the backend does not leave an owned sidecar running after app exit.
 
