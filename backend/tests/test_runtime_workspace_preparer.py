@@ -3,10 +3,30 @@ from pathlib import Path
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
+from app.runtime.dependency_lock import (
+    ResolvedDependencyLock,
+    ResolverMetadata,
+    with_computed_lock_hash,
+)
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.profiles import RuntimeProfileErrorCode, RuntimeProfileResolutionError, load_runtime_profile_catalog
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+
+
+class _FakeDependencyEnvInstaller:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.requests: list[DependencyEnvironmentInstallRequest] = []
+
+    def install(self, request: DependencyEnvironmentInstallRequest) -> None:
+        self.requests.append(request)
+        if self.fail:
+            raise RuntimeError("dependency install failed")
+        request.target_dir.mkdir(parents=True)
+        (request.target_dir / "venv").mkdir()
+        (request.target_dir / "install.marker").write_text("installed", encoding="utf-8")
 
 
 def _capsule_lock(
@@ -67,6 +87,27 @@ def _preparer(tmp_path: Path) -> RuntimeWorkspacePreparer:
     )
 
 
+def _dependency_lock_for_capsule(capsule: CapsuleLock) -> ResolvedDependencyLock:
+    return with_computed_lock_hash(
+        ResolvedDependencyLock(
+            runtime_profile_id=capsule.runtime.runtime_profile_id,
+            runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+            install_policy_version=capsule.dependencies.install_policy,
+            resolver=ResolverMetadata(name="uv", version="0.9.0"),
+            wheels=[],
+        )
+    )
+
+
+def _capsule_with_dependency_lock() -> tuple[CapsuleLock, ResolvedDependencyLock]:
+    base = _capsule_lock()
+    lock = _dependency_lock_for_capsule(base)
+    data = base.model_dump(mode="json")
+    data["runtime"]["dependency_lock_hash"] = lock.lock_hash
+    return CapsuleLock.model_validate(data), lock
+
+
 def _profile_checked_preparer(tmp_path: Path) -> RuntimeWorkspacePreparer:
     return RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
@@ -111,6 +152,90 @@ def test_prepare_creates_staged_dependency_and_runner_manifests(tmp_path: Path) 
     assert (prepared.runner_workspace_path / "manifest.json").exists()
     assert preparer.dependency_env_store.read(prepared.dependency_env_manifest.fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
     assert preparer.runner_workspace_store.read(prepared.runner_workspace_manifest.fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
+
+
+def test_prepare_installs_dependency_env_in_transaction_before_promotion(tmp_path: Path) -> None:
+    capsule, lock = _capsule_with_dependency_lock()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert len(installer.requests) == 1
+    assert installer.requests[0].target_dir.parent == tmp_path / "transactions"
+    assert (prepared.dependency_env_path / "install.marker").read_text(encoding="utf-8") == "installed"
+    assert (prepared.dependency_env_path / "manifest.json").exists()
+    transactions_dir = tmp_path / "transactions"
+    assert not transactions_dir.exists() or list(transactions_dir.iterdir()) == []
+
+
+def test_prepare_reuses_ready_dependency_env_without_reinstalling(tmp_path: Path) -> None:
+    capsule, lock = _capsule_with_dependency_lock()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+    ready = preparer.mark_ready(
+        preparer.prepare(capsule),
+        smoke_test_status=SmokeTestStatus.PASSED,
+        workflow_id=capsule.workflow.package_id,
+    )
+
+    second = preparer.prepare(capsule)
+
+    assert len(installer.requests) == 1
+    assert second.dependency_env_path == ready.dependency_env_path
+    assert second.dependency_env_manifest.status is InstallStatus.READY
+
+
+def test_failed_dependency_env_install_leaves_no_ready_manifest(tmp_path: Path) -> None:
+    capsule, lock = _capsule_with_dependency_lock()
+    installer = _FakeDependencyEnvInstaller(fail=True)
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(RuntimeError, match="dependency install failed"):
+        preparer.prepare(capsule)
+
+    assert len(installer.requests) == 1
+    assert list((tmp_path / "envs").glob("*")) == []
+    transactions_dir = tmp_path / "transactions"
+    assert not transactions_dir.exists() or list(transactions_dir.iterdir()) == []
+
+
+def test_prepare_requires_matching_resolved_dependency_lock_for_env_install(tmp_path: Path) -> None:
+    capsule, _ = _capsule_with_dependency_lock()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=_FakeDependencyEnvInstaller(),
+        dependency_locks={},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(RuntimeError, match="Resolved dependency lock is not available"):
+        preparer.prepare(capsule)
+
+    assert list((tmp_path / "envs").glob("*")) == []
 
 
 def test_prepare_reuses_existing_ready_manifests(tmp_path: Path) -> None:

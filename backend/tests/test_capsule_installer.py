@@ -10,12 +10,27 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
+from app.runtime.dependency_env import DependencyEnvironmentInstallError, DependencyEnvironmentInstallRequest
+from app.runtime.dependency_lock import (
+    DependencyPolicyErrorCode,
+    ResolvedDependencyLock,
+    ResolverMetadata,
+    with_computed_lock_hash,
+)
 from app.runtime.install_state import InstallStateStore
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.model_store import ModelStore
 from app.runtime.profiles import load_runtime_profile_catalog
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+
+
+class _FailingDependencyEnvInstaller:
+    def install(self, request: DependencyEnvironmentInstallRequest) -> None:
+        raise DependencyEnvironmentInstallError(
+            DependencyPolicyErrorCode.UNAPPROVED_SOURCE,
+            "dependency source is not approved",
+        )
 
 
 def _capsule_lock_data(
@@ -94,6 +109,19 @@ def _build_installer(
         log_store=log_store,
     )
     return installer, state_store, log_store
+
+
+def _resolved_lock_for_capsule(capsule: CapsuleLock) -> ResolvedDependencyLock:
+    return with_computed_lock_hash(
+        ResolvedDependencyLock(
+            runtime_profile_id=capsule.runtime.runtime_profile_id,
+            runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+            install_policy_version=capsule.dependencies.install_policy,
+            resolver=ResolverMetadata(name="uv", version="0.9.0"),
+            wheels=[],
+        )
+    )
 
 
 @pytest.mark.anyio
@@ -333,6 +361,52 @@ async def test_prepare_runtime_profile_failure_marks_unsupported_runtime_profile
     assert persisted.status is InstallStatus.UNSUPPORTED_RUNTIME_PROFILE
     assert list((tmp_path / "envs").glob("*")) == []
     assert list((tmp_path / "runner-workspaces").glob("*")) == []
+
+
+@pytest.mark.anyio
+async def test_prepare_dependency_policy_failure_marks_blocked_by_policy(tmp_path: Path) -> None:
+    data = _capsule_lock_data(fingerprint="fp-dependency-policy", models=[])
+    capsule = CapsuleLock.model_validate(data)
+    lock = _resolved_lock_for_capsule(capsule)
+    data["runtime"]["dependency_lock_hash"] = lock.lock_hash
+    capsule = CapsuleLock.model_validate(data)
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=_FailingDependencyEnvInstaller(),
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+    )
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError, match="dependency source is not approved") as exc:
+        await installer.prepare(capsule)
+
+    assert exc.value.state.status is InstallStatus.BLOCKED_BY_POLICY
+    persisted = state_store.get("fp-dependency-policy")
+    assert persisted is not None
+    assert persisted.status is InstallStatus.BLOCKED_BY_POLICY
+    assert list((tmp_path / "envs").glob("*")) == []
 
 
 @pytest.mark.anyio

@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from app.engine.diagnostics import LogStore
+from app.runtime.dependency_env import DependencyEnvironmentInstallError
 from app.runtime.install_state import (
     InstallStateStore,
     now_iso,
@@ -98,7 +99,7 @@ class CapsuleInstaller:
             )
             raise CapsuleInstallError(str(exc), state=state) from exc
 
-        self._transition(fingerprint, InstallStatus.CHECKING_COMPATIBILITY, workflow_id)
+        self._transition(fingerprint, InstallStatus.RESOLVING_DEPENDENCIES, workflow_id)
         prepared_workspace = None
         try:
             if self.workspace_preparer is not None:
@@ -107,6 +108,14 @@ class CapsuleInstaller:
             state = self._transition(
                 fingerprint,
                 InstallStatus.UNSUPPORTED_RUNTIME_PROFILE,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
+        except DependencyEnvironmentInstallError as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.BLOCKED_BY_POLICY,
                 workflow_id,
                 last_error=str(exc),
             )
@@ -120,6 +129,7 @@ class CapsuleInstaller:
             )
             raise CapsuleInstallError(str(exc), state=state) from exc
 
+        self._transition(fingerprint, InstallStatus.CHECKING_COMPATIBILITY, workflow_id)
         smoke_test_status = SmokeTestStatus.NOT_RUN
         if prepared_workspace is not None and self.workspace_smoke_test is not None:
             try:

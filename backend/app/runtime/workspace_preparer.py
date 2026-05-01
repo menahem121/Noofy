@@ -11,10 +11,17 @@ check.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from app.engine.diagnostics import LogStore
+from app.runtime.dependency_env import (
+    DependencyEnvironmentInstallRequest,
+    DependencyEnvironmentInstaller,
+)
+from app.runtime.dependency_lock import ResolvedDependencyLock, resolved_dependency_lock_hash
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.isolation import (
     CapsuleLock,
@@ -54,6 +61,9 @@ class RuntimeWorkspacePreparer:
         comfyui_source_dir: Path | None = None,
         model_view_dir: Path | None = None,
         runtime_profile_catalog: RuntimeProfileCatalog | None = None,
+        dependency_env_installer: DependencyEnvironmentInstaller | None = None,
+        dependency_locks: Mapping[str, ResolvedDependencyLock] | None = None,
+        dependency_transactions_dir: Path | None = None,
         log_store: LogStore | None = None,
     ) -> None:
         self.dependency_env_store = dependency_env_store
@@ -61,6 +71,11 @@ class RuntimeWorkspacePreparer:
         self.comfyui_source_dir = comfyui_source_dir
         self.model_view_dir = model_view_dir
         self.runtime_profile_catalog = runtime_profile_catalog
+        self.dependency_env_installer = dependency_env_installer
+        self.dependency_locks = dict(dependency_locks or {})
+        self.dependency_transactions_dir = dependency_transactions_dir or (
+            dependency_env_store.root_dir.parent / "transactions"
+        )
         self.log_store = log_store or LogStore()
 
     def prepare(self, capsule_lock: CapsuleLock) -> PreparedRuntimeWorkspace:
@@ -161,6 +176,8 @@ class RuntimeWorkspacePreparer:
                     },
                 )
                 return existing
+            if self.dependency_env_installer is not None:
+                return self._install_staged_dependency_env(manifest, workflow_id)
             if existing != manifest:
                 self.dependency_env_store.save_staged(manifest)
                 self.log_store.add(
@@ -179,6 +196,8 @@ class RuntimeWorkspacePreparer:
                 details={"fingerprint": existing.fingerprint},
             )
             return existing
+        if self.dependency_env_installer is not None:
+            return self._install_staged_dependency_env(manifest, workflow_id)
         self.dependency_env_store.save_staged(manifest)
         self.log_store.add(
             "info",
@@ -188,6 +207,83 @@ class RuntimeWorkspacePreparer:
             details={"fingerprint": manifest.fingerprint},
         )
         return manifest
+
+    def _install_staged_dependency_env(
+        self,
+        manifest: DependencyEnvManifest,
+        workflow_id: str,
+    ) -> DependencyEnvManifest:
+        assert self.dependency_env_installer is not None
+        lock = self._resolved_dependency_lock(manifest)
+        staging_dir = self.dependency_transactions_dir / (
+            f"dep-env-{_safe_fingerprint(manifest.fingerprint)}-{uuid4().hex}"
+        )
+        try:
+            self.dependency_env_installer.install(
+                DependencyEnvironmentInstallRequest(
+                    lock=lock,
+                    target_dir=staging_dir,
+                    python_version=manifest.python_version,
+                    workflow_id=workflow_id,
+                )
+            )
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            (staging_dir / "manifest.json").write_text(
+                manifest.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            self._promote_dependency_env_staging(staging_dir, manifest)
+        except Exception:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+
+        self.log_store.add(
+            "info",
+            "Installed staged dependency environment",
+            "runtime.workspace",
+            workflow_id=workflow_id,
+            details={
+                "fingerprint": manifest.fingerprint,
+                "dependency_lock_hash": manifest.dependency_lock_hash,
+            },
+        )
+        return self.dependency_env_store.read(manifest.fingerprint)
+
+    def _resolved_dependency_lock(self, manifest: DependencyEnvManifest) -> ResolvedDependencyLock:
+        lock = self.dependency_locks.get(manifest.dependency_lock_hash)
+        if lock is None:
+            raise RuntimeError(
+                "Resolved dependency lock is not available for dependency environment install: "
+                f"{manifest.dependency_lock_hash}"
+            )
+        if lock.runtime_profile_id != manifest.runtime_profile_id:
+            raise RuntimeError("Resolved dependency lock runtime profile does not match dependency manifest.")
+        if lock.runtime_profile_variant_id != manifest.runtime_profile_variant_id:
+            raise RuntimeError("Resolved dependency lock runtime variant does not match dependency manifest.")
+        if lock.runtime_profile_manifest_hash != manifest.runtime_profile_manifest_hash:
+            raise RuntimeError("Resolved dependency lock profile hash does not match dependency manifest.")
+        if lock.install_policy_version != manifest.install_policy_version:
+            raise RuntimeError("Resolved dependency lock install policy does not match dependency manifest.")
+        lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        if lock_hash != manifest.dependency_lock_hash:
+            raise RuntimeError("Resolved dependency lock hash does not match dependency manifest.")
+        return lock
+
+    def _promote_dependency_env_staging(
+        self,
+        staging_dir: Path,
+        manifest: DependencyEnvManifest,
+    ) -> None:
+        artifact_dir = self.dependency_env_store.artifact_dir(manifest.fingerprint)
+        if self.dependency_env_store.exists(manifest.fingerprint):
+            existing = self.dependency_env_store.read(manifest.fingerprint)
+            if existing.status is InstallStatus.READY:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                return
+        if artifact_dir.exists():
+            shutil.rmtree(artifact_dir)
+        artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging_dir.replace(artifact_dir)
 
     def _ensure_staged_runner_workspace(
         self,
@@ -394,3 +490,7 @@ _WORKSPACE_OWNED_NAMES = {
     "temp",
     "user",
 }
+
+
+def _safe_fingerprint(fingerprint: str) -> str:
+    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
