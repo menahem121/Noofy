@@ -4,6 +4,7 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
+from app.runtime.profiles import RuntimeProfileErrorCode, RuntimeProfileResolutionError, load_runtime_profile_catalog
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
@@ -28,12 +29,18 @@ def _capsule_lock(
                 "core_source_hash": "sha256:" + ("a" * 64),
             },
             "runtime": {
+                "runtime_profile_id": "noofy-comfyui-v1-default",
+                "runtime_profile_variant_id": "darwin-arm64-mps-dev",
+                "runtime_profile_manifest_hash": "sha256:" + ("9" * 64),
+                "runtime_profile_catalog_version": "0.1.0",
+                "fingerprint_schema_version": "0.1.0",
                 "dependency_env_fingerprint": "sha256:" + ("b" * 64),
                 "runner_fingerprint": runner_fingerprint,
                 "capsule_fingerprint": "sha256:" + ("d" * 64),
                 "os": "darwin",
                 "architecture": "arm64",
                 "python_version": "3.11",
+                "python_build_id": "cpython-3.11-noofy-dev",
                 "gpu_backend": "mps",
                 "dependency_lock_hash": "sha256:" + ("e" * 64),
                 "runner_workspace_hash": "sha256:" + ("f" * 64),
@@ -56,6 +63,15 @@ def _preparer(tmp_path: Path) -> RuntimeWorkspacePreparer:
     return RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
         runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=LogStore(),
+    )
+
+
+def _profile_checked_preparer(tmp_path: Path) -> RuntimeWorkspacePreparer:
+    return RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
         log_store=LogStore(),
     )
 
@@ -209,3 +225,63 @@ def test_prepare_refuses_to_reuse_ready_workspace_with_missing_source_view(tmp_p
 
     with pytest.raises(RuntimeError, match="Ready runner workspace is missing materialized entries"):
         preparer.prepare(capsule)
+
+
+def test_prepare_resolves_runtime_profile_before_staging_artifacts(tmp_path: Path) -> None:
+    preparer = _profile_checked_preparer(tmp_path)
+    capsule = _capsule_with_catalog_profile()
+
+    prepared = preparer.prepare(capsule)
+
+    assert prepared.dependency_env_manifest.runtime_profile_id == "noofy-comfyui-v1-default"
+    assert prepared.runner_workspace_manifest.runtime_profile_variant_id == "darwin-arm64-mps"
+
+
+def test_prepare_fails_missing_runtime_profile_before_staging_artifacts(tmp_path: Path) -> None:
+    preparer = _profile_checked_preparer(tmp_path)
+    data = _capsule_with_catalog_profile().model_dump(mode="json")
+    data["runtime"]["runtime_profile_id"] = "missing-profile"
+    capsule = CapsuleLock.model_validate(data)
+
+    with pytest.raises(RuntimeProfileResolutionError) as exc:
+        preparer.prepare(capsule)
+
+    assert exc.value.code is RuntimeProfileErrorCode.MISSING_RUNTIME_PROFILE
+    assert list((tmp_path / "envs").glob("*")) == []
+    assert list((tmp_path / "runner-workspaces").glob("*")) == []
+
+
+def test_prepare_fails_profile_hash_mismatch_before_staging_artifacts(tmp_path: Path) -> None:
+    preparer = _profile_checked_preparer(tmp_path)
+    data = _capsule_with_catalog_profile().model_dump(mode="json")
+    data["runtime"]["runtime_profile_manifest_hash"] = "sha256:" + ("8" * 64)
+    capsule = CapsuleLock.model_validate(data)
+
+    with pytest.raises(RuntimeProfileResolutionError) as exc:
+        preparer.prepare(capsule)
+
+    assert exc.value.code is RuntimeProfileErrorCode.PROFILE_MANIFEST_HASH_MISMATCH
+    assert list((tmp_path / "envs").glob("*")) == []
+    assert list((tmp_path / "runner-workspaces").glob("*")) == []
+
+
+def _capsule_with_catalog_profile() -> CapsuleLock:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    profile = catalog.profiles[0]
+    variant = profile.variants[0]
+    data = _capsule_lock().model_dump(mode="json")
+    data["runtime"].update(
+        {
+            "runtime_profile_id": profile.runtime_profile_id,
+            "runtime_profile_variant_id": variant.runtime_profile_variant_id,
+            "runtime_profile_manifest_hash": profile.runtime_profile_manifest_hash,
+            "runtime_profile_catalog_version": catalog.schema_version,
+            "os": variant.os,
+            "architecture": variant.architecture,
+            "python_version": variant.python_version,
+            "python_build_id": variant.python_build_id,
+            "gpu_backend": variant.gpu_backend_profile,
+            "dependency_lock_hash": variant.core_dependency_lock_hash,
+        }
+    )
+    return CapsuleLock.model_validate(data)

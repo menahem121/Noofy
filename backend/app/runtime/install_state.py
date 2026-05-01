@@ -34,10 +34,22 @@ def user_facing_install_message(status: InstallStatus) -> str:
     """Map an install status to the beginner-friendly string the UI shows."""
     return {
         InstallStatus.PENDING: "Not started",
+        InstallStatus.IMPORTED: "Imported",
+        InstallStatus.NEEDS_INPUT_SETUP: "Needs input setup",
         InstallStatus.PREPARING: "Preparing workflow",
+        InstallStatus.RESOLVING_RUNTIME_PROFILE: "Checking runtime support",
+        InstallStatus.RESOLVING_MODELS: "Checking required models",
+        InstallStatus.RESOLVING_DEPENDENCIES: "Preparing workflow support files",
+        InstallStatus.MATERIALIZING_CUSTOM_NODES: "Preparing workflow extensions",
+        InstallStatus.MATERIALIZING_MODEL_VIEW: "Preparing model access",
         InstallStatus.DOWNLOADING: "Downloading required models",
         InstallStatus.CHECKING_COMPATIBILITY: "Checking compatibility",
+        InstallStatus.SMOKE_TESTING: "Testing workflow startup",
         InstallStatus.READY: "Ready",
+        InstallStatus.PREPARED_NEEDS_INPUT_SETUP: "Needs input setup",
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY: "Cannot prepare automatically",
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE: "Unsupported runtime",
+        InstallStatus.BLOCKED_BY_POLICY: "Blocked by safety policy",
         InstallStatus.FAILED: "Cannot prepare automatically",
         InstallStatus.UNSUPPORTED: "Unsupported",
     }[status]
@@ -88,6 +100,12 @@ class InstallStateStore:
         *,
         status: InstallStatus | None = None,
         last_error: str | None | object = _UNSET,
+        runtime_profile_variant_id: str | None | object = _UNSET,
+        runtime_profile_manifest_hash: str | None | object = _UNSET,
+        runtime_profile_catalog_version: str | None | object = _UNSET,
+        dependency_env_fingerprint: str | None | object = _UNSET,
+        runner_workspace_fingerprint: str | None | object = _UNSET,
+        runner_process_compatibility_key: str | None | object = _UNSET,
         dependency_env_path: str | None | object = _UNSET,
         runner_workspace_path: str | None | object = _UNSET,
         model_references: list[InstalledModelReference] | object = _UNSET,
@@ -108,6 +126,18 @@ class InstallStateStore:
             updates["smoke_test_status"] = smoke_test_status
         if last_error is not _UNSET:
             updates["last_error"] = last_error
+        if runtime_profile_variant_id is not _UNSET:
+            updates["runtime_profile_variant_id"] = runtime_profile_variant_id
+        if runtime_profile_manifest_hash is not _UNSET:
+            updates["runtime_profile_manifest_hash"] = runtime_profile_manifest_hash
+        if runtime_profile_catalog_version is not _UNSET:
+            updates["runtime_profile_catalog_version"] = runtime_profile_catalog_version
+        if dependency_env_fingerprint is not _UNSET:
+            updates["dependency_env_fingerprint"] = dependency_env_fingerprint
+        if runner_workspace_fingerprint is not _UNSET:
+            updates["runner_workspace_fingerprint"] = runner_workspace_fingerprint
+        if runner_process_compatibility_key is not _UNSET:
+            updates["runner_process_compatibility_key"] = runner_process_compatibility_key
         if dependency_env_path is not _UNSET:
             updates["dependency_env_path"] = dependency_env_path
         if runner_workspace_path is not _UNSET:

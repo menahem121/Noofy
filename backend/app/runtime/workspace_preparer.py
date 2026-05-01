@@ -23,6 +23,12 @@ from app.runtime.isolation import (
     RunnerWorkspaceManifest,
     SmokeTestStatus,
 )
+from app.runtime.profiles import (
+    RuntimeProfileCatalog,
+    RuntimeProfileErrorCode,
+    RuntimeProfileResolutionError,
+    resolve_runtime_profile,
+)
 from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
@@ -47,15 +53,18 @@ class RuntimeWorkspacePreparer:
         runner_workspace_store: RunnerWorkspaceManifestStore,
         comfyui_source_dir: Path | None = None,
         model_view_dir: Path | None = None,
+        runtime_profile_catalog: RuntimeProfileCatalog | None = None,
         log_store: LogStore | None = None,
     ) -> None:
         self.dependency_env_store = dependency_env_store
         self.runner_workspace_store = runner_workspace_store
         self.comfyui_source_dir = comfyui_source_dir
         self.model_view_dir = model_view_dir
+        self.runtime_profile_catalog = runtime_profile_catalog
         self.log_store = log_store or LogStore()
 
     def prepare(self, capsule_lock: CapsuleLock) -> PreparedRuntimeWorkspace:
+        self._resolve_runtime_profile(capsule_lock)
         dependency_manifest = self._dependency_env_manifest(
             capsule_lock,
             status=InstallStatus.CHECKING_COMPATIBILITY,
@@ -242,8 +251,13 @@ class RuntimeWorkspacePreparer:
         return DependencyEnvManifest(
             schema_version=RUNTIME_MANIFEST_SCHEMA_VERSION,
             fingerprint=runtime.dependency_env_fingerprint,
+            runtime_profile_id=runtime.runtime_profile_id,
+            runtime_profile_variant_id=runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
+            runtime_profile_catalog_version=runtime.runtime_profile_catalog_version,
+            fingerprint_schema_version=runtime.fingerprint_schema_version,
             python_version=runtime.python_version,
-            python_build_id=runtime.python_version,
+            python_build_id=runtime.python_build_id,
             os=runtime.os,
             architecture=runtime.architecture,
             gpu_backend=runtime.gpu_backend,
@@ -252,6 +266,24 @@ class RuntimeWorkspacePreparer:
             status=status,
             smoke_test_status=smoke_test_status,
         )
+
+    def _resolve_runtime_profile(self, capsule_lock: CapsuleLock) -> None:
+        if self.runtime_profile_catalog is None:
+            return
+        runtime = capsule_lock.runtime
+        selection = resolve_runtime_profile(
+            self.runtime_profile_catalog,
+            runtime_profile_id=runtime.runtime_profile_id,
+            runtime_profile_variant_id=runtime.runtime_profile_variant_id,
+            os_name=runtime.os,
+            architecture=runtime.architecture,
+            gpu_backend_profile=runtime.gpu_backend,
+        )
+        if selection.profile.runtime_profile_manifest_hash != runtime.runtime_profile_manifest_hash:
+            raise RuntimeProfileResolutionError(
+                RuntimeProfileErrorCode.PROFILE_MANIFEST_HASH_MISMATCH,
+                "Workflow runtime profile manifest hash does not match the installed catalog.",
+            )
 
     def _runner_workspace_manifest(
         self,
@@ -264,6 +296,11 @@ class RuntimeWorkspacePreparer:
         return RunnerWorkspaceManifest(
             schema_version=RUNTIME_MANIFEST_SCHEMA_VERSION,
             fingerprint=runtime.runner_fingerprint,
+            runtime_profile_id=runtime.runtime_profile_id,
+            runtime_profile_variant_id=runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
+            runtime_profile_catalog_version=runtime.runtime_profile_catalog_version,
+            fingerprint_schema_version=runtime.fingerprint_schema_version,
             dependency_env_fingerprint=runtime.dependency_env_fingerprint,
             comfyui_version=capsule_lock.engine.comfyui_version,
             comfyui_source_hash=capsule_lock.engine.core_source_hash,

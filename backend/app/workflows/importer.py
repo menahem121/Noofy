@@ -161,7 +161,7 @@ class NoofyArchiveImporter:
         version = _string_field(package_json, "version", fallback="0.1.0")
         workflow_id = imported_workflow_id(publisher_id, package_id, version)
         trust_level = _normalize_trust_level(package_json.get("trust_level"))
-        display_name = _string_field(package_json, "display_name", fallback=package_id)
+        display_name = _normalized_display_name(package_json, fallback=package_id)
 
         models = _normalize_models(capsule_json)
         custom_nodes = _normalize_custom_nodes(capsule_json)
@@ -310,6 +310,14 @@ def _string_field(data: dict[str, Any], key: str, *, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback
+
+
+def _normalized_display_name(data: dict[str, Any], *, fallback: str) -> str:
+    value = _string_field(data, "display_name", fallback=fallback)
+    # Some exported fixtures mark the selected workflow title with a leading
+    # asterisk. That marker is exporter UI state, not part of the app name.
+    cleaned = value.lstrip("*").strip()
+    return cleaned or fallback
 
 
 def _normalize_trust_level(value: Any) -> str:

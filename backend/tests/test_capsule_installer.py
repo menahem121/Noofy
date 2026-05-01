@@ -13,6 +13,7 @@ from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.install_state import InstallStateStore
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.model_store import ModelStore
+from app.runtime.profiles import load_runtime_profile_catalog
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
@@ -38,12 +39,18 @@ def _capsule_lock_data(
             "core_source_hash": "phase3-core",
         },
         "runtime": {
+            "runtime_profile_id": "noofy-comfyui-v1-default",
+            "runtime_profile_variant_id": "darwin-arm64-mps-dev",
+            "runtime_profile_manifest_hash": "sha256:" + ("9" * 64),
+            "runtime_profile_catalog_version": "0.1.0",
+            "fingerprint_schema_version": "0.1.0",
             "dependency_env_fingerprint": "phase3-dep",
             "runner_fingerprint": "phase3-runner",
             "capsule_fingerprint": fingerprint,
             "os": "any",
             "architecture": "any",
             "python_version": "3.11",
+            "python_build_id": "cpython-3.11-noofy-dev",
             "gpu_backend": "any",
             "dependency_lock_hash": "phase3-deps",
             "runner_workspace_hash": "phase3-workspace",
@@ -225,6 +232,11 @@ async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) ->
     assert persisted is not None
     assert persisted.status is InstallStatus.READY
     assert persisted.smoke_test_status is SmokeTestStatus.PASSED
+    assert persisted.runtime_profile_variant_id == capsule.runtime.runtime_profile_variant_id
+    assert persisted.runtime_profile_manifest_hash == capsule.runtime.runtime_profile_manifest_hash
+    assert persisted.runtime_profile_catalog_version == capsule.runtime.runtime_profile_catalog_version
+    assert persisted.dependency_env_fingerprint == capsule.runtime.dependency_env_fingerprint
+    assert persisted.runner_workspace_fingerprint == capsule.runtime.runner_fingerprint
     runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
     assert runner_manifest.status is InstallStatus.READY
     assert runner_manifest.smoke_test_status is SmokeTestStatus.PASSED
@@ -278,6 +290,49 @@ async def test_prepare_smoke_failure_marks_state_failed_and_not_ready(tmp_path: 
     runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
     assert runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
     assert runner_manifest.smoke_test_status is SmokeTestStatus.NOT_RUN
+
+
+@pytest.mark.anyio
+async def test_prepare_runtime_profile_failure_marks_unsupported_runtime_profile(tmp_path: Path) -> None:
+    data = _capsule_lock_data(fingerprint="fp-runtime-profile", models=[])
+    data["runtime"]["runtime_profile_id"] = "missing-profile"
+    capsule = CapsuleLock.model_validate(data)
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        log_store=log_store,
+    )
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError) as exc:
+        await installer.prepare(capsule)
+
+    assert exc.value.state.status is InstallStatus.UNSUPPORTED_RUNTIME_PROFILE
+    persisted = state_store.get("fp-runtime-profile")
+    assert persisted is not None
+    assert persisted.status is InstallStatus.UNSUPPORTED_RUNTIME_PROFILE
+    assert list((tmp_path / "envs").glob("*")) == []
+    assert list((tmp_path / "runner-workspaces").glob("*")) == []
 
 
 @pytest.mark.anyio

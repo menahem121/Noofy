@@ -30,10 +30,22 @@ class TrustLevel(StrEnum):
 
 class InstallStatus(StrEnum):
     PENDING = "pending"
+    IMPORTED = "imported"
+    NEEDS_INPUT_SETUP = "needs_input_setup"
     PREPARING = "preparing"
+    RESOLVING_RUNTIME_PROFILE = "resolving_runtime_profile"
+    RESOLVING_MODELS = "resolving_models"
+    RESOLVING_DEPENDENCIES = "resolving_dependencies"
+    MATERIALIZING_CUSTOM_NODES = "materializing_custom_nodes"
+    MATERIALIZING_MODEL_VIEW = "materializing_model_view"
     DOWNLOADING = "downloading"
     CHECKING_COMPATIBILITY = "checking_compatibility"
+    SMOKE_TESTING = "smoke_testing"
     READY = "ready"
+    PREPARED_NEEDS_INPUT_SETUP = "prepared_needs_input_setup"
+    CANNOT_PREPARE_AUTOMATICALLY = "cannot_prepare_automatically"
+    UNSUPPORTED_RUNTIME_PROFILE = "unsupported_runtime_profile"
+    BLOCKED_BY_POLICY = "blocked_by_policy"
     FAILED = "failed"
     UNSUPPORTED = "unsupported"
 
@@ -58,12 +70,19 @@ class PackageIdentity(BaseModel):
 class RuntimeIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    runtime_profile_id: str = Field(min_length=1)
+    runtime_profile_variant_id: str = Field(min_length=1)
+    runtime_profile_manifest_hash: str = Field(min_length=1)
+    runtime_profile_catalog_version: str = Field(min_length=1)
+    fingerprint_schema_version: str = Field(min_length=1)
     dependency_env_fingerprint: str = Field(min_length=1)
     runner_fingerprint: str = Field(min_length=1)
+    runner_process_compatibility_key: str | None = None
     capsule_fingerprint: str = Field(min_length=1)
     os: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
     python_version: str = Field(min_length=1)
+    python_build_id: str = Field(min_length=1)
     gpu_backend: str = Field(min_length=1)
     dependency_lock_hash: str = Field(min_length=1)
     runner_workspace_hash: str = Field(min_length=1)
@@ -200,6 +219,12 @@ class InstallState(BaseModel):
     status: InstallStatus
     installed_at: str | None = None
     last_used_at: str | None = None
+    runtime_profile_variant_id: str | None = None
+    runtime_profile_manifest_hash: str | None = None
+    runtime_profile_catalog_version: str | None = None
+    dependency_env_fingerprint: str | None = None
+    runner_workspace_fingerprint: str | None = None
+    runner_process_compatibility_key: str | None = None
     dependency_env_path: str | None = None
     runner_workspace_path: str | None = None
     model_references: list[InstalledModelReference] = Field(default_factory=list)
@@ -212,6 +237,11 @@ class DependencyEnvManifest(BaseModel):
 
     schema_version: str = Field(min_length=1)
     fingerprint: str = Field(min_length=1)
+    runtime_profile_id: str = Field(min_length=1)
+    runtime_profile_variant_id: str = Field(min_length=1)
+    runtime_profile_manifest_hash: str = Field(min_length=1)
+    runtime_profile_catalog_version: str = Field(min_length=1)
+    fingerprint_schema_version: str = Field(min_length=1)
     python_version: str = Field(min_length=1)
     python_build_id: str = Field(min_length=1)
     os: str = Field(min_length=1)
@@ -228,6 +258,11 @@ class RunnerWorkspaceManifest(BaseModel):
 
     schema_version: str = Field(min_length=1)
     fingerprint: str = Field(min_length=1)
+    runtime_profile_id: str = Field(min_length=1)
+    runtime_profile_variant_id: str = Field(min_length=1)
+    runtime_profile_manifest_hash: str = Field(min_length=1)
+    runtime_profile_catalog_version: str = Field(min_length=1)
+    fingerprint_schema_version: str = Field(min_length=1)
     dependency_env_fingerprint: str = Field(min_length=1)
     comfyui_version: str = Field(min_length=1)
     comfyui_source_hash: str = Field(min_length=1)

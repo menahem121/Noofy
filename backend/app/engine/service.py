@@ -37,6 +37,7 @@ from app.runtime.isolation import (
 )
 from app.runtime.manager import RuntimeManager
 from app.runtime.model_store import ModelStore, http_streaming_downloader
+from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester
@@ -850,6 +851,7 @@ def create_default_engine_service() -> EngineService:
             runner_workspace_store=RunnerWorkspaceManifestStore(paths.runner_workspaces_dir),
             comfyui_source_dir=settings.comfyui_repo_dir,
             model_view_dir=paths.model_materialized_dir,
+            runtime_profile_catalog=load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH),
             log_store=log_store,
         ),
         workspace_smoke_test=runner_smoke_tester.run,

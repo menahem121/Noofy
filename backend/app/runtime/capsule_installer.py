@@ -25,6 +25,7 @@ from app.runtime.isolation import (
     TrustLevel,
 )
 from app.runtime.model_store import ModelDownloadError, ModelStore
+from app.runtime.profiles import RuntimeProfileResolutionError
 from app.runtime.workspace_preparer import PreparedRuntimeWorkspace, RuntimeWorkspacePreparer
 
 WorkspaceSmokeTest = Callable[[CapsuleLock, PreparedRuntimeWorkspace], Awaitable[None]]
@@ -102,6 +103,14 @@ class CapsuleInstaller:
         try:
             if self.workspace_preparer is not None:
                 prepared_workspace = self.workspace_preparer.prepare(capsule_lock)
+        except RuntimeProfileResolutionError as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.UNSUPPORTED_RUNTIME_PROFILE,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
         except Exception as exc:
             state = self._transition(
                 fingerprint,
@@ -138,6 +147,12 @@ class CapsuleInstaller:
             "smoke_test_status": smoke_test_status,
         }
         if prepared_workspace is not None:
+            ready_fields["runtime_profile_variant_id"] = capsule_lock.runtime.runtime_profile_variant_id
+            ready_fields["runtime_profile_manifest_hash"] = capsule_lock.runtime.runtime_profile_manifest_hash
+            ready_fields["runtime_profile_catalog_version"] = capsule_lock.runtime.runtime_profile_catalog_version
+            ready_fields["dependency_env_fingerprint"] = prepared_workspace.dependency_env_manifest.fingerprint
+            ready_fields["runner_workspace_fingerprint"] = prepared_workspace.runner_workspace_manifest.fingerprint
+            ready_fields["runner_process_compatibility_key"] = capsule_lock.runtime.runner_process_compatibility_key
             ready_fields["dependency_env_path"] = str(prepared_workspace.dependency_env_path)
             ready_fields["runner_workspace_path"] = str(prepared_workspace.runner_workspace_path)
 
@@ -163,7 +178,13 @@ class CapsuleInstaller:
         **fields,
     ) -> InstallState:
         state = self.install_state_store.update(fingerprint, status=status, **fields)
-        level = "error" if status is InstallStatus.FAILED else "info"
+        level = "error" if status in {
+            InstallStatus.FAILED,
+            InstallStatus.UNSUPPORTED,
+            InstallStatus.UNSUPPORTED_RUNTIME_PROFILE,
+            InstallStatus.BLOCKED_BY_POLICY,
+            InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
+        } else "info"
         self.log_store.add(
             level,
             f"Capsule install: {user_facing_install_message(status)}",

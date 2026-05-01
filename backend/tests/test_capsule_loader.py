@@ -10,6 +10,7 @@ from app.runtime.fingerprints import (
     sha256_fingerprint,
 )
 from app.runtime.isolation import TrustLevel
+from app.runtime.profiles import load_runtime_profile_catalog
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 
 
@@ -31,12 +32,18 @@ def _write_capsule(directory: Path, package_id: str, *, fingerprint: str | None 
             "core_source_hash": "phase3-core",
         },
         "runtime": {
+            "runtime_profile_id": "noofy-comfyui-v1-default",
+            "runtime_profile_variant_id": "darwin-arm64-mps-dev",
+            "runtime_profile_manifest_hash": "sha256:" + ("9" * 64),
+            "runtime_profile_catalog_version": "0.1.0",
+            "fingerprint_schema_version": "0.1.0",
             "dependency_env_fingerprint": "phase3-dep",
             "runner_fingerprint": "phase3-runner",
             "capsule_fingerprint": fingerprint,
             "os": "any",
             "architecture": "any",
             "python_version": "3.11",
+            "python_build_id": "cpython-3.11-noofy-dev",
             "gpu_backend": "any",
             "dependency_lock_hash": "phase3-deps",
             "runner_workspace_hash": "phase3-workspace",
@@ -69,6 +76,14 @@ def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
     packages_dir = Path("app/workflows/packages")
     package = json.loads((packages_dir / "text_to_image_v0" / "package.json").read_text(encoding="utf-8"))
     lock = CapsuleLockLoader(packages_dir).get_capsule_lock("text_to_image_v0")
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    profile = catalog.profile_by_id(lock.runtime.runtime_profile_id)
+    assert profile is not None
+    variant = next(
+        variant
+        for variant in profile.variants
+        if variant.runtime_profile_variant_id == lock.runtime.runtime_profile_variant_id
+    )
 
     expected_dependency_lock_hash = sha256_fingerprint(
         {
@@ -77,17 +92,15 @@ def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
             "dependencies": [],
         }
     )
-    expected_core_source_hash = sha256_fingerprint(
-        {
-            "kind": "comfyui_core_source",
-            "comfyui_version": lock.engine.comfyui_version,
-            "source": "managed-core",
-        }
-    )
+    expected_core_source_hash = profile.comfyui_core_source_hash
     expected_dependency_fingerprint = dependency_env_fingerprint(
+        runtime_profile_id=lock.runtime.runtime_profile_id,
+        runtime_profile_manifest_hash=lock.runtime.runtime_profile_manifest_hash,
+        runtime_profile_variant_id=lock.runtime.runtime_profile_variant_id,
         os_name=lock.runtime.os,
         architecture=lock.runtime.architecture,
-        python_build_id=lock.runtime.python_version,
+        python_build_id=lock.runtime.python_build_id,
+        torch_wheel_build_tag=variant.torch_wheel_build_tag,
         torch_backend=lock.runtime.gpu_backend,
         dependency_lock_hash=expected_dependency_lock_hash,
         native_dependency_constraints={},
@@ -95,7 +108,11 @@ def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
     )
     expected_runner_fingerprint = runner_workspace_fingerprint(
         dependency_env_fingerprint=expected_dependency_fingerprint,
+        runtime_profile_id=lock.runtime.runtime_profile_id,
+        runtime_profile_manifest_hash=lock.runtime.runtime_profile_manifest_hash,
+        runtime_profile_variant_id=lock.runtime.runtime_profile_variant_id,
         comfyui_source_hash=expected_core_source_hash,
+        comfyui_frontend_version=profile.comfyui_frontend_version,
         enabled_custom_node_manifest_hash=sha256_fingerprint(lock.custom_nodes),
         launch_config_hash=sha256_fingerprint(
             {

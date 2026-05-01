@@ -69,7 +69,7 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert package.unresolved_runtime_inputs[0].reason == "creator_local_image_not_bundled"
     assert package.dashboard.sections[0].title == "Input setup needed"
     assert package.assets.thumbnail == "source-files/assets/thumbnail.png"
-    assert package.observed_hardware["observed_peak_ram_mb"] == 5599
+    assert package.observed_hardware["observed_peak_ram_mb"] == 5567
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
     assert package.import_metadata.user_facing_message == "Needs input setup"

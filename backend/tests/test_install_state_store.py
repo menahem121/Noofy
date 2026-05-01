@@ -37,15 +37,28 @@ def test_update_round_trip(tmp_path: Path) -> None:
         installed_at="2026-04-30T12:00:00+00:00",
         smoke_test_status=SmokeTestStatus.PASSED,
         last_error=None,
+        runtime_profile_variant_id="darwin-arm64-mps-dev",
+        runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+        runtime_profile_catalog_version="0.1.0",
+        dependency_env_fingerprint="sha256:" + ("a" * 64),
+        runner_workspace_fingerprint="sha256:" + ("b" * 64),
+        runner_process_compatibility_key="runner-key",
     )
 
     assert updated.status is InstallStatus.READY
     assert updated.installed_at == "2026-04-30T12:00:00+00:00"
     assert updated.smoke_test_status is SmokeTestStatus.PASSED
     assert updated.last_error is None
+    assert updated.runtime_profile_variant_id == "darwin-arm64-mps-dev"
+    assert updated.runtime_profile_manifest_hash == "sha256:" + ("9" * 64)
+    assert updated.runtime_profile_catalog_version == "0.1.0"
+    assert updated.dependency_env_fingerprint == "sha256:" + ("a" * 64)
+    assert updated.runner_workspace_fingerprint == "sha256:" + ("b" * 64)
+    assert updated.runner_process_compatibility_key == "runner-key"
     # Persisted on disk:
     reloaded = InstallStateStore(tmp_path).get("phase3-fp")
     assert reloaded is not None and reloaded.status is InstallStatus.READY
+    assert reloaded.runtime_profile_variant_id == "darwin-arm64-mps-dev"
 
 
 def test_update_distinguishes_unset_from_explicit_none(tmp_path: Path) -> None:

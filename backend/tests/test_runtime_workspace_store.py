@@ -23,6 +23,11 @@ def _dependency_manifest(
     return DependencyEnvManifest(
         schema_version="0.1.0",
         fingerprint=fingerprint,
+        runtime_profile_id="noofy-comfyui-v1-default",
+        runtime_profile_variant_id="darwin-arm64-mps-dev",
+        runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+        runtime_profile_catalog_version="0.1.0",
+        fingerprint_schema_version="0.1.0",
         python_version="3.11",
         python_build_id="cpython-3.11-noofy-1",
         os="darwin",
@@ -43,6 +48,11 @@ def _runner_manifest(
     return RunnerWorkspaceManifest(
         schema_version="0.1.0",
         fingerprint=fingerprint,
+        runtime_profile_id="noofy-comfyui-v1-default",
+        runtime_profile_variant_id="darwin-arm64-mps-dev",
+        runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+        runtime_profile_catalog_version="0.1.0",
+        fingerprint_schema_version="0.1.0",
         dependency_env_fingerprint="sha256:" + ("a" * 64),
         comfyui_version="0.3.0",
         comfyui_source_hash="sha256:" + ("d" * 64),
