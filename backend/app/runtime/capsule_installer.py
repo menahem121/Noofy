@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from app.runtime.custom_nodes import (
+    CustomNodeMaterializationError,
+    CustomNodeMaterializationErrorCode,
+)
 from app.engine.diagnostics import LogStore
 from app.runtime.dependency_env import DependencyEnvironmentInstallError
 from app.runtime.install_state import (
@@ -112,6 +116,19 @@ class CapsuleInstaller:
             state = self._transition(
                 fingerprint,
                 InstallStatus.BLOCKED_BY_POLICY,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
+        except CustomNodeMaterializationError as exc:
+            status = (
+                InstallStatus.CANNOT_PREPARE_AUTOMATICALLY
+                if exc.code is CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE
+                else InstallStatus.BLOCKED_BY_POLICY
+            )
+            state = self._transition(
+                fingerprint,
+                status,
                 workflow_id,
                 last_error=str(exc),
             )

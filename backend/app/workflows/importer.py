@@ -6,6 +6,7 @@ import json
 import shutil
 import stat
 import uuid
+import platform
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,28 @@ from pydantic import ValidationError
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
+from app.runtime.dependency_lock import DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
+from app.runtime.fingerprints import (
+    FINGERPRINT_SCHEMA_VERSION,
+    capsule_fingerprint,
+    dependency_env_fingerprint,
+    runner_workspace_fingerprint,
+    sha256_fingerprint,
+)
+from app.runtime.isolation import (
+    CapsuleLock,
+    CustomNodeLock,
+    HardwareObservations,
+    ModelLock,
+    TrustMetadata,
+    TrustLevel,
+)
+from app.runtime.profiles import (
+    DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
+    RuntimeProfile,
+    RuntimeProfileVariant,
+    load_runtime_profile_catalog,
+)
 from app.workflows.package import (
     DashboardSchema,
     DashboardSection,
@@ -41,6 +64,12 @@ REQUIRED_FILES = {
     "export-report.json",
 }
 LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
+UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS = {
+    "comfyui_launch_options",
+    "launch_config",
+    "launch_options",
+    "runner_launch_options",
+}
 
 
 class NoofyImportError(RuntimeError):
@@ -70,7 +99,12 @@ class ImportedWorkflowPackageStore:
                 package.model_dump_json(indent=2),
                 encoding="utf-8",
             )
+            app_capsule_lock = imported_package_capsule_lock(package)
             (transaction_dir / "capsule.lock.json").write_text(
+                app_capsule_lock.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            (transaction_dir / "exported-capsule.lock.json").write_text(
                 json.dumps(package.exported_capsule, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
@@ -84,6 +118,12 @@ class ImportedWorkflowPackageStore:
                         "status": package.import_metadata.status
                         if package.import_metadata
                         else "imported",
+                        "runtime_resolution": {
+                            "runtime_profile_id": app_capsule_lock.runtime.runtime_profile_id,
+                            "runtime_profile_variant_id": app_capsule_lock.runtime.runtime_profile_variant_id,
+                            "runtime_profile_manifest_hash": app_capsule_lock.runtime.runtime_profile_manifest_hash,
+                            "selection_stage": "import_time_phase5c",
+                        },
                     },
                     indent=2,
                     sort_keys=True,
@@ -492,3 +532,244 @@ def _observed_hardware(capsule_json: dict[str, Any], export_report: dict[str, An
     if isinstance(test_run, dict):
         observed["test_run"] = test_run
     return observed
+
+
+def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
+    if package.identity is None:
+        raise NoofyImportError("Imported package is missing identity metadata.")
+    _reject_unsupported_exported_launch_options(package.exported_capsule)
+    _reject_unsupported_exported_launch_options(package.exported_package)
+    catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
+    profile, variant = _select_import_runtime_profile(catalog.profiles)
+    trust_level = _trust_level_from_string(package.identity.trust_level)
+    trust = TrustMetadata(level=trust_level, publisher=package.identity.publisher_id)
+    custom_nodes = [
+        CustomNodeLock(
+            package_id=node.id,
+            source=node.source,
+            trust_level=trust_level,
+            node_types=node.node_types,
+        )
+        for node in package.custom_nodes
+        if node.included
+    ]
+    models = _model_locks_from_package(package)
+    dependency_lock_hash = variant.core_dependency_lock_hash
+    dependency_fingerprint = dependency_env_fingerprint(
+        runtime_profile_id=profile.runtime_profile_id,
+        runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+        runtime_profile_variant_id=variant.runtime_profile_variant_id,
+        os_name=variant.os,
+        architecture=variant.architecture,
+        python_build_id=variant.python_build_id,
+        torch_wheel_build_tag=variant.torch_wheel_build_tag,
+        torch_backend=variant.gpu_backend_profile,
+        dependency_lock_hash=dependency_lock_hash,
+        native_dependency_constraints={},
+        install_policy_version=DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
+    )
+    runner_fingerprint = runner_workspace_fingerprint(
+        dependency_env_fingerprint=dependency_fingerprint,
+        runtime_profile_id=profile.runtime_profile_id,
+        runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+        runtime_profile_variant_id=variant.runtime_profile_variant_id,
+        comfyui_source_hash=profile.comfyui_core_source_hash,
+        comfyui_frontend_version=profile.comfyui_frontend_version,
+        enabled_custom_node_manifest_hash=sha256_fingerprint(custom_nodes),
+        launch_config_hash=_launch_config_hash(package.engine, variant, sha256_fingerprint(custom_nodes)),
+        model_view_hash=sha256_fingerprint(models),
+    )
+    package_json = package.model_dump(mode="json", exclude_none=True)
+    capsule_hash = capsule_fingerprint(
+        workflow_package_hash=sha256_fingerprint(package_json),
+        graph_hash=sha256_fingerprint(package.comfyui_graph),
+        dashboard_schema_hash=sha256_fingerprint(package.dashboard),
+        model_requirements=models,
+        custom_nodes=custom_nodes,
+        trust=trust,
+        runner_fingerprint=runner_fingerprint,
+    )
+    return CapsuleLock.model_validate(
+        {
+            "schema_version": NOOFY_ARCHIVE_SCHEMA_VERSION,
+            "workflow": {
+                "publisher_id": package.identity.publisher_id,
+                "package_id": package.identity.package_id,
+                "version": package.identity.version,
+                "trust_level": trust_level.value,
+                "source": package.identity.source,
+                "signature": package.identity.signature if hasattr(package.identity, "signature") else None,
+            },
+            "engine": {
+                "type": package.engine,
+                "comfyui_version": profile.comfyui_core_version,
+                "core_source_hash": profile.comfyui_core_source_hash,
+            },
+            "runtime": {
+                "runtime_profile_id": profile.runtime_profile_id,
+                "runtime_profile_variant_id": variant.runtime_profile_variant_id,
+                "runtime_profile_manifest_hash": profile.runtime_profile_manifest_hash,
+                "runtime_profile_catalog_version": catalog.schema_version,
+                "fingerprint_schema_version": FINGERPRINT_SCHEMA_VERSION,
+                "dependency_env_fingerprint": dependency_fingerprint,
+                "runner_fingerprint": runner_fingerprint,
+                "runner_process_compatibility_key": None,
+                "capsule_fingerprint": capsule_hash,
+                "os": variant.os,
+                "architecture": variant.architecture,
+                "python_version": variant.python_version,
+                "python_build_id": variant.python_build_id,
+                "gpu_backend": variant.gpu_backend_profile,
+                "dependency_lock_hash": dependency_lock_hash,
+                "runner_workspace_hash": runner_fingerprint,
+            },
+            "custom_nodes": [node.model_dump(mode="json", exclude_none=True) for node in custom_nodes],
+            "dependencies": {
+                "lock_file": "community-runtime.lock",
+                "install_policy": DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
+            },
+            "models": [model.model_dump(mode="json", exclude_none=True) for model in models],
+            "hardware_observations": _hardware_observations_from_package(package).model_dump(mode="json", exclude_none=True),
+            "trust": trust.model_dump(mode="json", exclude_none=True),
+        }
+    )
+
+
+def _select_import_runtime_profile(profiles: list[RuntimeProfile]) -> tuple[RuntimeProfile, RuntimeProfileVariant]:
+    """Select the local v1 runtime variant for imported package preparation.
+
+    This is a Phase 5c bridge: imported app-owned capsule locks need concrete
+    runtime facts before Phase 5d/5e can prepare artifacts. Later phases can
+    replace this with an adapter-aware resolution pass before install.
+    """
+    if not profiles:
+        raise NoofyImportError("Runtime profile catalog is empty.")
+    profile = profiles[0]
+    os_name = _current_os_name()
+    architecture = _current_architecture()
+    preferred_gpu = "mps" if os_name == "darwin" and architecture == "arm64" else "cpu"
+    for variant in profile.variants:
+        if variant.os == os_name and variant.architecture == architecture and variant.gpu_backend_profile == preferred_gpu:
+            return profile, variant
+    for variant in profile.variants:
+        if variant.os == os_name and variant.architecture == architecture and variant.gpu_backend_profile == "cpu":
+            return profile, variant
+    return profile, profile.variants[0]
+
+
+def _reject_unsupported_exported_launch_options(data: dict[str, Any]) -> None:
+    launch_keys = sorted(key for key in UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS if _has_nonempty_launch_option(data, key))
+    runtime = data.get("runtime")
+    if isinstance(runtime, dict):
+        launch_keys.extend(
+            f"runtime.{key}"
+            for key in sorted(UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS)
+            if _has_nonempty_launch_option(runtime, key)
+        )
+    if launch_keys:
+        raise NoofyImportError(
+            "Workflow package declares unsupported launch options: "
+            + ", ".join(launch_keys)
+        )
+
+
+def _has_nonempty_launch_option(data: dict[str, Any], key: str) -> bool:
+    value = data.get(key)
+    return value not in (None, {}, [], "")
+
+
+def _current_os_name() -> str:
+    system = platform.system().lower()
+    if system == "darwin":
+        return "darwin"
+    if system == "windows":
+        return "windows"
+    if system == "linux":
+        return "linux"
+    return system or "unknown"
+
+
+def _current_architecture() -> str:
+    machine = (platform.machine() or platform.processor() or "").lower()
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+    if machine in {"x86_64", "amd64", "x64"}:
+        return "x64"
+    return machine or "unknown"
+
+
+def _trust_level_from_string(value: str) -> TrustLevel:
+    if value in {item.value for item in TrustLevel}:
+        return TrustLevel(value)
+    return TrustLevel.UNSUPPORTED
+
+
+def _model_locks_from_package(package: WorkflowPackage) -> list[ModelLock]:
+    models: list[ModelLock] = []
+    for model in package.required_models:
+        if model.checksum is None or model.size_bytes is None:
+            continue
+        models.append(
+            ModelLock(
+                id=_model_id(model),
+                sha256=model.checksum,
+                size_bytes=model.size_bytes,
+                source_urls=model.source_urls or ([model.source_url] if model.source_url else []),
+                comfyui_folder=model.folder,
+                filename=model.filename,
+            )
+        )
+    return models
+
+
+def _model_id(model: RequiredModel) -> str:
+    if model.source_urls:
+        return model.source_urls[0]
+    if model.source_url:
+        return model.source_url
+    return f"{model.folder}/{model.filename}"
+
+
+def _hardware_observations_from_package(package: WorkflowPackage) -> HardwareObservations:
+    observed = package.observed_hardware
+    return HardwareObservations(
+        observed_peak_vram_mb=observed.get("observed_peak_vram_mb")
+        if isinstance(observed.get("observed_peak_vram_mb"), int)
+        else None,
+        observed_peak_ram_mb=observed.get("observed_peak_ram_mb")
+        if isinstance(observed.get("observed_peak_ram_mb"), int)
+        else None,
+        tested_resolution=observed.get("tested_resolution")
+        if isinstance(observed.get("tested_resolution"), str)
+        else None,
+        tested_batch_size=observed.get("tested_batch_size")
+        if isinstance(observed.get("tested_batch_size"), int)
+        else None,
+        gpu_name=observed.get("gpu_name") if isinstance(observed.get("gpu_name"), str) else None,
+        os=observed.get("os") if isinstance(observed.get("os"), str) else None,
+        backend=observed.get("backend") if isinstance(observed.get("backend"), str) else None,
+        precision=observed.get("precision") if isinstance(observed.get("precision"), str) else None,
+        recommended_vram_mb=observed.get("recommended_vram_mb")
+        if isinstance(observed.get("recommended_vram_mb"), int)
+        else None,
+        recommended_ram_mb=observed.get("recommended_ram_mb")
+        if isinstance(observed.get("recommended_ram_mb"), int)
+        else None,
+    )
+
+
+def _launch_config_hash(engine: str, variant: RuntimeProfileVariant, enabled_custom_node_hash: str) -> str:
+    launch_defaults = variant.launch_defaults
+    return sha256_fingerprint(
+        {
+            "kind": "runner_launch_config",
+            "engine": engine,
+            "preview_method": launch_defaults.preview_method,
+            "vram_mode": launch_defaults.vram_mode,
+            "attention_backend": launch_defaults.attention_backend,
+            "precision_policy": launch_defaults.precision_policy,
+            "enabled_custom_node_set": enabled_custom_node_hash,
+            "extra_model_paths_mode": launch_defaults.extra_model_paths_mode,
+            "noofy_environment": launch_defaults.noofy_environment,
+        }
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -9,7 +10,15 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.engine.service import EngineService
+from app.runtime.custom_nodes import (
+    CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
+    CustomNodeWorkspaceMaterializer,
+)
+from app.runtime.profiles import load_runtime_profile_catalog
 from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerSupervisor
+from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.importer import (
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
@@ -89,9 +98,13 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     package_dir = tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0"
     assert (package_dir / "package.json").exists()
     assert (package_dir / "capsule.lock.json").exists()
+    assert (package_dir / "exported-capsule.lock.json").exists()
     assert (package_dir / "source-archive.noofy").exists()
     assert (package_dir / "source-files" / "package.json").exists()
     assert (package_dir / "source-files" / "custom_nodes" / "comfyui-kjnodes" / "requirements.txt").exists()
+    import_report = json.loads((package_dir / "import-report.json").read_text(encoding="utf-8"))
+    assert import_report["runtime_resolution"]["selection_stage"] == "import_time_phase5c"
+    assert import_report["runtime_resolution"]["runtime_profile_variant_id"]
 
     loader = WorkflowPackageLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages")
     loaded = loader.get_package(package.metadata.id)
@@ -101,6 +114,50 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     assert loaded.import_metadata is not None
     assert loaded.import_metadata.status == "needs_input_setup"
     assert log_store.list_events().events[-1].message == "Imported workflow package"
+
+    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
+        package.metadata.id
+    )
+    assert capsule.workflow.package_id == "eraserv4.5"
+    assert len(capsule.custom_nodes) == 5
+    assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
+
+
+def test_imported_real_archive_can_materialize_custom_node_workspace(tmp_path: Path) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+    package = store.import_archive(_archive_bytes(), original_filename="exported-workflow-for-testing.noofy")
+    package_dir = tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0"
+    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
+        package.metadata.id
+    )
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        custom_node_materializer=CustomNodeWorkspaceMaterializer(),
+        custom_node_source_files_dir=package_dir / "source-files",
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert (prepared.runner_workspace_path / "custom_nodes" / "comfyui-kjnodes" / "requirements.txt").exists()
+    assert (prepared.runner_workspace_path / "custom_nodes" / "comfyui_controlnet_aux" / "requirements.txt").exists()
+    manifest_path = prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert len(manifest["entries"]) == 5
+
+
+def test_import_store_rejects_exported_launch_options(tmp_path: Path) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+
+    with pytest.raises(NoofyImportError, match="unsupported launch options"):
+        store.import_archive(
+            _archive_bytes_with_capsule_update({"launch_options": {"vram_mode": "highvram"}}),
+            original_filename="launch-options.noofy",
+        )
+
+    assert not (tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0").exists()
 
 
 def test_importer_normalizes_untrusted_model_identity_and_ownership_values() -> None:
@@ -221,4 +278,18 @@ def _unsafe_zip_bytes() -> bytes:
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w") as archive:
         archive.writestr("../evil.txt", "bad")
+    return payload.getvalue()
+
+
+def _archive_bytes_with_capsule_update(update: dict) -> bytes:
+    source = io.BytesIO(_archive_bytes())
+    payload = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(payload, "w") as rewritten:
+        for info in original.infolist():
+            contents = original.read(info)
+            if info.filename == "capsule.lock.json":
+                capsule = json.loads(contents.decode("utf-8"))
+                capsule.update(update)
+                contents = json.dumps(capsule).encode("utf-8")
+            rewritten.writestr(info, contents)
     return payload.getvalue()

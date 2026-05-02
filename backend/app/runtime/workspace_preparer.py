@@ -17,6 +17,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.engine.diagnostics import LogStore
+from app.runtime.custom_nodes import (
+    CustomNodeWorkspaceManifest,
+    CustomNodeWorkspaceMaterializer,
+)
 from app.runtime.dependency_env import (
     DependencyEnvironmentInstallRequest,
     DependencyEnvironmentInstaller,
@@ -78,6 +82,7 @@ class RuntimeWorkspacePreparer:
         dependency_locks: Mapping[str, ResolvedDependencyLock] | None = None,
         dependency_lock_store: ResolvedDependencyLockStore | None = None,
         dependency_lock_resolver: UvDependencyLockResolver | None = None,
+        custom_node_materializer: CustomNodeWorkspaceMaterializer | None = None,
         custom_node_source_files_dir: Path | None = None,
         custom_node_source_files_dir_resolver: Callable[[str], Path | None] | None = None,
         dependency_transactions_dir: Path | None = None,
@@ -92,6 +97,7 @@ class RuntimeWorkspacePreparer:
         self.dependency_locks = dict(dependency_locks or {})
         self.dependency_lock_store = dependency_lock_store
         self.dependency_lock_resolver = dependency_lock_resolver
+        self.custom_node_materializer = custom_node_materializer
         self.custom_node_source_files_dir = custom_node_source_files_dir
         self.custom_node_source_files_dir_resolver = custom_node_source_files_dir_resolver
         self.dependency_transactions_dir = dependency_transactions_dir or (
@@ -101,6 +107,7 @@ class RuntimeWorkspacePreparer:
 
     def prepare(self, capsule_lock: CapsuleLock) -> PreparedRuntimeWorkspace:
         profile_selection = self._resolve_runtime_profile(capsule_lock)
+        custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
         dependency_manifest = self._dependency_env_manifest(
             capsule_lock,
             status=InstallStatus.CHECKING_COMPATIBILITY,
@@ -114,11 +121,17 @@ class RuntimeWorkspacePreparer:
             capsule_lock,
             dependency_env_fingerprint=dependency_manifest.fingerprint,
             profile_selection=profile_selection,
+            custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
             status=InstallStatus.CHECKING_COMPATIBILITY,
         )
 
         dependency_manifest = self._ensure_staged_dependency_env(dependency_manifest, capsule_lock.workflow.package_id)
-        runner_manifest = self._ensure_staged_runner_workspace(runner_manifest, capsule_lock.workflow.package_id)
+        runner_manifest = self._ensure_staged_runner_workspace(
+            runner_manifest,
+            capsule_lock.workflow.package_id,
+            custom_node_manifest=custom_node_manifest,
+            source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+        )
 
         return PreparedRuntimeWorkspace(
             dependency_env_manifest=dependency_manifest,
@@ -353,6 +366,9 @@ class RuntimeWorkspacePreparer:
         self,
         manifest: RunnerWorkspaceManifest,
         workflow_id: str,
+        *,
+        custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
+        source_files_dir: Path | None = None,
     ) -> RunnerWorkspaceManifest:
         workspace_path = self.runner_workspace_store.artifact_dir(manifest.fingerprint)
         if self.runner_workspace_store.exists(manifest.fingerprint):
@@ -370,7 +386,12 @@ class RuntimeWorkspacePreparer:
                     },
                 )
                 return existing
-            self._materialize_runner_workspace(workspace_path, workflow_id)
+            self._materialize_runner_workspace(
+                workspace_path,
+                workflow_id,
+                custom_node_manifest=custom_node_manifest,
+                source_files_dir=source_files_dir,
+            )
             if existing != manifest:
                 self.runner_workspace_store.save_staged(manifest)
                 self.log_store.add(
@@ -389,7 +410,12 @@ class RuntimeWorkspacePreparer:
                 details={"fingerprint": existing.fingerprint},
             )
             return existing
-        self._materialize_runner_workspace(workspace_path, workflow_id)
+        self._materialize_runner_workspace(
+            workspace_path,
+            workflow_id,
+            custom_node_manifest=custom_node_manifest,
+            source_files_dir=source_files_dir,
+        )
         self.runner_workspace_store.save_staged(manifest)
         self.log_store.add(
             "info",
@@ -518,22 +544,20 @@ class RuntimeWorkspacePreparer:
         *,
         dependency_env_fingerprint: str | None = None,
         profile_selection: RuntimeProfileSelection | None = None,
+        custom_node_workspace_manifest_hash: str | None = None,
         status: InstallStatus = InstallStatus.READY,
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> RunnerWorkspaceManifest:
         runtime = capsule_lock.runtime
         dependency_env_fingerprint = dependency_env_fingerprint or runtime.dependency_env_fingerprint
-        enabled_custom_node_hash = sha256_fingerprint(capsule_lock.custom_nodes)
-        launch_config_hash = sha256_fingerprint(
-            {
-                "engine": capsule_lock.engine.type,
-                "runner": "core_comfyui",
-                "phase": "phase4-runner-workspace",
-            }
-        )
+        enabled_custom_node_hash = custom_node_workspace_manifest_hash or sha256_fingerprint(capsule_lock.custom_nodes)
+        launch_config_hash = _launch_config_hash(capsule_lock, profile_selection, enabled_custom_node_hash)
         model_view_hash = sha256_fingerprint(capsule_lock.models)
         fingerprint = runtime.runner_fingerprint
-        if dependency_env_fingerprint != runtime.dependency_env_fingerprint:
+        if (
+            dependency_env_fingerprint != runtime.dependency_env_fingerprint
+            or custom_node_workspace_manifest_hash is not None
+        ):
             fingerprint = runner_workspace_fingerprint(
                 dependency_env_fingerprint=dependency_env_fingerprint,
                 runtime_profile_id=runtime.runtime_profile_id,
@@ -565,8 +589,34 @@ class RuntimeWorkspacePreparer:
             smoke_test_status=smoke_test_status,
         )
 
-    def _materialize_runner_workspace(self, workspace_path: Path, workflow_id: str) -> None:
+    def _custom_node_workspace_manifest(
+        self,
+        capsule_lock: CapsuleLock,
+        profile_selection: RuntimeProfileSelection | None,
+    ) -> CustomNodeWorkspaceManifest | None:
+        if self.custom_node_materializer is None or profile_selection is None or not capsule_lock.custom_nodes:
+            return None
+        return self.custom_node_materializer.build_manifest(
+            capsule_lock=capsule_lock,
+            source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+            profile_selection=profile_selection,
+        )
+
+    def _materialize_runner_workspace(
+        self,
+        workspace_path: Path,
+        workflow_id: str,
+        *,
+        custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
+        source_files_dir: Path | None = None,
+    ) -> None:
         if self.comfyui_source_dir is None:
+            if custom_node_manifest is not None and self.custom_node_materializer is not None:
+                self.custom_node_materializer.materialize(
+                    manifest=custom_node_manifest,
+                    source_files_dir=source_files_dir,
+                    runner_workspace_dir=workspace_path,
+                )
             return
         source_dir = self.comfyui_source_dir
         if not source_dir.exists():
@@ -590,6 +640,13 @@ class RuntimeWorkspacePreparer:
             self._link_or_copy(self.model_view_dir, models_target)
         else:
             models_target.mkdir(parents=True, exist_ok=True)
+
+        if custom_node_manifest is not None and self.custom_node_materializer is not None:
+            self.custom_node_materializer.materialize(
+                manifest=custom_node_manifest,
+                source_files_dir=source_files_dir,
+                runner_workspace_dir=workspace_path,
+            )
 
         self.log_store.add(
             "info",
@@ -658,3 +715,24 @@ def _uv_python_platform(os_name: str, architecture: str) -> str | None:
     if os_name == "linux" and architecture == "x64":
         return "x86_64-unknown-linux-gnu"
     return None
+
+
+def _launch_config_hash(
+    capsule_lock: CapsuleLock,
+    profile_selection: RuntimeProfileSelection | None,
+    enabled_custom_node_hash: str,
+) -> str:
+    launch_defaults = profile_selection.variant.launch_defaults if profile_selection is not None else None
+    return sha256_fingerprint(
+        {
+            "kind": "runner_launch_config",
+            "engine": capsule_lock.engine.type,
+            "preview_method": launch_defaults.preview_method if launch_defaults is not None else "auto",
+            "vram_mode": launch_defaults.vram_mode if launch_defaults is not None else "auto",
+            "attention_backend": launch_defaults.attention_backend if launch_defaults is not None else "auto",
+            "precision_policy": launch_defaults.precision_policy if launch_defaults is not None else "auto",
+            "enabled_custom_node_set": enabled_custom_node_hash,
+            "extra_model_paths_mode": launch_defaults.extra_model_paths_mode if launch_defaults is not None else "noofy_managed",
+            "noofy_environment": launch_defaults.noofy_environment if launch_defaults is not None else {},
+        }
+    )

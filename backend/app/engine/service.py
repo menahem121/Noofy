@@ -25,6 +25,7 @@ from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
 from app.runtime.dependency_lock import core_dependency_lock_from_capsule
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.dependency_resolver import UvDependencyLockResolver
+from app.runtime.custom_nodes import CustomNodeWorkspaceMaterializer
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_state import (
     InstallStateStore,
@@ -923,6 +924,7 @@ def create_default_engine_service() -> EngineService:
                 uv_cache_dir=paths.cache_dir / "uv",
                 log_store=log_store,
             ),
+            custom_node_materializer=CustomNodeWorkspaceMaterializer(),
             custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
                 workflow_id,
                 workflow_loader=workflow_loader,

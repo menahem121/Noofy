@@ -447,6 +447,8 @@ Current implementation notes:
 
 ### Phase 5c: Core Node Manifest And Custom-Node Workspace Materialization
 
+Status: Complete
+
 Goal: materialize only the custom nodes required by a workflow into a staged runner workspace with deterministic manifests and no trusted-core mutation.
 
 Tasks:
@@ -491,6 +493,19 @@ Acceptance criteria:
 - Custom node materialization is deterministic across filesystem ordering.
 - Path traversal, symlink escape, case-insensitive collision, oversized source, unknown node, and protected path shadowing failures are covered by tests.
 - Ready trusted core runtime files are unchanged after custom-node preparation.
+
+Current implementation notes:
+
+- Pinned core-node manifests are stored in `backend/app/runtime/core_node_manifest.json` for the v1 runtime profile variants.
+- `CustomNodeWorkspaceMaterializer` reads workflow graphs and capsule custom-node records as data, recognizes built-in node types from the pinned core-node manifest, and rejects unknown non-core node types before materialization.
+- Imported `.noofy` packages now persist an app-owned `capsule.lock.json` that is loadable by `CapsuleLockLoader`, while preserving the original exporter capsule separately as `exported-capsule.lock.json`.
+- Imported package capsule generation chooses a concrete v1 runtime profile variant at import time as a Phase 5c bridge so runtime artifacts can be prepared. The import report records this `runtime_resolution`; later runner/model-view phases may replace it with an adapter-aware resolution pass before install.
+- Bundled custom-node source is materialized only into staged runner workspaces under `custom_nodes/<folder>/`; trusted core runtime `custom_nodes/` is excluded from the runner source view and is not mutated.
+- The custom-node workspace manifest records source kind, source ref, source content hash, materialized path, import order, dependency marker hashes, trust level, policy flags, node types, and a stable manifest hash.
+- Runner workspace fingerprints now use the custom-node workspace manifest hash as the enabled custom-node set when custom-node source is available.
+- The runner launch configuration hash is built from the allowlisted launch surface: preview method, VRAM mode, attention backend, precision policy, enabled custom-node set, extra model paths mode, and Noofy-controlled environment variables. Exported package launch options outside this app-owned surface are rejected during import instead of being silently folded into the runner.
+- Materialization rejects path traversal, symlink escape, case-insensitive path collisions, oversized source, unknown node types, protected runtime path shadowing, and unsupported custom-node source kinds.
+- `exported-workflow-for-testing.noofy` is covered by an integration test that imports the archive, loads the normalized capsule lock, and materializes all required bundled custom-node sources into a staged runner workspace.
 
 ### Phase 5d: Shared Model Store And Runner Model-View Materialization
 
@@ -823,6 +838,8 @@ Acceptance criteria:
 ## Phase 6: Trust, Signing, Marketplace Readiness
 
 Goal: prepare the runtime model for community distribution without weakening isolation.
+
+This phase does not implement the full in-app marketplace. It adds the trust, signing, source-policy, and UI foundations required before marketplace workflows can be distributed safely.
 
 Tasks:
 
