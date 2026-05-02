@@ -84,10 +84,17 @@ from app.runtime.isolation import (
 from app.runtime.manager import RuntimeManager, select_free_port
 from app.runtime.model_store import (
     AsyncDownloader,
+    LocalModelCandidateError,
+    LocalModelRequirement,
     ModelDownloadError,
     ModelMaterialization,
+    ModelViewMaterialization,
     ModelStore,
+    ResolvedLocalModel,
+    model_view_fingerprint,
+    probe_symlink_capability,
 )
+from app.runtime.model_gc import ModelReferenceCleanupPolicy, model_reference_cleanup_policy
 from app.runtime.runner_process import (
     RunnerLaunchSpec,
     RunnerProcessHandle,
@@ -170,6 +177,7 @@ __all__ = [
     "ModelDownloadError",
     "ModelMaterialization",
     "ModelStore",
+    "ModelViewMaterialization",
     "PreparedRuntimeWorkspace",
     "PackageIndexClient",
     "PyPIPackageIndexClient",
@@ -211,6 +219,7 @@ __all__ = [
     "inspect_dependency_marker_files",
     "load_core_node_manifest_catalog",
     "merge_resolved_dependency_locks",
+    "model_view_fingerprint",
     "now_iso",
     "normalize_package_name",
     "parse_uv_compiled_requirements",

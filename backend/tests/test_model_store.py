@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
 import app.runtime.model_store as model_store_module
+from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
 from app.runtime.isolation import ModelLock
-from app.runtime.model_store import ModelDownloadError, ModelStore
+from app.runtime.model_store import (
+    LocalModelRequirement,
+    ModelDownloadError,
+    ModelStore,
+    probe_symlink_capability,
+)
 
 
 def _model_store_paths(root: Path) -> dict[str, Path]:
@@ -23,12 +30,13 @@ def _model_store_paths(root: Path) -> dict[str, Path]:
     }
 
 
-def _build_store(tmp_path: Path, downloader) -> tuple[ModelStore, LogStore]:
+def _build_store(tmp_path: Path, downloader, *, local_model_roots: list[Path] | None = None) -> tuple[ModelStore, LogStore]:
     log_store = LogStore()
     store = ModelStore(
         **_model_store_paths(tmp_path),
         log_store=log_store,
         downloader=downloader,
+        local_model_roots=local_model_roots,
     )
     return store, log_store
 
@@ -187,16 +195,15 @@ async def test_no_source_urls_raises_without_attempted_download(tmp_path: Path) 
 
 
 @pytest.mark.anyio
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks differ on Windows")
-async def test_materialized_path_is_a_symlink_to_blob(tmp_path: Path) -> None:
+async def test_materialized_path_uses_supported_link_or_copy_strategy(tmp_path: Path) -> None:
     payload = b"link-target"
     lock = _model_lock(payload)
     store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
 
     result = await store.materialize(lock)
 
-    assert result.materialized_path.is_symlink()
-    assert result.materialized_path.resolve() == result.blob_path.resolve()
+    assert result.materialization_strategy in {"hardlink", "symlink", "copy"}
+    assert result.materialized_path.read_bytes() == payload
 
 
 @pytest.mark.anyio
@@ -247,3 +254,277 @@ async def test_failed_materialized_replace_preserves_existing_target(tmp_path: P
 
     assert first.materialized_path.read_bytes() == payload
     assert not list(first.materialized_path.parent.glob("*.tmp"))
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_writes_per_view_tree_and_references(tmp_path: Path) -> None:
+    payload = b"view-model"
+    lock = _model_lock(payload, model_id="view/model", folder="checkpoints", filename="model.safetensors")
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    materialized = view.view_path / "checkpoints" / "model.safetensors"
+    assert view.view_path.name.startswith("model-view-")
+    assert materialized.exists()
+    assert materialized.read_bytes() == payload
+    assert view.model_references[0].requirement_id == "view/model"
+    assert view.model_references[0].materialized_path == str(materialized)
+    assert view.model_references[0].materialization_strategy in {"hardlink", "symlink", "copy"}
+    assert view.model_references[0].materialized_file_verified is True
+    manifest = json.loads((view.view_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["view_fingerprint"] == view.view_fingerprint
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_reuses_existing_blob_without_download(tmp_path: Path) -> None:
+    payload = b"existing-view-model"
+    lock = _model_lock(payload)
+    call_count = 0
+
+    async def downloader(url: str, dest: Path) -> int:
+        nonlocal call_count
+        call_count += 1
+        dest.write_bytes(payload)
+        return len(payload)
+
+    store, _ = _build_store(tmp_path, downloader)
+
+    first = await store.materialize_model_view(view_id="capsule-a", model_locks=[lock])
+    second = await store.materialize_model_view(view_id="capsule-b", model_locks=[lock])
+
+    assert call_count == 1
+    assert first.view_path != second.view_path
+    assert second.model_references[0].blob_path == first.model_references[0].blob_path
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_reuses_filename_size_local_candidate(tmp_path: Path) -> None:
+    payload = b"local-candidate"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "checkpoints" / "local.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    requirement = LocalModelRequirement(
+        requirement_id="checkpoints/local.safetensors",
+        comfyui_folder="checkpoints",
+        filename="local.safetensors",
+        size_bytes=len(payload),
+    )
+    store, log_store = _build_store(tmp_path, _make_downloader({}), local_model_roots=[local_root])
+
+    view = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[],
+        local_model_requirements=[requirement],
+    )
+
+    ref = view.model_references[0]
+    materialized = view.view_path / "checkpoints" / "local.safetensors"
+    assert materialized.read_bytes() == payload
+    assert ref.verification_level is ModelVerificationLevel.FILENAME_SIZE
+    assert ref.asset_ownership is AssetOwnership.USER_LOCAL
+    assert ref.source_path == str(local_path)
+    assert ref.blob_path is None
+    assert ref.store_ref is None
+    assert ref.sha256 == f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    assert ref.materialized_path == str(materialized)
+    assert ref.materialization_strategy in {"hardlink", "symlink", "copy"}
+    assert any("Reusing local model candidate" in event.message for event in log_store.list_events().events)
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_rejects_local_candidate_size_mismatch(tmp_path: Path) -> None:
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "checkpoints" / "local.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(b"wrong-size")
+    requirement = LocalModelRequirement(
+        requirement_id="checkpoints/local.safetensors",
+        comfyui_folder="checkpoints",
+        filename="local.safetensors",
+        size_bytes=999,
+    )
+    store, _ = _build_store(tmp_path, _make_downloader({}), local_model_roots=[local_root])
+
+    with pytest.raises(ModelDownloadError, match="Local model candidate size mismatch"):
+        await store.materialize_model_view(
+            view_id="capsule-fp",
+            model_locks=[],
+            local_model_requirements=[requirement],
+        )
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_rejects_same_name_different_blob_collision(tmp_path: Path) -> None:
+    first = _model_lock(b"first", model_id="first", folder="checkpoints", filename="shared.safetensors")
+    second = _model_lock(b"second", model_id="second", folder="checkpoints", filename="shared.safetensors")
+    store, _ = _build_store(tmp_path, _make_downloader({}))
+
+    with pytest.raises(ModelDownloadError, match="conflicting requirements"):
+        await store.materialize_model_view(view_id="capsule-fp", model_locks=[first, second])
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_repairs_stale_view_file(tmp_path: Path) -> None:
+    payload = b"fresh-view-model"
+    lock = _model_lock(payload, folder="checkpoints", filename="stale.safetensors")
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    first = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    target = first.view_path / "checkpoints" / "stale.safetensors"
+    target.unlink()
+    target.write_bytes(b"stale")
+
+    repaired = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert repaired.view_path == first.view_path
+    assert target.read_bytes() == payload
+    assert repaired.model_references[0].materialized_file_verified is True
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink permissions vary on Windows")
+async def test_materialize_model_view_repairs_stale_symlink(tmp_path: Path) -> None:
+    payload = b"fresh-view-model"
+    lock = _model_lock(payload, folder="checkpoints", filename="stale-link.safetensors")
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    first = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    target = first.view_path / "checkpoints" / "stale-link.safetensors"
+    target.unlink()
+    model_store_module.os.symlink(tmp_path / "missing-blob", target)
+
+    repaired = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert repaired.view_path == first.view_path
+    assert target.read_bytes() == payload
+    assert repaired.model_references[0].materialized_file_verified is True
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_falls_back_to_symlink_when_hardlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"symlink-fallback"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert view.model_references[0].materialization_strategy in {"symlink", "copy"}
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_falls_back_to_copy_when_links_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"copy-fallback"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert view.model_references[0].materialization_strategy == "copy"
+    assert Path(view.model_references[0].materialized_path).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_skips_symlink_when_capability_probe_is_false(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"copy-after-probe"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    store._symlink_capability = False
+    symlink_called = False
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def track_symlink(source: Path, target: Path) -> None:
+        nonlocal symlink_called
+        symlink_called = True
+        raise AssertionError("symlink should not be attempted")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", track_symlink)
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert view.model_references[0].materialization_strategy == "copy"
+    assert symlink_called is False
+
+
+def test_probe_symlink_capability_returns_false_when_symlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+
+    assert probe_symlink_capability(tmp_path) is False
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_copy_failure_cleans_temp_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"copy-failure"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    def fail_copy(source: Path, target: Path) -> None:
+        Path(target).write_bytes(b"partial")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+    monkeypatch.setattr(model_store_module.shutil, "copy2", fail_copy)
+
+    with pytest.raises(OSError, match="copy failed"):
+        await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert not list((tmp_path / "materialized").rglob("*.tmp"))
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_rejects_windows_path_length_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"windows-path-limit"
+    lock = _model_lock(payload)
+    store, log_store = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    store.materialized_dir = tmp_path / ("x" * 240)
+    monkeypatch.setattr(model_store_module.sys, "platform", "win32")
+
+    with pytest.raises(ModelDownloadError, match="path is too long"):
+        await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert any("Model materialization failed" in event.message for event in log_store.list_events().events)

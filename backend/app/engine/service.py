@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from app.artifacts import AssetOwnership
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
@@ -41,7 +43,7 @@ from app.runtime.isolation import (
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager
-from app.runtime.model_store import ModelStore, http_streaming_downloader
+from app.runtime.model_store import LocalModelRequirement, ModelStore, http_streaming_downloader
 from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
@@ -173,8 +175,33 @@ class EngineService:
             )
             return self._unsupported_install_payload(workflow_id)
 
+        package = self.workflow_loader.get_package(workflow_id)
+        local_model_requirements = _local_model_requirements(package, capsule_lock)
+        model_resolution_error = _unresolved_model_requirement_message(package, capsule_lock)
+        if model_resolution_error is not None:
+            state = self.capsule_installer.install_state_store.update(
+                capsule_lock.runtime.capsule_fingerprint,
+                status=InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
+                last_error=model_resolution_error,
+                model_references=[],
+            )
+            self.log_store.add(
+                "warning",
+                "Workflow prepare blocked by unresolved model requirements",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "error": model_resolution_error,
+                },
+            )
+            return self._install_payload(workflow_id, state)
+
         try:
-            state = await self.capsule_installer.prepare(capsule_lock)
+            state = await self.capsule_installer.prepare(
+                capsule_lock,
+                local_model_requirements=local_model_requirements,
+            )
         except CapsuleInstallError as exc:
             self.log_store.add(
                 "error",
@@ -696,6 +723,7 @@ class EngineService:
             not_ready.append("runner workspace manifest fingerprint mismatch")
         if runner_manifest.dependency_env_fingerprint != dependency_manifest.fingerprint:
             not_ready.append("runner workspace dependency environment mismatch")
+        not_ready.extend(_invalid_model_references(install_state))
         if not_ready:
             raise ValueError(f"Prepared runtime artifact is not ready: {', '.join(not_ready)}")
         return dependency_env_path, runner_workspace_path
@@ -765,6 +793,111 @@ def _read_runner_workspace_manifest(path: Path) -> RunnerWorkspaceManifest:
         raise ValueError(f"Prepared runtime artifact manifest is unreadable: {path}") from exc
     except ValidationError as exc:
         raise ValueError(f"Prepared runtime artifact manifest is invalid: {path}") from exc
+
+
+def _invalid_model_references(install_state: InstallState) -> list[str]:
+    invalid: list[str] = []
+    for ref in install_state.model_references:
+        if ref.asset_ownership is AssetOwnership.USER_LOCAL:
+            if not ref.source_path:
+                invalid.append(f"local model reference missing source path for {ref.requirement_id}")
+                continue
+            source_path = Path(ref.source_path)
+            if not source_path.exists():
+                invalid.append(f"local model source missing for {ref.requirement_id}")
+                continue
+        else:
+            if not ref.blob_path:
+                invalid.append(f"model reference missing blob path for {ref.requirement_id}")
+                continue
+            blob_path = Path(ref.blob_path)
+            if not blob_path.exists():
+                invalid.append(f"model blob missing for {ref.requirement_id}")
+                continue
+        if not ref.materialized_path:
+            invalid.append(f"model reference missing materialized path for {ref.requirement_id}")
+            continue
+        materialized_path = Path(ref.materialized_path)
+        if not materialized_path.exists():
+            invalid.append(f"model view file missing for {ref.requirement_id}")
+            continue
+        if ref.size_bytes is not None and materialized_path.stat().st_size != ref.size_bytes:
+            invalid.append(f"model view file size mismatch for {ref.requirement_id}")
+            continue
+        if ref.sha256 is not None:
+            expected = ref.sha256.removeprefix("sha256:")
+            if _sha256_file(materialized_path) != expected:
+                invalid.append(f"model view file hash mismatch for {ref.requirement_id}")
+    return invalid
+
+
+def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while True:
+            chunk = file.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _unresolved_model_requirement_message(
+    package: WorkflowPackage,
+    capsule_lock: CapsuleLock,
+) -> str | None:
+    locked_targets = {
+        (model.comfyui_folder.casefold(), model.filename.casefold())
+        for model in capsule_lock.models
+    }
+    unresolved: list[str] = []
+    for model in package.required_models:
+        target = (model.folder.casefold(), model.filename.casefold())
+        if target in locked_targets:
+            continue
+        if model.checksum is not None and model.size_bytes is not None:
+            unresolved.append(f"{model.folder}/{model.filename} is missing from the capsule model lock")
+        elif model.checksum is not None:
+            unresolved.append(
+                f"{model.folder}/{model.filename} has hash identity but no byte size; complete model identity is required"
+            )
+        elif model.size_bytes is not None:
+            continue
+        else:
+            unresolved.append(
+                f"{model.folder}/{model.filename} has only filename identity; filename-only model matches are not trusted"
+            )
+    if not unresolved:
+        return None
+    return (
+        "Cannot prepare workflow automatically because model requirements are unresolved: "
+        + "; ".join(unresolved)
+    )
+
+
+def _local_model_requirements(
+    package: WorkflowPackage,
+    capsule_lock: CapsuleLock,
+) -> list[LocalModelRequirement]:
+    locked_targets = {
+        (model.comfyui_folder.casefold(), model.filename.casefold())
+        for model in capsule_lock.models
+    }
+    requirements: list[LocalModelRequirement] = []
+    for model in package.required_models:
+        target = (model.folder.casefold(), model.filename.casefold())
+        if target in locked_targets:
+            continue
+        if model.checksum is None and model.size_bytes is not None:
+            requirements.append(
+                LocalModelRequirement(
+                    requirement_id=f"{model.folder}/{model.filename}",
+                    comfyui_folder=model.folder,
+                    filename=model.filename,
+                    size_bytes=model.size_bytes,
+                )
+            )
+    return requirements
 
 
 def _workflow_source_files_dir(
@@ -886,6 +1019,7 @@ def create_default_engine_service() -> EngineService:
         transactions_dir=paths.install_transactions_dir,
         log_store=log_store,
         downloader=http_streaming_downloader,
+        local_model_roots=[settings.comfyui_models_dir],
     )
     runner_process_supervisor = RunnerProcessSupervisor(
         log_store=log_store,

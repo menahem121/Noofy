@@ -509,6 +509,8 @@ Current implementation notes:
 
 ### Phase 5d: Shared Model Store And Runner Model-View Materialization
 
+Status: Complete for Phase 5e readiness
+
 Goal: resolve required models through the shared model store and create runner-visible model views without duplicating or deleting user assets incorrectly.
 
 Tasks:
@@ -553,6 +555,17 @@ Acceptance criteria:
 - Materialized model views present the exact files expected by the runner before smoke tests.
 - Name collision, missing blob, stale symlink, Windows symlink-denied, cross-volume hardlink, and copy failure cases have tests or platform-specific test fixtures.
 - User-local model source files are never marked auto-deletable.
+
+Current implementation notes:
+
+- `ModelStore.materialize_model_view(...)` creates per-view model trees under `runtime-store/model-store/materialized/views/model-view-<fingerprint>/`.
+- Model view fingerprints include the view ID plus each model's SHA-256, byte size, ComfyUI folder, and expected filename, so workflows with the same folder/name but different blobs do not overwrite a shared view.
+- The materialization ladder now tries hardlink first, then symlink where allowed, then copy as the last fallback. The selected strategy is recorded in `install-state.json` model references.
+- `CapsuleInstaller` resolves required model blobs and materializes the model view before runtime workspace preparation, then passes the selected model view into `RuntimeWorkspacePreparer`.
+- Install state records resolved model references with requirement ID, ComfyUI folder, filename, SHA-256, byte size, verification level, asset ownership, store ref, blob path, materialized model-view path, materialization strategy, and file verification result.
+- Runner workspaces link/copy the selected model view as their `models` directory without mutating ready runner workspaces.
+- Covered: SHA-256/size blob reuse, filename+size local candidate reuse with locally computed SHA-256, per-view materialization, conflicting same folder/name with different blob rejection, install-state model-reference persistence, hardlink/symlink/copy strategy recording, stale model-view repair, missing blob/view/source validation at runner startup, copy-failure cleanup, cross-volume hardlink fallback, symlink-denied fallback, Windows path-length rejection, filename-only model requirement blocking, explicit model-reference cleanup policy, and a symlink capability probe used before Windows symlink attempts.
+- No Phase 5d implementation work remains before Phase 5e. Real Windows-host validation is still required before Windows release readiness, but it is not a blocker for starting Phase 5e.
 
 ### Phase 5e: Runner Smoke Tests And Minimal Graph Execution
 

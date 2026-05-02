@@ -26,10 +26,16 @@ from app.runtime.isolation import (
     CapsuleLock,
     InstallState,
     InstallStatus,
+    InstalledModelReference,
     SmokeTestStatus,
     TrustLevel,
 )
-from app.runtime.model_store import ModelDownloadError, ModelStore
+from app.runtime.model_store import (
+    LocalModelCandidateError,
+    LocalModelRequirement,
+    ModelDownloadError,
+    ModelStore,
+)
 from app.runtime.profiles import RuntimeProfileResolutionError
 from app.runtime.workspace_preparer import PreparedRuntimeWorkspace, RuntimeWorkspacePreparer
 
@@ -60,7 +66,12 @@ class CapsuleInstaller:
         self.workspace_smoke_test = workspace_smoke_test
         self.log_store = log_store or LogStore()
 
-    async def prepare(self, capsule_lock: CapsuleLock) -> InstallState:
+    async def prepare(
+        self,
+        capsule_lock: CapsuleLock,
+        *,
+        local_model_requirements: list[LocalModelRequirement] | None = None,
+    ) -> InstallState:
         fingerprint = capsule_lock.runtime.capsule_fingerprint
         workflow_id = capsule_lock.workflow.package_id
 
@@ -76,6 +87,8 @@ class CapsuleInstaller:
 
         self._transition(fingerprint, InstallStatus.DOWNLOADING, workflow_id)
 
+        model_references: list[InstalledModelReference] = []
+        model_view_path = None
         try:
             for model_lock in capsule_lock.models:
                 self.log_store.add(
@@ -89,7 +102,23 @@ class CapsuleInstaller:
                         "filename": model_lock.filename,
                     },
                 )
-                await self.model_store.materialize(model_lock)
+            if capsule_lock.models or local_model_requirements:
+                self._transition(fingerprint, InstallStatus.MATERIALIZING_MODEL_VIEW, workflow_id)
+                model_view = await self.model_store.materialize_model_view(
+                    view_id=fingerprint,
+                    model_locks=capsule_lock.models,
+                    local_model_requirements=local_model_requirements,
+                )
+                model_references = model_view.model_references
+                model_view_path = model_view.view_path
+        except LocalModelCandidateError as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
         except ModelDownloadError as exc:
             state = self._transition(
                 fingerprint,
@@ -103,7 +132,10 @@ class CapsuleInstaller:
         prepared_workspace = None
         try:
             if self.workspace_preparer is not None:
-                prepared_workspace = self.workspace_preparer.prepare(capsule_lock)
+                prepared_workspace = self.workspace_preparer.prepare(
+                    capsule_lock,
+                    model_view_dir=model_view_path,
+                )
         except RuntimeProfileResolutionError as exc:
             state = self._transition(
                 fingerprint,
@@ -169,6 +201,7 @@ class CapsuleInstaller:
             capsule_lock,
             prepared_workspace,
             smoke_test_status=smoke_test_status,
+            model_references=model_references,
         )
         ready_fields["installed_at"] = now_iso()
 
@@ -228,8 +261,10 @@ def _prepared_runtime_fields(
     prepared_workspace: PreparedRuntimeWorkspace | None,
     *,
     smoke_test_status: SmokeTestStatus,
+    model_references: list[InstalledModelReference],
 ) -> dict[str, object]:
     ready_fields: dict[str, object] = {
+        "model_references": model_references,
         "smoke_test_status": smoke_test_status,
     }
     if prepared_workspace is not None:

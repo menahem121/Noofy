@@ -105,7 +105,12 @@ class RuntimeWorkspacePreparer:
         )
         self.log_store = log_store or LogStore()
 
-    def prepare(self, capsule_lock: CapsuleLock) -> PreparedRuntimeWorkspace:
+    def prepare(
+        self,
+        capsule_lock: CapsuleLock,
+        *,
+        model_view_dir: Path | None = None,
+    ) -> PreparedRuntimeWorkspace:
         profile_selection = self._resolve_runtime_profile(capsule_lock)
         custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
         dependency_manifest = self._dependency_env_manifest(
@@ -122,6 +127,7 @@ class RuntimeWorkspacePreparer:
             dependency_env_fingerprint=dependency_manifest.fingerprint,
             profile_selection=profile_selection,
             custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
+            model_view_dir=model_view_dir,
             status=InstallStatus.CHECKING_COMPATIBILITY,
         )
 
@@ -131,6 +137,7 @@ class RuntimeWorkspacePreparer:
             capsule_lock.workflow.package_id,
             custom_node_manifest=custom_node_manifest,
             source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+            model_view_dir=model_view_dir,
         )
 
         return PreparedRuntimeWorkspace(
@@ -369,6 +376,7 @@ class RuntimeWorkspacePreparer:
         *,
         custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
         source_files_dir: Path | None = None,
+        model_view_dir: Path | None = None,
     ) -> RunnerWorkspaceManifest:
         workspace_path = self.runner_workspace_store.artifact_dir(manifest.fingerprint)
         if self.runner_workspace_store.exists(manifest.fingerprint):
@@ -391,6 +399,7 @@ class RuntimeWorkspacePreparer:
                 workflow_id,
                 custom_node_manifest=custom_node_manifest,
                 source_files_dir=source_files_dir,
+                model_view_dir=model_view_dir,
             )
             if existing != manifest:
                 self.runner_workspace_store.save_staged(manifest)
@@ -415,6 +424,7 @@ class RuntimeWorkspacePreparer:
             workflow_id,
             custom_node_manifest=custom_node_manifest,
             source_files_dir=source_files_dir,
+            model_view_dir=model_view_dir,
         )
         self.runner_workspace_store.save_staged(manifest)
         self.log_store.add(
@@ -545,6 +555,7 @@ class RuntimeWorkspacePreparer:
         dependency_env_fingerprint: str | None = None,
         profile_selection: RuntimeProfileSelection | None = None,
         custom_node_workspace_manifest_hash: str | None = None,
+        model_view_dir: Path | None = None,
         status: InstallStatus = InstallStatus.READY,
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> RunnerWorkspaceManifest:
@@ -552,7 +563,12 @@ class RuntimeWorkspacePreparer:
         dependency_env_fingerprint = dependency_env_fingerprint or runtime.dependency_env_fingerprint
         enabled_custom_node_hash = custom_node_workspace_manifest_hash or sha256_fingerprint(capsule_lock.custom_nodes)
         launch_config_hash = _launch_config_hash(capsule_lock, profile_selection, enabled_custom_node_hash)
-        model_view_hash = sha256_fingerprint(capsule_lock.models)
+        model_view_hash = sha256_fingerprint(
+            {
+                "models": capsule_lock.models,
+                "model_view_dir": str(model_view_dir) if model_view_dir is not None else None,
+            }
+        )
         fingerprint = runtime.runner_fingerprint
         if (
             dependency_env_fingerprint != runtime.dependency_env_fingerprint
@@ -609,6 +625,7 @@ class RuntimeWorkspacePreparer:
         *,
         custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
         source_files_dir: Path | None = None,
+        model_view_dir: Path | None = None,
     ) -> None:
         if self.comfyui_source_dir is None:
             if custom_node_manifest is not None and self.custom_node_materializer is not None:
@@ -635,9 +652,10 @@ class RuntimeWorkspacePreparer:
             (workspace_path / directory_name).mkdir(parents=True, exist_ok=True)
 
         models_target = workspace_path / "models"
-        if self.model_view_dir is not None:
-            self.model_view_dir.mkdir(parents=True, exist_ok=True)
-            self._link_or_copy(self.model_view_dir, models_target)
+        selected_model_view_dir = model_view_dir or self.model_view_dir
+        if selected_model_view_dir is not None:
+            selected_model_view_dir.mkdir(parents=True, exist_ok=True)
+            self._link_or_copy(selected_model_view_dir, models_target)
         else:
             models_target.mkdir(parents=True, exist_ok=True)
 
@@ -656,7 +674,7 @@ class RuntimeWorkspacePreparer:
             details={
                 "workspace_path": str(workspace_path),
                 "source_dir": str(source_dir),
-                "model_view_dir": str(self.model_view_dir) if self.model_view_dir else None,
+                "model_view_dir": str(selected_model_view_dir) if selected_model_view_dir else None,
             },
         )
 

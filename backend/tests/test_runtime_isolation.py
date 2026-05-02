@@ -13,6 +13,7 @@ from app.runtime.isolation import (
     SmokeTestStatus,
     TrustLevel,
 )
+from app.runtime.model_gc import model_reference_cleanup_policy
 
 
 def _valid_capsule_lock_data() -> dict:
@@ -172,6 +173,50 @@ def test_install_state_can_record_local_model_references() -> None:
 
     assert state.model_references[0].asset_ownership is AssetOwnership.NOOFY_DOWNLOADED
     assert state.model_references[0].verification_level is ModelVerificationLevel.SHA256_SIZE
+
+
+def test_model_reference_cleanup_policy_never_deletes_user_local_source() -> None:
+    ref = InstalledModelReference(
+        requirement_id="checkpoints/model.safetensors",
+        model_id="model-id",
+        comfyui_folder="checkpoints",
+        filename="model.safetensors",
+        sha256="sha256:" + ("b" * 64),
+        size_bytes=123,
+        verification_level=ModelVerificationLevel.FILENAME_SIZE,
+        asset_ownership=AssetOwnership.USER_LOCAL,
+        source_path="/Users/example/models/checkpoints/model.safetensors",
+        materialized_path="model-store/materialized/views/model-view/model.safetensors",
+    )
+
+    policy = model_reference_cleanup_policy(ref)
+
+    assert policy.source_path is not None
+    assert policy.may_delete_source is False
+    assert policy.materialized_path is not None
+    assert policy.may_delete_materialized is True
+
+
+def test_model_reference_cleanup_policy_can_delete_app_owned_blob_reference() -> None:
+    ref = InstalledModelReference(
+        requirement_id="checkpoints/model.safetensors",
+        model_id="model-id",
+        comfyui_folder="checkpoints",
+        filename="model.safetensors",
+        sha256="sha256:" + ("b" * 64),
+        size_bytes=123,
+        verification_level=ModelVerificationLevel.SHA256_SIZE,
+        asset_ownership=AssetOwnership.NOOFY_DOWNLOADED,
+        blob_path="model-store/blobs/sha256/b/blob",
+        materialized_path="model-store/materialized/views/model-view/model.safetensors",
+    )
+
+    policy = model_reference_cleanup_policy(ref)
+
+    assert policy.source_path is not None
+    assert policy.may_delete_source is True
+    assert policy.materialized_path is not None
+    assert policy.may_delete_materialized is True
 
 
 def test_install_state_rejects_unsafe_model_reference_paths() -> None:

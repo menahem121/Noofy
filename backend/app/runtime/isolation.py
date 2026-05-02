@@ -157,6 +157,8 @@ class InstalledModelReference(BaseModel):
     store_ref: str | None = None
     blob_path: str | None = None
     materialized_path: str | None = None
+    materialization_strategy: str | None = None
+    materialized_file_verified: bool | None = None
     source_path: str | None = None
 
     @field_validator("comfyui_folder")

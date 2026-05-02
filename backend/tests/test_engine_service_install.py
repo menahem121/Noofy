@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
 from app.engine.service import EngineService
 from app.runtime.capsule_installer import CapsuleInstaller
@@ -59,6 +60,7 @@ def _build_service(
     packages_dir: Path | None = None,
     user_packages_dir: Path | None = None,
     downloader=None,
+    local_model_roots: list[Path] | None = None,
     runner_coordinator_factory=None,
     include_workspace_preparer: bool = True,
 ) -> EngineService:
@@ -87,6 +89,7 @@ def _build_service(
         transactions_dir=tmp_path / "transactions",
         log_store=log_store,
         downloader=downloader or default_downloader,
+        local_model_roots=local_model_roots,
     )
     workspace_preparer = None
     workspace_smoke_test = None
@@ -196,6 +199,21 @@ def _runner_capsule_payload(*, runner_char: str = "6") -> dict:
         "models": [],
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }
+
+
+def _runner_capsule_payload_with_model(payload: bytes, *, runner_char: str = "a") -> dict:
+    capsule_payload = _runner_capsule_payload(runner_char=runner_char)
+    capsule_payload["models"] = [
+        {
+            "id": "runner-model",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+            "source_urls": ["https://example.invalid/runner-model"],
+            "comfyui_folder": "checkpoints",
+            "filename": "runner-model.safetensors",
+        }
+    ]
+    return capsule_payload
 
 
 class RecordingRunnerCoordinator:
@@ -561,6 +579,80 @@ async def test_start_workflow_runner_blocks_manifest_fingerprint_mismatch(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_start_workflow_runner_blocks_missing_model_view_file(tmp_path: Path) -> None:
+    payload = b"runner-model"
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload_with_model(payload, runner_char="a")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        downloader=downloader,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    materialized_path = Path(state.model_references[0].materialized_path or "")
+    materialized_path.unlink()
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "failed"
+    assert "model view file missing for runner-model" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_missing_model_blob(tmp_path: Path) -> None:
+    payload = b"runner-model"
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload_with_model(payload, runner_char="b")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        downloader=downloader,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    blob_path = Path(state.model_references[0].blob_path or "")
+    blob_path.unlink()
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "failed"
+    assert "model blob missing for runner-model" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
 async def test_start_workflow_runner_requires_passed_smoke_status(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     capsule_payload = _runner_capsule_payload(runner_char="9")
@@ -731,6 +823,163 @@ async def test_prepare_workflow_drives_bundled_capsule_to_ready(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+async def test_prepare_workflow_blocks_filename_only_model_requirement(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    workflow_dir = packages_dir / "runner_workflow"
+    workflow_dir.mkdir(parents=True)
+    package = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
+    package["metadata"]["id"] = "runner_workflow"
+    package["metadata"]["name"] = "runner_workflow"
+    package["required_models"] = [
+        {
+            "folder": "checkpoints",
+            "filename": "creator-local-model.safetensors",
+            "verification_level": "filename_only",
+        }
+    ]
+    (workflow_dir / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(_runner_capsule_payload(runner_char="c")),
+        encoding="utf-8",
+    )
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value
+    assert result["user_facing_message"] == "Cannot prepare automatically"
+    assert "filename-only model matches are not trusted" in result["last_error"]
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    assert state.model_references == []
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_reuses_filename_size_local_model_candidate(tmp_path: Path) -> None:
+    payload = b"local-model"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "checkpoints" / "creator-local-model.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    packages_dir = tmp_path / "packages"
+    workflow_dir = packages_dir / "runner_workflow"
+    workflow_dir.mkdir(parents=True)
+    package = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
+    package["metadata"]["id"] = "runner_workflow"
+    package["metadata"]["name"] = "runner_workflow"
+    package["required_models"] = [
+        {
+            "folder": "checkpoints",
+            "filename": "creator-local-model.safetensors",
+            "size_bytes": len(payload),
+            "verification_level": "filename_size",
+        }
+    ]
+    (workflow_dir / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(_runner_capsule_payload(runner_char="d")),
+        encoding="utf-8",
+    )
+    service = _build_service(tmp_path, packages_dir=packages_dir, local_model_roots=[local_root])
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.READY.value
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    ref = state.model_references[0]
+    assert ref.verification_level is ModelVerificationLevel.FILENAME_SIZE
+    assert ref.asset_ownership is AssetOwnership.USER_LOCAL
+    assert ref.source_path == str(local_path)
+    assert ref.blob_path is None
+    assert ref.sha256 == f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    assert Path(ref.materialized_path or "").read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_reports_missing_filename_size_local_candidate(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    workflow_dir = packages_dir / "runner_workflow"
+    workflow_dir.mkdir(parents=True)
+    package = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
+    package["metadata"]["id"] = "runner_workflow"
+    package["metadata"]["name"] = "runner_workflow"
+    package["required_models"] = [
+        {
+            "folder": "checkpoints",
+            "filename": "creator-local-model.safetensors",
+            "size_bytes": 123,
+            "verification_level": "filename_size",
+        }
+    ]
+    (workflow_dir / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(_runner_capsule_payload(runner_char="f")),
+        encoding="utf-8",
+    )
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        local_model_roots=[tmp_path / "user-models"],
+    )
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value
+    assert "No local model candidate found" in result["last_error"]
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_missing_user_local_model_source(tmp_path: Path) -> None:
+    payload = b"local-model"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "checkpoints" / "creator-local-model.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    packages_dir = tmp_path / "packages"
+    workflow_dir = packages_dir / "runner_workflow"
+    workflow_dir.mkdir(parents=True)
+    package = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
+    package["metadata"]["id"] = "runner_workflow"
+    package["metadata"]["name"] = "runner_workflow"
+    package["required_models"] = [
+        {
+            "folder": "checkpoints",
+            "filename": "creator-local-model.safetensors",
+            "size_bytes": len(payload),
+            "verification_level": "filename_size",
+        }
+    ]
+    (workflow_dir / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(_runner_capsule_payload(runner_char="e")),
+        encoding="utf-8",
+    )
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        local_model_roots=[local_root],
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    local_path.unlink()
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "failed"
+    assert "local model source missing for checkpoints/creator-local-model.safetensors" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
 async def test_prepare_bundled_workflow_with_model_failure_returns_failed_payload(tmp_path: Path) -> None:
     payload = b"correct-bytes"
 
@@ -807,6 +1056,7 @@ async def test_prepare_user_capsule_uses_preparable_capsule_path(tmp_path: Path)
     bundled_pkg = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
     bundled_pkg["metadata"]["id"] = "user_capsule_workflow"
     bundled_pkg["metadata"]["name"] = "User Capsule Workflow"
+    bundled_pkg["required_models"] = []
     (workflow_dir / "package.json").write_text(json.dumps(bundled_pkg), encoding="utf-8")
     (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
         json.dumps(

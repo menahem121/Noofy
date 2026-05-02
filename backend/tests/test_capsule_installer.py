@@ -168,10 +168,13 @@ async def test_prepare_with_model_download_succeeds(tmp_path: Path) -> None:
 
     assert state.status is InstallStatus.READY
     assert state.smoke_test_status is SmokeTestStatus.NOT_RUN
-    # Materialized link contains the bytes.
-    materialized = tmp_path / "materialized" / "checkpoints" / "m.safetensors"
+    # Per-capsule model view contains the bytes.
+    materialized = Path(state.model_references[0].materialized_path)
     assert materialized.exists()
     assert materialized.read_bytes() == payload
+    assert "model-view-" in str(materialized)
+    assert state.model_references[0].materialization_strategy in {"hardlink", "symlink", "copy"}
+    assert state.model_references[0].materialized_file_verified is True
 
 
 @pytest.mark.anyio
