@@ -5,10 +5,14 @@ import pytest
 from app.engine.diagnostics import LogStore
 from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
 from app.runtime.dependency_lock import (
+    DependencyRelationship,
+    DependencySourceKind,
     ResolvedDependencyLock,
+    ResolvedDependencyWheel,
     ResolverMetadata,
     with_computed_lock_hash,
 )
+from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.profiles import RuntimeProfileErrorCode, RuntimeProfileResolutionError, load_runtime_profile_catalog
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
@@ -198,6 +202,122 @@ def test_prepare_reuses_ready_dependency_env_without_reinstalling(tmp_path: Path
     assert len(installer.requests) == 1
     assert second.dependency_env_path == ready.dependency_env_path
     assert second.dependency_env_manifest.status is InstallStatus.READY
+
+
+def test_prepare_loads_resolved_dependency_lock_from_store(tmp_path: Path) -> None:
+    capsule, lock = _capsule_with_dependency_lock()
+    lock_store = ResolvedDependencyLockStore(tmp_path / "dependency-locks")
+    lock_store.write(lock)
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_store=lock_store,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert installer.requests[0].lock == lock
+    assert (prepared.dependency_env_path / "install.marker").exists()
+
+
+def test_prepare_uses_generated_dependency_lock_identity_when_capsule_hash_is_stale(tmp_path: Path) -> None:
+    base = _capsule_lock()
+    lock = _dependency_lock_for_capsule(base)
+    source_files_dir = tmp_path / "source-files"
+    (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
+    (source_files_dir / "custom_nodes" / "node-a" / "requirements.txt").write_text("demo>=1\n", encoding="utf-8")
+
+    class FakeResolver:
+        def resolve(self, request) -> ResolvedDependencyLock:
+            return lock
+
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_resolver=FakeResolver(),
+        custom_node_source_files_dir=source_files_dir,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(base)
+
+    assert prepared.dependency_env_manifest.dependency_lock_hash == lock.lock_hash
+    assert prepared.dependency_env_manifest.fingerprint != base.runtime.dependency_env_fingerprint
+    assert prepared.runner_workspace_manifest.dependency_env_fingerprint == prepared.dependency_env_manifest.fingerprint
+    assert installer.requests[0].lock == lock
+
+
+def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Path) -> None:
+    base = _capsule_lock()
+    core_lock = ResolvedDependencyLock(
+        lock_hash=base.runtime.dependency_lock_hash,
+        runtime_profile_id=base.runtime.runtime_profile_id,
+        runtime_profile_variant_id=base.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
+        install_policy_version=base.dependencies.install_policy,
+        resolver=ResolverMetadata(name="uv", version="0.9.0"),
+        wheels=[],
+    )
+    custom_lock = with_computed_lock_hash(
+        ResolvedDependencyLock(
+            runtime_profile_id=base.runtime.runtime_profile_id,
+            runtime_profile_variant_id=base.runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
+            install_policy_version=base.dependencies.install_policy,
+            resolver=ResolverMetadata(name="uv", version="0.9.0"),
+            wheels=[
+                ResolvedDependencyWheel(
+                    name="Demo_Package",
+                    version="1.0.0",
+                    wheel_filename="demo-package-1.0.0-py3-none-any.whl",
+                    sha256="sha256:" + ("a" * 64),
+                    source_kind=DependencySourceKind.APPROVED_CACHE,
+                    approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
+                    platform_tags=["py3-none-any"],
+                    relationship=DependencyRelationship.DIRECT,
+                    requested_by=["node-a"],
+                    resolver_name="uv",
+                    resolver_version="0.9.0",
+                )
+            ],
+        )
+    )
+    source_files_dir = tmp_path / "source-files"
+    (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
+    (source_files_dir / "custom_nodes" / "node-a" / "requirements.txt").write_text("demo-package==1.0.0\n", encoding="utf-8")
+
+    class FakeResolver:
+        def resolve(self, request) -> ResolvedDependencyLock:
+            return custom_lock
+
+    installer = _FakeDependencyEnvInstaller()
+    lock_store = ResolvedDependencyLockStore(tmp_path / "dependency-locks")
+    lock_store.write(core_lock)
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_store=lock_store,
+        dependency_lock_resolver=FakeResolver(),
+        custom_node_source_files_dir=source_files_dir,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(base)
+
+    installed_lock = installer.requests[0].lock
+    assert installed_lock.lock_hash == prepared.dependency_env_manifest.dependency_lock_hash
+    assert installed_lock.lock_hash != base.runtime.dependency_lock_hash
+    assert [wheel.name for wheel in installed_lock.wheels] == ["demo-package"]
+    assert lock_store.exists(installed_lock.lock_hash)
 
 
 def test_failed_dependency_env_install_leaves_no_ready_manifest(tmp_path: Path) -> None:

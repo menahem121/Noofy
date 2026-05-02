@@ -13,7 +13,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-export type AppRouteId = "home" | "workflows" | "history" | "models" | "settings";
+export type AppRouteId = "home" | "workflows" | "history" | "models" | "gallery" | "settings";
 export type StatusTone = "success" | "warning" | "error" | "info";
 
 export interface AppStatusView {
@@ -35,6 +35,7 @@ const navItems = [
   { id: "workflows", label: "Workflows", Icon: PackageOpen },
   { id: "history", label: "History", Icon: FolderClock },
   { id: "models", label: "Models", Icon: Layers },
+  { id: "gallery", label: "Gallery", Icon: Images },
   { id: "settings", label: "Settings", Icon: Settings },
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 

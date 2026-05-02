@@ -83,7 +83,7 @@ class UvDependencyEnvironmentInstaller:
         self.log_store = log_store or LogStore()
 
     def install(self, request: DependencyEnvironmentInstallRequest) -> None:
-        lock = with_computed_lock_hash(request.lock)
+        lock = request.lock if request.lock.lock_hash is not None else with_computed_lock_hash(request.lock)
         try:
             self._validate_installable_lock(lock)
         except DependencyPolicyError as exc:

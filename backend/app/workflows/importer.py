@@ -70,6 +70,10 @@ class ImportedWorkflowPackageStore:
                 package.model_dump_json(indent=2),
                 encoding="utf-8",
             )
+            (transaction_dir / "capsule.lock.json").write_text(
+                json.dumps(package.exported_capsule, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
             (transaction_dir / "import-report.json").write_text(
                 json.dumps(
                     {

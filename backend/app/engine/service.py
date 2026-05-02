@@ -21,6 +21,10 @@ from app.engine.models import (
     WorkflowValidationResult,
 )
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
+from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
+from app.runtime.dependency_lock import core_dependency_lock_from_capsule
+from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependency_resolver import UvDependencyLockResolver
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_state import (
     InstallStateStore,
@@ -60,6 +64,12 @@ from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportErro
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
+
+_PREPARABLE_TRUST_LEVELS = {
+    TrustLevel.NOOFY_VERIFIED,
+    TrustLevel.REGISTRY_LOCKED,
+    TrustLevel.QUARANTINED_COMMUNITY,
+}
 
 
 class EngineService:
@@ -135,7 +145,7 @@ class EngineService:
         """
         if self.capsule_loader is None or self.capsule_installer is None:
             return self._unsupported_install_payload(workflow_id)
-        capsule_lock = self._phase3_verified_capsule_lock(workflow_id)
+        capsule_lock = self._preparable_capsule_lock(workflow_id)
         if capsule_lock is None:
             return self._unsupported_install_payload(workflow_id)
 
@@ -152,7 +162,7 @@ class EngineService:
             )
             return self._unsupported_install_payload(workflow_id)
 
-        capsule_lock = self._phase3_verified_capsule_lock(workflow_id)
+        capsule_lock = self._preparable_capsule_lock(workflow_id)
         if capsule_lock is None:
             self.log_store.add(
                 "warning",
@@ -197,7 +207,7 @@ class EngineService:
             )
             return self._unsupported_runner_payload(workflow_id, "capsule_installer_not_configured")
 
-        capsule_lock = self._phase3_verified_capsule_lock(workflow_id)
+        capsule_lock = self._preparable_capsule_lock(workflow_id)
         if capsule_lock is None:
             self.log_store.add(
                 "warning",
@@ -556,19 +566,23 @@ class EngineService:
         }
 
     def _phase3_verified_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
+        return self._preparable_capsule_lock(workflow_id)
+
+    def _preparable_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
         if self.capsule_loader is None:
             return None
         try:
             capsule_lock = self.capsule_loader.get_bundled_capsule_lock(workflow_id)
         except KeyError:
+            try:
+                capsule_lock = self.capsule_loader.get_capsule_lock(workflow_id)
+            except KeyError:
+                return None
+        if capsule_lock.workflow.package_id != workflow_id and _imported_workflow_id(capsule_lock) != workflow_id:
             return None
-        if capsule_lock.workflow.package_id != workflow_id:
+        if capsule_lock.workflow.trust_level not in _PREPARABLE_TRUST_LEVELS:
             return None
-        if capsule_lock.workflow.trust_level is not TrustLevel.NOOFY_VERIFIED:
-            return None
-        if capsule_lock.trust.level is not TrustLevel.NOOFY_VERIFIED:
-            return None
-        if capsule_lock.custom_nodes:
+        if capsule_lock.trust.level not in _PREPARABLE_TRUST_LEVELS:
             return None
         return capsule_lock
 
@@ -752,6 +766,42 @@ def _read_runner_workspace_manifest(path: Path) -> RunnerWorkspaceManifest:
         raise ValueError(f"Prepared runtime artifact manifest is invalid: {path}") from exc
 
 
+def _workflow_source_files_dir(
+    workflow_id: str,
+    *,
+    workflow_loader: WorkflowPackageLoader,
+    imported_package_store: ImportedWorkflowPackageStore,
+) -> Path | None:
+    try:
+        package = workflow_loader.get_package(workflow_id)
+    except KeyError:
+        return None
+    if package.import_metadata is None:
+        return None
+    try:
+        package_dir = imported_package_store.package_dir(package)
+    except NoofyImportError:
+        return None
+    source_files_dir = package_dir / "source-files"
+    return source_files_dir if source_files_dir.exists() else None
+
+
+def _imported_workflow_id(capsule_lock: CapsuleLock) -> str:
+    return "__".join(
+        [
+            _safe_store_segment(capsule_lock.workflow.publisher_id),
+            _safe_store_segment(capsule_lock.workflow.package_id),
+            _safe_store_segment(capsule_lock.workflow.version),
+        ]
+    )
+
+
+def _safe_store_segment(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value.strip())
+    cleaned = cleaned.strip(".-_")
+    return cleaned or "unknown"
+
+
 def create_default_engine_service() -> EngineService:
     paths = settings.paths
     paths.ensure_directories()
@@ -817,7 +867,16 @@ def create_default_engine_service() -> EngineService:
     capsule_loader = CapsuleLockLoader(
         settings.workflows_dir,
         user_packages_dir=paths.user_workflows_dir,
+        imported_packages_dir=paths.workflow_packages_store_dir,
     )
+    dependency_lock_store = ResolvedDependencyLockStore(paths.dependency_locks_dir)
+    preseed_capsule_loader = CapsuleLockLoader(
+        settings.workflows_dir,
+        user_packages_dir=paths.user_workflows_dir,
+    )
+    for capsule_lock in preseed_capsule_loader.list_capsule_locks():
+        if not capsule_lock.custom_nodes:
+            dependency_lock_store.write(core_dependency_lock_from_capsule(capsule_lock))
     install_state_store = InstallStateStore(paths.workflow_store_dir / "install-state")
     model_store = ModelStore(
         blobs_dir=paths.model_blobs_dir,
@@ -852,6 +911,24 @@ def create_default_engine_service() -> EngineService:
             comfyui_source_dir=settings.comfyui_repo_dir,
             model_view_dir=paths.model_materialized_dir,
             runtime_profile_catalog=load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH),
+            dependency_env_installer=UvDependencyEnvironmentInstaller(
+                wheel_cache_dir=paths.wheel_cache_dir,
+                uv_cache_dir=paths.cache_dir / "uv",
+                log_store=log_store,
+            ),
+            dependency_lock_store=dependency_lock_store,
+            dependency_lock_resolver=UvDependencyLockResolver(
+                wheel_cache_dir=paths.wheel_cache_dir,
+                work_dir=paths.install_transactions_dir,
+                uv_cache_dir=paths.cache_dir / "uv",
+                log_store=log_store,
+            ),
+            custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
+                workflow_id,
+                workflow_loader=workflow_loader,
+                imported_package_store=imported_package_store,
+            ),
+            dependency_transactions_dir=paths.install_transactions_dir,
             log_store=log_store,
         ),
         workspace_smoke_test=runner_smoke_tester.run,

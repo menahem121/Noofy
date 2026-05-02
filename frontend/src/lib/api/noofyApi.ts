@@ -275,3 +275,45 @@ export function stopEngine() {
 export function isEngineJob(response: WorkflowRunResponse): response is EngineJob {
   return "job_id" in response;
 }
+
+// ─── Gallery ────────────────────────────────────────────────────────────────
+
+/**
+ * User-facing settings used when an image was generated.
+ * Keys are beginner labels (e.g. "Prompt", "Style", "Aspect ratio").
+ * Raw ComfyUI node data must never appear here.
+ */
+export type GalleryImageSettings = Record<string, string | number | boolean>;
+
+export interface GalleryImage {
+  id: string;
+  /** URL or relative path for the grid thumbnail (may be same as imageUrl) */
+  thumbnailUrl: string;
+  /** URL or relative path for the full-resolution image */
+  imageUrl: string;
+  workflowId: string;
+  workflowName: string;
+  /** The text prompt the user typed, if applicable */
+  prompt: string;
+  /** ISO-8601 timestamp */
+  createdAt: string;
+  width: number;
+  height: number;
+  favorite: boolean;
+  /**
+   * User-facing workflow control values at the time of generation.
+   * Only values the user could edit in the Noofy workflow UI.
+   */
+  usedSettings: GalleryImageSettings;
+  /** Backend file reference (path or output ref) — not shown in default UI */
+  fileRef: string;
+}
+
+export interface GalleryResponse {
+  images: GalleryImage[];
+  total: number;
+}
+
+export function fetchGallery(): Promise<GalleryResponse> {
+  return getJson<GalleryResponse>("/gallery");
+}

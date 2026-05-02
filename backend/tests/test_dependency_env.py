@@ -92,6 +92,33 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(tmp_path: 
     assert "--find-links" in commands[1]
 
 
+def test_uv_dependency_installer_preserves_explicit_lock_hash(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "wheel-cache"
+    cache_dir.mkdir()
+    lock = _lock_for_cached_wheel(cache_dir).model_copy(update={"lock_hash": "sha256:" + ("1" * 64)})
+
+    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    installer = UvDependencyEnvironmentInstaller(
+        wheel_cache_dir=cache_dir,
+        command_runner=runner,
+    )
+
+    installer.install(
+        DependencyEnvironmentInstallRequest(
+            lock=lock,
+            target_dir=tmp_path / "stage",
+            python_version="3.13",
+            workflow_id="workflow",
+        )
+    )
+
+    assert '"lock_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"' in (
+        tmp_path / "stage" / "noofy-dependency-lock.json"
+    ).read_text(encoding="utf-8")
+
+
 def test_uv_dependency_installer_rejects_unmaterialized_index_wheel(tmp_path: Path) -> None:
     resolver = ResolverMetadata(name="uv", version="0.9.0")
     lock = with_computed_lock_hash(

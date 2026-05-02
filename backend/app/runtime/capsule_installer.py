@@ -61,16 +61,12 @@ class CapsuleInstaller:
         workflow_id = capsule_lock.workflow.package_id
 
         self._transition(fingerprint, InstallStatus.PREPARING, workflow_id, last_error=None)
-        if (
-            capsule_lock.workflow.trust_level is not TrustLevel.NOOFY_VERIFIED
-            or capsule_lock.trust.level is not TrustLevel.NOOFY_VERIFIED
-            or capsule_lock.custom_nodes
-        ):
+        if not _trust_level_can_prepare_dependencies(capsule_lock.workflow.trust_level) or not _trust_level_can_prepare_dependencies(capsule_lock.trust.level):
             state = self._transition(
                 fingerprint,
-                InstallStatus.FAILED,
+                InstallStatus.BLOCKED_BY_POLICY,
                 workflow_id,
-                last_error="This workflow cannot be prepared by the verified core installer.",
+                last_error="This workflow is blocked by the dependency preparation policy.",
             )
             raise CapsuleInstallError(state.last_error or "Unsupported capsule", state=state)
 
@@ -131,7 +127,7 @@ class CapsuleInstaller:
 
         self._transition(fingerprint, InstallStatus.CHECKING_COMPATIBILITY, workflow_id)
         smoke_test_status = SmokeTestStatus.NOT_RUN
-        if prepared_workspace is not None and self.workspace_smoke_test is not None:
+        if prepared_workspace is not None and self.workspace_smoke_test is not None and not capsule_lock.custom_nodes:
             try:
                 await self.workspace_smoke_test(capsule_lock, prepared_workspace)
             except Exception as exc:
@@ -152,19 +148,20 @@ class CapsuleInstaller:
                 workflow_id=workflow_id,
             )
 
-        ready_fields = {
-            "installed_at": now_iso(),
-            "smoke_test_status": smoke_test_status,
-        }
-        if prepared_workspace is not None:
-            ready_fields["runtime_profile_variant_id"] = capsule_lock.runtime.runtime_profile_variant_id
-            ready_fields["runtime_profile_manifest_hash"] = capsule_lock.runtime.runtime_profile_manifest_hash
-            ready_fields["runtime_profile_catalog_version"] = capsule_lock.runtime.runtime_profile_catalog_version
-            ready_fields["dependency_env_fingerprint"] = prepared_workspace.dependency_env_manifest.fingerprint
-            ready_fields["runner_workspace_fingerprint"] = prepared_workspace.runner_workspace_manifest.fingerprint
-            ready_fields["runner_process_compatibility_key"] = capsule_lock.runtime.runner_process_compatibility_key
-            ready_fields["dependency_env_path"] = str(prepared_workspace.dependency_env_path)
-            ready_fields["runner_workspace_path"] = str(prepared_workspace.runner_workspace_path)
+        ready_fields = _prepared_runtime_fields(
+            capsule_lock,
+            prepared_workspace,
+            smoke_test_status=smoke_test_status,
+        )
+        ready_fields["installed_at"] = now_iso()
+
+        if capsule_lock.custom_nodes:
+            return self._transition(
+                fingerprint,
+                InstallStatus.PREPARED_NEEDS_INPUT_SETUP,
+                workflow_id,
+                **ready_fields,
+            )
 
         return self._transition(
             fingerprint,
@@ -207,3 +204,32 @@ class CapsuleInstaller:
             },
         )
         return state
+
+
+def _prepared_runtime_fields(
+    capsule_lock: CapsuleLock,
+    prepared_workspace: PreparedRuntimeWorkspace | None,
+    *,
+    smoke_test_status: SmokeTestStatus,
+) -> dict[str, object]:
+    ready_fields: dict[str, object] = {
+        "smoke_test_status": smoke_test_status,
+    }
+    if prepared_workspace is not None:
+        ready_fields["runtime_profile_variant_id"] = capsule_lock.runtime.runtime_profile_variant_id
+        ready_fields["runtime_profile_manifest_hash"] = capsule_lock.runtime.runtime_profile_manifest_hash
+        ready_fields["runtime_profile_catalog_version"] = capsule_lock.runtime.runtime_profile_catalog_version
+        ready_fields["dependency_env_fingerprint"] = prepared_workspace.dependency_env_manifest.fingerprint
+        ready_fields["runner_workspace_fingerprint"] = prepared_workspace.runner_workspace_manifest.fingerprint
+        ready_fields["runner_process_compatibility_key"] = capsule_lock.runtime.runner_process_compatibility_key
+        ready_fields["dependency_env_path"] = str(prepared_workspace.dependency_env_path)
+        ready_fields["runner_workspace_path"] = str(prepared_workspace.runner_workspace_path)
+    return ready_fields
+
+
+def _trust_level_can_prepare_dependencies(trust_level: TrustLevel) -> bool:
+    return trust_level in {
+        TrustLevel.NOOFY_VERIFIED,
+        TrustLevel.REGISTRY_LOCKED,
+        TrustLevel.QUARANTINED_COMMUNITY,
+    }

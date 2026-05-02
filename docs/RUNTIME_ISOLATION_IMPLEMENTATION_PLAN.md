@@ -388,6 +388,8 @@ Acceptance criteria:
 
 ### Phase 5b: Dependency Lock Policy And Dependency Environment Preparation
 
+Status: Complete
+
 Goal: install normal Python dependencies into reusable immutable dependency environments using a deterministic lock, without executing arbitrary custom-node setup code.
 
 Tasks:
@@ -431,6 +433,17 @@ Acceptance criteria:
 - Missing wheel, hash mismatch, sdist-only package, native build requirement, and setup-code execution attempts have failure tests.
 - Failed dependency installation leaves no ready dependency-env manifest.
 - The trusted backend never imports custom node modules during dependency resolution.
+
+Current implementation notes:
+
+- Noofy resolved dependency locks are persisted under `runtime-store/dependency-locks/<lock-hash>/dependency-lock.json`.
+- The dependency lock resolver uses `uv pip compile --generate-hashes --no-build --only-binary :all:` and materializes hash-verified wheels into the shared wheel cache before installation.
+- Dependency marker discovery reads `requirements.txt`, PEP 621 `pyproject.toml` dependencies, and static optional dependencies as data only.
+- `setup.py`, dynamic `pyproject.toml` dependency fields, editable installs, local paths, URL requirements, alternate index flags, constraints, and recursive requirement files are blocked before resolver execution.
+- Dependency environments are installed with `uv` from Noofy resolved locks only, using `--require-hashes`, `--only-binary :all:`, `--no-index`, and `--find-links` pointed at the shared wheel cache.
+- Imported package source files are connected to runtime preparation through the package store, so bundled custom-node dependency markers can generate a local dependency lock without importing custom-node Python.
+- Runtime preparation merges the stored core dependency lock with the generated custom-node dependency lock, stores the combined lock, recomputes the dependency-env fingerprint when the capsule lock hash is stale, and installs into a staged transaction path before promotion.
+- Custom-node workflow packages can prepare dependency environments, but they remain `prepared_needs_input_setup` until Phase 5c materializes custom-node workspaces and compatibility smoke tests.
 
 ### Phase 5c: Core Node Manifest And Custom-Node Workspace Materialization
 

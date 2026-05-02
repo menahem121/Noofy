@@ -17,7 +17,7 @@ from typing import Iterable
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.runtime.fingerprints import dependency_env_fingerprint, sha256_fingerprint
-from app.runtime.isolation import SHA256_PATTERN
+from app.runtime.isolation import SHA256_PATTERN, CapsuleLock
 
 DEPENDENCY_LOCK_SCHEMA_VERSION = "0.1.0"
 DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION = "quarantined-community-v1"
@@ -192,6 +192,24 @@ def resolved_dependency_lock_hash(lock: ResolvedDependencyLock) -> str:
 
 def with_computed_lock_hash(lock: ResolvedDependencyLock) -> ResolvedDependencyLock:
     return lock.model_copy(update={"lock_hash": resolved_dependency_lock_hash(lock)})
+
+
+def core_dependency_lock_from_capsule(capsule_lock: CapsuleLock) -> ResolvedDependencyLock:
+    """Represent an already-pinned managed-core dependency lock."""
+    runtime = capsule_lock.runtime
+    return ResolvedDependencyLock(
+        lock_hash=runtime.dependency_lock_hash,
+        runtime_profile_id=runtime.runtime_profile_id,
+        runtime_profile_variant_id=runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
+        install_policy_version=capsule_lock.dependencies.install_policy,
+        resolver=ResolverMetadata(
+            name="noofy-managed-core",
+            version=DEPENDENCY_LOCK_SCHEMA_VERSION,
+            command="bundled core dependency lock",
+        ),
+        wheels=[],
+    )
 
 
 def dependency_env_fingerprint_for_resolved_lock(

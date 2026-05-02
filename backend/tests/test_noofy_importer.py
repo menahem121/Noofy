@@ -88,6 +88,7 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
 
     package_dir = tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0"
     assert (package_dir / "package.json").exists()
+    assert (package_dir / "capsule.lock.json").exists()
     assert (package_dir / "source-archive.noofy").exists()
     assert (package_dir / "source-files" / "package.json").exists()
     assert (package_dir / "source-files" / "custom_nodes" / "comfyui-kjnodes" / "requirements.txt").exists()

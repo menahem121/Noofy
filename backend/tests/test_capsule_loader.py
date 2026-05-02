@@ -159,6 +159,28 @@ def test_loader_falls_back_to_user_dir_when_bundled_missing(tmp_path: Path) -> N
     assert lock.workflow.package_id == "user_only_workflow"
 
 
+def test_loader_falls_back_to_imported_dir_when_bundled_and_user_missing(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    imported = tmp_path / "imported"
+    _write_capsule(imported / "publisher" / "imported_workflow" / "0.1.0", "imported_workflow")
+
+    loader = CapsuleLockLoader(bundled, imported_packages_dir=imported)
+
+    lock = loader.get_capsule_lock("imported_workflow")
+    assert lock.workflow.package_id == "imported_workflow"
+
+
+def test_loader_finds_imported_lock_by_normalized_workflow_id(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    imported = tmp_path / "imported"
+    _write_capsule(imported / "unknown" / "eraserv4.5" / "0.1.0", "eraserv4.5")
+
+    loader = CapsuleLockLoader(bundled, imported_packages_dir=imported)
+
+    lock = loader.get_capsule_lock("noofy__eraserv4.5__0.1.0")
+    assert lock.workflow.package_id == "eraserv4.5"
+
+
 def test_user_capsule_cannot_shadow_bundled_capsule(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled"
     user = tmp_path / "user"

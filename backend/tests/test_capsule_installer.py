@@ -410,6 +410,60 @@ async def test_prepare_dependency_policy_failure_marks_blocked_by_policy(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_prepare_custom_node_capsule_prepares_dependencies_without_marking_ready(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-custom-node",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "custom-node-a",
+                    "source": "https://example.invalid/custom-node-a.git",
+                    "trust_level": "quarantined_community",
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+        raise AssertionError("custom-node capsules are not smoke-tested until custom-node materialization exists")
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.PREPARED_NEEDS_INPUT_SETUP
+    assert state.dependency_env_path is not None
+    assert state.runner_workspace_path is not None
+    assert state.smoke_test_status is SmokeTestStatus.NOT_RUN
+
+
+@pytest.mark.anyio
 async def test_prepare_can_retry_after_smoke_failure_and_promote_staged_workspace(tmp_path: Path) -> None:
     capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-retry", models=[]))
 
@@ -539,7 +593,7 @@ async def test_get_state_does_not_trigger_install(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_prepare_rejects_custom_node_capsule_in_verified_core_installer(tmp_path: Path) -> None:
+async def test_prepare_custom_node_capsule_without_workspace_stops_before_ready(tmp_path: Path) -> None:
     capsule = CapsuleLock.model_validate(
         _capsule_lock_data(
             fingerprint="fp-custom-node",
@@ -560,10 +614,10 @@ async def test_prepare_rejects_custom_node_capsule_in_verified_core_installer(tm
 
     installer, state_store, _ = _build_installer(tmp_path, downloader=downloader)
 
-    with pytest.raises(CapsuleInstallError):
-        await installer.prepare(capsule)
+    result = await installer.prepare(capsule)
 
     state = state_store.get("fp-custom-node")
     assert state is not None
-    assert state.status is InstallStatus.FAILED
-    assert state.installed_at is None
+    assert result.status is InstallStatus.PREPARED_NEEDS_INPUT_SETUP
+    assert state.status is InstallStatus.PREPARED_NEEDS_INPUT_SETUP
+    assert state.installed_at is not None

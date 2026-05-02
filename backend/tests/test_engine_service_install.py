@@ -799,7 +799,7 @@ async def test_prepare_bundled_workflow_with_model_failure_returns_failed_payloa
 
 
 @pytest.mark.anyio
-async def test_prepare_user_capsule_is_unsupported_in_phase3(tmp_path: Path) -> None:
+async def test_prepare_user_capsule_uses_preparable_capsule_path(tmp_path: Path) -> None:
     user_packages_dir = tmp_path / "user_packages"
     workflow_dir = user_packages_dir / "user_capsule_workflow"
     workflow_dir.mkdir(parents=True)
@@ -854,7 +854,7 @@ async def test_prepare_user_capsule_is_unsupported_in_phase3(tmp_path: Path) -> 
 
     result = await service.prepare_workflow("user_capsule_workflow")
 
-    assert result["status"] == InstallStatus.UNSUPPORTED.value
-    assert result["capsule_fingerprint"] is None
+    assert result["status"] == InstallStatus.READY.value
+    assert result["capsule_fingerprint"] == "user_capsule_workflow-fp"
 
     shutil.rmtree(user_packages_dir, ignore_errors=True)

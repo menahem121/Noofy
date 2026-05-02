@@ -11,7 +11,7 @@ check.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -21,8 +21,20 @@ from app.runtime.dependency_env import (
     DependencyEnvironmentInstallRequest,
     DependencyEnvironmentInstaller,
 )
-from app.runtime.dependency_lock import ResolvedDependencyLock, resolved_dependency_lock_hash
-from app.runtime.fingerprints import sha256_fingerprint
+from app.runtime.dependency_lock import (
+    ResolvedDependencyLock,
+    core_dependency_lock_from_capsule,
+    dependency_env_fingerprint_for_resolved_lock,
+    merge_resolved_dependency_locks,
+    resolved_dependency_lock_hash,
+)
+from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependency_resolver import (
+    DependencyResolutionRequest,
+    UvDependencyLockResolver,
+    custom_node_dependency_source_dirs,
+)
+from app.runtime.fingerprints import runner_workspace_fingerprint, sha256_fingerprint
 from app.runtime.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
@@ -34,6 +46,7 @@ from app.runtime.profiles import (
     RuntimeProfileCatalog,
     RuntimeProfileErrorCode,
     RuntimeProfileResolutionError,
+    RuntimeProfileSelection,
     resolve_runtime_profile,
 )
 from app.runtime.workspace_store import (
@@ -63,6 +76,10 @@ class RuntimeWorkspacePreparer:
         runtime_profile_catalog: RuntimeProfileCatalog | None = None,
         dependency_env_installer: DependencyEnvironmentInstaller | None = None,
         dependency_locks: Mapping[str, ResolvedDependencyLock] | None = None,
+        dependency_lock_store: ResolvedDependencyLockStore | None = None,
+        dependency_lock_resolver: UvDependencyLockResolver | None = None,
+        custom_node_source_files_dir: Path | None = None,
+        custom_node_source_files_dir_resolver: Callable[[str], Path | None] | None = None,
         dependency_transactions_dir: Path | None = None,
         log_store: LogStore | None = None,
     ) -> None:
@@ -73,19 +90,30 @@ class RuntimeWorkspacePreparer:
         self.runtime_profile_catalog = runtime_profile_catalog
         self.dependency_env_installer = dependency_env_installer
         self.dependency_locks = dict(dependency_locks or {})
+        self.dependency_lock_store = dependency_lock_store
+        self.dependency_lock_resolver = dependency_lock_resolver
+        self.custom_node_source_files_dir = custom_node_source_files_dir
+        self.custom_node_source_files_dir_resolver = custom_node_source_files_dir_resolver
         self.dependency_transactions_dir = dependency_transactions_dir or (
             dependency_env_store.root_dir.parent / "transactions"
         )
         self.log_store = log_store or LogStore()
 
     def prepare(self, capsule_lock: CapsuleLock) -> PreparedRuntimeWorkspace:
-        self._resolve_runtime_profile(capsule_lock)
+        profile_selection = self._resolve_runtime_profile(capsule_lock)
         dependency_manifest = self._dependency_env_manifest(
             capsule_lock,
             status=InstallStatus.CHECKING_COMPATIBILITY,
         )
+        dependency_manifest = self._maybe_resolve_dependency_manifest(
+            capsule_lock,
+            dependency_manifest,
+            profile_selection,
+        )
         runner_manifest = self._runner_workspace_manifest(
             capsule_lock,
+            dependency_env_fingerprint=dependency_manifest.fingerprint,
+            profile_selection=profile_selection,
             status=InstallStatus.CHECKING_COMPATIBILITY,
         )
 
@@ -214,7 +242,7 @@ class RuntimeWorkspacePreparer:
         workflow_id: str,
     ) -> DependencyEnvManifest:
         assert self.dependency_env_installer is not None
-        lock = self._resolved_dependency_lock(manifest)
+        lock = self._resolved_dependency_lock(manifest, workflow_id)
         staging_dir = self.dependency_transactions_dir / (
             f"dep-env-{_safe_fingerprint(manifest.fingerprint)}-{uuid4().hex}"
         )
@@ -249,8 +277,23 @@ class RuntimeWorkspacePreparer:
         )
         return self.dependency_env_store.read(manifest.fingerprint)
 
-    def _resolved_dependency_lock(self, manifest: DependencyEnvManifest) -> ResolvedDependencyLock:
-        lock = self.dependency_locks.get(manifest.dependency_lock_hash)
+    def _resolved_dependency_lock(self, manifest: DependencyEnvManifest, workflow_id: str) -> ResolvedDependencyLock:
+        lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+        source_files_dir = self._custom_node_source_files_dir(workflow_id)
+        if lock is None and self.dependency_lock_resolver is not None and source_files_dir is not None:
+            lock = self.dependency_lock_resolver.resolve(
+                DependencyResolutionRequest(
+                    source_dirs=custom_node_dependency_source_dirs(source_files_dir),
+                    runtime_profile_id=manifest.runtime_profile_id,
+                    runtime_profile_variant_id=manifest.runtime_profile_variant_id,
+                    runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
+                    install_policy_version=manifest.install_policy_version,
+                    python_version=manifest.python_version,
+                    python_platform=_uv_python_platform(manifest.os, manifest.architecture),
+                    workflow_id=workflow_id,
+                )
+            )
+            self._remember_dependency_lock(lock)
         if lock is None:
             raise RuntimeError(
                 "Resolved dependency lock is not available for dependency environment install: "
@@ -268,6 +311,27 @@ class RuntimeWorkspacePreparer:
         if lock_hash != manifest.dependency_lock_hash:
             raise RuntimeError("Resolved dependency lock hash does not match dependency manifest.")
         return lock
+
+    def _find_existing_dependency_lock(self, lock_hash: str) -> ResolvedDependencyLock | None:
+        lock = self.dependency_locks.get(lock_hash)
+        if lock is not None:
+            return lock
+        if self.dependency_lock_store is not None and self.dependency_lock_store.exists(lock_hash):
+            lock = self.dependency_lock_store.read(lock_hash)
+            self.dependency_locks[lock_hash] = lock
+            return lock
+        return None
+
+    def _remember_dependency_lock(self, lock: ResolvedDependencyLock) -> None:
+        lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        self.dependency_locks[lock_hash] = lock
+        if self.dependency_lock_store is not None:
+            self.dependency_lock_store.write(lock)
+
+    def _custom_node_source_files_dir(self, workflow_id: str) -> Path | None:
+        if self.custom_node_source_files_dir_resolver is not None:
+            return self.custom_node_source_files_dir_resolver(workflow_id)
+        return self.custom_node_source_files_dir
 
     def _promote_dependency_env_staging(
         self,
@@ -363,9 +427,75 @@ class RuntimeWorkspacePreparer:
             smoke_test_status=smoke_test_status,
         )
 
-    def _resolve_runtime_profile(self, capsule_lock: CapsuleLock) -> None:
+    def _maybe_resolve_dependency_manifest(
+        self,
+        capsule_lock: CapsuleLock,
+        manifest: DependencyEnvManifest,
+        profile_selection: RuntimeProfileSelection | None,
+    ) -> DependencyEnvManifest:
+        if self.dependency_env_installer is None:
+            return manifest
+        source_files_dir = self._custom_node_source_files_dir(capsule_lock.workflow.package_id)
+        source_dirs = custom_node_dependency_source_dirs(source_files_dir) if source_files_dir is not None else []
+        if self.dependency_lock_resolver is not None and source_dirs:
+            existing_core_lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+            custom_node_lock = self.dependency_lock_resolver.resolve(
+                DependencyResolutionRequest(
+                    source_dirs=source_dirs,
+                    runtime_profile_id=manifest.runtime_profile_id,
+                    runtime_profile_variant_id=manifest.runtime_profile_variant_id,
+                    runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
+                    install_policy_version=manifest.install_policy_version,
+                    python_version=manifest.python_version,
+                    python_platform=_uv_python_platform(manifest.os, manifest.architecture),
+                    workflow_id=capsule_lock.workflow.package_id,
+                )
+            )
+            if existing_core_lock is not None:
+                lock = merge_resolved_dependency_locks(existing_core_lock, [custom_node_lock])
+            elif custom_node_lock.wheels:
+                lock = merge_resolved_dependency_locks(core_dependency_lock_from_capsule(capsule_lock), [custom_node_lock])
+            else:
+                lock = custom_node_lock
+            self._remember_dependency_lock(lock)
+        else:
+            lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+        if lock is None:
+            return manifest
+        lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        if lock_hash == manifest.dependency_lock_hash:
+            return manifest
+        dependency_fingerprint = dependency_env_fingerprint_for_resolved_lock(
+            lock,
+            os_name=manifest.os,
+            architecture=manifest.architecture,
+            python_build_id=manifest.python_build_id,
+            torch_wheel_build_tag=profile_selection.variant.torch_wheel_build_tag
+            if profile_selection is not None
+            else manifest.gpu_backend,
+            torch_backend=manifest.gpu_backend,
+        )
+        self.log_store.add(
+            "info",
+            "Using locally resolved dependency lock for workflow",
+            "runtime.workspace",
+            workflow_id=capsule_lock.workflow.package_id,
+            details={
+                "original_dependency_lock_hash": manifest.dependency_lock_hash,
+                "resolved_dependency_lock_hash": lock_hash,
+                "dependency_env_fingerprint": dependency_fingerprint,
+            },
+        )
+        return manifest.model_copy(
+            update={
+                "fingerprint": dependency_fingerprint,
+                "dependency_lock_hash": lock_hash,
+            }
+        )
+
+    def _resolve_runtime_profile(self, capsule_lock: CapsuleLock) -> RuntimeProfileSelection | None:
         if self.runtime_profile_catalog is None:
-            return
+            return None
         runtime = capsule_lock.runtime
         selection = resolve_runtime_profile(
             self.runtime_profile_catalog,
@@ -380,35 +510,57 @@ class RuntimeWorkspacePreparer:
                 RuntimeProfileErrorCode.PROFILE_MANIFEST_HASH_MISMATCH,
                 "Workflow runtime profile manifest hash does not match the installed catalog.",
             )
+        return selection
 
     def _runner_workspace_manifest(
         self,
         capsule_lock: CapsuleLock,
         *,
+        dependency_env_fingerprint: str | None = None,
+        profile_selection: RuntimeProfileSelection | None = None,
         status: InstallStatus = InstallStatus.READY,
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> RunnerWorkspaceManifest:
         runtime = capsule_lock.runtime
+        dependency_env_fingerprint = dependency_env_fingerprint or runtime.dependency_env_fingerprint
+        enabled_custom_node_hash = sha256_fingerprint(capsule_lock.custom_nodes)
+        launch_config_hash = sha256_fingerprint(
+            {
+                "engine": capsule_lock.engine.type,
+                "runner": "core_comfyui",
+                "phase": "phase4-runner-workspace",
+            }
+        )
+        model_view_hash = sha256_fingerprint(capsule_lock.models)
+        fingerprint = runtime.runner_fingerprint
+        if dependency_env_fingerprint != runtime.dependency_env_fingerprint:
+            fingerprint = runner_workspace_fingerprint(
+                dependency_env_fingerprint=dependency_env_fingerprint,
+                runtime_profile_id=runtime.runtime_profile_id,
+                runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
+                runtime_profile_variant_id=runtime.runtime_profile_variant_id,
+                comfyui_source_hash=capsule_lock.engine.core_source_hash,
+                comfyui_frontend_version=profile_selection.profile.comfyui_frontend_version
+                if profile_selection is not None
+                else "unknown",
+                enabled_custom_node_manifest_hash=enabled_custom_node_hash,
+                launch_config_hash=launch_config_hash,
+                model_view_hash=model_view_hash,
+            )
         return RunnerWorkspaceManifest(
             schema_version=RUNTIME_MANIFEST_SCHEMA_VERSION,
-            fingerprint=runtime.runner_fingerprint,
+            fingerprint=fingerprint,
             runtime_profile_id=runtime.runtime_profile_id,
             runtime_profile_variant_id=runtime.runtime_profile_variant_id,
             runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
             runtime_profile_catalog_version=runtime.runtime_profile_catalog_version,
             fingerprint_schema_version=runtime.fingerprint_schema_version,
-            dependency_env_fingerprint=runtime.dependency_env_fingerprint,
+            dependency_env_fingerprint=dependency_env_fingerprint,
             comfyui_version=capsule_lock.engine.comfyui_version,
             comfyui_source_hash=capsule_lock.engine.core_source_hash,
-            enabled_custom_node_hash=sha256_fingerprint(capsule_lock.custom_nodes),
-            launch_config_hash=sha256_fingerprint(
-                {
-                    "engine": capsule_lock.engine.type,
-                    "runner": "core_comfyui",
-                    "phase": "phase4-runner-workspace",
-                }
-            ),
-            model_view_hash=sha256_fingerprint(capsule_lock.models),
+            enabled_custom_node_hash=enabled_custom_node_hash,
+            launch_config_hash=launch_config_hash,
+            model_view_hash=model_view_hash,
             status=status,
             smoke_test_status=smoke_test_status,
         )
@@ -494,3 +646,15 @@ _WORKSPACE_OWNED_NAMES = {
 
 def _safe_fingerprint(fingerprint: str) -> str:
     return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+
+
+def _uv_python_platform(os_name: str, architecture: str) -> str | None:
+    if os_name == "darwin" and architecture == "arm64":
+        return "aarch64-apple-darwin"
+    if os_name == "darwin" and architecture == "x64":
+        return "x86_64-apple-darwin"
+    if os_name == "windows" and architecture == "x64":
+        return "x86_64-pc-windows-msvc"
+    if os_name == "linux" and architecture == "x64":
+        return "x86_64-unknown-linux-gnu"
+    return None
