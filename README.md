@@ -61,6 +61,7 @@ The end user would then open the workflow as a clean, intuitive interface design
 - [Memory Governor implementation plan](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md)
 - [Milestone 1](docs/MILESTONE_1.md)
 - [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
+- [Import, dashboard widgets, and user dashboard flow](docs/NOOFY_IMPORT_DASHBOARD_WIDGET_FLOW.md)
 
 ## Main Goal
 
