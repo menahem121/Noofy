@@ -10,9 +10,11 @@ check.
 
 from __future__ import annotations
 
+import json
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -59,6 +61,8 @@ from app.runtime.workspace_store import (
 )
 
 RUNTIME_MANIFEST_SCHEMA_VERSION = "0.1.0"
+RUNTIME_QUARANTINE_FILENAME = "quarantine.json"
+DEFAULT_QUARANTINE_RETENTION_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -205,6 +209,61 @@ class RuntimeWorkspacePreparer:
             runner_workspace_path=prepared_workspace.runner_workspace_path,
         )
 
+    def quarantine_failed(
+        self,
+        prepared_workspace: PreparedRuntimeWorkspace,
+        *,
+        workflow_id: str,
+        reason: str,
+        retention_days: int = DEFAULT_QUARANTINE_RETENTION_DAYS,
+    ) -> None:
+        quarantined_at = datetime.now(UTC)
+        retain_until = quarantined_at + timedelta(days=retention_days)
+        base_payload = {
+            "schema_version": RUNTIME_MANIFEST_SCHEMA_VERSION,
+            "workflow_id": workflow_id,
+            "reason": reason,
+            "quarantined_at": quarantined_at.isoformat(),
+            "retain_until": retain_until.isoformat(),
+            "retention_days": retention_days,
+        }
+
+        artifacts = [
+            (
+                "dependency_env",
+                prepared_workspace.dependency_env_path,
+                prepared_workspace.dependency_env_manifest.fingerprint,
+                prepared_workspace.dependency_env_manifest.status,
+            ),
+            (
+                "runner_workspace",
+                prepared_workspace.runner_workspace_path,
+                prepared_workspace.runner_workspace_manifest.fingerprint,
+                prepared_workspace.runner_workspace_manifest.status,
+            ),
+        ]
+        for artifact_kind, artifact_path, fingerprint, status in artifacts:
+            if status is InstallStatus.READY:
+                continue
+            payload = {
+                **base_payload,
+                "artifact_kind": artifact_kind,
+                "fingerprint": fingerprint,
+            }
+            self._write_quarantine_marker(artifact_path, payload)
+            self.log_store.add(
+                "warning",
+                "Quarantined failed staged runtime artifact",
+                "runtime.workspace",
+                workflow_id=workflow_id,
+                details={
+                    "artifact_kind": artifact_kind,
+                    "fingerprint": fingerprint,
+                    "path": str(artifact_path),
+                    "retain_until": retain_until.isoformat(),
+                },
+            )
+
     def _ensure_staged_dependency_env(
         self,
         manifest: DependencyEnvManifest,
@@ -256,6 +315,13 @@ class RuntimeWorkspacePreparer:
         )
         return manifest
 
+    def _write_quarantine_marker(self, artifact_path: Path, payload: Mapping[str, object]) -> None:
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        (artifact_path / RUNTIME_QUARANTINE_FILENAME).write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
     def _install_staged_dependency_env(
         self,
         manifest: DependencyEnvManifest,
@@ -298,7 +364,13 @@ class RuntimeWorkspacePreparer:
         return self.dependency_env_store.read(manifest.fingerprint)
 
     def _resolved_dependency_lock(self, manifest: DependencyEnvManifest, workflow_id: str) -> ResolvedDependencyLock:
-        lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+        lock = self._find_existing_dependency_lock(
+            manifest.dependency_lock_hash,
+            runtime_profile_id=manifest.runtime_profile_id,
+            runtime_profile_variant_id=manifest.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
+            install_policy_version=manifest.install_policy_version,
+        )
         source_files_dir = self._custom_node_source_files_dir(workflow_id)
         if lock is None and self.dependency_lock_resolver is not None and source_files_dir is not None:
             lock = self.dependency_lock_resolver.resolve(
@@ -332,7 +404,55 @@ class RuntimeWorkspacePreparer:
             raise RuntimeError("Resolved dependency lock hash does not match dependency manifest.")
         return lock
 
-    def _find_existing_dependency_lock(self, lock_hash: str) -> ResolvedDependencyLock | None:
+    def _find_existing_dependency_lock(
+        self,
+        lock_hash: str,
+        *,
+        runtime_profile_id: str | None = None,
+        runtime_profile_variant_id: str | None = None,
+        runtime_profile_manifest_hash: str | None = None,
+        install_policy_version: str | None = None,
+    ) -> ResolvedDependencyLock | None:
+        if (
+            runtime_profile_id is not None
+            and runtime_profile_variant_id is not None
+            and runtime_profile_manifest_hash is not None
+            and install_policy_version is not None
+        ):
+            cache_key = _dependency_lock_cache_key(
+                lock_hash,
+                runtime_profile_id=runtime_profile_id,
+                runtime_profile_variant_id=runtime_profile_variant_id,
+                runtime_profile_manifest_hash=runtime_profile_manifest_hash,
+                install_policy_version=install_policy_version,
+            )
+            lock = self.dependency_locks.get(cache_key)
+            if lock is not None:
+                return lock
+            lock = self.dependency_locks.get(lock_hash)
+            if lock is not None and _dependency_lock_matches_runtime(
+                lock,
+                runtime_profile_id=runtime_profile_id,
+                runtime_profile_variant_id=runtime_profile_variant_id,
+                runtime_profile_manifest_hash=runtime_profile_manifest_hash,
+                install_policy_version=install_policy_version,
+            ):
+                self.dependency_locks[cache_key] = lock
+                return lock
+            if self.dependency_lock_store is not None:
+                lock = self.dependency_lock_store.read_matching(
+                    lock_hash,
+                    runtime_profile_id=runtime_profile_id,
+                    runtime_profile_variant_id=runtime_profile_variant_id,
+                    runtime_profile_manifest_hash=runtime_profile_manifest_hash,
+                    install_policy_version=install_policy_version,
+                )
+                if lock is not None:
+                    self.dependency_locks[cache_key] = lock
+                    self.dependency_locks[lock_hash] = lock
+                    return lock
+            return None
+
         lock = self.dependency_locks.get(lock_hash)
         if lock is not None:
             return lock
@@ -345,6 +465,15 @@ class RuntimeWorkspacePreparer:
     def _remember_dependency_lock(self, lock: ResolvedDependencyLock) -> None:
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
         self.dependency_locks[lock_hash] = lock
+        self.dependency_locks[
+            _dependency_lock_cache_key(
+                lock_hash,
+                runtime_profile_id=lock.runtime_profile_id,
+                runtime_profile_variant_id=lock.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=lock.runtime_profile_manifest_hash,
+                install_policy_version=lock.install_policy_version,
+            )
+        ] = lock
         if self.dependency_lock_store is not None:
             self.dependency_lock_store.write(lock)
 
@@ -474,7 +603,13 @@ class RuntimeWorkspacePreparer:
         source_files_dir = self._custom_node_source_files_dir(capsule_lock.workflow.package_id)
         source_dirs = custom_node_dependency_source_dirs(source_files_dir) if source_files_dir is not None else []
         if self.dependency_lock_resolver is not None and source_dirs:
-            existing_core_lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+            existing_core_lock = self._find_existing_dependency_lock(
+                manifest.dependency_lock_hash,
+                runtime_profile_id=manifest.runtime_profile_id,
+                runtime_profile_variant_id=manifest.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
+                install_policy_version=manifest.install_policy_version,
+            )
             custom_node_lock = self.dependency_lock_resolver.resolve(
                 DependencyResolutionRequest(
                     source_dirs=source_dirs,
@@ -495,7 +630,13 @@ class RuntimeWorkspacePreparer:
                 lock = custom_node_lock
             self._remember_dependency_lock(lock)
         else:
-            lock = self._find_existing_dependency_lock(manifest.dependency_lock_hash)
+            lock = self._find_existing_dependency_lock(
+                manifest.dependency_lock_hash,
+                runtime_profile_id=manifest.runtime_profile_id,
+                runtime_profile_variant_id=manifest.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
+                install_policy_version=manifest.install_policy_version,
+            )
         if lock is None:
             return manifest
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
@@ -721,6 +862,41 @@ _WORKSPACE_OWNED_NAMES = {
 
 def _safe_fingerprint(fingerprint: str) -> str:
     return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+
+
+def _dependency_lock_cache_key(
+    lock_hash: str,
+    *,
+    runtime_profile_id: str,
+    runtime_profile_variant_id: str,
+    runtime_profile_manifest_hash: str,
+    install_policy_version: str,
+) -> str:
+    return "|".join(
+        (
+            lock_hash,
+            runtime_profile_id,
+            runtime_profile_variant_id,
+            runtime_profile_manifest_hash,
+            install_policy_version,
+        )
+    )
+
+
+def _dependency_lock_matches_runtime(
+    lock: ResolvedDependencyLock,
+    *,
+    runtime_profile_id: str,
+    runtime_profile_variant_id: str,
+    runtime_profile_manifest_hash: str,
+    install_policy_version: str,
+) -> bool:
+    return (
+        lock.runtime_profile_id == runtime_profile_id
+        and lock.runtime_profile_variant_id == runtime_profile_variant_id
+        and lock.runtime_profile_manifest_hash == runtime_profile_manifest_hash
+        and lock.install_policy_version == install_policy_version
+    )
 
 
 def _uv_python_platform(os_name: str, architecture: str) -> str | None:

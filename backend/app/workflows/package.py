@@ -111,6 +111,23 @@ class WorkflowImportMetadata(BaseModel):
     user_facing_message: str = "Imported"
 
 
+class WorkflowExecutionSmokeFixture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    prompt: dict[str, Any]
+    required_node_types: list[str] = Field(default_factory=list)
+    expected_output_node_count: int | None = Field(default=None, ge=0)
+    expected_output_node_ids: list[str] = Field(default_factory=list)
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
+
+
+class WorkflowSmokeTests(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_execution: WorkflowExecutionSmokeFixture | None = None
+
+
 class WorkflowPackage(BaseModel):
     metadata: WorkflowMetadata
     identity: WorkflowPackageIdentity | None = None
@@ -127,4 +144,5 @@ class WorkflowPackage(BaseModel):
     exported_package: dict[str, Any] = Field(default_factory=dict)
     exported_capsule: dict[str, Any] = Field(default_factory=dict)
     observed_hardware: dict[str, Any] = Field(default_factory=dict)
+    smoke_tests: WorkflowSmokeTests = Field(default_factory=WorkflowSmokeTests)
     import_metadata: WorkflowImportMetadata | None = None

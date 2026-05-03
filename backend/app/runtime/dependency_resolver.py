@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -63,6 +64,7 @@ class MaterializedWheel:
     approved_cache_ref: str
     source_index_url: str
     platform_tags: list[str]
+    import_names: list[str]
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,7 @@ class UvDependencyLockResolver:
             approved_cache_ref=wheel.approved_cache_ref,
             platform_tags=wheel.platform_tags,
             environment_marker=requirement.environment_marker,
+            import_names=wheel.import_names,
             relationship=relationship,
             requested_by=["dependency-marker"] if relationship is DependencyRelationship.DIRECT else [],
             resolver_name=resolver.name,
@@ -306,6 +309,7 @@ class PyPIPackageIndexClient:
                 approved_cache_ref=filename,
                 source_index_url=metadata_url,
                 platform_tags=_platform_tags_from_wheel(filename),
+                import_names=_import_names_from_wheel(target),
             )
         raise DependencyResolutionError(
             DependencyPolicyErrorCode.MISSING_WHEEL,
@@ -378,6 +382,28 @@ def _platform_tags_from_wheel(filename: str) -> list[str]:
     if len(parts) < 5:
         return []
     return ["-".join(parts[-3:])]
+
+
+def _import_names_from_wheel(path: Path) -> list[str]:
+    try:
+        with zipfile.ZipFile(path) as wheel:
+            for name in wheel.namelist():
+                if name.endswith(".dist-info/top_level.txt"):
+                    contents = wheel.read(name).decode("utf-8", errors="replace")
+                    return sorted(
+                        {
+                            line.strip()
+                            for line in contents.splitlines()
+                            if line.strip() and _is_valid_import_name(line.strip())
+                        }
+                    )
+    except zipfile.BadZipFile:
+        return []
+    return []
+
+
+def _is_valid_import_name(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$", value))
 
 
 def _run_command(

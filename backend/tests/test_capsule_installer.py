@@ -18,10 +18,18 @@ from app.runtime.dependency_lock import (
     with_computed_lock_hash,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
+from app.runtime.isolation import (
+    CapsuleLock,
+    InstallStatus,
+    SmokeStageResult,
+    SmokeStageStatus,
+    SmokeTestReport,
+    SmokeTestStatus,
+)
 from app.runtime.model_store import ModelStore
 from app.runtime.profiles import load_runtime_profile_catalog
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.smoke_test import RunnerSmokeTestError
+from app.runtime.workspace_preparer import RUNTIME_QUARANTINE_FILENAME, RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
 
@@ -124,6 +132,17 @@ def _resolved_lock_for_capsule(capsule: CapsuleLock) -> ResolvedDependencyLock:
     )
 
 
+def _passed_smoke_report(*, custom_nodes: bool = False) -> SmokeTestReport:
+    return SmokeTestReport(
+        dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+        custom_node_import=SmokeStageResult(
+            status=SmokeStageStatus.PASSED if custom_nodes else SmokeStageStatus.SKIPPED,
+        ),
+        runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
+        workflow_execution=SmokeStageResult(status=SmokeStageStatus.PASSED),
+    )
+
+
 @pytest.mark.anyio
 async def test_prepare_no_models_transitions_to_ready(tmp_path: Path) -> None:
     async def downloader(url: str, dest: Path) -> int:
@@ -208,7 +227,7 @@ async def test_prepare_records_runtime_workspace_paths_when_preparer_is_configur
 
     state = await installer.prepare(capsule)
 
-    assert state.status is InstallStatus.READY
+    assert state.status is InstallStatus.PREPARED_NEEDS_INPUT_SETUP
     assert state.dependency_env_path is not None
     assert state.runner_workspace_path is not None
     assert (Path(state.dependency_env_path) / "manifest.json").exists()
@@ -239,12 +258,13 @@ async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) ->
     )
     smoke_calls = []
 
-    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
         smoke_calls.append((capsule_lock, prepared_workspace))
         assert capsule_lock == capsule
         assert (prepared_workspace.dependency_env_path / "manifest.json").exists()
         assert (prepared_workspace.runner_workspace_path / "manifest.json").exists()
-        assert state_store.get(capsule.runtime.capsule_fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
+        assert state_store.get(capsule.runtime.capsule_fingerprint).status is InstallStatus.SMOKE_TESTING
+        return _passed_smoke_report()
 
     installer = CapsuleInstaller(
         install_state_store=state_store,
@@ -259,6 +279,7 @@ async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) ->
     assert len(smoke_calls) == 1
     assert state.status is InstallStatus.READY
     assert state.smoke_test_status is SmokeTestStatus.PASSED
+    assert state.smoke_test_report.workflow_execution.status is SmokeStageStatus.PASSED
     persisted = state_store.get("fp-smoke")
     assert persisted is not None
     assert persisted.status is InstallStatus.READY
@@ -296,7 +317,7 @@ async def test_prepare_smoke_failure_marks_state_failed_and_not_ready(tmp_path: 
         log_store=log_store,
     )
 
-    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
         raise RuntimeError("runner never became healthy")
 
     installer = CapsuleInstaller(
@@ -321,6 +342,187 @@ async def test_prepare_smoke_failure_marks_state_failed_and_not_ready(tmp_path: 
     runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
     assert runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
     assert runner_manifest.smoke_test_status is SmokeTestStatus.NOT_RUN
+    dependency_quarantine = (
+        workspace_preparer.dependency_env_store.artifact_dir(capsule.runtime.dependency_env_fingerprint)
+        / RUNTIME_QUARANTINE_FILENAME
+    )
+    runner_quarantine = (
+        workspace_preparer.runner_workspace_store.artifact_dir(capsule.runtime.runner_fingerprint)
+        / RUNTIME_QUARANTINE_FILENAME
+    )
+    assert dependency_quarantine.exists()
+    assert runner_quarantine.exists()
+    dependency_marker = json.loads(dependency_quarantine.read_text(encoding="utf-8"))
+    runner_marker = json.loads(runner_quarantine.read_text(encoding="utf-8"))
+    assert dependency_marker["artifact_kind"] == "dependency_env"
+    assert runner_marker["artifact_kind"] == "runner_workspace"
+    assert dependency_marker["reason"] == "runner never became healthy"
+    assert runner_marker["reason"] == "runner never became healthy"
+    assert dependency_marker["retain_until"]
+    assert runner_marker["retain_until"]
+
+
+@pytest.mark.anyio
+async def test_prepare_failed_smoke_stage_quarantines_staged_workspace(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-stage-fail", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        return SmokeTestReport(
+            dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            custom_node_import=SmokeStageResult(status=SmokeStageStatus.SKIPPED),
+            runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            workflow_execution=SmokeStageResult(
+                status=SmokeStageStatus.FAILED,
+                message="fixture output was missing",
+            ),
+        )
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError, match="fixture output was missing"):
+        await installer.prepare(capsule)
+
+    dependency_quarantine = (
+        workspace_preparer.dependency_env_store.artifact_dir(capsule.runtime.dependency_env_fingerprint)
+        / RUNTIME_QUARANTINE_FILENAME
+    )
+    runner_quarantine = (
+        workspace_preparer.runner_workspace_store.artifact_dir(capsule.runtime.runner_fingerprint)
+        / RUNTIME_QUARANTINE_FILENAME
+    )
+    assert json.loads(dependency_quarantine.read_text(encoding="utf-8"))["reason"] == "fixture output was missing"
+    assert json.loads(runner_quarantine.read_text(encoding="utf-8"))["reason"] == "fixture output was missing"
+
+
+@pytest.mark.anyio
+async def test_prepare_runner_startup_failure_persists_smoke_report(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-startup-fail", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+    startup_report = SmokeTestReport(
+        dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+        custom_node_import=SmokeStageResult(status=SmokeStageStatus.SKIPPED),
+        runner_health=SmokeStageResult(
+            status=SmokeStageStatus.FAILED,
+            message="startup timeout",
+        ),
+        workflow_execution=SmokeStageResult(status=SmokeStageStatus.NOT_RUN),
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        raise RunnerSmokeTestError("Runner smoke test failed: startup timeout", report=startup_report)
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError, match="startup timeout") as exc_info:
+        await installer.prepare(capsule)
+
+    assert exc_info.value.state.smoke_test_status is SmokeTestStatus.FAILED
+    assert exc_info.value.state.smoke_test_report.runner_health.status is SmokeStageStatus.FAILED
+    assert exc_info.value.state.smoke_test_report.runner_health.message == "startup timeout"
+
+
+@pytest.mark.anyio
+async def test_prepare_custom_node_capsule_marks_ready_after_all_smoke_stages_pass(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-custom-node-ready",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "custom-node-a",
+                    "source": "https://example.invalid/custom-node-a.git",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomNodeA"],
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        return _passed_smoke_report(custom_nodes=True)
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.READY
+    assert state.smoke_test_status is SmokeTestStatus.PASSED
+    runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
+    assert runner_manifest.status is InstallStatus.READY
 
 
 @pytest.mark.anyio
@@ -447,14 +649,10 @@ async def test_prepare_custom_node_capsule_prepares_dependencies_without_marking
         log_store=log_store,
     )
 
-    async def smoke_test(capsule_lock, prepared_workspace) -> None:
-        raise AssertionError("custom-node capsules are not smoke-tested until custom-node materialization exists")
-
     installer = CapsuleInstaller(
         install_state_store=state_store,
         model_store=model_store,
         workspace_preparer=workspace_preparer,
-        workspace_smoke_test=smoke_test,
         log_store=log_store,
     )
 
@@ -490,10 +688,11 @@ async def test_prepare_can_retry_after_smoke_failure_and_promote_staged_workspac
     )
     attempts = {"count": 0}
 
-    async def smoke_test(capsule_lock, prepared_workspace) -> None:
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
         attempts["count"] += 1
         if attempts["count"] == 1:
             raise RuntimeError("runner never became healthy")
+        return _passed_smoke_report()
 
     installer = CapsuleInstaller(
         install_state_store=state_store,

@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import platform
 import shutil
 import stat
+import subprocess
 import uuid
-import platform
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -49,6 +50,7 @@ from app.workflows.package import (
     WorkflowMetadata,
     WorkflowPackage,
     WorkflowPackageIdentity,
+    WorkflowSmokeTests,
 )
 
 NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
@@ -247,6 +249,7 @@ class NoofyArchiveImporter:
                 exported_package=package_json,
                 exported_capsule=capsule_json,
                 observed_hardware=observed_hardware,
+                smoke_tests=WorkflowSmokeTests.model_validate(package_json.get("smoke_tests") or {}),
                 import_metadata=WorkflowImportMetadata(
                     original_filename=self.original_filename,
                     imported_at=datetime.now(UTC).isoformat(),
@@ -647,7 +650,7 @@ def _select_import_runtime_profile(profiles: list[RuntimeProfile]) -> tuple[Runt
     profile = profiles[0]
     os_name = _current_os_name()
     architecture = _current_architecture()
-    preferred_gpu = "mps" if os_name == "darwin" and architecture == "arm64" else "cpu"
+    preferred_gpu = _preferred_gpu_backend(os_name, architecture)
     for variant in profile.variants:
         if variant.os == os_name and variant.architecture == architecture and variant.gpu_backend_profile == preferred_gpu:
             return profile, variant
@@ -696,6 +699,28 @@ def _current_architecture() -> str:
     if machine in {"x86_64", "amd64", "x64"}:
         return "x64"
     return machine or "unknown"
+
+
+def _preferred_gpu_backend(os_name: str, architecture: str) -> str:
+    if os_name == "darwin" and architecture == "arm64":
+        return "mps"
+    if os_name in {"linux", "windows"} and architecture == "x64" and _has_nvidia_gpu():
+        return "cuda"
+    return "cpu"
+
+
+def _has_nvidia_gpu() -> bool:
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _trust_level_from_string(value: str) -> TrustLevel:

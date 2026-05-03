@@ -47,7 +47,7 @@ from app.runtime.model_store import LocalModelRequirement, ModelStore, http_stre
 from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.smoke_test import RunnerSmokeTester
+from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
@@ -201,6 +201,7 @@ class EngineService:
             state = await self.capsule_installer.prepare(
                 capsule_lock,
                 local_model_requirements=local_model_requirements,
+                workflow_execution_smoke_allowed=not package.unresolved_runtime_inputs,
             )
         except CapsuleInstallError as exc:
             self.log_store.add(
@@ -568,6 +569,7 @@ class EngineService:
             "dependency_env_path": state.dependency_env_path,
             "runner_workspace_path": state.runner_workspace_path,
             "smoke_test_status": state.smoke_test_status.value,
+            "smoke_test_report": state.smoke_test_report.model_dump(mode="json"),
             "last_error": state.last_error,
         }
 
@@ -625,6 +627,7 @@ class EngineService:
             "dependency_env_path": None,
             "runner_workspace_path": None,
             "smoke_test_status": "not_run",
+            "smoke_test_report": {},
             "last_error": None,
         }
 
@@ -746,6 +749,13 @@ def _workflow_runner_launch_spec(
     runner_id = EngineService._runner_id_for_capsule(capsule_lock)
     if runner_id_suffix:
         runner_id = f"{runner_id}-{runner_id_suffix}"
+    extra_args = [
+        "--base-directory",
+        str(runner_workspace_path),
+        "--disable-auto-launch",
+    ]
+    if not capsule_lock.custom_nodes:
+        extra_args.append("--disable-all-custom-nodes")
     return RunnerLaunchSpec(
         runner_id=runner_id,
         kind=RunnerKind.ISOLATED_COMFYUI,
@@ -755,12 +765,7 @@ def _workflow_runner_launch_spec(
         dependency_env_path=dependency_env_path,
         runner_workspace_path=runner_workspace_path,
         host=runtime_manager.managed_host,
-        extra_args=[
-            "--base-directory",
-            str(runner_workspace_path),
-            "--disable-auto-launch",
-            "--disable-all-custom-nodes",
-        ],
+        extra_args=extra_args,
         env={
             "NOOFY_CAPSULE_FINGERPRINT": capsule_lock.runtime.capsule_fingerprint,
             "NOOFY_DEPENDENCY_ENV_PATH": str(dependency_env_path),
@@ -920,6 +925,63 @@ def _workflow_source_files_dir(
     return source_files_dir if source_files_dir.exists() else None
 
 
+def _smoke_execution_fixture_for_capsule(
+    capsule_lock: CapsuleLock,
+    *,
+    workflow_loader: WorkflowPackageLoader,
+) -> SmokeExecutionFixture | None:
+    package = None
+    for workflow_id in (capsule_lock.workflow.package_id, _imported_workflow_id(capsule_lock)):
+        try:
+            package = workflow_loader.get_package(workflow_id)
+            break
+        except KeyError:
+            continue
+    if package is None:
+        return None
+    fixture = package.smoke_tests.workflow_execution
+    if fixture is None:
+        if capsule_lock.custom_nodes:
+            return None
+        return _default_core_smoke_execution_fixture()
+    return SmokeExecutionFixture(
+        name=fixture.name,
+        prompt=fixture.prompt,
+        required_node_types=fixture.required_node_types,
+        expected_output_node_count=fixture.expected_output_node_count,
+        expected_output_node_ids=fixture.expected_output_node_ids,
+        timeout_seconds=fixture.timeout_seconds,
+    )
+
+
+def _default_core_smoke_execution_fixture() -> SmokeExecutionFixture:
+    return SmokeExecutionFixture(
+        name="default-core-empty-image",
+        prompt={
+            "1": {
+                "class_type": "EmptyImage",
+                "inputs": {
+                    "width": 64,
+                    "height": 64,
+                    "batch_size": 1,
+                    "color": 0x335577,
+                },
+            },
+            "2": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "images": ["1", 0],
+                    "filename_prefix": "noofy_smoke",
+                },
+            },
+        },
+        required_node_types=("EmptyImage", "SaveImage"),
+        expected_output_node_count=1,
+        expected_output_node_ids=("2",),
+        timeout_seconds=30,
+    )
+
+
 def _imported_workflow_id(capsule_lock: CapsuleLock) -> str:
     return "__".join(
         [
@@ -1034,6 +1096,10 @@ def create_default_engine_service() -> EngineService:
             runner_workspace_path=prepared_workspace.runner_workspace_path,
             runtime_manager=runtime_manager,
             runner_id_suffix="smoke",
+        ),
+        execution_fixture_resolver=lambda capsule_lock, prepared_workspace: _smoke_execution_fixture_for_capsule(
+            capsule_lock,
+            workflow_loader=workflow_loader,
         ),
         log_store=log_store,
     )

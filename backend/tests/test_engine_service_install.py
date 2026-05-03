@@ -11,10 +11,16 @@ import pytest
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
-from app.engine.service import EngineService
+from app.engine.service import EngineService, _smoke_execution_fixture_for_capsule
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import InstallStatus, SmokeTestStatus
+from app.runtime.isolation import (
+    InstallStatus,
+    SmokeStageResult,
+    SmokeStageStatus,
+    SmokeTestReport,
+    SmokeTestStatus,
+)
 from app.runtime.model_store import ModelStore
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessStatus
 from app.runtime.supervisor import (
@@ -106,8 +112,8 @@ def _build_service(
             log_store=log_store,
         )
 
-        async def workspace_smoke_test(capsule_lock, prepared_workspace) -> None:
-            return None
+        async def workspace_smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+            return _passed_smoke_report(custom_nodes=bool(capsule_lock.custom_nodes))
 
     capsule_installer = CapsuleInstaller(
         install_state_store=state_store,
@@ -136,6 +142,17 @@ def _build_service(
         ),
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
+    )
+
+
+def _passed_smoke_report(*, custom_nodes: bool = False) -> SmokeTestReport:
+    return SmokeTestReport(
+        dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+        custom_node_import=SmokeStageResult(
+            status=SmokeStageStatus.PASSED if custom_nodes else SmokeStageStatus.SKIPPED,
+        ),
+        runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
+        workflow_execution=SmokeStageResult(status=SmokeStageStatus.PASSED),
     )
 
 
@@ -279,6 +296,91 @@ def test_get_install_state_for_unknown_workflow_returns_unsupported(tmp_path: Pa
     assert payload["capsule_fingerprint"] is None
 
 
+def test_smoke_execution_fixture_resolver_reads_workflow_package_fixture(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="d")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    package_path = packages_dir / "runner_workflow" / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["smoke_tests"] = {
+        "workflow_execution": {
+            "name": "tiny-fixture",
+            "prompt": {"1": {"class_type": "NoOp", "inputs": {}}},
+            "required_node_types": ["NoOp"],
+            "expected_output_node_count": 1,
+            "expected_output_node_ids": ["1"],
+            "timeout_seconds": 4,
+        }
+    }
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+
+    fixture = _smoke_execution_fixture_for_capsule(
+        capsule_lock,
+        workflow_loader=service.workflow_loader,
+    )
+
+    assert fixture is not None
+    assert fixture.name == "tiny-fixture"
+    assert fixture.prompt == {"1": {"class_type": "NoOp", "inputs": {}}}
+    assert fixture.required_node_types == ["NoOp"]
+    assert fixture.expected_output_node_count == 1
+    assert fixture.expected_output_node_ids == ["1"]
+    assert fixture.timeout_seconds == 4
+
+
+def test_smoke_execution_fixture_resolver_generates_default_for_core_package_without_fixture(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="e")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    package_path = packages_dir / "runner_workflow" / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package.pop("smoke_tests", None)
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+
+    fixture = _smoke_execution_fixture_for_capsule(
+        capsule_lock,
+        workflow_loader=service.workflow_loader,
+    )
+
+    assert fixture is not None
+    assert fixture.name == "default-core-empty-image"
+    assert fixture.prompt["1"]["class_type"] == "EmptyImage"
+    assert fixture.prompt["2"]["class_type"] == "SaveImage"
+    assert fixture.required_node_types == ("EmptyImage", "SaveImage")
+    assert fixture.expected_output_node_ids == ("2",)
+
+
+def test_smoke_execution_fixture_resolver_does_not_generate_default_for_custom_nodes(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="f")
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    package_path = packages_dir / "runner_workflow" / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package.pop("smoke_tests", None)
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+
+    fixture = _smoke_execution_fixture_for_capsule(
+        capsule_lock,
+        workflow_loader=service.workflow_loader,
+    )
+
+    assert fixture is None
+
+
 @pytest.mark.anyio
 async def test_start_workflow_runner_requires_ready_install_state(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
@@ -415,6 +517,42 @@ async def test_start_workflow_runner_binds_ready_isolated_runner(tmp_path: Path)
     assert coordinator.started_specs[0].env["NOOFY_WORKFLOW_ID"] == "runner_workflow"
     package = service.workflow_loader.get_package("runner_workflow")
     assert service.runner_supervisor.acquire_runner(package).runner_id == result["runner"]["runner_id"]
+
+
+@pytest.mark.anyio
+async def test_start_custom_node_workflow_runner_allows_materialized_custom_nodes(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="c")
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+
+    install_result = await service.prepare_workflow("runner_workflow")
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert install_result["status"] == InstallStatus.READY.value
+    assert result["status"] == RunnerStatus.READY.value
+    assert coordinator is not None
+    assert "--disable-auto-launch" in coordinator.started_specs[0].extra_args
+    assert "--disable-all-custom-nodes" not in coordinator.started_specs[0].extra_args
 
 
 @pytest.mark.anyio
@@ -820,6 +958,38 @@ async def test_prepare_workflow_drives_bundled_capsule_to_ready(tmp_path: Path) 
     assert followup["status"] == InstallStatus.READY.value
     assert followup["dependency_env_path"] == payload["dependency_env_path"]
     assert followup["runner_workspace_path"] == payload["runner_workspace_path"]
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_with_unresolved_runtime_input_does_not_mark_ready(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    workflow_dir = packages_dir / "runner_workflow"
+    workflow_dir.mkdir(parents=True)
+    package = json.loads((_bundled_packages_dir() / "text_to_image_v0" / "package.json").read_text())
+    package["metadata"]["id"] = "runner_workflow"
+    package["metadata"]["name"] = "runner_workflow"
+    package["required_models"] = []
+    package["unresolved_runtime_inputs"] = [
+        {
+            "node_id": "10",
+            "node_type": "LoadImage",
+            "input_name": "image",
+            "reason": "creator_local_image_not_bundled",
+        }
+    ]
+    (workflow_dir / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    (workflow_dir / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(_runner_capsule_payload(runner_char="0")),
+        encoding="utf-8",
+    )
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.PREPARED_NEEDS_INPUT_SETUP.value
+    assert result["smoke_test_status"] == SmokeTestStatus.NOT_RUN.value
+    assert result["smoke_test_report"]["workflow_execution"]["status"] == SmokeStageStatus.BLOCKED.value
+    assert "unresolved runtime inputs" in result["smoke_test_report"]["workflow_execution"]["message"]
 
 
 @pytest.mark.anyio

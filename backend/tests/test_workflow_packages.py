@@ -56,6 +56,50 @@ def test_text_to_image_package_loads() -> None:
     assert package.metadata.id == "text_to_image_v0"
     assert package.engine == "comfyui"
     assert package.dashboard.sections
+    assert package.smoke_tests.workflow_execution is not None
+    assert package.smoke_tests.workflow_execution.name == "default-core-empty-image"
+    assert package.smoke_tests.workflow_execution.required_node_types == ["EmptyImage", "SaveImage"]
+
+
+def test_workflow_package_can_declare_execution_smoke_fixture(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "fixture_workflow"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        """
+        {
+          "metadata": {
+            "id": "fixture_workflow",
+            "name": "Fixture workflow",
+            "version": "0.1.0"
+          },
+          "engine": "comfyui",
+          "comfyui_graph": {},
+          "dashboard": {"version": "0.1.0", "sections": []},
+          "smoke_tests": {
+            "workflow_execution": {
+              "name": "tiny-noop",
+              "prompt": {
+                "1": {"class_type": "NoOp", "inputs": {}}
+              },
+              "required_node_types": ["NoOp"],
+              "expected_output_node_count": 1,
+              "expected_output_node_ids": ["1"],
+              "timeout_seconds": 5
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package("fixture_workflow")
+
+    assert package.smoke_tests.workflow_execution is not None
+    assert package.smoke_tests.workflow_execution.name == "tiny-noop"
+    assert package.smoke_tests.workflow_execution.required_node_types == ["NoOp"]
+    assert package.smoke_tests.workflow_execution.expected_output_node_count == 1
+    assert package.smoke_tests.workflow_execution.expected_output_node_ids == ["1"]
+    assert package.smoke_tests.workflow_execution.timeout_seconds == 5
 
 
 def test_validator_reports_missing_model() -> None:

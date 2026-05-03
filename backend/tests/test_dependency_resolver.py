@@ -53,6 +53,7 @@ class _FakePackageIndexClient:
             approved_cache_ref=filename,
             source_index_url="https://pypi.org/simple",
             platform_tags=["py3-none-any"],
+            import_names=["demo_import"],
         )
 
 
@@ -133,6 +134,7 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path
     assert lock.resolver.name == "uv"
     assert lock.resolver.version == "0.9.0"
     assert lock.wheels[0].relationship is DependencyRelationship.DIRECT
+    assert lock.wheels[0].import_names == ["demo_import"]
     assert (tmp_path / "wheel-cache" / "demo-1.0.0-py3-none-any.whl").exists()
     assert "--generate-hashes" in commands[1]
     assert "--no-build" in commands[1]

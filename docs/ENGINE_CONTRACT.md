@@ -20,7 +20,7 @@ The app owns the engine contract. UI code should depend on this contract, not on
 
 The first implementation is `ComfyUIEngineAdapter`, which translates app operations into ComfyUI HTTP and WebSocket calls.
 
-The frontend must not know whether a workflow is running through ComfyUI, a future macOS-native engine, or another adapter.
+The frontend must not know whether a workflow is running through ComfyUI, a future platform-native engine, or another adapter.
 
 For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI sidecar. Connecting to an externally launched ComfyUI instance is a development convenience only.
 

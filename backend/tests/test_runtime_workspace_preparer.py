@@ -224,6 +224,44 @@ def test_prepare_loads_resolved_dependency_lock_from_store(tmp_path: Path) -> No
     assert (prepared.dependency_env_path / "install.marker").exists()
 
 
+def test_prepare_uses_runtime_matching_dependency_lock_for_shared_hash(tmp_path: Path) -> None:
+    base = _capsule_lock()
+    stale_lock = ResolvedDependencyLock(
+        lock_hash=base.runtime.dependency_lock_hash,
+        runtime_profile_id=base.runtime.runtime_profile_id,
+        runtime_profile_variant_id="linux-x64-cuda130",
+        runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
+        install_policy_version=base.dependencies.install_policy,
+        resolver=ResolverMetadata(name="noofy-managed-core", version="0.1.0"),
+        wheels=[],
+    )
+    current_lock = ResolvedDependencyLock(
+        lock_hash=base.runtime.dependency_lock_hash,
+        runtime_profile_id=base.runtime.runtime_profile_id,
+        runtime_profile_variant_id=base.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
+        install_policy_version=base.dependencies.install_policy,
+        resolver=ResolverMetadata(name="noofy-managed-core", version="0.1.0"),
+        wheels=[],
+    )
+    lock_store = ResolvedDependencyLockStore(tmp_path / "dependency-locks")
+    lock_store.write(stale_lock)
+    lock_store.write(current_lock)
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_store=lock_store,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    preparer.prepare(base)
+
+    assert installer.requests[0].lock == current_lock
+
+
 def test_prepare_uses_generated_dependency_lock_identity_when_capsule_hash_is_stale(tmp_path: Path) -> None:
     base = _capsule_lock()
     lock = _dependency_lock_for_capsule(base)

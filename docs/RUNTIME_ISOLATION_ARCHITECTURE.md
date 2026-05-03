@@ -6,7 +6,7 @@ Status: Accepted
 
 ## Context
 
-Noofy is a local desktop AI workflow app for macOS and Windows. It hides ComfyUI complexity from beginners while preserving ComfyUI's workflow power behind an app-owned backend API.
+Noofy is a local AI workflow app for Linux, Windows, and macOS. It hides ComfyUI complexity from beginners while preserving ComfyUI's workflow power behind an app-owned backend API.
 
 Community ComfyUI workflows can include custom nodes. Custom nodes are Python code and commonly require additional Python dependencies. Installing those nodes and dependencies into one global mutable ComfyUI environment would make Noofy fragile:
 
@@ -693,6 +693,7 @@ Future sandboxing work must be evaluated per platform:
 
 - macOS App Sandbox and hardened runtime constraints
 - Windows AppContainer or restricted child-process tokens
+- Linux namespaces, seccomp, cgroups, and container-like runner restrictions
 - network restrictions for runner processes
 - per-runner filesystem allowlists
 - quarantined unverified workflow mode
@@ -729,19 +730,20 @@ Runtime checks must account for resolution, batch size, model, precision, backen
 - Python package resolution for Torch/CUDA/Metal stacks is difficult and changes over time.
 - Native wheels may be unavailable for some OS/Python/GPU combinations.
 - Windows filesystem linking behavior can complicate model deduplication.
+- Linux filesystem permissions, mount layout, and GPU device access can complicate runner isolation.
 - macOS and Windows app signing/notarization can be affected by bundled interpreters and downloaded executable code.
 - Untrusted Python code remains dangerous even in a separate virtualenv.
 - Multiple warm ComfyUI runners can exhaust VRAM quickly.
 - Install times and model downloads may be long.
-- Reliable process-tree cleanup is OS-specific and must be tested on macOS and Windows.
+- Reliable process-tree cleanup is OS-specific and must be tested on Linux, Windows, and macOS.
 - Registry locks generated on the user's machine can fail in technical and unpredictable ways.
 - GPLv3 distribution obligations for ComfyUI need legal/product approval when bundling.
 
 ## Follow-Up Decisions Needed
 
-- exact product Python distribution strategy for macOS and Windows
+- exact product Python distribution strategy for Linux, Windows, and macOS
 - whether backend packaging uses managed Python directly or a standalone executable
-- process-tree cleanup implementation for macOS and Windows
+- process-tree cleanup implementation for Linux, Windows, and macOS
 - package signature format and verification process
 - Noofy Verified package publishing process
 - registry metadata format and hosting

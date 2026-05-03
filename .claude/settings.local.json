@@ -7,7 +7,8 @@
       "mcp__stitch__list_projects",
       "mcp__stitch__list_screens",
       "WebFetch(domain:contribution.usercontent.google.com)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(grep -E \"\\\\.\\(tsx?|jsx?|json\\)$\")"
     ]
   }
 }

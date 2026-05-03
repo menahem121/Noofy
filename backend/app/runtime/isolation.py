@@ -56,6 +56,31 @@ class SmokeTestStatus(StrEnum):
     FAILED = "failed"
 
 
+class SmokeStageStatus(StrEnum):
+    NOT_RUN = "not_run"
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    BLOCKED = "blocked"
+
+
+class SmokeStageResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: SmokeStageStatus = SmokeStageStatus.NOT_RUN
+    message: str | None = None
+    details: dict[str, object] = Field(default_factory=dict)
+
+
+class SmokeTestReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dependency_env: SmokeStageResult = Field(default_factory=SmokeStageResult)
+    custom_node_import: SmokeStageResult = Field(default_factory=SmokeStageResult)
+    runner_health: SmokeStageResult = Field(default_factory=SmokeStageResult)
+    workflow_execution: SmokeStageResult = Field(default_factory=SmokeStageResult)
+
+
 class PackageIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -231,6 +256,7 @@ class InstallState(BaseModel):
     runner_workspace_path: str | None = None
     model_references: list[InstalledModelReference] = Field(default_factory=list)
     smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN
+    smoke_test_report: SmokeTestReport = Field(default_factory=SmokeTestReport)
     last_error: str | None = None
 
 

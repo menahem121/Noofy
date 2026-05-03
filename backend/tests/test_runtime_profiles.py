@@ -52,6 +52,23 @@ def test_resolve_runtime_profile_selects_supported_variant() -> None:
     assert selection.variant.torch_version == "2.11.0"
 
 
+def test_resolve_runtime_profile_selects_linux_cuda_variant() -> None:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+
+    selection = resolve_runtime_profile(
+        catalog,
+        runtime_profile_id="noofy-comfyui-v1-default",
+        os_name="linux",
+        architecture="x64",
+        gpu_backend_profile="cuda",
+    )
+
+    assert selection.variant.runtime_profile_variant_id == "linux-x64-cuda130"
+    assert selection.variant.python_build_id == "cpython-3.13-noofy-v1"
+    assert selection.variant.torch_version == "2.11.0"
+    assert selection.variant.torch_wheel_build_tag == "torch==2.11.0+cu130"
+
+
 def test_missing_runtime_profile_fails_before_preparation() -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
 
@@ -74,7 +91,7 @@ def test_unsupported_runtime_profile_variant_reports_policy_state() -> None:
             catalog,
             runtime_profile_id="noofy-comfyui-v1-default",
             os_name="linux",
-            architecture="x64",
+            architecture="arm64",
         )
 
     assert exc.value.code is RuntimeProfileErrorCode.UNSUPPORTED_PROFILE_VARIANT

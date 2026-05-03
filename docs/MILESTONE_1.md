@@ -37,7 +37,7 @@ The first dashboard should include only the controls needed to prove the system:
 - Marketplace or public workflow sharing.
 - Automatic model download and installation.
 - ComfyUI custom node or extension for exporting packages.
-- Native macOS or Windows inference adapters.
+- Platform-native inference adapters.
 - Production-ready managed ComfyUI sidecar packaging.
 
 ## Acceptance Check

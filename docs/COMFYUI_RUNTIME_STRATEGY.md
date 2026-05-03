@@ -10,7 +10,7 @@ This document is the strategy source for Phase 5 of [RUNTIME_ISOLATION_IMPLEMENT
 
 ## Context
 
-Noofy is a local desktop AI workflow app for macOS and Windows. ComfyUI is the first execution engine, behind an app-owned `EngineAdapter` boundary. Community workflows are a first-class product direction. Some community workflows include custom nodes and Python dependencies; some workflows depend on ComfyUI behavior that may not match the latest upstream version.
+Noofy is a local AI workflow app for Linux, Windows, and macOS. ComfyUI is the first execution engine, behind an app-owned `EngineAdapter` boundary. Community workflows are a first-class product direction. Some community workflows include custom nodes and Python dependencies; some workflows depend on ComfyUI behavior that may not match the latest upstream version.
 
 The product needs an explicit runtime strategy that answers:
 
@@ -28,7 +28,7 @@ Firm decisions:
 
 - Noofy uses reusable compatibility-group runtimes. A workflow may require a specific runtime profile, but Noofy resolves that profile into reusable immutable runtime artifacts and shares them across compatible workflows.
 - Compatibility is identified by layered fingerprints over fully resolved runtime facts, not over raw declarations such as `requirements.txt`.
-- Noofy supports one pinned runtime profile family in v1, with explicit platform/backend variants as needed for macOS, Windows, CPU, MPS, CUDA, or other supported backends. The schema must support multiple profile families and variants so older or alternative profiles can be added later without migration.
+- Noofy supports one pinned runtime profile family in v1, with explicit platform/backend variants as needed for Linux, Windows, macOS, CPU, MPS, CUDA, or other supported backends. The schema must support multiple profile families and variants so older or alternative profiles can be added later without migration.
 - Noofy targets the most recent stable ComfyUI release when a Noofy runtime profile is generated. It does not use a floating "latest ComfyUI" at runtime; the product contract is a named, pinned runtime profile with exact source and dependency hashes.
 - Noofy does not install a full isolated runtime per workflow. Workflows that share a fingerprint share the runtime artifact.
 - Noofy keeps at most one GPU-heavy runner resident by default. A workflow-open warm retention policy is part of v1, but it must not imply a general multi-runner warm pool.
@@ -68,7 +68,7 @@ The accepted architecture rejects this approach. This document keeps that reject
 
 Compatibility must be defined over a named runtime profile, not just a ComfyUI version string.
 
-A runtime profile is a pinned bundle that fully describes the runtime contract Noofy supports for a class of workflows. A profile may contain multiple platform/backend variants, because the exact Torch wheel, native dependency set, and launch constraints differ across macOS, Windows, CPU, MPS, CUDA, DirectML, and future backends. The profile and every selected variant are signed/owned by Noofy and treated as immutable artifacts in the trusted control plane.
+A runtime profile is a pinned bundle that fully describes the runtime contract Noofy supports for a class of workflows. A profile may contain multiple platform/backend variants, because the exact Torch wheel, native dependency set, and launch constraints differ across Linux, Windows, macOS, CPU, MPS, CUDA, DirectML, and future backends. The profile and every selected variant are signed/owned by Noofy and treated as immutable artifacts in the trusted control plane.
 
 ### ComfyUI Source Roles
 
@@ -354,7 +354,7 @@ Noofy must be honest about what it does and does not protect:
 
 - Noofy protects itself: one workflow cannot break another workflow or the trusted core runtime.
 - Noofy does not guarantee that arbitrary community Python code is safe or trustworthy.
-- Noofy does not currently provide OS-level sandboxing. macOS App Sandbox, hardened runtime constraints, Windows AppContainer, restricted child-process tokens, network restrictions, and per-runner filesystem allowlists are deferred and platform-specific.
+- Noofy does not currently provide OS-level sandboxing. macOS App Sandbox, hardened runtime constraints, Windows AppContainer, restricted child-process tokens, Linux namespaces/seccomp/cgroups, network restrictions, and per-runner filesystem allowlists are deferred and platform-specific.
 
 Trust levels follow the four-level model defined in the runtime isolation architecture (Noofy Verified, Registry Locked, Quarantined Community, Unsupported). The default install policy in this document applies to Quarantined Community workflows. Verified levels may relax specific rules through explicit, named overrides.
 
@@ -450,10 +450,10 @@ The following are intentionally not part of v1. They are recorded so the schema 
 
 - Multiple runtime profile families in the catalog (older ComfyUI versions, alternative behavior profiles, alternative Torch major versions). The schema supports this from day one; the catalog ships with one family.
 - Multi-runner warm pool with per-runner memory accounting.
-- OS-level sandboxing per platform (macOS App Sandbox, Windows AppContainer, network restrictions, per-runner filesystem allowlists).
+- OS-level sandboxing per platform (macOS App Sandbox, Windows AppContainer, Linux namespaces/seccomp/cgroups, network restrictions, per-runner filesystem allowlists).
 - Verified publishing and signing pipeline for Noofy Verified packages.
 - Marketplace and registry hosting infrastructure.
-- Native macOS inference paths (Core ML, Metal, MLX) behind a future `MacNativeEngineAdapter`.
+- Native platform inference paths, including macOS Core ML/Metal/MLX and Linux CUDA-specific paths behind future `EngineAdapter` implementations.
 - Allowed-with-explicit-policy native builds and sdists for Verified workflows.
 
 ## Open Questions

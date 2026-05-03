@@ -140,6 +140,33 @@
       "type": "image"
     }
   ],
+  "smoke_tests": {
+    "workflow_execution": {
+      "name": "default-core-empty-image",
+      "prompt": {
+        "1": {
+          "class_type": "EmptyImage",
+          "inputs": {
+            "width": 64,
+            "height": 64,
+            "batch_size": 1,
+            "color": 3364215
+          }
+        },
+        "2": {
+          "class_type": "SaveImage",
+          "inputs": {
+            "images": ["1", 0],
+            "filename_prefix": "noofy_smoke"
+          }
+        }
+      },
+      "required_node_types": ["EmptyImage", "SaveImage"],
+      "expected_output_node_count": 1,
+      "expected_output_node_ids": ["2"],
+      "timeout_seconds": 30
+    }
+  },
   "dashboard": {
     "version": "0.1.0",
     "sections": [

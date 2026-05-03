@@ -20,7 +20,7 @@ Tasks:
 - Keep the current Tauri/backend handoff.
 - Link the runtime isolation architecture from the main docs index.
 - Add a product Python packaging decision record.
-- Add a process-tree shutdown decision record for macOS and Windows.
+- Add a process-tree shutdown decision record for Linux, Windows, and macOS.
 
 Acceptance criteria:
 
@@ -565,9 +565,11 @@ Current implementation notes:
 - Install state records resolved model references with requirement ID, ComfyUI folder, filename, SHA-256, byte size, verification level, asset ownership, store ref, blob path, materialized model-view path, materialization strategy, and file verification result.
 - Runner workspaces link/copy the selected model view as their `models` directory without mutating ready runner workspaces.
 - Covered: SHA-256/size blob reuse, filename+size local candidate reuse with locally computed SHA-256, per-view materialization, conflicting same folder/name with different blob rejection, install-state model-reference persistence, hardlink/symlink/copy strategy recording, stale model-view repair, missing blob/view/source validation at runner startup, copy-failure cleanup, cross-volume hardlink fallback, symlink-denied fallback, Windows path-length rejection, filename-only model requirement blocking, explicit model-reference cleanup policy, and a symlink capability probe used before Windows symlink attempts.
-- No Phase 5d implementation work remains before Phase 5e. Real Windows-host validation is still required before Windows release readiness, but it is not a blocker for starting Phase 5e.
+- No Phase 5d implementation work remains before Phase 5e. Real Windows-host and Linux CUDA-host validation are still required before platform release readiness, but they are not blockers for starting Phase 5e.
 
 ### Phase 5e: Runner Smoke Tests And Minimal Graph Execution
+
+Status: Implementation complete; staged real ComfyUI hardware validation pending
 
 Goal: promote runtime artifacts only after the staged environment and runner prove they can import, start, and execute real work.
 
@@ -596,9 +598,31 @@ Acceptance criteria:
 
 - Import-only checks are not sufficient for `ready`.
 - Dependency import, custom-node import, runner health, and tiny execution success paths are tested with fake/lightweight runners where real ComfyUI execution is unavailable.
+- Real ComfyUI smoke execution paths exist as opt-in local integration tests, skipped by default unless suitable hardware and ComfyUI dependencies are provided.
 - Dependency import failure, custom node import failure, runner startup timeout, node registration missing, workflow execution failure, and unresolved input cases are tested.
 - A workflow with unresolved `LoadImage` or `LoadImageMask` input is not presented as ready to run.
 - Failed smoke tests do not mutate trusted core runtime, ready dependency environments, ready runner workspaces, or existing install states.
+- Failed smoke tests write bounded-retention quarantine markers for staged dependency-env and runner-workspace artifacts without promoting them.
+
+Current implementation notes:
+
+- Install state now records a split `smoke_test_report` with dependency-env, custom-node import, runner-health, and workflow-execution stages while preserving the existing summary `smoke_test_status`.
+- `CapsuleInstaller` moves staged runtime artifacts through `smoke_testing` and only promotes dependency envs / runner workspaces to `ready` when all required smoke stages pass.
+- The bundled `text_to_image_v0` package declares a model-free `EmptyImage -> SaveImage` smoke fixture, so its smoke execution does not need to run the full model-heavy generation graph.
+- Core-only packages without an explicit smoke fixture receive the same safe model-free fallback fixture. Custom-node packages do not receive this fallback because their smoke fixture must exercise at least one declared custom node type.
+- Custom-node workflows can now become `ready` when isolated workspace preparation exists and every required smoke stage passes. Custom-node workflows without a workspace preparer still stop at `prepared_needs_input_setup`.
+- Isolated runner launch args keep `--disable-all-custom-nodes` for default-node workflows, but omit it for materialized custom-node runner workspaces so staged custom nodes can actually import and execute inside the runner.
+- The current `RunnerSmokeTester` runs dependency wheel import smoke from the staged dependency environment before runner startup, preferring explicit dependency-lock `import_names` over best-effort wheel metadata inference. It verifies `/object_info` node registration when custom node types or a smoke fixture require it, and can execute a package-declared lightweight prompt fixture from `smoke_tests.workflow_execution`. For custom-node capsules, a declared execution fixture must exercise at least one declared custom node type before the fixture can pass. Fixture execution can assert expected output node count and output node ids, and timeout failures report fixture name, timeout seconds, and prompt id when available. Without a workflow execution fixture it marks workflow execution as blocked. Health-only smoke is not sufficient for `ready`.
+- Runner startup smoke failures now carry the split smoke report through to install state, so `runner_health=failed` is preserved instead of being flattened to an empty report.
+- Workflows with unresolved runtime inputs force the workflow-execution stage to `blocked` and remain `prepared_needs_input_setup`.
+- Failed smoke exceptions or failed smoke report stages write `quarantine.json` markers with `retain_until` metadata into staged runtime artifact directories. The sweep that deletes expired quarantine artifacts remains Phase 5g storage cleanup work.
+- Fake/lightweight tests cover full-pass smoke reports, dependency import failure, runner health failure, missing execution smoke, object-info node registration failures, custom-node fixture exercise requirements, failed-staging quarantine markers, and unresolved runtime input blocking.
+- The optional external real ComfyUI smoke validation can be run with `NOOFY_REAL_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_BASE_URL` / `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT`.
+- The optional staged real ComfyUI smoke validation can be run with `NOOFY_REAL_STAGED_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SOURCE_DIR=<ComfyUI checkout>`, `NOOFY_REAL_COMFYUI_PYTHON=<Python with ComfyUI deps>`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT` / `NOOFY_REAL_COMFYUI_SMOKE_MIN_OUTPUTS`. It materializes a Noofy staged runner workspace and executes through `RunnerSmokeTester`, so it is the preferred Phase 5e hardware-readiness check. Both real smoke paths are intentionally skipped in default test runs until suitable hardware is available.
+
+Remaining readiness gate:
+
+- Run at least one optional staged real ComfyUI smoke execution on suitable hardware before declaring Phase 5e product-ready for real imported workflow execution.
 
 ### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Safety
 
@@ -802,7 +826,7 @@ Tasks:
 - Add unit tests for schemas, fingerprint canonicalization, policy decisions, path validation, dependency lock parsing, manifest parsing, and install-state parsing.
 - Add integration tests using fake or lightweight runner adapters where real ComfyUI startup is too expensive for normal CI.
 - Add at least one real ComfyUI smoke test path that can be run locally or in an optional CI job, but mark it skipped by default on current development hardware.
-- Add macOS and Windows filesystem behavior tests or documented manual test scripts for hardlink, symlink, copy fallback, long paths, and case-insensitive collisions.
+- Add Linux, Windows, and macOS filesystem behavior tests or documented manual test scripts for hardlink, symlink, copy fallback, long paths, and case-insensitive collisions.
 - Keep `make test` as the documented root test command and ensure backend/frontend tests still run from the expected directories.
 
 Phase 5 locked/bundled acceptance criteria:
@@ -865,7 +889,7 @@ Tasks:
   - Unsupported
 - Add explicit opt-in policy for unverified/community workflows.
 - Add marketplace/package source policy.
-- Evaluate OS-level sandboxing feasibility for macOS and Windows.
+- Evaluate OS-level sandboxing feasibility for Linux, Windows, and macOS.
 
 Acceptance criteria:
 

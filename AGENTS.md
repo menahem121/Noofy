@@ -1,6 +1,6 @@
 # Agent Entry Point
 
-This project is a local desktop AI workflow app for macOS and Windows. It should make powerful AI workflows usable by beginners: a user opens a simple dashboard, presses clear controls, and the app runs the local AI workflow in the background.
+This project is a local AI workflow app for Linux, Windows, and macOS. It should make powerful AI workflows usable by beginners: a user opens a simple dashboard, presses clear controls, and the app runs the local AI workflow in the background.
 
 The app is desktop-first, privacy-focused, and powered first by ComfyUI. ComfyUI should be treated as the first execution engine, not as the public contract of the app.
 
@@ -8,7 +8,7 @@ The app is desktop-first, privacy-focused, and powered first by ComfyUI. ComfyUI
 
 The frontend must call the app backend API. It must not call ComfyUI directly.
 
-The backend owns the `EngineAdapter` contract and translates app workflow requests into the active engine implementation. The first adapter is `ComfyUIEngineAdapter`; future adapters may target native macOS or Windows inference paths.
+The backend owns the `EngineAdapter` contract and translates app workflow requests into the active engine implementation. The first adapter is `ComfyUIEngineAdapter`; future adapters may target platform-native inference paths.
 
 ## Documentation Index
 

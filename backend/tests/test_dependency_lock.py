@@ -39,6 +39,7 @@ def _wheel(
     source_distribution: bool = False,
     native_build_required: bool = False,
     install_script: bool = False,
+    import_names: list[str] | None = None,
 ) -> ResolvedDependencyWheel:
     resolver = _resolver()
     return ResolvedDependencyWheel(
@@ -51,6 +52,7 @@ def _wheel(
         approved_cache_ref=approved_cache_ref,
         platform_tags=["py3-none-any"],
         environment_marker=None,
+        import_names=import_names or [],
         relationship=relationship,
         requested_by=requested_by or ["custom-node-a"],
         resolver_name=resolver.name,
@@ -114,6 +116,15 @@ def test_wheel_names_are_normalized() -> None:
     wheel = _wheel("Demo_Package.Name")
 
     assert wheel.name == "demo-package-name"
+
+
+def test_wheel_import_names_are_normalized_and_validated() -> None:
+    wheel = _wheel(import_names=["demo", "demo.submodule", "demo"])
+
+    assert wheel.import_names == ["demo", "demo.submodule"]
+
+    with pytest.raises(ValueError, match="import_names"):
+        _wheel(import_names=["not-valid-name"])
 
 
 def test_lock_rejects_wheel_resolver_metadata_mismatch() -> None:

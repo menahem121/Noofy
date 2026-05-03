@@ -45,6 +45,40 @@ target input name: text
 
 The backend applies input bindings before submitting the graph to the active `EngineAdapter`.
 
+## Smoke Tests
+
+Workflow packages may declare a small execution smoke fixture under `smoke_tests.workflow_execution`.
+
+This fixture is not the public workflow contract. It is a preparation-time check that lets Noofy prove a staged runner can execute real work before promoting isolated runtime artifacts to ready. The fixture should be minimal, bounded, and safe for low-resource machines.
+
+Example:
+
+```json
+{
+  "smoke_tests": {
+    "workflow_execution": {
+      "name": "tiny-noop",
+      "prompt": {
+        "1": {
+          "class_type": "NoOp",
+          "inputs": {}
+        }
+      },
+      "required_node_types": ["NoOp"],
+      "expected_output_node_count": 1,
+      "expected_output_node_ids": ["1"],
+      "timeout_seconds": 10
+    }
+  }
+}
+```
+
+If a workflow has unresolved runtime inputs or no execution fixture, Noofy must not treat runner health alone as sufficient for ready status.
+
+For core-only workflows that do not declare a fixture, Noofy may use a safe model-free fallback fixture such as `EmptyImage -> SaveImage` to prove the staged runner can execute work. This fallback is not used for custom-node packages because it would not exercise the custom node code.
+
+For packages that declare custom nodes, the smoke fixture should exercise at least one declared custom node type when possible. Registration-only checks prove the staged runner imported the node package, but execution smoke is the stronger signal before Noofy promotes isolated runtime artifacts.
+
 ## Model Handling
 
 The first version validates required models before running a workflow.

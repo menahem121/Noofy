@@ -23,6 +23,7 @@ DEPENDENCY_LOCK_SCHEMA_VERSION = "0.1.0"
 DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION = "quarantined-community-v1"
 
 _NORMALIZED_NAME_PATTERN = re.compile(r"[-_.]+")
+_VALID_IMPORT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _UNSAFE_REQUIREMENT_PREFIXES = (
     "-e ",
     "--editable ",
@@ -92,6 +93,7 @@ class ResolvedDependencyWheel(BaseModel):
     approved_cache_ref: str | None = None
     platform_tags: list[str] = Field(default_factory=list)
     environment_marker: str | None = None
+    import_names: list[str] = Field(default_factory=list)
     relationship: DependencyRelationship
     requested_by: list[str] = Field(default_factory=list)
     resolver_name: str = Field(min_length=1)
@@ -125,6 +127,15 @@ class ResolvedDependencyWheel(BaseModel):
         if "\\" in value:
             raise ValueError("approved_cache_ref must use forward slashes")
         return value
+
+    @field_validator("import_names")
+    @classmethod
+    def _validate_import_names(cls, value: list[str]) -> list[str]:
+        names = sorted(set(value))
+        for name in names:
+            if not _VALID_IMPORT_NAME_RE.match(name):
+                raise ValueError("import_names must be valid dotted Python import names")
+        return names
 
     @model_validator(mode="after")
     def _validate_source_fields(self) -> ResolvedDependencyWheel:

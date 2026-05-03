@@ -1,6 +1,6 @@
 # Architecture
 
-The app is a local desktop AI workflow tool for macOS and Windows. It should hide ComfyUI complexity from end users while keeping ComfyUI's workflow power available behind the scenes.
+The app is a local AI workflow tool for Linux, Windows, and macOS. It should hide ComfyUI complexity from end users while keeping ComfyUI's workflow power available behind the scenes.
 
 ## Stack
 
@@ -140,5 +140,6 @@ Future adapters may include:
 
 - `MacNativeEngineAdapter` for Apple-native acceleration through Core ML, Metal, or MLX.
 - `WindowsNativeEngineAdapter` if a native Windows path becomes useful.
+- `LinuxCudaEngineAdapter` or another Linux-native adapter if direct CUDA integration becomes useful beyond the managed ComfyUI runtime.
 
 Distribution must account for ComfyUI's GPLv3 license when bundling or modifying it.

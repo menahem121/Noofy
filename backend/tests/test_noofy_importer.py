@@ -19,6 +19,7 @@ from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, Runn
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 from app.workflows.capsule import CapsuleLockLoader
+from app.workflows import importer as importer_module
 from app.workflows.importer import (
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
@@ -121,6 +122,28 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     assert capsule.workflow.package_id == "eraserv4.5"
     assert len(capsule.custom_nodes) == 5
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
+
+
+def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
+    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
+    monkeypatch.setattr(importer_module, "_has_nvidia_gpu", lambda: True)
+
+    _, variant = importer_module._select_import_runtime_profile(catalog.profiles)
+
+    assert variant.runtime_profile_variant_id == "linux-x64-cuda130"
+
+
+def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
+    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
+    monkeypatch.setattr(importer_module, "_has_nvidia_gpu", lambda: False)
+
+    _, variant = importer_module._select_import_runtime_profile(catalog.profiles)
+
+    assert variant.runtime_profile_variant_id == "linux-x64-cpu"
 
 
 def test_imported_real_archive_can_materialize_custom_node_workspace(tmp_path: Path) -> None:

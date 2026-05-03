@@ -19,6 +19,7 @@ from app.runtime.isolation import (
     InstallStatus,
     InstalledModelReference,
     SmokeTestStatus,
+    SmokeTestReport,
 )
 
 INSTALL_STATE_SCHEMA_VERSION = "0.1.0"
@@ -110,6 +111,7 @@ class InstallStateStore:
         runner_workspace_path: str | None | object = _UNSET,
         model_references: list[InstalledModelReference] | object = _UNSET,
         smoke_test_status: SmokeTestStatus | None = None,
+        smoke_test_report: SmokeTestReport | object = _UNSET,
         installed_at: str | None | object = _UNSET,
         last_used_at: str | None | object = _UNSET,
     ) -> InstallState:
@@ -124,6 +126,8 @@ class InstallStateStore:
             updates["status"] = status
         if smoke_test_status is not None:
             updates["smoke_test_status"] = smoke_test_status
+        if smoke_test_report is not _UNSET:
+            updates["smoke_test_report"] = smoke_test_report
         if last_error is not _UNSET:
             updates["last_error"] = last_error
         if runtime_profile_variant_id is not _UNSET:

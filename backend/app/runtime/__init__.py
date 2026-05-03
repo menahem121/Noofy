@@ -78,7 +78,10 @@ from app.runtime.isolation import (
     InstallState,
     InstallStatus,
     RunnerWorkspaceManifest,
+    SmokeStageResult,
+    SmokeStageStatus,
     SmokeTestStatus,
+    SmokeTestReport,
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager, select_free_port
@@ -101,7 +104,12 @@ from app.runtime.runner_process import (
     RunnerProcessStatus,
     RunnerProcessSupervisor,
 )
-from app.runtime.smoke_test import RunnerSmokeTester
+from app.runtime.smoke_test import (
+    RunnerSmokeTester,
+    RunnerSmokeTestError,
+    SmokeExecutionFixture,
+    SmokePromptTimeoutError,
+)
 from app.runtime.runner_coordinator import (
     RunnerProcessCoordinator,
     comfyui_adapter_factory,
@@ -194,6 +202,9 @@ __all__ = [
     "RunnerProcessCoordinator",
     "RunnerProcessStatus",
     "RunnerProcessSupervisor",
+    "SmokeExecutionFixture",
+    "SmokePromptTimeoutError",
+    "RunnerSmokeTestError",
     "RunnerSmokeTester",
     "RunnerStatus",
     "RunnerWorkspaceManifestStore",
