@@ -14,6 +14,7 @@ from app.engine.diagnostics import LogStore
 from app.engine.models import (
     BackendHealthReport,
     DiagnosticLogResponse,
+    EngineJob,
     JobProgress,
     JobResult,
     LogLevel,
@@ -43,6 +44,26 @@ from app.runtime.isolation import (
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager
+from app.runtime.memory_governor import (
+    LocalMemoryLearningStore,
+    LocalMemoryObservation,
+    MachineMemoryObserver,
+    MemoryAdmissionRequest,
+    MemoryBackend,
+    MemoryDecisionAction,
+    MemoryGovernorDecision,
+    MemoryObservationOutcome,
+    MemoryReleaseStatus,
+    RunnerMemorySnapshot,
+    WorkflowMemoryEstimateRequest,
+    build_workflow_memory_estimate,
+    decide_memory_admission,
+    likely_memory_error,
+    memory_user_status_for_decision,
+    record_memory_governor_decision,
+    retry_after_memory_cleanup_decision,
+    wait_for_memory_release,
+)
 from app.runtime.model_store import LocalModelRequirement, ModelStore, http_streaming_downloader
 from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
@@ -55,6 +76,7 @@ from app.runtime.supervisor import (
     RunnerDescriptor,
     RunnerKind,
     RunnerMemoryClass,
+    QueuedRunnerStartKind,
     RunnerSelectionAction,
     RunnerStatus,
     RunnerSupervisor,
@@ -89,6 +111,8 @@ class EngineService:
         capsule_installer: CapsuleInstaller | None = None,
         runner_process_coordinator: RunnerProcessCoordinator | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
+        memory_observer: MachineMemoryObserver | None = None,
+        memory_learning_store: LocalMemoryLearningStore | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -99,6 +123,14 @@ class EngineService:
         self.capsule_installer = capsule_installer
         self.runner_process_coordinator = runner_process_coordinator
         self.imported_package_store = imported_package_store
+        self.memory_observer = memory_observer
+        self.memory_learning_store = memory_learning_store
+        self._job_workflows: dict[str, str] = {}
+        self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        self._memory_retry_roots: dict[str, str] = {}
+        self._memory_retry_attempted_roots: set[str] = set()
+        self._queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        self._memory_governor_metrics: dict[str, int] = {}
 
     def list_workflows(self) -> list[dict[str, object]]:
         return [
@@ -320,12 +352,19 @@ class EngineService:
                 if decision.queued_behind_runner_id is not None
                 else None
             )
+            queued = self.runner_supervisor.enqueue_runner_start(
+                workflow_id=workflow_id,
+                kind=QueuedRunnerStartKind.PENDING_SWITCH,
+                queued_behind_runner_id=decision.queued_behind_runner_id,
+                reason=decision.reason,
+            )
             self.log_store.add(
                 "info",
                 "Workflow runner start queued pending switch",
                 "engine.service",
                 workflow_id=workflow_id,
                 details={
+                    "queue_id": queued.queue_id,
                     "queued_behind_runner_id": decision.queued_behind_runner_id,
                     "reason": decision.reason,
                 },
@@ -333,13 +372,112 @@ class EngineService:
             return {
                 "workflow_id": workflow_id,
                 "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "queue_id": queued.queue_id,
                 "runner": queued_behind.model_dump() if queued_behind is not None else None,
                 "pid": queued_behind.pid if queued_behind is not None else None,
                 "install_status": InstallStatus.READY.value,
                 "error": None,
+                "memory_status": {
+                    "state": "waiting_for_gpu",
+                    "message": "This workflow is waiting until the current GPU work finishes.",
+                    "risk_level": "medium",
+                    "queue_id": queued.queue_id,
+                    "can_cancel": True,
+                    "can_retry_after_cleanup": False,
+                },
             }
         try:
-            if decision.action is RunnerSelectionAction.SWITCH and decision.evict_runner_id is not None:
+            memory_decision = self._memory_governor_decision_for_runner_start(
+                workflow_id=workflow_id,
+                capsule_lock=capsule_lock,
+                install_state=install_state,
+                spec=spec,
+            )
+            if memory_decision is not None:
+                self._record_memory_governor_metric(f"runner_start_decision_{memory_decision.action.value}")
+                if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
+                    queued_behind = (
+                        self.runner_supervisor.get_runner(memory_decision.queued_behind_runner_id)
+                        if memory_decision.queued_behind_runner_id is not None
+                        else None
+                    )
+                    queued = self.runner_supervisor.enqueue_runner_start(
+                        workflow_id=workflow_id,
+                        kind=QueuedRunnerStartKind.PENDING_MEMORY,
+                        queued_behind_runner_id=memory_decision.queued_behind_runner_id,
+                        reason=memory_decision.reason_code,
+                    )
+                    self._record_memory_governor_metric("runner_start_queued_pending_memory")
+                    return {
+                        "workflow_id": workflow_id,
+                        "status": RunnerStatus.QUEUED_PENDING_MEMORY.value,
+                        "queue_id": queued.queue_id,
+                        "runner": queued_behind.model_dump() if queued_behind is not None else None,
+                        "pid": queued_behind.pid if queued_behind is not None else None,
+                        "install_status": InstallStatus.READY.value,
+                        "error": None,
+                        "memory_decision": memory_decision.model_dump(mode="json"),
+                        "memory_status": self._memory_status_payload(memory_decision, queue_id=queued.queue_id),
+                    }
+                if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
+                    self._record_memory_governor_metric("runner_start_blocked_by_memory")
+                    return {
+                        "workflow_id": workflow_id,
+                        "status": RunnerStatus.BLOCKED_BY_MEMORY.value,
+                        "runner": None,
+                        "pid": None,
+                        "install_status": InstallStatus.READY.value,
+                        "error": memory_decision.user_message,
+                        "memory_decision": memory_decision.model_dump(mode="json"),
+                        "memory_status": self._memory_status_payload(memory_decision),
+                    }
+                if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
+                    for evict_runner_id in memory_decision.evict_runner_ids:
+                        stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
+                        self._record_memory_governor_metric("idle_runner_evicted_for_memory")
+                        self.log_store.add(
+                            "info",
+                            "Evicted idle runner before Memory Governor admitted workflow runner",
+                            "engine.service",
+                            workflow_id=workflow_id,
+                            details={
+                                "evicted_runner_id": evict_runner_id,
+                                "stop_status": stopped.status.value,
+                                "memory_decision_id": memory_decision.decision_id,
+                                "reason": memory_decision.reason_code,
+                            },
+                        )
+                    release_check = self._wait_for_memory_release_after_cleanup(memory_decision)
+                    if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
+                        self.log_store.add(
+                            "warning",
+                            "Memory cleanup did not release enough memory",
+                            "engine.service",
+                            workflow_id=workflow_id,
+                            details={
+                                "memory_decision_id": memory_decision.decision_id,
+                                "release_status": release_check.status.value,
+                                "reason": release_check.reason_code,
+                                "required_free_vram_mb": release_check.required_free_vram_mb,
+                                "required_free_ram_mb": release_check.required_free_ram_mb,
+                            },
+                        )
+                        return {
+                            "workflow_id": workflow_id,
+                            "status": RunnerStatus.MEMORY_CLEANUP_FAILED.value,
+                            "runner": None,
+                            "pid": None,
+                            "install_status": InstallStatus.READY.value,
+                            "error": "Noofy freed memory, but the machine still does not have enough available memory.",
+                            "memory_decision": memory_decision.model_dump(mode="json"),
+                            "memory_status": {
+                                **self._memory_status_payload(memory_decision),
+                                "state": "memory_cleanup_failed",
+                                "message": "Noofy freed memory, but the machine still does not have enough available memory.",
+                            },
+                            "memory_release_check": release_check.model_dump(mode="json"),
+                        }
+            elif decision.action is RunnerSelectionAction.SWITCH and decision.evict_runner_id is not None:
                 stopped = await self.runner_process_coordinator.stop_runner(decision.evict_runner_id)
                 self.log_store.add(
                     "info",
@@ -392,7 +530,74 @@ class EngineService:
             "pid": handle.pid,
             "install_status": InstallStatus.READY.value,
             "error": None,
+            "memory_decision": memory_decision.model_dump(mode="json") if memory_decision is not None else None,
+            "memory_status": self._memory_status_payload(memory_decision) if memory_decision is not None else None,
         }
+
+    async def handoff_next_queued_runner_start(
+        self,
+        *,
+        released_runner_id: str | None = None,
+    ) -> dict[str, object] | None:
+        queued = self.runner_supervisor.pop_next_queued_runner_start(
+            released_runner_id=released_runner_id,
+        )
+        if queued is None:
+            return None
+        self.log_store.add(
+            "info",
+            "Handing off queued workflow runner start",
+            "engine.service",
+            workflow_id=queued.workflow_id,
+            details={
+                "queue_id": queued.queue_id,
+                "kind": queued.kind.value,
+                "released_runner_id": released_runner_id,
+                "queued_behind_runner_id": queued.queued_behind_runner_id,
+                "reason": queued.reason,
+            },
+        )
+        result = await self.start_workflow_runner(queued.workflow_id)
+        result["started_from_queue_id"] = queued.queue_id
+        return result
+
+    def cancel_queued_runner_start(self, queue_id: str) -> dict[str, object]:
+        queued = self.runner_supervisor.cancel_queued_runner_start(queue_id)
+        if queued is None:
+            return {
+                "queue_id": queue_id,
+                "status": "not_found",
+                "workflow_id": None,
+            }
+        self.log_store.add(
+            "info",
+            "Canceled queued workflow runner start",
+            "engine.service",
+            workflow_id=queued.workflow_id,
+            details={
+                "queue_id": queued.queue_id,
+                "kind": queued.kind.value,
+                "queued_behind_runner_id": queued.queued_behind_runner_id,
+            },
+        )
+        return queued.model_dump(mode="json")
+
+    async def handoff_queued_workflow_run(self, queue_id: str) -> dict[str, object] | EngineJob | WorkflowValidationResult | None:
+        queued = self._queued_workflow_runs.pop(queue_id, None)
+        if queued is None:
+            return None
+        workflow_id, inputs, options = queued
+        self.log_store.add(
+            "info",
+            "Handing off queued workflow run",
+            "engine.service",
+            workflow_id=workflow_id,
+            details={"queue_id": queue_id},
+        )
+        result = await self.run_workflow(workflow_id, inputs, options)
+        if isinstance(result, EngineJob):
+            result = result.model_copy(update={"queue_id": result.queue_id or queue_id})
+        return result
 
     async def stop_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         """Stop the isolated runner currently bound to a workflow."""
@@ -578,6 +783,60 @@ class EngineService:
             return validation
 
         graph = self._apply_input_bindings(package, inputs)
+        memory_decision = self._memory_governor_decision_for_workflow_run(
+            workflow_id=workflow_id,
+            runner=runner,
+        )
+        if memory_decision is not None:
+            if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
+                queue_id = f"workflow-run-queue-{workflow_id}-{len(self._queued_workflow_runs) + 1}"
+                self._queued_workflow_runs[queue_id] = (workflow_id, dict(inputs), dict(options))
+                self._record_memory_governor_metric("workflow_run_queued_pending_memory")
+                self.log_store.add(
+                    "info",
+                    "Workflow run queued pending memory",
+                    "engine.service",
+                    workflow_id=workflow_id,
+                    details={
+                        "queue_id": queue_id,
+                        "runner_id": runner.runner_id,
+                        "memory_decision_id": memory_decision.decision_id,
+                        "reason": memory_decision.reason_code,
+                    },
+                )
+                return EngineJob(
+                    job_id=queue_id,
+                    workflow_id=workflow_id,
+                    engine="noofy",
+                    status="queued_pending_memory",
+                    queue_id=queue_id,
+                    message=memory_decision.user_message,
+                    memory_decision=memory_decision.model_dump(mode="json"),
+                    memory_status=self._memory_status_payload(memory_decision, queue_id=queue_id),
+                )
+            if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
+                self._record_memory_governor_metric("workflow_run_blocked_by_memory")
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked by memory policy",
+                    "engine.service",
+                    workflow_id=workflow_id,
+                    details={
+                        "runner_id": runner.runner_id,
+                        "memory_decision_id": memory_decision.decision_id,
+                        "reason": memory_decision.reason_code,
+                    },
+                )
+                return EngineJob(
+                    job_id=f"blocked-memory-{workflow_id}",
+                    workflow_id=workflow_id,
+                    engine="noofy",
+                    status="blocked_by_memory",
+                    message=memory_decision.user_message,
+                    memory_decision=memory_decision.model_dump(mode="json"),
+                    memory_status=self._memory_status_payload(memory_decision),
+                )
+
         self.log_store.add(
             "info",
             "Submitting workflow run",
@@ -587,6 +846,9 @@ class EngineService:
         )
         job = await adapter.run_workflow(package, graph, inputs, options)
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
+        self._job_workflows[job.job_id] = workflow_id
+        self._job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
+        self._memory_retry_roots.setdefault(job.job_id, job.job_id)
         self.log_store.add(
             "info",
             "Workflow run queued",
@@ -606,9 +868,12 @@ class EngineService:
         adapter = self._adapter_for_job(job_id)
         return await adapter.cancel_job(job_id)
 
-    async def get_result(self, job_id: str) -> JobResult:
+    async def get_result(self, job_id: str) -> JobResult | EngineJob:
         adapter = self._adapter_for_job(job_id)
-        return await adapter.get_result(job_id)
+        result = await adapter.get_result(job_id)
+        self._record_local_memory_observation_for_result(result)
+        retry_job = await self._maybe_retry_after_memory_cleanup(result)
+        return retry_job or result
 
     async def stream_progress_events(self, job_id: str):
         while True:
@@ -836,6 +1101,346 @@ class EngineService:
             runtime_manager=self.runtime_manager,
         )
 
+    def _memory_governor_decision_for_runner_start(
+        self,
+        *,
+        workflow_id: str,
+        capsule_lock: CapsuleLock,
+        install_state: InstallState,
+        spec: RunnerLaunchSpec,
+    ) -> MemoryGovernorDecision | None:
+        if self.memory_observer is None:
+            return None
+        machine_snapshot = self.memory_observer.snapshot()
+        local_evidence = (
+            self.memory_learning_store.summary_for(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
+                machine_profile_id=machine_snapshot.machine_profile_id,
+                backend=machine_snapshot.backend,
+            )
+            if self.memory_learning_store is not None
+            else None
+        )
+        model_size_mb = _installed_model_size_mb(install_state)
+        estimate = build_workflow_memory_estimate(
+            WorkflowMemoryEstimateRequest(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
+                declared_memory_class=spec.memory_class,
+                local_evidence=local_evidence,
+                creator_observed_peak_vram_mb=capsule_lock.hardware_observations.observed_peak_vram_mb
+                or capsule_lock.hardware_observations.recommended_vram_mb,
+                creator_observed_peak_ram_mb=capsule_lock.hardware_observations.observed_peak_ram_mb
+                or capsule_lock.hardware_observations.recommended_ram_mb,
+                required_model_size_mb=model_size_mb,
+            )
+        )
+        runner_snapshots = [
+            RunnerMemorySnapshot.from_descriptor(runner)
+            for runner in self.runner_supervisor.list_runners()
+            if runner.kind is RunnerKind.ISOLATED_COMFYUI
+        ]
+        decision = decide_memory_admission(
+            MemoryAdmissionRequest(
+                workflow_estimate=estimate,
+                machine_snapshot=machine_snapshot,
+                resident_runners=runner_snapshots,
+            )
+        )
+        record_memory_governor_decision(self.log_store, decision)
+        return decision
+
+    def _memory_governor_decision_for_workflow_run(
+        self,
+        *,
+        workflow_id: str,
+        runner: RunnerDescriptor,
+    ) -> MemoryGovernorDecision | None:
+        if self.memory_observer is None or runner.kind is not RunnerKind.ISOLATED_COMFYUI:
+            return None
+        machine_snapshot = self.memory_observer.snapshot()
+        local_evidence = (
+            self.memory_learning_store.summary_for(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=runner.runner_process_compatibility_key,
+                machine_profile_id=machine_snapshot.machine_profile_id,
+                backend=machine_snapshot.backend,
+            )
+            if self.memory_learning_store is not None
+            else None
+        )
+        estimate = build_workflow_memory_estimate(
+            WorkflowMemoryEstimateRequest(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=runner.runner_process_compatibility_key,
+                declared_memory_class=runner.memory_class,
+                local_evidence=local_evidence,
+                declared_peak_vram_mb=runner.observed_execution_peak_vram_mb,
+                declared_peak_ram_mb=runner.observed_execution_peak_ram_mb,
+            )
+        )
+        resident_runners = []
+        for resident in self.runner_supervisor.list_runners():
+            if resident.kind is not RunnerKind.ISOLATED_COMFYUI:
+                continue
+            if resident.runner_id == runner.runner_id and resident.current_job_id is None:
+                continue
+            resident_runners.append(RunnerMemorySnapshot.from_descriptor(resident))
+        decision = decide_memory_admission(
+            MemoryAdmissionRequest(
+                workflow_estimate=estimate,
+                machine_snapshot=machine_snapshot,
+                resident_runners=resident_runners,
+            )
+        )
+        record_memory_governor_decision(self.log_store, decision)
+        self._record_memory_governor_metric(f"workflow_run_decision_{decision.action.value}")
+        if decision.action in {
+            MemoryDecisionAction.START_CO_RESIDENT,
+            MemoryDecisionAction.REUSE_RUNNER,
+        }:
+            return None
+        return decision
+
+    def _wait_for_memory_release_after_cleanup(
+        self,
+        decision: MemoryGovernorDecision,
+    ):
+        if self.memory_observer is None or decision.workflow_estimate is None:
+            return None
+        required_free_vram_mb = _required_free_after_cleanup(
+            decision.workflow_estimate.estimated_peak_vram_mb,
+            decision.required_vram_margin_mb,
+        )
+        required_free_ram_mb = _required_free_after_cleanup(
+            decision.workflow_estimate.estimated_peak_ram_mb,
+            decision.required_ram_margin_mb,
+        )
+        if required_free_vram_mb is None and required_free_ram_mb is None:
+            return None
+        release_check = wait_for_memory_release(
+            self.memory_observer,
+            required_free_vram_mb=required_free_vram_mb,
+            required_free_ram_mb=required_free_ram_mb,
+            max_checks=3,
+            interval_seconds=0,
+        )
+        self.log_store.add(
+            "info" if release_check.status is MemoryReleaseStatus.RELEASED else "warning",
+            "Memory release check completed",
+            "memory_governor",
+            workflow_id=decision.workflow_id,
+            details={
+                "memory_decision_id": decision.decision_id,
+                "status": release_check.status.value,
+                "reason_code": release_check.reason_code,
+                "required_free_vram_mb": release_check.required_free_vram_mb,
+                "required_free_ram_mb": release_check.required_free_ram_mb,
+                "checks": len(release_check.snapshots),
+            },
+        )
+        return release_check
+
+    async def _maybe_retry_after_memory_cleanup(self, result: JobResult) -> EngineJob | None:
+        if result.status != "failed" or not likely_memory_error(result.error):
+            return None
+        workflow_id = self._job_workflows.get(result.job_id)
+        run_request = self._job_run_requests.get(result.job_id)
+        if workflow_id is None or run_request is None or self.memory_observer is None:
+            return None
+
+        root_job_id = self._memory_retry_roots.get(result.job_id, result.job_id)
+        retry_already_attempted = root_job_id in self._memory_retry_attempted_roots
+        machine_snapshot = self.memory_observer.snapshot()
+        try:
+            runner = self.runner_supervisor.runner_for_job(result.job_id)
+        except JobRunnerNotFoundError:
+            runner = None
+        local_evidence = (
+            self.memory_learning_store.summary_for(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
+                machine_profile_id=machine_snapshot.machine_profile_id,
+                backend=machine_snapshot.backend,
+            )
+            if self.memory_learning_store is not None
+            else None
+        )
+        estimate = build_workflow_memory_estimate(
+            WorkflowMemoryEstimateRequest(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
+                declared_memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
+                local_evidence=local_evidence,
+                declared_peak_vram_mb=runner.observed_execution_peak_vram_mb if runner is not None else None,
+                declared_peak_ram_mb=runner.observed_execution_peak_ram_mb if runner is not None else None,
+            )
+        )
+        decision = retry_after_memory_cleanup_decision(
+            workflow_estimate=estimate,
+            machine_snapshot=machine_snapshot,
+            error_message=result.error,
+            retry_already_attempted=retry_already_attempted,
+        )
+        record_memory_governor_decision(
+            self.log_store,
+            decision,
+            level="warning" if decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY else "info",
+        )
+        if decision.action is not MemoryDecisionAction.RETRY_AFTER_MEMORY_CLEANUP:
+            self._record_memory_governor_metric("memory_retry_blocked")
+            return None
+
+        release_check = await self._stop_idle_runners_for_memory_retry(
+            current_job_id=result.job_id,
+            decision=decision,
+        )
+        if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
+            self._record_memory_governor_metric("memory_retry_cleanup_failed")
+            return None
+
+        self._memory_retry_attempted_roots.add(root_job_id)
+        self._record_memory_governor_metric("memory_retry_attempted")
+        retry_workflow_id, inputs, options = run_request
+        retry_result = await self.run_workflow(retry_workflow_id, dict(inputs), dict(options))
+        if not isinstance(retry_result, EngineJob):
+            return None
+        self._memory_retry_roots[retry_result.job_id] = root_job_id
+        self.log_store.add(
+            "info",
+            "Retrying workflow after Memory Governor cleanup",
+            "memory_governor",
+            job_id=retry_result.job_id,
+            workflow_id=retry_workflow_id,
+            details={
+                "original_job_id": result.job_id,
+                "root_job_id": root_job_id,
+                "memory_decision_id": decision.decision_id,
+            },
+        )
+        return retry_result.model_copy(
+            update={
+                "status": "queued",
+                "message": decision.user_message,
+                "memory_decision": decision.model_dump(mode="json"),
+                "memory_status": self._memory_status_payload(decision),
+            }
+        )
+
+    async def _stop_idle_runners_for_memory_retry(
+        self,
+        *,
+        current_job_id: str,
+        decision: MemoryGovernorDecision,
+    ):
+        if self.runner_process_coordinator is None:
+            return None
+        stopped_runner_ids: list[str] = []
+        for runner in self.runner_supervisor.list_runners():
+            if runner.kind is not RunnerKind.ISOLATED_COMFYUI:
+                continue
+            if runner.current_job_id in {current_job_id}:
+                continue
+            if runner.current_job_id is not None or runner.status is RunnerStatus.RUNNING:
+                continue
+            if runner.status not in {
+                RunnerStatus.READY,
+                RunnerStatus.IDLE,
+                RunnerStatus.IDLE_WARM,
+                RunnerStatus.CO_RESIDENT,
+            }:
+                continue
+            stopped = await self.runner_process_coordinator.stop_runner(runner.runner_id)
+            stopped_runner_ids.append(runner.runner_id)
+            self._record_memory_governor_metric("idle_runner_evicted_for_retry")
+            self.log_store.add(
+                "info",
+                "Evicted idle runner before retry after memory cleanup",
+                "memory_governor",
+                workflow_id=decision.workflow_id,
+                details={
+                    "evicted_runner_id": runner.runner_id,
+                    "stop_status": stopped.status.value,
+                    "memory_decision_id": decision.decision_id,
+                },
+            )
+        if not stopped_runner_ids:
+            return None
+        return self._wait_for_memory_release_after_cleanup(decision)
+
+    def _record_local_memory_observation_for_result(self, result: JobResult) -> None:
+        if self.memory_learning_store is None:
+            return
+        workflow_id = self._job_workflows.get(result.job_id)
+        if workflow_id is None:
+            return
+        if result.status not in {"completed", "failed", "canceled"}:
+            return
+        try:
+            runner = self.runner_supervisor.runner_for_job(result.job_id)
+        except JobRunnerNotFoundError:
+            runner = None
+        machine_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
+        if result.status == "completed":
+            outcome = MemoryObservationOutcome.SUCCESS
+        elif result.status == "canceled":
+            outcome = MemoryObservationOutcome.CANCELED
+        elif likely_memory_error(result.error):
+            outcome = MemoryObservationOutcome.MEMORY_ERROR
+        else:
+            outcome = MemoryObservationOutcome.RUNTIME_ERROR
+        summary = self.memory_learning_store.record(
+            LocalMemoryObservation(
+                workflow_id=workflow_id,
+                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
+                machine_profile_id=machine_snapshot.machine_profile_id if machine_snapshot is not None else None,
+                backend=machine_snapshot.backend if machine_snapshot is not None else MemoryBackend.UNKNOWN,
+                outcome=outcome,
+                memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
+                peak_vram_mb=(
+                    runner.observed_execution_peak_vram_mb
+                    if runner is not None and runner.observed_execution_peak_vram_mb is not None
+                    else None
+                ),
+                peak_ram_mb=(
+                    runner.observed_execution_peak_ram_mb
+                    if runner is not None and runner.observed_execution_peak_ram_mb is not None
+                    else None
+                ),
+                retry_required=outcome is MemoryObservationOutcome.MEMORY_ERROR,
+            )
+        )
+        self.log_store.add(
+            "info",
+            "Recorded local workflow memory observation",
+            "memory_governor",
+            job_id=result.job_id,
+            workflow_id=workflow_id,
+            details={
+                "outcome": outcome.value,
+                "successful_runs": summary.successful_runs,
+                "memory_error_runs": summary.memory_error_runs,
+                "observed_peak_vram_mb": summary.observed_peak_vram_mb,
+                "observed_peak_ram_mb": summary.observed_peak_ram_mb,
+            },
+        )
+        self._record_memory_governor_metric(f"local_observation_{outcome.value}")
+
+    def memory_governor_metrics(self) -> dict[str, int]:
+        return dict(self._memory_governor_metrics)
+
+    def _record_memory_governor_metric(self, name: str) -> None:
+        self._memory_governor_metrics[name] = self._memory_governor_metrics.get(name, 0) + 1
+
+    def _memory_status_payload(
+        self,
+        decision: MemoryGovernorDecision,
+        *,
+        queue_id: str | None = None,
+    ) -> dict[str, Any]:
+        return memory_user_status_for_decision(decision, queue_id=queue_id).model_dump(mode="json")
+
     def _prepared_runtime_paths(self, install_state: InstallState, capsule_lock: CapsuleLock) -> tuple[Path, Path]:
         if not install_state.dependency_env_path or not install_state.runner_workspace_path:
             raise ValueError("Prepared runtime artifact paths are missing; prepare the workflow again.")
@@ -982,6 +1587,19 @@ def _invalid_model_references(install_state: InstallState) -> list[str]:
             if _sha256_file(materialized_path) != expected:
                 invalid.append(f"model view file hash mismatch for {ref.requirement_id}")
     return invalid
+
+
+def _installed_model_size_mb(install_state: InstallState) -> int | None:
+    total_size_bytes = sum(ref.size_bytes or 0 for ref in install_state.model_references)
+    if total_size_bytes <= 0:
+        return None
+    return max(1, total_size_bytes // (1024 * 1024))
+
+
+def _required_free_after_cleanup(estimated_peak_mb: int | None, margin_mb: int | None) -> int | None:
+    if estimated_peak_mb is None:
+        return None
+    return estimated_peak_mb + (margin_mb or 0)
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:

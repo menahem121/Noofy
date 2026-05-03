@@ -7,12 +7,20 @@ import pytest
 from app.engine.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
+from app.runtime.memory_governor import (
+    LocalMemoryLearningStore,
+    MachineMemorySnapshot,
+    MemoryBackend,
+    MemoryPressureLevel,
+)
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     DuplicateJobRegistrationError,
     JobRunnerNotFoundError,
     JobRunnerRegistry,
+    QueuedRunnerStartKind,
+    QueuedRunnerStartStatus,
     RunnerDescriptor,
     RunnerKind,
     RunnerMemoryClass,
@@ -72,6 +80,28 @@ class RecordingAdapter:
     async def get_result(self, job_id: str) -> JobResult:
         self.result_calls.append(job_id)
         return JobResult(job_id=job_id, status="completed")
+
+
+class MemoryRetryAdapter(RecordingAdapter):
+    def __init__(self, models: list[ModelInfo]) -> None:
+        super().__init__(models=models)
+        self._job_counter = 0
+
+    async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
+        del graph, options
+        self._job_counter += 1
+        job_id = f"job-{self._job_counter}"
+        self.run_calls.append((job_id, dict(inputs)))
+        return EngineJob(
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+            engine="comfyui",
+            status="queued",
+        )
+
+    async def get_result(self, job_id: str) -> JobResult:
+        self.result_calls.append(job_id)
+        return JobResult(job_id=job_id, status="failed", error="CUDA out of memory")
 
 
 def _core_descriptor() -> RunnerDescriptor:
@@ -531,6 +561,57 @@ def test_runner_job_markers_track_active_job_and_warm_status() -> None:
     assert finished.current_job_id is None
 
 
+def test_supervisor_runner_start_queue_round_trip_and_cancel() -> None:
+    now = datetime(2026, 5, 3, 12, 0, tzinfo=UTC)
+    supervisor = RunnerSupervisor(now=lambda: now)
+    supervisor.upsert_runner(_isolated_descriptor(runner_id="runner-a"), RecordingAdapter())
+
+    queued = supervisor.enqueue_runner_start(
+        workflow_id="workflow-b",
+        kind=QueuedRunnerStartKind.PENDING_MEMORY,
+        queued_behind_runner_id="runner-a",
+        reason="memory_pressure_high",
+        queue_id="queue-1",
+    )
+
+    assert queued.status is QueuedRunnerStartStatus.QUEUED
+    assert queued.created_at == "2026-05-03T12:00:00+00:00"
+    assert supervisor.get_queued_runner_start("queue-1") == queued
+    assert supervisor.list_queued_runner_starts() == [queued]
+
+    canceled = supervisor.cancel_queued_runner_start("queue-1")
+
+    assert canceled is not None
+    assert canceled.status is QueuedRunnerStartStatus.CANCELED
+    assert canceled.canceled_at == "2026-05-03T12:00:00+00:00"
+    assert supervisor.list_queued_runner_starts() == []
+    assert supervisor.list_queued_runner_starts(status=None) == [canceled]
+
+
+def test_supervisor_pops_next_queued_runner_start_after_released_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(_isolated_descriptor(runner_id="runner-a"), RecordingAdapter())
+    supervisor.upsert_runner(_isolated_descriptor(runner_id="runner-b"), RecordingAdapter())
+    queue_a = supervisor.enqueue_runner_start(
+        workflow_id="workflow-a",
+        kind=QueuedRunnerStartKind.PENDING_SWITCH,
+        queued_behind_runner_id="runner-a",
+        queue_id="queue-a",
+    )
+    supervisor.enqueue_runner_start(
+        workflow_id="workflow-b",
+        kind=QueuedRunnerStartKind.PENDING_SWITCH,
+        queued_behind_runner_id="runner-b",
+        queue_id="queue-b",
+    )
+
+    popped = supervisor.pop_next_queued_runner_start(released_runner_id="runner-a")
+
+    assert popped == queue_a
+    assert supervisor.get_queued_runner_start("queue-a") is None
+    assert [item.queue_id for item in supervisor.list_queued_runner_starts()] == ["queue-b"]
+
+
 # ----------------------------------------------------------------------
 # Job routing through the supervisor
 # ----------------------------------------------------------------------
@@ -578,7 +659,20 @@ def test_supervisor_forget_job_removes_routing() -> None:
 # ----------------------------------------------------------------------
 
 
-def _build_service(adapter: RecordingAdapter) -> tuple[EngineService, RunnerSupervisor]:
+class StaticMemoryObserver:
+    def __init__(self, snapshot: MachineMemorySnapshot) -> None:
+        self.snapshot_value = snapshot
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        return self.snapshot_value
+
+
+def _build_service(
+    adapter: RecordingAdapter,
+    *,
+    memory_learning_store: LocalMemoryLearningStore | None = None,
+    memory_observer: StaticMemoryObserver | None = None,
+) -> tuple[EngineService, RunnerSupervisor]:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), adapter)
     service = EngineService(
@@ -587,6 +681,8 @@ def _build_service(adapter: RecordingAdapter) -> tuple[EngineService, RunnerSupe
         runner_supervisor=supervisor,
         runtime_manager=StubRuntimeManager(),
         log_store=LogStore(),
+        memory_learning_store=memory_learning_store,
+        memory_observer=memory_observer,
     )
     return service, supervisor
 
@@ -664,6 +760,179 @@ async def test_progress_cancel_result_route_through_registry() -> None:
 
 
 @pytest.mark.anyio
+async def test_get_result_records_successful_local_memory_observation(tmp_path: Path) -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    learning_store = LocalMemoryLearningStore(tmp_path / "memory-learning")
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=learning_store,
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                machine_profile_id="machine-a",
+                total_vram_mb=12_000,
+                free_vram_mb=8_000,
+                total_ram_mb=64_000,
+                free_ram_mb=50_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(
+            update={
+                "observed_execution_peak_vram_mb": 2400,
+                "observed_execution_peak_ram_mb": 1200,
+            }
+        ),
+        adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await service.get_result(job.job_id)
+    summary = learning_store.summary_for(
+        workflow_id="text_to_image_v0",
+        runner_process_compatibility_key="runner-key-a",
+        machine_profile_id="machine-a",
+        backend=MemoryBackend.CUDA,
+    )
+
+    assert summary is not None
+    assert summary.successful_runs == 1
+    assert summary.memory_error_runs == 0
+    assert summary.observed_peak_vram_mb == 2400
+
+@pytest.mark.anyio
+async def test_get_result_records_memory_error_observation(tmp_path: Path) -> None:
+    class FailingResultAdapter(RecordingAdapter):
+        def __init__(self, models: list[ModelInfo]) -> None:
+            super().__init__(models=models)
+            self._job_counter = 0
+
+        async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
+            del graph, options
+            self._job_counter += 1
+            job_id = f"job-{self._job_counter}"
+            self.run_calls.append((job_id, dict(inputs)))
+            return EngineJob(
+                job_id=job_id,
+                workflow_id=workflow_package.metadata.id,
+                engine="comfyui",
+                status="queued",
+            )
+
+        async def get_result(self, job_id: str) -> JobResult:
+            self.result_calls.append(job_id)
+            return JobResult(job_id=job_id, status="failed", error="CUDA out of memory")
+
+    adapter = FailingResultAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    learning_store = LocalMemoryLearningStore(tmp_path / "memory-learning")
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=learning_store,
+        memory_observer=StaticMemoryObserver(MachineMemorySnapshot(backend=MemoryBackend.CUDA)),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await service.get_result(job.job_id)
+    summary = learning_store.list_summaries()[0]
+
+    assert summary.memory_error_runs == 1
+    assert summary.successful_runs == 0
+    assert summary.has_memory_failure is True
+
+
+@pytest.mark.anyio
+async def test_get_result_retries_once_after_memory_cleanup(tmp_path: Path) -> None:
+    adapter = MemoryRetryAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, _ = _build_service(
+        adapter,
+        memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=8_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={"prompt": "hello"}, options={})
+    retry_job = await service.get_result(job.job_id)
+
+    assert isinstance(retry_job, EngineJob)
+    assert retry_job.job_id == "job-2"
+    assert retry_job.status == "queued"
+    assert retry_job.memory_decision is not None
+    assert retry_job.memory_decision["action"] == "retry_after_memory_cleanup"
+    assert retry_job.memory_status is not None
+    assert retry_job.memory_status["state"] == "retrying_after_memory_cleanup"
+    assert adapter.run_calls == [("job-1", {"prompt": "hello"}), ("job-2", {"prompt": "hello"})]
+    assert service.memory_governor_metrics()["memory_retry_attempted"] == 1
+
+
+@pytest.mark.anyio
+async def test_get_result_does_not_repeat_memory_retry(tmp_path: Path) -> None:
+    adapter = MemoryRetryAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, _ = _build_service(
+        adapter,
+        memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=8_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    retry_job = await service.get_result(job.job_id)
+    repeated_result = await service.get_result(retry_job.job_id)
+
+    assert isinstance(retry_job, EngineJob)
+    assert isinstance(repeated_result, JobResult)
+    assert repeated_result.status == "failed"
+    assert adapter.run_calls == [("job-1", {}), ("job-2", {})]
+    assert service.memory_governor_metrics()["memory_retry_attempted"] == 1
+    assert service.memory_governor_metrics()["memory_retry_blocked"] == 1
+
+
+@pytest.mark.anyio
 async def test_progress_for_unknown_job_falls_back_to_core_runner() -> None:
     """Existing API behavior must keep working when a job has no registry entry."""
     adapter = RecordingAdapter()
@@ -685,6 +954,172 @@ async def test_run_workflow_blocked_by_validation_does_not_register_job() -> Non
     # Validation blocked submission, so no job exists and nothing was routed.
     assert hasattr(result, "valid") and not result.valid
     assert adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_queues_pending_memory_without_submitting_to_adapter() -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert job.status == "queued_pending_memory"
+    assert job.queue_id == job.job_id
+    assert job.memory_decision is not None
+    assert job.memory_decision["action"] == "queue_pending_memory"
+    assert job.memory_status is not None
+    assert job.memory_status["state"] == "waiting_for_gpu"
+    assert selected_adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-after-memory",
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+    queued = await service.run_workflow("text_to_image_v0", inputs={"prompt": "hello"}, options={})
+
+    supervisor.mark_runner_job_finished("active-runner", "job-active")
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=8_000,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    handed_off = await service.handoff_queued_workflow_run(queued.queue_id)
+
+    assert isinstance(handed_off, EngineJob)
+    assert handed_off.status == "queued"
+    assert handed_off.job_id == "job-after-memory"
+    assert handed_off.queue_id == queued.queue_id
+    assert selected_adapter.run_calls == [("job-after-memory", {"prompt": "hello"})]
+    assert supervisor.runner_for_job("job-after-memory").runner_id == "selected-runner"
+    assert await service.handoff_queued_workflow_run(queued.queue_id) is None
+
+
+@pytest.mark.anyio
+async def test_run_workflow_blocks_by_memory_without_submitting_to_adapter() -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=10_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.UNKNOWN,
+        ),
+        selected_adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert job.status == "blocked_by_memory"
+    assert job.memory_decision is not None
+    assert job.memory_decision["action"] == "blocked_by_memory"
+    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain"
+    assert job.memory_status is not None
+    assert job.memory_status["state"] == "blocked_by_memory"
+    assert selected_adapter.run_calls == []
     assert supervisor.job_registry.snapshot() == {}
 
 

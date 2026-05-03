@@ -220,6 +220,100 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("model failed")).toBeInTheDocument();
   });
 
+  it("shows a memory waiting state without polling a queue id", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse(validWorkflow));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "workflow-run-queue-text_to_image_v0-1",
+            workflow_id: "text_to_image_v0",
+            engine: "noofy",
+            status: "queued_pending_memory",
+            queue_id: "workflow-run-queue-text_to_image_v0-1",
+            message: "This workflow is waiting until the current GPU work finishes.",
+            memory_status: {
+              state: "waiting_for_gpu",
+              message: "This workflow is waiting until the current GPU work finishes.",
+              risk_level: "high",
+              queue_id: "workflow-run-queue-text_to_image_v0-1",
+              can_cancel: true,
+              can_retry_after_cleanup: true,
+            },
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByText("Waiting for the GPU")).toBeInTheDocument();
+    expect(screen.getAllByText("This workflow is waiting until the current GPU work finishes.").length).toBeGreaterThan(0);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/jobs/workflow-run-queue-text_to_image_v0-1/progress"),
+      ),
+    ).toBe(false);
+  });
+
+  it("shows a blocked memory state", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse(validWorkflow));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "blocked-memory-text_to_image_v0",
+            workflow_id: "text_to_image_v0",
+            engine: "noofy",
+            status: "blocked_by_memory",
+            message: "This workflow needs more memory than Noofy can safely use right now.",
+            memory_status: {
+              state: "blocked_by_memory",
+              message: "This workflow needs more memory than Noofy can safely use right now.",
+              risk_level: "high",
+              queue_id: null,
+              can_cancel: true,
+              can_retry_after_cleanup: false,
+            },
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByText("Not enough memory")).toBeInTheDocument();
+    expect(screen.getAllByText("This workflow needs more memory than Noofy can safely use right now.").length).toBeGreaterThan(0);
+  });
+
   it("cancels a running job", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

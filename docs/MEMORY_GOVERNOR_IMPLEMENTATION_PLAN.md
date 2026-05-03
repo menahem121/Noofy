@@ -427,83 +427,90 @@ API payloads should remain beginner-friendly by default, with developer details 
 
 ### MG1: Schemas And Decision Records
 
-- Add memory class enum with `gpu_medium`.
-- Add workflow memory estimate schema.
-- Add local memory observation summary schema.
-- Add runner memory snapshot schema.
-- Add machine memory snapshot schema.
-- Add Memory Governor decision schema.
-- Persist decision records in diagnostics.
+- [x] Add memory class enum with `gpu_medium`.
+- [x] Add workflow memory estimate schema.
+- [x] Add local memory observation summary schema.
+- [x] Add runner memory snapshot schema.
+- [x] Add machine memory snapshot schema.
+- [x] Add Memory Governor decision schema.
+- [x] Persist decision records in diagnostics.
 
 Acceptance:
 
-- Unit tests cover schema validation, unknown-as-heavy behavior, local evidence summaries, and decision serialization.
+- [x] Unit tests cover schema validation, unknown-as-heavy behavior, local evidence summaries, local-observation precedence, and decision serialization.
 
 ### MG2: Hardware And Memory Observers
 
-- Implement backend-specific observers for CUDA first.
-- Add MPS, DirectML, CPU/RAM observer interfaces even if initial implementation is conservative.
-- Capture total/free VRAM, total/free RAM, backend name, device name, and pressure indicators.
+- [x] Implement backend-specific observers for CUDA first.
+- [x] Add MPS, DirectML, CPU/RAM observer interfaces even if initial implementation is conservative.
+- [x] Capture total/free VRAM, total/free RAM, backend name, device name, and pressure indicators.
 
 Acceptance:
 
-- Fake observer tests cover normal, unavailable, and partial-data cases.
+- [x] Fake observer tests cover normal, unavailable, and partial-data cases.
 
 ### MG3: Estimation Engine
 
-- Build estimates from repeated local history, single local observations, `.noofy` creator metrics, model metadata, workflow type, resolution, batch size, and heuristics.
-- Attach confidence level and reason list.
-- Treat missing estimates as `unknown`/high risk.
-- Lower confidence when local observations do not match the requested settings or machine profile.
+- [x] Build first-pass estimates from repeated local history, single local observations, `.noofy` creator metrics, declared requirements, model size, resolution, batch size, and heuristics.
+- [x] Attach confidence level and reason list.
+- [x] Treat missing estimates as `unknown`/high risk.
+- [x] Lower confidence when local observations do not match the requested settings.
+- [x] Add app-local learning store for local run observations and evidence summaries.
+- [x] Use exact machine-profile matching and conservative workflow-type heuristics before policy integration.
 
 Acceptance:
 
-- Tests prove repeated local observations outrank single local observations, local observations outrank creator observations, creator observations outrank heuristics, unknown remains conservative, and materially changed settings lower confidence.
+- [x] Tests prove repeated local observations outrank single local observations, local observations outrank creator observations, creator observations outrank heuristics, unknown remains conservative, and materially changed settings lower confidence.
 
 ### MG4: Co-Residence And Eviction Policy
 
-- Implement co-residence matrix.
-- Implement safety margins per backend/device tier.
-- Implement eviction scoring.
-- Integrate decisions into runner start and workflow run requests.
+- [x] Implement co-residence matrix.
+- [x] Implement safety margins per backend/device tier.
+- [x] Implement eviction scoring.
+- [x] Integrate decisions into runner start requests when a Memory Governor observer is configured.
+- [x] Integrate decisions into workflow run requests and queued job handoff.
 
 Acceptance:
 
-- Tests cover heavy/heavy deny, heavy/light allow with margin, unknown deny, large-GPU high-confidence allow, and memory-pressure eviction.
+- [x] Tests cover heavy/heavy deny, heavy/light allow with margin, unknown deny, large-GPU high-confidence allow, and memory-pressure eviction.
 
 ### MG5: Queue And Handoff
 
-- Add `queued_pending_memory`.
-- Persist in-memory queue records while backend is running.
-- Handoff queued work after active job finishes or memory release completes.
-- Keep normal cancellation behavior.
+- [x] Add `queued_pending_memory`.
+- [x] Persist in-memory queue records while backend is running.
+- [x] Handoff queued runner-start work after active runner/job release or memory release completes.
+- [x] Keep normal cancellation behavior.
+- [x] Extend handoff to submitted workflow jobs after run-request admission is integrated.
 
 Acceptance:
 
-- Tests cover queue behind active job, queue after memory cleanup, cancellation of queued work, and no active-job auto-kill.
+- [x] Tests cover queue behind active job, queue after memory cleanup, cancellation of queued work, and no active-job auto-kill.
 
 ### MG6: Memory Release And Retry
 
-- Stop idle runners and wait for bounded RAM/VRAM release.
-- Detect likely memory errors.
-- Retry once when safe.
-- Record failure history and downgrade future confidence.
-- Record successful local runs and raise future confidence only for similar settings.
+- [x] Stop idle runners and wait for bounded RAM/VRAM release before starting the next runner.
+- [x] Detect likely memory errors.
+- [x] Decide whether one retry after cleanup is safe.
+- [x] Record failure history and downgrade future confidence.
+- [x] Record successful local runs and raise future confidence only for similar settings.
+- [x] Integrate automatic retry execution around submitted workflow jobs.
 
 Acceptance:
 
-- Tests cover release success, release timeout, retry success, retry blocked, repeated memory failure avoiding the same optimistic decision, and repeated success increasing confidence for future warm retention.
+- [x] Tests cover release success, release timeout, retry success, retry blocked, repeated memory failure avoiding the same optimistic decision, and repeated success increasing confidence for future warm retention.
 
 ### MG7: UI And Diagnostics Contract
 
-- Extend API payloads with user-facing memory status summaries.
-- Add developer details for decision signals and raw errors.
-- Add frontend states and copy for memory decisions.
+- [x] Extend API payloads with user-facing memory status summaries.
+- [x] Add developer details for decision signals and raw errors.
+- [x] Add backend diagnostic counters for memory admission, queueing, eviction, retry, blocked-by-memory, and learned observation outcomes.
+- [x] Add frontend-ready states and copy for memory decisions.
 
 Acceptance:
 
-- API tests cover response shape and redaction.
-- UI tests or stories cover memory waiting, retry, blocked, and warm co-residence states.
+- [x] API tests cover response shape for memory metrics and runtime payloads.
+- [x] Backend tests cover memory waiting, retry, blocked, and warm co-residence states.
+- [x] Frontend run-page tests cover memory waiting and blocked-memory states.
 
 ### MG8: Integration And Hardware Validation
 
@@ -532,5 +539,11 @@ Memory Governor v1 is complete when:
 - one safe retry after cleanup exists for likely memory errors
 - UI/API states explain waiting, cleanup, retry, blocked, and warm readiness
 - tests cover success, uncertainty fallback, memory pressure, eviction, retry, and blocked failure
+
+Current v1 status: complete for Phase 5f. The backend exposes
+`memory_decision` for developer diagnostics, `memory_status` for UI copy, and
+`/api/memory-governor/metrics` for aggregate counters. Frontend presentation can
+consume those states without calling ComfyUI directly or changing the Memory
+Governor contract.
 
 The safe fallback remains: if Memory Governor cannot make a confident decision, Noofy behaves as though only one GPU-heavy runner may remain resident.

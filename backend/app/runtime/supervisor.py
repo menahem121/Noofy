@@ -94,6 +94,16 @@ class RunnerSelectionAction(StrEnum):
     BLOCKED_BY_MEMORY = "blocked_by_memory"
 
 
+class QueuedRunnerStartKind(StrEnum):
+    PENDING_SWITCH = "pending_switch"
+    PENDING_MEMORY = "pending_memory"
+
+
+class QueuedRunnerStartStatus(StrEnum):
+    QUEUED = "queued"
+    CANCELED = "canceled"
+
+
 class RunnerDescriptor(BaseModel):
     """Serializable view of a runner managed by the supervisor."""
 
@@ -138,6 +148,19 @@ class RunnerSelectionDecision(BaseModel):
     evict_runner_id: str | None = None
     queued_behind_runner_id: str | None = None
     reason: str | None = None
+
+
+class QueuedRunnerStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queue_id: str = Field(min_length=1)
+    workflow_id: str = Field(min_length=1)
+    kind: QueuedRunnerStartKind
+    status: QueuedRunnerStartStatus = QueuedRunnerStartStatus.QUEUED
+    queued_behind_runner_id: str | None = None
+    reason: str | None = None
+    created_at: str
+    canceled_at: str | None = None
 
 
 class RunnerNotFoundError(LookupError):
@@ -204,6 +227,7 @@ class RunnerSupervisor:
         self._core_runner_id: str | None = None
         self._workflow_runners: dict[str, str] = {}
         self._workflow_leases: dict[str, tuple[str, str]] = {}
+        self._queued_runner_starts: dict[str, QueuedRunnerStart] = {}
         self._registry = JobRunnerRegistry()
         self.closed_view_cooldown_seconds = closed_view_cooldown_seconds
         self._now = now or (lambda: datetime.now(UTC))
@@ -525,6 +549,81 @@ class RunnerSupervisor:
             )
             self._descriptors[runner_id] = updated
             return updated
+
+    def enqueue_runner_start(
+        self,
+        *,
+        workflow_id: str,
+        kind: QueuedRunnerStartKind,
+        queued_behind_runner_id: str | None = None,
+        reason: str | None = None,
+        queue_id: str | None = None,
+    ) -> QueuedRunnerStart:
+        if queued_behind_runner_id is not None:
+            self.get_runner(queued_behind_runner_id)
+        queued = QueuedRunnerStart(
+            queue_id=queue_id or f"runner-queue-{uuid.uuid4().hex}",
+            workflow_id=workflow_id,
+            kind=kind,
+            queued_behind_runner_id=queued_behind_runner_id,
+            reason=reason,
+            created_at=_iso(self._now()),
+        )
+        with self._lock:
+            self._queued_runner_starts[queued.queue_id] = queued
+        return queued
+
+    def list_queued_runner_starts(
+        self,
+        *,
+        status: QueuedRunnerStartStatus | None = QueuedRunnerStartStatus.QUEUED,
+    ) -> list[QueuedRunnerStart]:
+        with self._lock:
+            queued = list(self._queued_runner_starts.values())
+        if status is not None:
+            queued = [item for item in queued if item.status is status]
+        return sorted(queued, key=lambda item: (item.created_at, item.queue_id))
+
+    def get_queued_runner_start(self, queue_id: str) -> QueuedRunnerStart | None:
+        with self._lock:
+            return self._queued_runner_starts.get(queue_id)
+
+    def cancel_queued_runner_start(self, queue_id: str) -> QueuedRunnerStart | None:
+        with self._lock:
+            queued = self._queued_runner_starts.get(queue_id)
+            if queued is None:
+                return None
+            if queued.status is QueuedRunnerStartStatus.CANCELED:
+                return queued
+            updated = queued.model_copy(
+                update={
+                    "status": QueuedRunnerStartStatus.CANCELED,
+                    "canceled_at": _iso(self._now()),
+                }
+            )
+            self._queued_runner_starts[queue_id] = updated
+            return updated
+
+    def pop_next_queued_runner_start(
+        self,
+        *,
+        released_runner_id: str | None = None,
+    ) -> QueuedRunnerStart | None:
+        with self._lock:
+            queued = sorted(
+                (
+                    item
+                    for item in self._queued_runner_starts.values()
+                    if item.status is QueuedRunnerStartStatus.QUEUED
+                    and (released_runner_id is None or item.queued_behind_runner_id in {None, released_runner_id})
+                ),
+                key=lambda item: (item.created_at, item.queue_id),
+            )
+            if not queued:
+                return None
+            selected = queued[0]
+            self._queued_runner_starts.pop(selected.queue_id, None)
+            return selected
 
     @staticmethod
     def _workflow_id(workflow_package: object) -> str | None:

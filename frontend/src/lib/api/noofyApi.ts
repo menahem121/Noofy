@@ -13,7 +13,16 @@ export interface WorkflowSummary {
   required_model_count?: number;
 }
 
-export type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled" | "missing_models" | "unknown";
+export type JobStatus =
+  | "queued"
+  | "queued_pending_memory"
+  | "blocked_by_memory"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "missing_models"
+  | "unknown";
 
 export interface RuntimeDependencyStatus {
   name: string;
@@ -72,11 +81,24 @@ export interface WorkflowValidationResult {
   errors: string[];
 }
 
+export interface MemoryStatus {
+  state: string;
+  message: string;
+  risk_level: "low" | "medium" | "high" | "unknown" | string;
+  queue_id: string | null;
+  can_cancel: boolean;
+  can_retry_after_cleanup: boolean;
+}
+
 export interface EngineJob {
   job_id: string;
   workflow_id: string;
   engine: string;
   status: JobStatus;
+  queue_id?: string | null;
+  message?: string | null;
+  memory_decision?: Record<string, unknown> | null;
+  memory_status?: MemoryStatus | null;
 }
 
 export interface JobProgress {
@@ -253,7 +275,7 @@ export function fetchJobProgress(jobId: string) {
 }
 
 export function fetchJobResult(jobId: string) {
-  return getJson<JobResult>(`/jobs/${jobId}/result`);
+  return getJson<JobResult | EngineJob>(`/jobs/${jobId}/result`);
 }
 
 export function cancelJob(jobId: string) {
@@ -272,8 +294,8 @@ export function stopEngine() {
   return postJson<unknown>("/engine/comfyui/stop");
 }
 
-export function isEngineJob(response: WorkflowRunResponse): response is EngineJob {
-  return "job_id" in response;
+export function isEngineJob(response: unknown): response is EngineJob {
+  return Boolean(response && typeof response === "object" && "job_id" in response && "engine" in response);
 }
 
 // ─── Gallery ────────────────────────────────────────────────────────────────

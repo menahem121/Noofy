@@ -23,6 +23,7 @@ import {
   type EngineJob,
   type JobProgress,
   type JobResult,
+  type MemoryStatus,
   type RuntimeStatus,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
@@ -56,6 +57,7 @@ const initialState: RunPageState = {
 };
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
+const watchableJobStatuses = new Set(["queued", "running"]);
 
 export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
@@ -67,6 +69,8 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
   const pollTimerRef = useRef<number | null>(null);
 
   const isRunning = state.progress?.status === "queued" || state.progress?.status === "running";
+  const isWaitingForMemory = state.job?.status === "queued_pending_memory";
+  const isBlockedByMemory = state.job?.status === "blocked_by_memory";
   const status = runtimeStatusCopy({ loading: state.loading, runtime: state.runtime });
 
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
@@ -124,20 +128,11 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
         return;
       }
 
-      setState((current) => ({
-        ...current,
-        job: response,
-        progress: {
-          job_id: response.job_id,
-          status: response.status,
-          value: null,
-          max: null,
-          current_node: null,
-          message: "Preparing workflow...",
-        },
-      }));
-      watchJob(response.job_id);
-      await pollJobOnce(response.job_id);
+      setSubmittedJob(response);
+      if (isWatchableJob(response)) {
+        watchJob(response.job_id);
+        await pollJobOnce(response.job_id);
+      }
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -179,7 +174,16 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     source.addEventListener("result", (event) => {
       source.close();
       eventSourceRef.current = null;
-      setState((current) => ({ ...current, result: JSON.parse(event.data) as JobResult }));
+      const result = JSON.parse(event.data) as JobResult | EngineJob;
+      if (isEngineJob(result)) {
+        setSubmittedJob(result);
+        if (isWatchableJob(result)) {
+          watchJob(result.job_id);
+          void pollJobOnce(result.job_id);
+        }
+        return;
+      }
+      setState((current) => ({ ...current, result }));
     });
     source.onerror = () => {
       source.close();
@@ -190,6 +194,22 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     };
   }
 
+  function setSubmittedJob(job: EngineJob) {
+    setState((current) => ({
+      ...current,
+      job,
+      progress: {
+        job_id: job.job_id,
+        status: job.status,
+        value: null,
+        max: null,
+        current_node: null,
+        message: job.memory_status?.message ?? job.message ?? "Preparing workflow...",
+      },
+      result: null,
+    }));
+  }
+
   async function pollJobOnce(jobId: string) {
     const progress = await fetchJobProgress(jobId);
     setState((current) => ({ ...current, progress }));
@@ -197,6 +217,14 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     if (terminalStatuses.has(progress.status)) {
       cleanupJobWatchers();
       const result = await fetchJobResult(jobId);
+      if (isEngineJob(result)) {
+        setSubmittedJob(result);
+        if (isWatchableJob(result)) {
+          watchJob(result.job_id);
+          await pollJobOnce(result.job_id);
+        }
+        return;
+      }
       setState((current) => ({ ...current, result }));
     }
   }
@@ -211,7 +239,11 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
   }
 
   const missingModels = state.validation?.missing_models ?? [];
-  const canRun = Boolean(state.validation?.valid && state.runtime?.reachable && !isRunning);
+  const memoryStatus = state.result ? null : state.job?.memory_status ?? null;
+  const canRun = Boolean(
+    state.validation?.valid && state.runtime?.reachable && !isRunning && !isWaitingForMemory && !isBlockedByMemory,
+  );
+  const canCancel = Boolean(isRunning && state.job && !isBlockedByMemory);
   const progressPercent =
     state.progress?.value !== null && state.progress?.value !== undefined && state.progress.max
       ? Math.min(100, Math.round((state.progress.value / state.progress.max) * 100))
@@ -322,7 +354,7 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
               {isRunning ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
               Run Workflow
             </button>
-            <button className="secondary-button" type="button" disabled={!isRunning} onClick={() => void handleCancel()}>
+            <button className="secondary-button" type="button" disabled={!canCancel} onClick={() => void handleCancel()}>
               <Square size={16} aria-hidden="true" />
               Cancel
             </button>
@@ -373,10 +405,24 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
               </div>
             </div>
           ) : null}
+
+          {memoryStatus ? (
+            <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>{memoryStatusTitle(memoryStatus.state)}</strong>
+                <span>{memoryStatus.message}</span>
+              </div>
+            </div>
+          ) : null}
         </aside>
       </section>
     </AppLayout>
   );
+}
+
+function isWatchableJob(job: EngineJob) {
+  return watchableJobStatuses.has(job.status);
 }
 
 function progressMessage(progress: JobProgress | null, result: JobResult | null) {
@@ -400,7 +446,41 @@ function progressMessage(progress: JobProgress | null, result: JobResult | null)
     return "Preparing workflow...";
   }
 
+  if (progress?.status === "queued_pending_memory") {
+    return progress.message ?? "Waiting for memory.";
+  }
+
+  if (progress?.status === "blocked_by_memory") {
+    return progress.message ?? "This workflow needs more memory.";
+  }
+
   return "Run the workflow to create your first result.";
+}
+
+function memoryStatusTitle(state: string) {
+  if (state === "waiting_for_gpu") {
+    return "Waiting for the GPU";
+  }
+  if (state === "freeing_memory" || state === "waiting_for_memory_release") {
+    return "Freeing memory";
+  }
+  if (state === "retrying_after_memory_cleanup") {
+    return "Trying again";
+  }
+  if (state === "blocked_by_memory" || state === "memory_cleanup_failed") {
+    return "Not enough memory";
+  }
+  if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") {
+    return "Ready to relaunch";
+  }
+  return "Memory status";
+}
+
+function memoryNoticeClass(status: MemoryStatus) {
+  if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed") {
+    return "notice--error";
+  }
+  return "notice--warning";
 }
 
 function extractImageUrls(result: JobResult | null) {

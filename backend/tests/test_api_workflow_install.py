@@ -12,6 +12,7 @@ class FakeEngineService:
         self.stopped_workflow_runners: list[str] = []
         self.opened_runner_leases: list[str] = []
         self.closed_runner_leases: list[tuple[str, str]] = []
+        self.canceled_runner_start_queues: list[str] = []
 
     def list_runners(self):
         return [
@@ -24,6 +25,9 @@ class FakeEngineService:
                 status=RunnerStatus.READY,
             )
         ]
+
+    def memory_governor_metrics(self):
+        return {"memory_retry_attempted": 1, "workflow_run_blocked_by_memory": 2}
 
     def get_install_state(self, workflow_id: str):
         if workflow_id == "missing":
@@ -95,6 +99,14 @@ class FakeEngineService:
             "error": None,
         }
 
+    def cancel_queued_runner_start(self, queue_id: str):
+        self.canceled_runner_start_queues.append(queue_id)
+        return {
+            "queue_id": queue_id,
+            "workflow_id": "text_to_image_v0",
+            "status": "canceled",
+        }
+
     def open_workflow_runner_lease(self, workflow_id: str):
         self.opened_runner_leases.append(workflow_id)
         return {
@@ -150,6 +162,22 @@ def test_runners_endpoint_returns_registered_descriptors(monkeypatch) -> None:
     assert payload[0]["status"] == "ready"
 
 
+def test_memory_governor_metrics_endpoint_returns_counters(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/memory-governor/metrics")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "metrics": {
+            "memory_retry_attempted": 1,
+            "workflow_run_blocked_by_memory": 2,
+        }
+    }
+
+
 def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     monkeypatch.setattr(routes, "engine_service", FakeEngineService())
@@ -202,6 +230,19 @@ def test_start_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
     assert response.json()["status"] == "ready"
     assert response.json()["runner"]["kind"] == "isolated_comfyui"
     assert fake_service.started_workflow_runners == ["text_to_image_v0"]
+
+
+def test_cancel_queued_runner_start_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.delete("/api/workflows/runner/queue/queue-1")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "canceled"
+    assert fake_service.canceled_runner_start_queues == ["queue-1"]
 
 
 def test_stop_workflow_runner_endpoint_calls_service(monkeypatch) -> None:

@@ -21,6 +21,7 @@ from app.runtime.isolation import (
     SmokeTestReport,
     SmokeTestStatus,
 )
+from app.runtime.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
 from app.runtime.model_store import ModelStore
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessStatus
 from app.runtime.supervisor import (
@@ -29,6 +30,8 @@ from app.runtime.supervisor import (
     RunnerDescriptor,
     RunnerKind,
     RunnerMemoryClass,
+    RunnerMemoryEstimateConfidence,
+    RunnerMemoryEstimateSource,
     RunnerStatus,
     RunnerSupervisor,
 )
@@ -57,6 +60,17 @@ class StubAdapter:
         return []
 
 
+class StubMemoryObserver:
+    def __init__(self, snapshot: MachineMemorySnapshot | list[MachineMemorySnapshot]) -> None:
+        self._snapshots = snapshot if isinstance(snapshot, list) else [snapshot]
+        self._index = 0
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        snapshot = self._snapshots[min(self._index, len(self._snapshots) - 1)]
+        self._index += 1
+        return snapshot
+
+
 def _bundled_packages_dir() -> Path:
     return Path("app/workflows/packages")
 
@@ -70,6 +84,7 @@ def _build_service(
     local_model_roots: list[Path] | None = None,
     runner_coordinator_factory=None,
     include_workspace_preparer: bool = True,
+    memory_observer=None,
 ) -> EngineService:
     log_store = LogStore()
     supervisor = RunnerSupervisor()
@@ -143,6 +158,7 @@ def _build_service(
         ),
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
+        memory_observer=memory_observer,
     )
 
 
@@ -600,9 +616,59 @@ async def test_start_workflow_runner_queues_pending_switch_when_incompatible_run
 
     assert coordinator is not None
     assert result["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
+    assert result["queue_id"] is not None
     assert result["runner"]["runner_id"] == "busy-runner"
     assert result["pid"] == 9200
     assert coordinator.started_specs == []
+    assert service.runner_supervisor.get_queued_runner_start(result["queue_id"]).workflow_id == "runner_workflow"
+
+
+@pytest.mark.anyio
+async def test_queued_pending_switch_handoff_starts_after_runner_finishes(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="busy-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("9" * 64),
+            status=RunnerStatus.RUNNING,
+            runner_process_compatibility_key="sha256:" + ("9" * 64),
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-1",
+            pid=9200,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+    queued = await service.start_workflow_runner("runner_workflow")
+
+    service.runner_supervisor.mark_runner_job_finished("busy-runner", "job-1")
+    handoff = await service.handoff_next_queued_runner_start(released_runner_id="busy-runner")
+
+    assert coordinator is not None
+    assert queued["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
+    assert handoff is not None
+    assert handoff["started_from_queue_id"] == queued["queue_id"]
+    assert handoff["status"] == RunnerStatus.READY.value
+    assert coordinator.stopped_runner_ids == ["busy-runner"]
+    assert len(coordinator.started_specs) == 1
+    assert service.runner_supervisor.get_queued_runner_start(queued["queue_id"]) is None
 
 
 @pytest.mark.anyio
@@ -644,6 +710,375 @@ async def test_start_workflow_runner_evicts_idle_incompatible_runner_before_swit
     assert result["runner"]["runner_id"] != "idle-runner"
     assert coordinator.stopped_runner_ids == ["idle-runner"]
     assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_uses_memory_governor_to_evict_light_runner_under_pressure(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    capsule_payload["hardware_observations"] = {
+        "observed_peak_vram_mb": 1200,
+        "observed_peak_ram_mb": 800,
+    }
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+        memory_observer=StubMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    total_ram_mb=64_000,
+                    free_ram_mb=50_000,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=8_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=50_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="idle-light-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("8" * 64),
+            status=RunnerStatus.IDLE_WARM,
+            runner_process_compatibility_key="sha256:" + ("8" * 64),
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+            observed_idle_vram_mb=900,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert result["status"] == RunnerStatus.READY.value
+    assert result["memory_decision"]["action"] == "evict_then_start"
+    assert coordinator.stopped_runner_ids == ["idle-light-runner"]
+    assert len(coordinator.started_specs) == 1
+    decision_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.source == "memory_governor" and "action" in event.details
+    ]
+    assert decision_events[-1].details["action"] == "evict_then_start"
+    assert decision_events[-1].details["reason_code"] == "memory_pressure_high"
+    release_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.source == "memory_governor" and event.message == "Memory release check completed"
+    ]
+    assert release_events[-1].details["status"] == "released"
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_when_memory_release_times_out_after_eviction(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    capsule_payload["hardware_observations"] = {
+        "observed_peak_vram_mb": 1200,
+        "observed_peak_ram_mb": 800,
+    }
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+        memory_observer=StubMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    total_ram_mb=64_000,
+                    free_ram_mb=50_000,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=1_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=50_000,
+                    memory_pressure=MemoryPressureLevel.MEDIUM,
+                ),
+            ]
+        ),
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="idle-light-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("8" * 64),
+            status=RunnerStatus.IDLE_WARM,
+            runner_process_compatibility_key="sha256:" + ("8" * 64),
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+            observed_idle_vram_mb=900,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert result["status"] == RunnerStatus.MEMORY_CLEANUP_FAILED.value
+    assert result["memory_release_check"]["status"] == "timeout"
+    assert coordinator.stopped_runner_ids == ["idle-light-runner"]
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_uses_memory_governor_to_keep_light_runner_warm(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    capsule_payload["hardware_observations"] = {
+        "observed_peak_vram_mb": 2000,
+        "observed_peak_ram_mb": 900,
+    }
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+        memory_observer=StubMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=24_000,
+                free_vram_mb=18_000,
+                total_ram_mb=64_000,
+                free_ram_mb=50_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="idle-light-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("8" * 64),
+            status=RunnerStatus.IDLE_WARM,
+            runner_process_compatibility_key="sha256:" + ("8" * 64),
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+            memory_estimate_confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+            memory_estimate_source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            observed_idle_vram_mb=900,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert result["status"] == RunnerStatus.READY.value
+    assert result["memory_decision"]["action"] == "start_co_resident"
+    assert coordinator.stopped_runner_ids == []
+    assert len(coordinator.started_specs) == 1
+    memory_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.source == "memory_governor"
+    ]
+    assert memory_events[-1].details["action"] == "start_co_resident"
+    assert memory_events[-1].details["reason_code"] == "co_residence_margin_available"
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_when_memory_governor_has_no_estimate_or_margin(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+        memory_observer=StubMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=8_000,
+                free_vram_mb=7_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == RunnerStatus.BLOCKED_BY_MEMORY.value
+    assert result["runner"] is None
+    assert result["memory_decision"]["action"] == "blocked_by_memory"
+    assert result["memory_decision"]["reason_code"] == "gpu_estimate_uncertain"
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_queued_pending_memory_handoff_after_active_runner_finishes(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    capsule_payload["hardware_observations"] = {
+        "observed_peak_vram_mb": 1200,
+        "observed_peak_ram_mb": 800,
+    }
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+        memory_observer=StubMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="active-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("8" * 64),
+            status=RunnerStatus.RUNNING,
+            runner_process_compatibility_key="sha256:" + ("8" * 64),
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+            current_job_id="job-1",
+            pid=9200,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+    queued = await service.start_workflow_runner("runner_workflow")
+
+    service.runner_supervisor.mark_runner_job_finished("active-runner", "job-1")
+    service.memory_observer = StubMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=8_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    handoff = await service.handoff_next_queued_runner_start(released_runner_id="active-runner")
+
+    assert coordinator is not None
+    assert queued["status"] == RunnerStatus.QUEUED_PENDING_MEMORY.value
+    assert queued["queue_id"] is not None
+    assert coordinator.stopped_runner_ids == []
+    assert handoff is not None
+    assert handoff["started_from_queue_id"] == queued["queue_id"]
+    assert handoff["status"] == RunnerStatus.READY.value
+    assert coordinator.stopped_runner_ids == []
+    assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
+async def test_cancel_queued_runner_start_prevents_handoff(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="busy-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("9" * 64),
+            status=RunnerStatus.RUNNING,
+            runner_process_compatibility_key="sha256:" + ("9" * 64),
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-1",
+            pid=9200,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+    queued = await service.start_workflow_runner("runner_workflow")
+
+    canceled = service.cancel_queued_runner_start(queued["queue_id"])
+    service.runner_supervisor.mark_runner_job_finished("busy-runner", "job-1")
+    handoff = await service.handoff_next_queued_runner_start(released_runner_id="busy-runner")
+
+    assert coordinator is not None
+    assert canceled["status"] == "canceled"
+    assert handoff is None
+    assert coordinator.started_specs == []
 
 
 @pytest.mark.anyio

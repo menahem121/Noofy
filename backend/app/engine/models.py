@@ -3,7 +3,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-JobStatus = Literal["queued", "running", "completed", "failed", "canceled", "missing_models", "unknown"]
+JobStatus = Literal[
+    "queued",
+    "queued_pending_memory",
+    "blocked_by_memory",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+    "missing_models",
+    "unknown",
+]
 LogLevel = Literal["debug", "info", "warning", "error"]
 RuntimeMode = Literal["external", "managed"]
 
@@ -38,6 +48,10 @@ class EngineJob(BaseModel):
     workflow_id: str
     engine: str
     status: JobStatus
+    queue_id: str | None = None
+    message: str | None = None
+    memory_decision: dict[str, Any] | None = None
+    memory_status: dict[str, Any] | None = None
 
 
 class JobProgress(BaseModel):

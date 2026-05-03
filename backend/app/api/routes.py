@@ -55,6 +55,11 @@ async def list_runners():
     return [descriptor.model_dump() for descriptor in engine_service.list_runners()]
 
 
+@router.get("/memory-governor/metrics")
+async def memory_governor_metrics():
+    return {"metrics": engine_service.memory_governor_metrics()}
+
+
 @router.get("/workflows")
 async def list_workflows() -> list[dict[str, object]]:
     return engine_service.list_workflows()
@@ -92,6 +97,11 @@ async def prepare_workflow(workflow_id: str):
 @router.post("/workflows/{workflow_id}/runner/start")
 async def start_workflow_runner(workflow_id: str):
     return await engine_service.start_workflow_runner(workflow_id)
+
+
+@router.delete("/workflows/runner/queue/{queue_id}")
+async def cancel_queued_runner_start(queue_id: str):
+    return engine_service.cancel_queued_runner_start(queue_id)
 
 
 @router.post("/workflows/{workflow_id}/runner/stop")
