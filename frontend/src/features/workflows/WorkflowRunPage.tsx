@@ -304,7 +304,7 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
           <div className="panel-heading">
             <div>
               <h2>Inputs</h2>
-              <p>Keep it simple. Advanced workflow controls can come later.</p>
+              <p>Keep it simple. Advanced workflow widgets can come later.</p>
             </div>
           </div>
 

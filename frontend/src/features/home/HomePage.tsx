@@ -292,7 +292,7 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
               </div>
               <div>
                 <h2>Create Workflow Interface</h2>
-                <p>Pick the controls beginners should see and keep the complex parts hidden.</p>
+                <p>Pick the widgets beginners should see and keep the complex parts hidden.</p>
               </div>
               <button
                 className="primary-button primary-button--compact"

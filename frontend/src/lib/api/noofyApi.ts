@@ -323,7 +323,7 @@ export interface GalleryImage {
   height: number;
   favorite: boolean;
   /**
-   * User-facing workflow control values at the time of generation.
+   * User-facing workflow widget values at the time of generation.
    * Only values the user could edit in the Noofy workflow UI.
    */
   usedSettings: GalleryImageSettings;

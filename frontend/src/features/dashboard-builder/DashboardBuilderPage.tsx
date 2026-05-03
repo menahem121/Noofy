@@ -23,18 +23,18 @@ import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import {
-  CONTROL_TYPE_LABELS,
+  WIDGET_TYPE_LABELS,
   MOCK_WORKFLOW,
   NODE_ICONS,
   VALUE_KIND_ICONS,
   buildInitialDashboard,
-  controlTypesForKind,
+  widgetTypesForKind,
   defaultGroupFor,
-  suggestControlType,
+  suggestWidgetType,
   suggestDescription,
   suggestTitle,
-  type ControlType,
-  type DashboardControl,
+  type WidgetType,
+  type DashboardWidget,
   type DashboardSchema,
   type MockWorkflow,
   type WorkflowNode,
@@ -87,7 +87,7 @@ export function DashboardBuilderPage({
 
   const [schema, setSchema] = useState<DashboardSchema>(() => buildInitialDashboard(workflow));
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
-  const [selectedControlId, setSelectedControlId] = useState<string | null>(null);
+  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set([workflow.nodes[0]?.id ?? ""]));
   const [showTechnical, setShowTechnical] = useState(false);
@@ -95,10 +95,10 @@ export function DashboardBuilderPage({
 
   useEffect(() => {
     setSchema(buildInitialDashboard(workflow));
-    const firstControl = buildInitialDashboard(workflow).controls[0];
-    if (firstControl) {
-      setSelectedControlId(firstControl.id);
-      setSelectedValueId(firstControl.valueId);
+    const firstWidget = buildInitialDashboard(workflow).widgets[0];
+    if (firstWidget) {
+      setSelectedWidgetId(firstWidget.id);
+      setSelectedValueId(firstWidget.valueId);
     }
   }, [workflow]);
 
@@ -112,7 +112,7 @@ export function DashboardBuilderPage({
     return map;
   }, [workflow]);
 
-  const exposedValueIds = useMemo(() => new Set(schema.controls.map((c) => c.valueId)), [schema.controls]);
+  const exposedValueIds = useMemo(() => new Set(schema.widgets.map((c) => c.valueId)), [schema.widgets]);
 
   const filteredNodes = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -134,9 +134,9 @@ export function DashboardBuilderPage({
       .filter((node) => node.values.length > 0 || (!query && node.values.length === 0));
   }, [workflow.nodes, search, showTechnical]);
 
-  const selectedControl = useMemo(
-    () => (selectedControlId ? schema.controls.find((c) => c.id === selectedControlId) ?? null : null),
-    [schema.controls, selectedControlId],
+  const selectedWidget = useMemo(
+    () => (selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
+    [schema.widgets, selectedWidgetId],
   );
 
   const selectedValueRecord = selectedValueId ? valueIndex.get(selectedValueId) ?? null : null;
@@ -145,54 +145,54 @@ export function DashboardBuilderPage({
     const record = valueIndex.get(valueId);
     if (!record) return;
 
-    const existing = schema.controls.find((c) => c.valueId === valueId);
+    const existing = schema.widgets.find((c) => c.valueId === valueId);
     if (existing) {
       setSelectedValueId(valueId);
-      setSelectedControlId(existing.id);
+      setSelectedWidgetId(existing.id);
       return;
     }
 
-    const newControl = createControlForValue(record.value, record.node);
-    setSchema((current) => ({ ...current, controls: [...current.controls, newControl] }));
+    const newWidget = createWidgetForValue(record.value, record.node);
+    setSchema((current) => ({ ...current, widgets: [...current.widgets, newWidget] }));
     setSelectedValueId(valueId);
-    setSelectedControlId(newControl.id);
+    setSelectedWidgetId(newWidget.id);
   }
 
-  function handleSelectControl(controlId: string) {
-    const control = schema.controls.find((c) => c.id === controlId);
-    if (!control) return;
-    setSelectedControlId(controlId);
-    setSelectedValueId(control.valueId);
+  function handleSelectWidget(widgetId: string) {
+    const widget = schema.widgets.find((c) => c.id === widgetId);
+    if (!widget) return;
+    setSelectedWidgetId(widgetId);
+    setSelectedValueId(widget.valueId);
   }
 
-  function patchControl(controlId: string, patch: Partial<DashboardControl>) {
+  function patchWidget(widgetId: string, patch: Partial<DashboardWidget>) {
     setSchema((current) => ({
       ...current,
-      controls: current.controls.map((c) => (c.id === controlId ? { ...c, ...patch } : c)),
+      widgets: current.widgets.map((c) => (c.id === widgetId ? { ...c, ...patch } : c)),
     }));
   }
 
-  function removeControl(controlId: string) {
+  function removeWidget(widgetId: string) {
     setSchema((current) => ({
       ...current,
-      controls: current.controls.filter((c) => c.id !== controlId),
+      widgets: current.widgets.filter((c) => c.id !== widgetId),
     }));
-    if (selectedControlId === controlId) {
-      setSelectedControlId(null);
+    if (selectedWidgetId === widgetId) {
+      setSelectedWidgetId(null);
       setSelectedValueId(null);
     }
   }
 
-  function moveControl(controlId: string, direction: "up" | "down") {
+  function moveWidget(widgetId: string, direction: "up" | "down") {
     setSchema((current) => {
-      const index = current.controls.findIndex((c) => c.id === controlId);
+      const index = current.widgets.findIndex((c) => c.id === widgetId);
       if (index === -1) return current;
       const target = direction === "up" ? index - 1 : index + 1;
-      if (target < 0 || target >= current.controls.length) return current;
-      const next = [...current.controls];
+      if (target < 0 || target >= current.widgets.length) return current;
+      const next = [...current.widgets];
       const [moved] = next.splice(index, 1);
       next.splice(target, 0, moved);
-      return { ...current, controls: next };
+      return { ...current, widgets: next };
     });
   }
 
@@ -215,8 +215,8 @@ export function DashboardBuilderPage({
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
-  const simpleControls = schema.controls.filter((c) => c.group === "simple");
-  const advancedControls = schema.controls.filter((c) => c.group === "advanced");
+  const simpleWidgets = schema.widgets.filter((c) => c.group === "simple");
+  const advancedWidgets = schema.widgets.filter((c) => c.group === "advanced");
 
   return (
     <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
@@ -231,7 +231,7 @@ export function DashboardBuilderPage({
               <p className="eyebrow">Creator setup · Dashboard builder</p>
             </div>
             <h1 id="builder-title">Dashboard Builder · {workflow.name}</h1>
-            <p>Choose which workflow values become simple controls.</p>
+            <p>Choose which workflow values become simple widgets.</p>
           </div>
 
           <div className="builder-heading__meta">
@@ -271,7 +271,7 @@ export function DashboardBuilderPage({
             <header className="builder-pane__header">
               <div>
                 <h2>Workflow values</h2>
-                <p>Pick a value to expose as a friendly control.</p>
+                <p>Pick a value to expose as a friendly widget.</p>
               </div>
             </header>
             <div className="builder-pane__toolbar">
@@ -320,14 +320,14 @@ export function DashboardBuilderPage({
             </div>
           </aside>
 
-          <main className="builder-pane builder-config" aria-label="Control configuration">
-            {selectedControl && selectedValueRecord ? (
-              <ControlEditor
-                control={selectedControl}
+          <main className="builder-pane builder-config" aria-label="Widget configuration">
+            {selectedWidget && selectedValueRecord ? (
+              <WidgetEditor
+                widget={selectedWidget}
                 value={selectedValueRecord.value}
                 node={selectedValueRecord.node}
-                onPatch={(patch) => patchControl(selectedControl.id, patch)}
-                onRemove={() => removeControl(selectedControl.id)}
+                onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
+                onRemove={() => removeWidget(selectedWidget.id)}
               />
             ) : (
               <BuilderEmptyState />
@@ -347,31 +347,31 @@ export function DashboardBuilderPage({
             </header>
 
             <div className="builder-pane__scroll builder-preview__canvas">
-              {schema.controls.length === 0 ? (
+              {schema.widgets.length === 0 ? (
                 <div className="builder-empty">
                   <div className="builder-empty__icon">
                     <Wand2 size={26} aria-hidden="true" />
                   </div>
                   <h3>Your dashboard is empty</h3>
-                  <p>Select a workflow value and turn it into a dashboard control.</p>
+                  <p>Select a workflow value and turn it into a dashboard widget.</p>
                 </div>
               ) : (
                 <>
-                  {simpleControls.length > 0 && (
-                    <PreviewSection title="Simple controls" controls={simpleControls}
-                      selectedControlId={selectedControlId}
-                      onSelect={handleSelectControl}
-                      onRemove={removeControl}
-                      onMove={moveControl}
+                  {simpleWidgets.length > 0 && (
+                    <PreviewSection title="Simple widgets" widgets={simpleWidgets}
+                      selectedWidgetId={selectedWidgetId}
+                      onSelect={handleSelectWidget}
+                      onRemove={removeWidget}
+                      onMove={moveWidget}
                     />
                   )}
 
-                  {advancedControls.length > 0 && (
-                    <PreviewSection title="Advanced controls" controls={advancedControls}
-                      selectedControlId={selectedControlId}
-                      onSelect={handleSelectControl}
-                      onRemove={removeControl}
-                      onMove={moveControl}
+                  {advancedWidgets.length > 0 && (
+                    <PreviewSection title="Advanced widgets" widgets={advancedWidgets}
+                      selectedWidgetId={selectedWidgetId}
+                      onSelect={handleSelectWidget}
+                      onRemove={removeWidget}
+                      onMove={moveWidget}
                       muted
                     />
                   )}
@@ -460,23 +460,23 @@ function NodeListItem({
   );
 }
 
-function ControlEditor({
-  control,
+function WidgetEditor({
+  widget,
   value,
   node,
   onPatch,
   onRemove,
 }: {
-  control: DashboardControl;
+  widget: DashboardWidget;
   value: WorkflowNodeValue;
   node: WorkflowNode;
-  onPatch: (patch: Partial<DashboardControl>) => void;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
 }) {
-  const allowedTypes = controlTypesForKind(value.valueKind);
-  const showSlider = control.controlType === "slider" || control.controlType === "int_field";
-  const showOptions = control.controlType === "select" || control.controlType === "lora_loader";
-  const showImageOptions = control.controlType === "load_image" || control.controlType === "load_image_mask";
+  const allowedTypes = widgetTypesForKind(value.valueKind);
+  const showSlider = widget.widgetType === "slider" || widget.widgetType === "int_field";
+  const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
+  const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
 
   return (
     <div className="builder-config__inner">
@@ -487,47 +487,47 @@ function ControlEditor({
             <ChevronRight size={12} aria-hidden="true" />
             <span>{value.label}</span>
           </p>
-          <h2>Configure control</h2>
+          <h2>Configure widget</h2>
           <p className="builder-config__summary">
-            This control is connected to a workflow value. People running this workflow will see your clear label instead of the ComfyUI node name.
+            This widget is connected to a workflow value. People running this workflow will see your clear label instead of the ComfyUI node name.
           </p>
         </div>
         <button className="secondary-button secondary-button--small secondary-button--danger" type="button" onClick={onRemove}>
           <Trash2 size={13} aria-hidden="true" />
-          Remove control
+          Remove widget
         </button>
       </div>
 
-      <FormCard title="Control details">
+      <FormCard title="Widget details">
         <FieldRow label="Display title">
           <input
             type="text"
             className="builder-input"
-            value={control.title}
+            value={widget.title}
             onChange={(event) => onPatch({ title: event.target.value })}
           />
         </FieldRow>
-        <FieldRow label="Helper description" hint="Shown under the control. Keep it short and friendly.">
+        <FieldRow label="Helper description" hint="Shown under the widget. Keep it short and friendly.">
           <textarea
             className="builder-input builder-input--textarea"
             rows={2}
-            value={control.description}
+            value={widget.description}
             onChange={(event) => onPatch({ description: event.target.value })}
           />
         </FieldRow>
       </FormCard>
 
-      <FormCard title="Control behavior">
+      <FormCard title="Widget behavior">
         <div className="builder-config__grid">
-          <FieldRow label="Control type">
+          <FieldRow label="Widget type">
             <select
               className="builder-input"
-              value={control.controlType}
-              onChange={(event) => onPatch({ controlType: event.target.value as ControlType })}
+              value={widget.widgetType}
+              onChange={(event) => onPatch({ widgetType: event.target.value as WidgetType })}
             >
               {allowedTypes.map((type) => (
                 <option key={type} value={type}>
-                  {CONTROL_TYPE_LABELS[type]}
+                  {WIDGET_TYPE_LABELS[type]}
                 </option>
               ))}
             </select>
@@ -539,7 +539,7 @@ function ControlEditor({
                 { id: "simple", label: "Simple" },
                 { id: "advanced", label: "Advanced" },
               ]}
-              value={control.group}
+              value={widget.group}
               onChange={(group) => onPatch({ group })}
             />
           </FieldRow>
@@ -552,7 +552,7 @@ function ControlEditor({
               { id: "vertical", label: "Stacked" },
               { id: "horizontal", label: "Inline" },
             ]}
-            value={control.orientation}
+            value={widget.orientation}
             onChange={(orientation) => onPatch({ orientation })}
           />
         </FieldRow>
@@ -565,7 +565,7 @@ function ControlEditor({
               <input
                 type="number"
                 className="builder-input"
-                value={control.min ?? value.numberRange.min}
+                value={widget.min ?? value.numberRange.min}
                 step={value.numberRange.step ?? 1}
                 onChange={(event) => onPatch({ min: Number(event.target.value) })}
               />
@@ -574,7 +574,7 @@ function ControlEditor({
               <input
                 type="number"
                 className="builder-input"
-                value={control.max ?? value.numberRange.max}
+                value={widget.max ?? value.numberRange.max}
                 step={value.numberRange.step ?? 1}
                 onChange={(event) => onPatch({ max: Number(event.target.value) })}
               />
@@ -583,7 +583,7 @@ function ControlEditor({
               <input
                 type="number"
                 className="builder-input"
-                value={control.step ?? value.numberRange.step ?? 1}
+                value={widget.step ?? value.numberRange.step ?? 1}
                 step={value.numberRange.step ?? 1}
                 onChange={(event) => onPatch({ step: Number(event.target.value) })}
               />
@@ -598,7 +598,7 @@ function ControlEditor({
             <textarea
               className="builder-input builder-input--textarea"
               rows={4}
-              value={(control.options ?? value.options ?? []).join("\n")}
+              value={(widget.options ?? value.options ?? []).join("\n")}
               onChange={(event) =>
                 onPatch({
                   options: event.target.value.split("\n").map((line) => line.trim()).filter(Boolean),
@@ -612,9 +612,9 @@ function ControlEditor({
       {showImageOptions ? (
         <FormCard title="Image input">
           <ToggleRow
-            checked={Boolean(control.drawMask)}
+            checked={Boolean(widget.drawMask)}
             onChange={(drawMask) =>
-              onPatch({ drawMask, controlType: drawMask ? "load_image_mask" : "load_image" })
+              onPatch({ drawMask, widgetType: drawMask ? "load_image_mask" : "load_image" })
             }
             label="Allow drawing a mask"
             hint="Adds a mask brush over the uploaded image."
@@ -622,81 +622,81 @@ function ControlEditor({
         </FormCard>
       ) : null}
 
-      {control.controlType !== "display_image" ? (
+      {widget.widgetType !== "display_image" ? (
         <FormCard title="Default value">
-          <DefaultValueEditor control={control} value={value} onPatch={onPatch} />
+          <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
         </FormCard>
       ) : null}
 
       <div className="builder-config__binding">
         <span>Connected to</span>
-        <code>node {control.binding.nodeId}</code>
+        <code>node {widget.binding.nodeId}</code>
         <span className="builder-config__binding-arrow">→</span>
-        <code>{control.binding.inputName}</code>
+        <code>{widget.binding.inputName}</code>
       </div>
     </div>
   );
 }
 
 function DefaultValueEditor({
-  control,
+  widget,
   value,
   onPatch,
 }: {
-  control: DashboardControl;
+  widget: DashboardWidget;
   value: WorkflowNodeValue;
-  onPatch: (patch: Partial<DashboardControl>) => void;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
 }) {
-  if (control.controlType === "textarea") {
+  if (widget.widgetType === "textarea") {
     return (
       <textarea
         className="builder-input builder-input--textarea"
         rows={4}
-        value={String(control.defaultValue ?? "")}
+        value={String(widget.defaultValue ?? "")}
         onChange={(event) => onPatch({ defaultValue: event.target.value })}
       />
     );
   }
 
-  if (control.controlType === "string_field") {
+  if (widget.widgetType === "string_field") {
     return (
       <input
         type="text"
         className="builder-input"
-        value={String(control.defaultValue ?? "")}
+        value={String(widget.defaultValue ?? "")}
         onChange={(event) => onPatch({ defaultValue: event.target.value })}
       />
     );
   }
 
-  if (control.controlType === "slider" || control.controlType === "int_field" || control.controlType === "seed_control") {
+  if (widget.widgetType === "slider" || widget.widgetType === "int_field" || widget.widgetType === "seed_widget") {
     return (
       <input
         type="number"
         className="builder-input"
-        value={Number(control.defaultValue ?? 0)}
-        step={control.step ?? value.numberRange?.step ?? 1}
+        value={Number(widget.defaultValue ?? 0)}
+        step={widget.step ?? value.numberRange?.step ?? 1}
         onChange={(event) => onPatch({ defaultValue: Number(event.target.value) })}
       />
     );
   }
 
-  if (control.controlType === "toggle") {
+  if (widget.widgetType === "toggle") {
     return (
       <ToggleRow
-        checked={Boolean(control.defaultValue)}
+        checked={Boolean(widget.defaultValue)}
         onChange={(checked) => onPatch({ defaultValue: checked })}
-        label={control.defaultValue ? "On" : "Off"}
+        label={widget.defaultValue ? "On" : "Off"}
       />
     );
   }
 
-  if (control.controlType === "select" || control.controlType === "lora_loader") {
-    const options = control.options ?? value.options ?? [];
+  if (widget.widgetType === "select" || widget.widgetType === "lora_loader") {
+    const options = widget.options ?? value.options ?? [];
     return (
       <select
         className="builder-input"
-        value={String(control.defaultValue ?? options[0] ?? "")}
+        value={String(widget.defaultValue ?? options[0] ?? "")}
         onChange={(event) => onPatch({ defaultValue: event.target.value })}
       >
         {options.map((option) => (
@@ -708,7 +708,7 @@ function DefaultValueEditor({
     );
   }
 
-  if (control.controlType === "load_image" || control.controlType === "load_image_mask") {
+  if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") {
     return (
       <p className="builder-config__hint">
         End-users will pick an image from their computer when they open the dashboard.
@@ -797,16 +797,16 @@ function ToggleRow({
 
 function PreviewSection({
   title,
-  controls,
-  selectedControlId,
+  widgets,
+  selectedWidgetId,
   onSelect,
   onRemove,
   onMove,
   muted,
 }: {
   title: string;
-  controls: DashboardControl[];
-  selectedControlId: string | null;
+  widgets: DashboardWidget[];
+  selectedWidgetId: string | null;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, direction: "up" | "down") => void;
@@ -818,16 +818,16 @@ function PreviewSection({
         <h4>{title}</h4>
       </header>
       <div className="preview-stack">
-        {controls.map((control, index) => (
-          <PreviewControl
-            key={control.id}
-            control={control}
-            isSelected={selectedControlId === control.id}
+        {widgets.map((widget, index) => (
+          <PreviewWidget
+            key={widget.id}
+            widget={widget}
+            isSelected={selectedWidgetId === widget.id}
             isFirst={index === 0}
-            isLast={index === controls.length - 1}
-            onSelect={() => onSelect(control.id)}
-            onRemove={() => onRemove(control.id)}
-            onMove={(direction) => onMove(control.id, direction)}
+            isLast={index === widgets.length - 1}
+            onSelect={() => onSelect(widget.id)}
+            onRemove={() => onRemove(widget.id)}
+            onMove={(direction) => onMove(widget.id, direction)}
           />
         ))}
       </div>
@@ -835,8 +835,8 @@ function PreviewSection({
   );
 }
 
-function PreviewControl({
-  control,
+function PreviewWidget({
+  widget,
   isSelected,
   isFirst,
   isLast,
@@ -844,7 +844,7 @@ function PreviewControl({
   onRemove,
   onMove,
 }: {
-  control: DashboardControl;
+  widget: DashboardWidget;
   isSelected: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -854,22 +854,22 @@ function PreviewControl({
 }) {
   return (
     <article
-      className={`preview-control ${isSelected ? "preview-control--selected" : ""}`}
+      className={`preview-widget ${isSelected ? "preview-widget--selected" : ""}`}
       onClick={onSelect}
     >
-      <div className="preview-control__handle" aria-hidden="true">
+      <div className="preview-widget__handle" aria-hidden="true">
         <GripVertical size={14} />
       </div>
 
-      <div className="preview-control__body">
-        <div className="preview-control__heading">
-          <h5>{control.title}</h5>
-          {control.description ? <p>{control.description}</p> : null}
+      <div className="preview-widget__body">
+        <div className="preview-widget__heading">
+          <h5>{widget.title}</h5>
+          {widget.description ? <p>{widget.description}</p> : null}
         </div>
-        <PreviewControlInput control={control} />
+        <PreviewWidgetInput widget={widget} />
       </div>
 
-      <div className="preview-control__actions" onClick={(e) => e.stopPropagation()}>
+      <div className="preview-widget__actions" onClick={(e) => e.stopPropagation()}>
         <button
           className="icon-button icon-button--card"
           type="button"
@@ -894,7 +894,7 @@ function PreviewControl({
           className="icon-button icon-button--card"
           type="button"
           onClick={onRemove}
-          aria-label="Remove control"
+          aria-label="Remove widget"
           title="Remove from dashboard"
         >
           <X size={14} aria-hidden="true" />
@@ -904,26 +904,26 @@ function PreviewControl({
   );
 }
 
-function PreviewControlInput({ control }: { control: DashboardControl }) {
-  if (control.controlType === "textarea") {
+function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
+  if (widget.widgetType === "textarea") {
     return (
       <textarea
         className="preview-input preview-input--textarea"
         readOnly
         rows={3}
-        value={String(control.defaultValue ?? "")}
+        value={String(widget.defaultValue ?? "")}
       />
     );
   }
 
-  if (control.controlType === "string_field") {
-    return <input className="preview-input" readOnly type="text" value={String(control.defaultValue ?? "")} />;
+  if (widget.widgetType === "string_field") {
+    return <input className="preview-input" readOnly type="text" value={String(widget.defaultValue ?? "")} />;
   }
 
-  if (control.controlType === "slider") {
-    const min = control.min ?? 0;
-    const max = control.max ?? 100;
-    const numeric = Number(control.defaultValue ?? min);
+  if (widget.widgetType === "slider") {
+    const min = widget.min ?? 0;
+    const max = widget.max ?? 100;
+    const numeric = Number(widget.defaultValue ?? min);
     const percent = max > min ? Math.max(0, Math.min(100, ((numeric - min) / (max - min)) * 100)) : 0;
     return (
       <div className="preview-slider">
@@ -940,19 +940,19 @@ function PreviewControlInput({ control }: { control: DashboardControl }) {
     );
   }
 
-  if (control.controlType === "int_field" || control.controlType === "seed_control") {
+  if (widget.widgetType === "int_field" || widget.widgetType === "seed_widget") {
     return (
       <div className="preview-int">
-        <input className="preview-input" readOnly type="text" value={String(control.defaultValue ?? 0)} />
-        {control.controlType === "seed_control" ? (
+        <input className="preview-input" readOnly type="text" value={String(widget.defaultValue ?? 0)} />
+        {widget.widgetType === "seed_widget" ? (
           <span className="preview-int__hint">Click to randomize</span>
         ) : null}
       </div>
     );
   }
 
-  if (control.controlType === "toggle") {
-    const on = Boolean(control.defaultValue);
+  if (widget.widgetType === "toggle") {
+    const on = Boolean(widget.defaultValue);
     return (
       <div className={`preview-toggle ${on ? "preview-toggle--on" : ""}`}>
         <span />
@@ -961,17 +961,17 @@ function PreviewControlInput({ control }: { control: DashboardControl }) {
     );
   }
 
-  if (control.controlType === "select" || control.controlType === "lora_loader") {
-    const options = control.options ?? [];
+  if (widget.widgetType === "select" || widget.widgetType === "lora_loader") {
+    const options = widget.options ?? [];
     return (
       <div className="preview-select">
-        <span>{String(control.defaultValue ?? options[0] ?? "—")}</span>
+        <span>{String(widget.defaultValue ?? options[0] ?? "—")}</span>
         <ChevronDown size={14} aria-hidden="true" />
       </div>
     );
   }
 
-  if (control.controlType === "load_image") {
+  if (widget.widgetType === "load_image") {
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />
@@ -980,7 +980,7 @@ function PreviewControlInput({ control }: { control: DashboardControl }) {
     );
   }
 
-  if (control.controlType === "load_image_mask") {
+  if (widget.widgetType === "load_image_mask") {
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />
@@ -989,7 +989,7 @@ function PreviewControlInput({ control }: { control: DashboardControl }) {
     );
   }
 
-  if (control.controlType === "display_image") {
+  if (widget.widgetType === "display_image") {
     return (
       <div className="preview-image-output">
         <Sparkles size={22} aria-hidden="true" />
@@ -1009,20 +1009,20 @@ function BuilderEmptyState() {
       </div>
       <h3>Pick a workflow value to start</h3>
       <p>
-        Open a node on the left and tap a value. Noofy will turn it into a dashboard control you can
+        Open a node on the left and tap a value. Noofy will turn it into a dashboard widget you can
         rename and configure.
       </p>
     </div>
   );
 }
 
-function createControlForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardControl {
-  const controlType = suggestControlType(value);
+function createWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
+  const widgetType = suggestWidgetType(value);
   return {
     id: `ctrl-${value.id}`,
     valueId: value.id,
     binding: { nodeId: value.nodeId, inputName: value.inputName },
-    controlType,
+    widgetType,
     title: suggestTitle(value, node.title),
     description: suggestDescription(value),
     orientation: "vertical",
@@ -1032,7 +1032,7 @@ function createControlForValue(value: WorkflowNodeValue, node: WorkflowNode): Da
     min: value.numberRange?.min,
     max: value.numberRange?.max,
     step: value.numberRange?.step,
-    showDownload: controlType === "display_image" ? true : undefined,
-    drawMask: controlType === "load_image_mask" ? true : undefined,
+    showDownload: widgetType === "display_image" ? true : undefined,
+    drawMask: widgetType === "load_image_mask" ? true : undefined,
   };
 }

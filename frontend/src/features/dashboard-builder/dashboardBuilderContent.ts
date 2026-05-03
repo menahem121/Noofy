@@ -11,7 +11,7 @@ import {
   Type,
 } from "lucide-react";
 
-export type ControlType =
+export type WidgetType =
   | "slider"
   | "int_field"
   | "string_field"
@@ -20,7 +20,7 @@ export type ControlType =
   | "load_image"
   | "load_image_mask"
   | "display_image"
-  | "seed_control"
+  | "seed_widget"
   | "lora_loader"
   | "select";
 
@@ -64,17 +64,17 @@ export interface MockWorkflow {
   nodes: WorkflowNode[];
 }
 
-export type ControlGroup = "simple" | "advanced";
+export type WidgetGroup = "simple" | "advanced";
 
-export interface DashboardControl {
+export interface DashboardWidget {
   id: string;
   binding: { nodeId: string; inputName: string };
   valueId: string;
-  controlType: ControlType;
+  widgetType: WidgetType;
   title: string;
   description: string;
   orientation: "vertical" | "horizontal";
-  group: ControlGroup;
+  group: WidgetGroup;
   defaultValue: unknown;
   min?: number;
   max?: number;
@@ -88,7 +88,7 @@ export interface DashboardSchema {
   version: number;
   workflowId: string;
   workflowName: string;
-  controls: DashboardControl[];
+  widgets: DashboardWidget[];
 }
 
 export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
@@ -113,7 +113,7 @@ export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   select: Layers,
 };
 
-export const CONTROL_TYPE_LABELS: Record<ControlType, string> = {
+export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   slider: "Slider",
   int_field: "Number field",
   string_field: "Single line text",
@@ -122,12 +122,12 @@ export const CONTROL_TYPE_LABELS: Record<ControlType, string> = {
   load_image: "Load image",
   load_image_mask: "Load image with mask",
   display_image: "Display image",
-  seed_control: "Variation ID (seed)",
+  seed_widget: "Variation ID (seed)",
   lora_loader: "LoRA loader",
   select: "Dropdown",
 };
 
-const INPUT_CONTROL_TYPES: ControlType[] = [
+const INPUT_WIDGET_TYPES: WidgetType[] = [
   "slider",
   "int_field",
   "string_field",
@@ -135,16 +135,16 @@ const INPUT_CONTROL_TYPES: ControlType[] = [
   "toggle",
   "load_image",
   "load_image_mask",
-  "seed_control",
+  "seed_widget",
   "lora_loader",
   "select",
 ];
 
-const OUTPUT_CONTROL_TYPES: ControlType[] = ["display_image"];
+const OUTPUT_WIDGET_TYPES: WidgetType[] = ["display_image"];
 
-export function controlTypesForKind(kind: WorkflowValueKind): ControlType[] {
+export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   if (kind === "image_output") {
-    return OUTPUT_CONTROL_TYPES;
+    return OUTPUT_WIDGET_TYPES;
   }
 
   if (kind === "image_input") {
@@ -152,7 +152,7 @@ export function controlTypesForKind(kind: WorkflowValueKind): ControlType[] {
   }
 
   if (kind === "seed") {
-    return ["seed_control", "int_field", "slider"];
+    return ["seed_widget", "int_field", "slider"];
   }
 
   if (kind === "lora") {
@@ -175,13 +175,13 @@ export function controlTypesForKind(kind: WorkflowValueKind): ControlType[] {
     return ["select", "string_field"];
   }
 
-  return INPUT_CONTROL_TYPES;
+  return INPUT_WIDGET_TYPES;
 }
 
-export function suggestControlType(value: WorkflowNodeValue): ControlType {
+export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "image_output") return "display_image";
   if (value.valueKind === "image_input") return "load_image";
-  if (value.valueKind === "seed") return "seed_control";
+  if (value.valueKind === "seed") return "seed_widget";
   if (value.valueKind === "lora") return "lora_loader";
   if (value.valueKind === "boolean") return "toggle";
   if (value.valueKind === "select") return "select";
@@ -244,7 +244,7 @@ export function suggestDescription(value: WorkflowNodeValue): string {
   return hints[key] ?? value.hint ?? "";
 }
 
-export function defaultGroupFor(value: WorkflowNodeValue): ControlGroup {
+export function defaultGroupFor(value: WorkflowNodeValue): WidgetGroup {
   if (value.technical) return "advanced";
   if (value.valueKind === "seed") return "advanced";
   if (["denoise", "cfg", "steps", "sampler", "scheduler"].includes(value.inputName)) {
@@ -468,15 +468,15 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     .flatMap((node) => node.values)
     .find((value) => value.inputName === "text" && !value.label.toLowerCase().includes("negative"));
 
-  const controls: DashboardControl[] = [];
+  const widgets: DashboardWidget[] = [];
 
   if (promptValue) {
     const node = workflow.nodes.find((n) => n.id === promptValue.nodeId)!;
-    controls.push({
+    widgets.push({
       id: `ctrl-${promptValue.id}`,
       valueId: promptValue.id,
       binding: { nodeId: promptValue.nodeId, inputName: promptValue.inputName },
-      controlType: "textarea",
+      widgetType: "textarea",
       title: suggestTitle(promptValue, node.title),
       description: suggestDescription(promptValue),
       orientation: "vertical",
@@ -489,6 +489,6 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     version: 1,
     workflowId: workflow.id,
     workflowName: workflow.name,
-    controls,
+    widgets,
   };
 }
