@@ -264,7 +264,7 @@ class NoofyArchiveImporter:
     def extract_source_files(self, target_dir: Path) -> None:
         target_dir.mkdir(parents=True, exist_ok=True)
         for name, info in self.members.items():
-            if name.endswith("/"):
+            if info.is_dir():
                 continue
             target = target_dir.joinpath(*PurePosixPath(name).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -291,7 +291,7 @@ class NoofyArchiveImporter:
             raise NoofyImportError("Workflow package contains too many files.")
 
         total_uncompressed = 0
-        members: dict[str, zipfile.ZipInfo] = {}
+        raw_members: dict[str, zipfile.ZipInfo] = {}
         for info in infos:
             name = _safe_archive_name(info.filename)
             if _zip_member_is_symlink(info):
@@ -299,7 +299,23 @@ class NoofyArchiveImporter:
             total_uncompressed += info.file_size
             if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
                 raise NoofyImportError("Workflow package expands to too much data.")
-            members[name] = info
+            if info.is_dir():
+                continue
+            if _ignored_archive_member(name):
+                continue
+            if name in raw_members:
+                raise NoofyImportError(f"Workflow package contains duplicate file path: {name}")
+            raw_members[name] = info
+
+        root_prefix = _single_wrapper_root(raw_members)
+        members: dict[str, zipfile.ZipInfo] = {}
+        for name, info in raw_members.items():
+            normalized_name = _strip_wrapper_root(name, root_prefix)
+            if normalized_name is None or _ignored_archive_member(normalized_name):
+                continue
+            if normalized_name in members:
+                raise NoofyImportError(f"Workflow package contains duplicate file path: {normalized_name}")
+            members[normalized_name] = info
 
         missing = sorted(REQUIRED_FILES - set(members))
         if missing:
@@ -340,6 +356,48 @@ def _safe_archive_name(name: str) -> str:
     if not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise NoofyImportError(f"Workflow package contains an unsafe path: {name}")
     return str(path)
+
+
+def _ignored_archive_member(name: str) -> bool:
+    parts = PurePosixPath(name).parts
+    return (
+        not parts
+        or parts[0] == "__MACOSX"
+        or parts[-1] == ".DS_Store"
+        or parts[-1].startswith("._")
+    )
+
+
+def _single_wrapper_root(members: dict[str, zipfile.ZipInfo]) -> str | None:
+    if REQUIRED_FILES <= set(members):
+        return None
+
+    roots: set[str] = set()
+    for name in members:
+        parts = PurePosixPath(name).parts
+        if len(parts) > 1:
+            roots.add(parts[0])
+
+    for root in sorted(roots):
+        root_files = {
+            str(PurePosixPath(*PurePosixPath(name).parts[1:]))
+            for name in members
+            if PurePosixPath(name).parts[:1] == (root,) and len(PurePosixPath(name).parts) > 1
+        }
+        if REQUIRED_FILES <= root_files:
+            return root
+    return None
+
+
+def _strip_wrapper_root(name: str, root_prefix: str | None) -> str | None:
+    if root_prefix is None:
+        return name
+    parts = PurePosixPath(name).parts
+    if parts[:1] != (root_prefix,):
+        return None
+    if len(parts) == 1:
+        return None
+    return str(PurePosixPath(*parts[1:]))
 
 
 def _safe_store_segment(value: str) -> str:

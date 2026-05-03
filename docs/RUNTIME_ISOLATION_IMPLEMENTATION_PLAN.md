@@ -569,7 +569,7 @@ Current implementation notes:
 
 ### Phase 5e: Runner Smoke Tests And Minimal Graph Execution
 
-Status: Implementation complete; staged real ComfyUI hardware validation pending
+Status: Implementation complete; Ubuntu A10G staged real ComfyUI validation passed; L40S-specific validation pending if required for release hardware
 
 Goal: promote runtime artifacts only after the staged environment and runner prove they can import, start, and execute real work.
 
@@ -620,9 +620,18 @@ Current implementation notes:
 - The optional external real ComfyUI smoke validation can be run with `NOOFY_REAL_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_BASE_URL` / `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT`.
 - The optional staged real ComfyUI smoke validation can be run with `NOOFY_REAL_STAGED_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SOURCE_DIR=<ComfyUI checkout>`, `NOOFY_REAL_COMFYUI_PYTHON=<Python with ComfyUI deps>`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT` / `NOOFY_REAL_COMFYUI_SMOKE_MIN_OUTPUTS`. It materializes a Noofy staged runner workspace and executes through `RunnerSmokeTester`, so it is the preferred Phase 5e hardware-readiness check. Both real smoke paths are intentionally skipped in default test runs until suitable hardware is available.
 
+Ubuntu staged validation completed on 2026-05-03:
+
+- Host: Ubuntu, NVIDIA A10G, driver 595.58.03, CUDA 13.2, ComfyUI venv with torch `2.11.0+cu130`.
+- `EmptyImage -> PreviewImage` model-free staged smoke passed through `NOOFY_REAL_STAGED_COMFYUI_SMOKE`.
+- `core_sd15_txt2img.noofy` passed with staged model view exposing `checkpoints/v1-5-pruned-emaonly-fp16.safetensors`; output node `9` completed.
+- `custom_node_no_deps_success.noofy` passed with `ComfyUI_JPS-Nodes` materialized into the staged runner workspace; `Crop Image TargetSize (JPS)` registered and executed.
+- `custom_node_with_pypi_dep_success.noofy` passed with `comfyui-kjnodes` materialized into the staged runner workspace; `ImageResizeKJv2` registered and executed.
+- `exported-workflow-for-testing.noofy` / `controlnet_two_model_workflow` passed with staged model view exposing `checkpoints/DreamShaperXL_Lightning.safetensors` and `controlnet/diffusion_pytorch_model_promax.safetensors`; all required custom-node types registered and output node `144` completed.
+
 Remaining readiness gate:
 
-- Run at least one optional staged real ComfyUI smoke execution on suitable hardware before declaring Phase 5e product-ready for real imported workflow execution.
+- Run the same optional staged real ComfyUI smoke set on the target L40S server profile if L40S is the release qualification host.
 
 ### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Safety
 
