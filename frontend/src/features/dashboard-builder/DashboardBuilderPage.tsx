@@ -347,8 +347,8 @@ export function DashboardBuilderPage({
           <aside className="builder-pane builder-preview" aria-label="Dashboard preview">
             <header className="builder-pane__header builder-pane__header--preview">
               <div>
-                <h2>End-user dashboard</h2>
-                <p>How beginners will see this workflow.</p>
+                <h2>Created widgets</h2>
+                <p>Contains the widgets that will be added to the dashboard.</p>
               </div>
               <span className="builder-preview__chip">
                 <LayoutGrid size={13} aria-hidden="true" />

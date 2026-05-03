@@ -3324,7 +3324,7 @@ button:disabled {
 .builder-heading__inline-title {
   margin: 0;
   font-family: Manrope, Inter, sans-serif;
-  font-size: 14px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text-secondary);
   line-height: 1;
