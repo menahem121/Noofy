@@ -295,7 +295,7 @@ Phase 5 product scope:
 - Treat dependency environments as conflict isolation, not as a security sandbox.
 - Product builds must use Noofy-managed Python.
 - Process-tree cleanup must be designed before deeper runner switching work: process groups on macOS/Linux, and Job Objects or equivalent on Windows.
-- Phase 5 development uses `exported-workflow-for-testing.noofy` as the only real `.noofy` package fixture for now. Current development hardware is not expected to run the workflow; real ComfyUI execution smoke tests remain optional/local until suitable hardware is available.
+- Phase 5 development uses `exported-workflow-for-testing.noofy` as the main community-style `.noofy` package fixture. Phase 5e also keeps smaller purpose-built `.noofy` fixtures under `test_workflows/` so the staged smoke suite can validate core, custom-node, and multi-model cases quickly and repeatably.
 - Keep unverified community workflow opt-in and trust UI aligned with Phase 6; Phase 5 may expose backend states before the full marketplace/trust UI exists.
 
 Phase 5 status vocabulary:
@@ -565,11 +565,11 @@ Current implementation notes:
 - Install state records resolved model references with requirement ID, ComfyUI folder, filename, SHA-256, byte size, verification level, asset ownership, store ref, blob path, materialized model-view path, materialization strategy, and file verification result.
 - Runner workspaces link/copy the selected model view as their `models` directory without mutating ready runner workspaces.
 - Covered: SHA-256/size blob reuse, filename+size local candidate reuse with locally computed SHA-256, per-view materialization, conflicting same folder/name with different blob rejection, install-state model-reference persistence, hardlink/symlink/copy strategy recording, stale model-view repair, missing blob/view/source validation at runner startup, copy-failure cleanup, cross-volume hardlink fallback, symlink-denied fallback, Windows path-length rejection, filename-only model requirement blocking, explicit model-reference cleanup policy, and a symlink capability probe used before Windows symlink attempts.
-- No Phase 5d implementation work remains before Phase 5e. Real Windows-host and Linux CUDA-host validation are still required before platform release readiness, but they are not blockers for starting Phase 5e.
+- No Phase 5d implementation work remains. Linux CUDA staged validation is complete on the Ubuntu A10G qualification host; Windows/macOS filesystem fallback validation remains part of broader platform readiness, not Phase 5e.
 
 ### Phase 5e: Runner Smoke Tests And Minimal Graph Execution
 
-Status: Implementation complete; Ubuntu A10G staged real ComfyUI validation passed; L40S-specific validation pending if required for release hardware
+Status: Implementation complete; Ubuntu A10G staged real ComfyUI validation passed
 
 Goal: promote runtime artifacts only after the staged environment and runner prove they can import, start, and execute real work.
 
@@ -586,7 +586,7 @@ Tasks:
 - Verify `/object_info` or equivalent node metadata includes required core and custom node types after import.
 - Run a minimal real graph execution test. It must execute real nodes, not only check registration.
 - Prefer package-provided smoke fixtures when present. Otherwise generate a tiny graph only when Noofy can do so without changing workflow semantics or requiring missing user inputs.
-- On current development hardware, do not attempt to execute `exported-workflow-for-testing.noofy` as a real graph. Use fake or lightweight runner tests for implementation coverage until suitable hardware is available.
+- Execute real staged smoke graphs on the Ubuntu CUDA qualification host with the productized `make phase5e-real-smoke` suite. Keep fake/lightweight runner tests for fast default coverage where real ComfyUI execution is unavailable.
 - Product readiness still requires real smoke execution before a workflow is marked `ready`. If real execution cannot be run, report `prepared_needs_input_setup`, `cannot_prepare_automatically`, or a developer-only skipped-smoke state rather than `ready`.
 - If unresolved runtime inputs prevent workflow execution smoke, keep the workflow out of `ready` and report `prepared_needs_input_setup`.
 - Use minimal resolution, minimal step count, and bounded timeouts for smoke graphs.
@@ -619,6 +619,7 @@ Current implementation notes:
 - Fake/lightweight tests cover full-pass smoke reports, dependency import failure, runner health failure, missing execution smoke, object-info node registration failures, custom-node fixture exercise requirements, failed-staging quarantine markers, and unresolved runtime input blocking.
 - The optional external real ComfyUI smoke validation can be run with `NOOFY_REAL_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_BASE_URL` / `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT`.
 - The optional staged real ComfyUI smoke validation can be run with `NOOFY_REAL_STAGED_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SOURCE_DIR=<ComfyUI checkout>`, `NOOFY_REAL_COMFYUI_PYTHON=<Python with ComfyUI deps>`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT` / `NOOFY_REAL_COMFYUI_SMOKE_MIN_OUTPUTS`. It materializes a Noofy staged runner workspace and executes through `RunnerSmokeTester`, so it is the preferred Phase 5e hardware-readiness check. Both real smoke paths are intentionally skipped in default test runs until suitable hardware is available.
+- The productized staged validation suite can be run with `make phase5e-real-smoke`. Override `COMFYUI_SOURCE_DIR`, `COMFYUI_PYTHON`, `PHASE5E_SMOKE_WORK_DIR`, or `PHASE5E_SMOKE_SUMMARY` when validating a different server. The underlying command is `python -m app.runtime.phase5e_real_smoke`; it runs the model-free, SD1.5, custom-node, KJ custom-node, and ControlNet two-model scenarios and writes a JSON summary.
 
 Ubuntu staged validation completed on 2026-05-03:
 
@@ -629,9 +630,9 @@ Ubuntu staged validation completed on 2026-05-03:
 - `custom_node_with_pypi_dep_success.noofy` passed with `comfyui-kjnodes` materialized into the staged runner workspace; `ImageResizeKJv2` registered and executed.
 - `exported-workflow-for-testing.noofy` / `controlnet_two_model_workflow` passed with staged model view exposing `checkpoints/DreamShaperXL_Lightning.safetensors` and `controlnet/diffusion_pytorch_model_promax.safetensors`; all required custom-node types registered and output node `144` completed.
 
-Remaining readiness gate:
+Completion gate:
 
-- Run the same optional staged real ComfyUI smoke set on the target L40S server profile if L40S is the release qualification host.
+- None for Phase 5e on the current Ubuntu CUDA qualification host. Re-run `make phase5e-real-smoke` after changes to runtime staging, smoke execution, dependency handling, model-view materialization, custom-node materialization, or ComfyUI runner launch behavior.
 
 ### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Safety
 
@@ -834,7 +835,7 @@ Tasks:
   - GC with shared references
 - Add unit tests for schemas, fingerprint canonicalization, policy decisions, path validation, dependency lock parsing, manifest parsing, and install-state parsing.
 - Add integration tests using fake or lightweight runner adapters where real ComfyUI startup is too expensive for normal CI.
-- Add at least one real ComfyUI smoke test path that can be run locally or in an optional CI job, but mark it skipped by default on current development hardware.
+- Keep real ComfyUI smoke paths available for local/optional CI validation, with `make phase5e-real-smoke` as the productized full staged validation command and pytest real-smoke hooks skipped by default in ordinary CI.
 - Add Linux, Windows, and macOS filesystem behavior tests or documented manual test scripts for hardlink, symlink, copy fallback, long paths, and case-insensitive collisions.
 - Keep `make test` as the documented root test command and ensure backend/frontend tests still run from the expected directories.
 
@@ -843,7 +844,7 @@ Phase 5 locked/bundled acceptance criteria:
 - Noofy can prepare the supported portions of `exported-workflow-for-testing.noofy` into isolated staged/runtime artifacts without importing custom node Python in the trusted backend.
 - Dependency envs, runner workspaces, model views, and install state are reusable where fingerprints and manifests match.
 - Failed dependency install, custom-node materialization, model materialization, runner start, or smoke execution does not mutate trusted core runtime or ready artifacts.
-- Workflows become `ready` only after required smoke stages pass. On current development hardware, the test archive must not be marked `ready` without a real smoke run.
+- Workflows become `ready` only after required smoke stages pass. Test archives must not be marked `ready` without a real smoke run or an explicitly controlled fake-runner test.
 - Workflows with unresolved runtime inputs remain not-ready with beginner-friendly required-action status.
 - Runner switching honors queueing, normal cancellation, workflow-open warm retention, closed-view cooldown, and one GPU-heavy resident runner policy.
 - Reference tracking and GC do not delete assets still referenced by installed workflows or active runners.
