@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import {
   FolderClock,
   Images,
@@ -40,11 +40,20 @@ const navItems = [
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 
 export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayoutProps) {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
   return (
-    <div className="app-shell">
+    <div className={sidebarOpen ? "app-shell" : "app-shell app-shell--sidebar-closed"}>
       <header className="topbar">
         <div className="topbar__brand">
-          <button className="icon-button topbar__menu" type="button" aria-label="Open navigation" title="Open navigation">
+          <button
+            className="icon-button topbar__menu"
+            type="button"
+            aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
+            title={sidebarOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen((o) => !o)}
+          >
             <Menu size={20} aria-hidden="true" />
           </button>
           <button className="brand-button" type="button" onClick={() => onNavigate("home")} aria-label="Go to home">
@@ -78,43 +87,45 @@ export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayo
         </div>
       </header>
 
-      <aside className="sidebar">
-        <div className="workspace-card">
-          <div className="workspace-card__avatar" aria-hidden="true">
-            <ShieldCheck size={19} />
+      <aside className="sidebar" aria-hidden={!sidebarOpen}>
+        <div className="sidebar__inner">
+          <div className="workspace-card">
+            <div className="workspace-card__avatar" aria-hidden="true">
+              <ShieldCheck size={19} />
+            </div>
+            <div>
+              <p>AI Workspace</p>
+              <span>{status.label}</span>
+            </div>
           </div>
-          <div>
-            <p>AI Workspace</p>
-            <span>{status.label}</span>
-          </div>
-        </div>
 
-        <nav className="sidebar-nav" aria-label="Main navigation">
-          {navItems.map(({ id, label, Icon }) => (
-            <button
-              className={activeRoute === id ? "sidebar-nav__item sidebar-nav__item--active" : "sidebar-nav__item"}
-              type="button"
-              key={id}
-              onClick={() => onNavigate(id)}
-            >
-              <Icon size={19} aria-hidden="true" />
-              <span>{label}</span>
+          <nav className="sidebar-nav" aria-label="Main navigation">
+            {navItems.map(({ id, label, Icon }) => (
+              <button
+                className={activeRoute === id ? "sidebar-nav__item sidebar-nav__item--active" : "sidebar-nav__item"}
+                type="button"
+                key={id}
+                onClick={() => onNavigate(id)}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="sidebar__spacer" />
+
+          <div className="engine-card">
+            <div className="engine-card__header">
+              <span className={`engine-dot engine-dot--${status.tone}`} />
+              <span>Local engine</span>
+            </div>
+            <p>{status.description}</p>
+            <button className="secondary-button secondary-button--full" type="button" onClick={() => onNavigate("settings")}>
+              <SlidersHorizontal size={16} aria-hidden="true" />
+              Engine Settings
             </button>
-          ))}
-        </nav>
-
-        <div className="sidebar__spacer" />
-
-        <div className="engine-card">
-          <div className="engine-card__header">
-            <span className={`engine-dot engine-dot--${status.tone}`} />
-            <span>Local engine</span>
           </div>
-          <p>{status.description}</p>
-          <button className="secondary-button secondary-button--full" type="button" onClick={() => onNavigate("settings")}>
-            <SlidersHorizontal size={16} aria-hidden="true" />
-            Engine Settings
-          </button>
         </div>
       </aside>
 

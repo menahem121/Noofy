@@ -9,7 +9,13 @@
       "Read(//tmp/**)",
       "Bash(echo \"EXIT=$?\")",
       "Bash(npx tsc *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(sed -n '79,90p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '245,260p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '372,385p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '1096,1120p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '79,92p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '245,258p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)"
     ]
   }
 }
