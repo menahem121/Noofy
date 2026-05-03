@@ -15,7 +15,12 @@
       "Bash(sed -n '372,385p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
       "Bash(sed -n '1096,1120p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
       "Bash(sed -n '79,92p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
-      "Bash(sed -n '245,258p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)"
+      "Bash(sed -n '245,258p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(grep -v \"^--$\")",
+      "Bash(sed -n '389,402p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '3297,3360p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '3443,3452p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)",
+      "Bash(sed -n '4800,4850p' /Users/menahem/Desktop/PROJECTS/Noofy/frontend/src/styles/global.css)"
     ]
   }
 }
