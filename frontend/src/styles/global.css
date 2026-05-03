@@ -1043,7 +1043,7 @@ button:disabled {
 .ghost-button--back {
   min-height: 28px;
   padding: 0;
-  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .icon-button {
@@ -3293,6 +3293,17 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.builder-heading__eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.builder-heading__eyebrow-row .eyebrow {
+  margin: 0;
 }
 
 .builder-heading__text h1 {

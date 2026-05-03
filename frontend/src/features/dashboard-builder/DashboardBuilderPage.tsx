@@ -221,14 +221,15 @@ export function DashboardBuilderPage({
   return (
     <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
       <div className="builder-page">
-        <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
-          <ArrowLeft size={15} aria-hidden="true" />
-          Back to workflows
-        </button>
-
         <section className="builder-heading" aria-labelledby="builder-title">
           <div className="builder-heading__text">
-            <p className="eyebrow">Creator setup · Dashboard builder</p>
+            <div className="builder-heading__eyebrow-row">
+              <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
+                <ArrowLeft size={15} aria-hidden="true" />
+                Back to workflows
+              </button>
+              <p className="eyebrow">Creator setup · Dashboard builder</p>
+            </div>
             <h1 id="builder-title">Dashboard Builder · {workflow.name}</h1>
             <p>Choose which workflow values become simple controls.</p>
           </div>
