@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(p.get\\('displayName',''\\), '->', p.get\\('name',''\\)\\) for p in data.get\\('projects',[]\\)]\")",
+      "Bash(python3 -c ' *)",
+      "mcp__stitch__get_screen",
+      "Bash(curl -sL \"https://contribution.usercontent.google.com/download?c=CgthaWRhX2NvZGVmeBJ8Eh1hcHBfY29tcGFuaW9uX2dlbmVyYXRlZF9maWxlcxpbCiVodG1sXzAwMDY1MGU5MzRmMmRjZjQwMjNiY2MyOWQ2MDQxNjcyEgsSBxDfpOy2-hkYAZIBJAoKcHJvamVjdF9pZBIWQhQxMDQ5NjE1MjQzMzM0NTQ0MDM1MA&filename=&opi=89354086\" -o /tmp/workflow_interface_builder.html)",
+      "Read(//tmp/**)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)"
     ]
   }
 }

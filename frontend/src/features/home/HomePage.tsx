@@ -106,10 +106,11 @@ function workflowStatusLabel(status: WorkflowStatus) {
 
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string) => void;
+  onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
-export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
+export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: HomePageProps) {
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
 
   useEffect(() => {
@@ -228,12 +229,28 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
           ) : null}
 
           {homeData.importResult ? (
-            <div className="notice" role="status">
+            <div className="notice notice--row" role="status">
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
                 <strong>{homeData.importResult.user_facing_message}</strong>
                 <span>{homeData.importResult.workflow.name} was added to your local workflows.</span>
               </div>
+              {homeData.importResult.status === "needs_input_setup" && onConfigureDashboard ? (
+                <button
+                  className="primary-button primary-button--compact"
+                  style={{ marginLeft: "auto" }}
+                  type="button"
+                  onClick={() =>
+                    onConfigureDashboard(
+                      homeData.importResult!.workflow.id,
+                      homeData.importResult!.workflow.name,
+                    )
+                  }
+                >
+                  <PackagePlus size={14} aria-hidden="true" />
+                  Configure dashboard
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -277,7 +294,11 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
                 <h2>Create Workflow Interface</h2>
                 <p>Pick the controls beginners should see and keep the complex parts hidden.</p>
               </div>
-              <button className="primary-button primary-button--compact" type="button">
+              <button
+                className="primary-button primary-button--compact"
+                type="button"
+                onClick={() => onConfigureDashboard?.()}
+              >
                 <PackagePlus size={16} aria-hidden="true" />
                 Create Interface
               </button>
@@ -301,7 +322,12 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
 
           <section className="workflow-grid" aria-label="Built-in workflows">
             {workflowCards.map((workflow) => (
-              <WorkflowCardView key={workflow.id} workflow={workflow} onOpenWorkflow={onOpenWorkflow} />
+              <WorkflowCardView
+                key={workflow.id}
+                workflow={workflow}
+                onOpenWorkflow={onOpenWorkflow}
+                onConfigureDashboard={onConfigureDashboard}
+              />
             ))}
           </section>
 
@@ -350,12 +376,26 @@ export function HomePage({ onOpenWorkflow, onNavigate }: HomePageProps) {
 function WorkflowCardView({
   workflow,
   onOpenWorkflow,
+  onConfigureDashboard,
 }: {
   workflow: WorkflowCard;
   onOpenWorkflow: (workflowId: string) => void;
+  onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
 }) {
   const StatusIcon = workflowIconStatus(workflow.status);
+  const needsSetup =
+    workflow.status === "needs_input_setup" || workflow.status === "cannot_prepare_automatically";
   const canOpen = workflow.source === "backend" || workflow.id === "text_to_image_v0";
+
+  function handleClick() {
+    if (needsSetup) {
+      onConfigureDashboard?.(workflow.id, workflow.title);
+      return;
+    }
+    if (canOpen) {
+      onOpenWorkflow(workflow.id);
+    }
+  }
 
   return (
     <article className={`workflow-card workflow-card--${workflow.status}`}>
@@ -375,9 +415,10 @@ function WorkflowCardView({
         <button
           className="icon-button icon-button--card"
           type="button"
-          aria-label={`Open ${workflow.title}`}
-          disabled={!canOpen}
-          onClick={() => canOpen && onOpenWorkflow(workflow.id)}
+          aria-label={needsSetup ? `Configure dashboard for ${workflow.title}` : `Open ${workflow.title}`}
+          title={needsSetup ? "Configure dashboard" : undefined}
+          disabled={!needsSetup && !canOpen}
+          onClick={handleClick}
         >
           <ArrowRight size={17} aria-hidden="true" />
         </button>

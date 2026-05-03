@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { AppRouteId } from "./features/app/AppLayout";
+import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
 import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
 import { GalleryPage } from "./features/gallery/GalleryPage";
 import { HistoryPage } from "./features/history/HistoryPage";
@@ -14,7 +15,8 @@ type AppRoute =
   | { name: "history" }
   | { name: "models" }
   | { name: "settings" }
-  | { name: "workflow"; workflowId: string };
+  | { name: "workflow"; workflowId: string }
+  | { name: "dashboard-builder"; workflowId?: string; workflowName?: string };
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>({ name: "home" });
@@ -49,6 +51,17 @@ export default function App() {
     );
   }
 
+  if (route.name === "dashboard-builder") {
+    return (
+      <DashboardBuilderPage
+        workflowId={route.workflowId}
+        workflowName={route.workflowName}
+        onBack={() => setRoute({ name: "home" })}
+        onNavigate={navigate}
+      />
+    );
+  }
+
   if (route.name === "settings") {
     return <EngineSettingsPage onNavigate={navigate} />;
   }
@@ -65,5 +78,17 @@ export default function App() {
     return <HistoryPage onNavigate={navigate} />;
   }
 
-  return <HomePage onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })} onNavigate={navigate} />;
+  return (
+    <HomePage
+      onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
+      onConfigureDashboard={(workflowId, workflowName) =>
+        setRoute({
+          name: "dashboard-builder",
+          workflowId: workflowId ?? undefined,
+          workflowName: workflowName ?? undefined,
+        })
+      }
+      onNavigate={navigate}
+    />
+  );
 }
