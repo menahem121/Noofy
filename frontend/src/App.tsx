@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { AppRouteId } from "./features/app/AppLayout";
+import { SidebarProvider } from "./features/app/AppLayout";
 import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
 import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
 import { DashboardBuilderLayoutPage } from "./features/dashboard-builder/DashboardBuilderLayoutPage";
@@ -44,83 +45,87 @@ export default function App() {
     setRoute({ name: "home" });
   }
 
-  if (route.name === "workflow") {
-    return (
-      <WorkflowRunPage
-        workflowId={route.workflowId}
-        onBack={() => setRoute({ name: "home" })}
-        onNavigate={navigate}
-      />
-    );
-  }
+  function renderPage() {
+    if (route.name === "workflow") {
+      return (
+        <WorkflowRunPage
+          workflowId={route.workflowId}
+          onBack={() => setRoute({ name: "home" })}
+          onNavigate={navigate}
+        />
+      );
+    }
 
-  if (route.name === "dashboard-builder") {
-    return (
-      <DashboardBuilderPage
-        workflowId={route.workflowId}
-        workflowName={route.workflowName}
-        initialSchema={route.initialSchema}
-        onBack={() => setRoute({ name: "home" })}
-        onContinue={(schema) =>
-          setRoute({
-            name: "dashboard-builder-layout",
-            workflowId: route.workflowId,
-            workflowName: route.workflowName,
-            initialSchema: schema,
-          })
-        }
-        onNavigate={navigate}
-      />
-    );
-  }
+    if (route.name === "dashboard-builder") {
+      return (
+        <DashboardBuilderPage
+          workflowId={route.workflowId}
+          workflowName={route.workflowName}
+          initialSchema={route.initialSchema}
+          onBack={() => setRoute({ name: "home" })}
+          onContinue={(schema) =>
+            setRoute({
+              name: "dashboard-builder-layout",
+              workflowId: route.workflowId,
+              workflowName: route.workflowName,
+              initialSchema: schema,
+            })
+          }
+          onNavigate={navigate}
+        />
+      );
+    }
 
-  if (route.name === "dashboard-builder-layout") {
+    if (route.name === "dashboard-builder-layout") {
+      return (
+        <DashboardBuilderLayoutPage
+          workflowId={route.workflowId}
+          workflowName={route.workflowName}
+          initialSchema={route.initialSchema}
+          onBackToWidgets={(schema) =>
+            setRoute({
+              name: "dashboard-builder",
+              workflowId: route.workflowId,
+              workflowName: route.workflowName,
+              initialSchema: schema,
+            })
+          }
+          onSaveComplete={(workflowId) => setRoute({ name: "workflow", workflowId })}
+          onNavigate={navigate}
+        />
+      );
+    }
+
+    if (route.name === "settings") {
+      return <EngineSettingsPage onNavigate={navigate} />;
+    }
+
+    if (route.name === "models") {
+      return <ModelsPage onNavigate={navigate} />;
+    }
+
+    if (route.name === "gallery") {
+      return <GalleryPage onNavigate={navigate} />;
+    }
+
+    if (route.name === "history") {
+      return <HistoryPage onNavigate={navigate} />;
+    }
+
     return (
-      <DashboardBuilderLayoutPage
-        workflowId={route.workflowId}
-        workflowName={route.workflowName}
-        initialSchema={route.initialSchema}
-        onBackToWidgets={(schema) =>
+      <HomePage
+        onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
+        onConfigureDashboard={(workflowId, workflowName) =>
           setRoute({
             name: "dashboard-builder",
-            workflowId: route.workflowId,
-            workflowName: route.workflowName,
-            initialSchema: schema,
+            workflowId: workflowId ?? undefined,
+            workflowName: workflowName ?? undefined,
           })
         }
-        onSaveComplete={(workflowId) => setRoute({ name: "workflow", workflowId })}
         onNavigate={navigate}
       />
     );
   }
 
-  if (route.name === "settings") {
-    return <EngineSettingsPage onNavigate={navigate} />;
-  }
-
-  if (route.name === "models") {
-    return <ModelsPage onNavigate={navigate} />;
-  }
-
-  if (route.name === "gallery") {
-    return <GalleryPage onNavigate={navigate} />;
-  }
-
-  if (route.name === "history") {
-    return <HistoryPage onNavigate={navigate} />;
-  }
-
-  return (
-    <HomePage
-      onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
-      onConfigureDashboard={(workflowId, workflowName) =>
-        setRoute({
-          name: "dashboard-builder",
-          workflowId: workflowId ?? undefined,
-          workflowName: workflowName ?? undefined,
-        })
-      }
-      onNavigate={navigate}
-    />
-  );
+  return <SidebarProvider>{renderPage()}</SidebarProvider>;
 }

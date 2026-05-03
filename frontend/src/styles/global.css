@@ -130,6 +130,16 @@ button:disabled {
   display: inline-flex;
 }
 
+.topbar__menu--disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.topbar__menu--disabled:hover {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
 .brand-mark {
   display: grid;
   place-items: center;

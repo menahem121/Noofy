@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { createContext, useContext, ReactNode, useState } from "react";
 import {
   FolderClock,
   Images,
@@ -39,20 +39,42 @@ const navItems = [
   { id: "settings", label: "Settings", Icon: Settings },
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 
-export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayoutProps) {
+interface SidebarContextValue {
+  sidebarOpen: boolean;
+  setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const SidebarContext = createContext<SidebarContextValue>({
+  sidebarOpen: true,
+  setSidebarOpen: () => {},
+});
+
+export function SidebarProvider({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  return <SidebarContext.Provider value={{ sidebarOpen, setSidebarOpen }}>{children}</SidebarContext.Provider>;
+}
+
+export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayoutProps) {
+  const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
+  const isHome = activeRoute === "home";
+  const effectiveOpen = isHome ? true : sidebarOpen;
+
+  function handleToggle() {
+    if (!isHome) setSidebarOpen((o) => !o);
+  }
 
   return (
-    <div className={sidebarOpen ? "app-shell" : "app-shell app-shell--sidebar-closed"}>
+    <div className={effectiveOpen ? "app-shell" : "app-shell app-shell--sidebar-closed"}>
       <header className="topbar">
         <div className="topbar__brand">
           <button
-            className="icon-button topbar__menu"
+            className={`icon-button topbar__menu${isHome ? " topbar__menu--disabled" : ""}`}
             type="button"
-            aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
-            title={sidebarOpen ? "Close navigation" : "Open navigation"}
-            aria-expanded={sidebarOpen}
-            onClick={() => setSidebarOpen((o) => !o)}
+            aria-label={effectiveOpen ? "Close navigation" : "Open navigation"}
+            title={isHome ? "Navigation is always open on the home page" : effectiveOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={effectiveOpen}
+            aria-disabled={isHome}
+            onClick={handleToggle}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -87,7 +109,7 @@ export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayo
         </div>
       </header>
 
-      <aside className="sidebar" aria-hidden={!sidebarOpen}>
+      <aside className="sidebar" aria-hidden={!effectiveOpen}>
         <div className="sidebar__inner">
           <div className="workspace-card">
             <div className="workspace-card__avatar" aria-hidden="true">
