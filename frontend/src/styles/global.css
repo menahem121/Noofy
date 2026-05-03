@@ -1089,7 +1089,7 @@ button:disabled {
 }
 
 .icon-button--danger {
-  color: var(--text-muted);
+  color: #f87171;
 }
 
 .icon-button--danger:hover {
