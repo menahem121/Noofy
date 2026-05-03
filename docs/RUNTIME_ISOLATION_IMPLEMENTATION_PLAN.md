@@ -912,6 +912,8 @@ Phase 5i backend completion:
 
 ### Phase 5j: Integration Tests And Phase Acceptance Gate
 
+Status: Complete for locked/bundled Phase 5 readiness
+
 Goal: prove the locked/bundled community workflow path works end to end and fails safely.
 
 Tasks:
@@ -946,6 +948,19 @@ Phase 5 locked/bundled acceptance criteria:
 - Runner switching honors queueing, normal cancellation, workflow-open warm retention, closed-view cooldown, and Memory Governor co-residence/eviction policy with one-GPU-heavy fallback when confidence is low.
 - Reference tracking and GC do not delete assets still referenced by installed workflows or active runners.
 - Backend and frontend tests pass through the documented project test commands.
+
+Current implementation notes:
+
+- `backend/tests/test_phase5j_acceptance.py` uses `exported-workflow-for-testing.noofy` as the real archive fixture and derives tiny model locks from it so normal CI can exercise import, custom-node staging, model-view materialization, smoke gating, and artifact reuse without multi-GB model files.
+- Acceptance coverage confirms the exported archive prepares isolated staged artifacts without importing custom-node Python in the trusted backend, leaves unresolved `LoadImage` workflows in `prepared_needs_input_setup`, preserves the trusted core `custom_nodes` directory, and promotes reusable ready dependency-env and runner-workspace artifacts only after controlled smoke success.
+- Phase 5j caught and fixed runner-workspace fingerprint instability: the preparer now uses the logical model-view fingerprint instead of the machine-local staged model-view path, so repeated prepares can reuse ready runner workspaces when manifests match.
+- Model-view collision coverage verifies derived workflows with different blobs at the same ComfyUI folder/name are materialized into separate views rather than overwriting each other.
+- The remaining Phase 5j bullets are covered by focused suites added during Phases 5a-5i: dependency policy and lock parsing, model hash/filename-size/filename-only handling, hash mismatch rollback, smoke failure quarantine, runner switching and Memory Governor queueing, startup sweep, storage GC shared-reference protection, path validation, manifest parsing, fingerprint canonicalization, and filesystem fallback behavior.
+
+Phase 5j backend completion:
+
+- Locked/bundled community workflow acceptance coverage is implemented. `make test` remains the documented root test command, and `make phase5e-real-smoke` remains the optional real ComfyUI staged validation path.
+- Phase 5 verification has been run on the Ubuntu ComfyUI validation host after the Phase 5j fingerprint fix: `make test` passed backend, frontend, and exporter suites; `make phase5e-real-smoke` passed all 5 staged real-ComfyUI scenarios, including `exported-workflow-for-testing.noofy`.
 
 ### Phase 5k: Community Registry And Non-Bundled Source Resolution
 

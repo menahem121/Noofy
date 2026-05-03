@@ -120,6 +120,7 @@ class RuntimeWorkspacePreparer:
         capsule_lock: CapsuleLock,
         *,
         model_view_dir: Path | None = None,
+        model_view_fingerprint: str | None = None,
         install_transaction: InstallTransaction | None = None,
     ) -> PreparedRuntimeWorkspace:
         transaction = install_transaction or self.install_transaction_store.open(
@@ -144,6 +145,7 @@ class RuntimeWorkspacePreparer:
                 profile_selection=profile_selection,
                 custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
                 model_view_dir=model_view_dir,
+                model_view_fingerprint=model_view_fingerprint,
                 status=InstallStatus.CHECKING_COMPATIBILITY,
             )
 
@@ -824,6 +826,7 @@ class RuntimeWorkspacePreparer:
         profile_selection: RuntimeProfileSelection | None = None,
         custom_node_workspace_manifest_hash: str | None = None,
         model_view_dir: Path | None = None,
+        model_view_fingerprint: str | None = None,
         status: InstallStatus = InstallStatus.READY,
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> RunnerWorkspaceManifest:
@@ -834,7 +837,8 @@ class RuntimeWorkspacePreparer:
         model_view_hash = sha256_fingerprint(
             {
                 "models": capsule_lock.models,
-                "model_view_dir": str(model_view_dir) if model_view_dir is not None else None,
+                "model_view_fingerprint": model_view_fingerprint,
+                "has_model_view": model_view_dir is not None or model_view_fingerprint is not None,
             }
         )
         fingerprint = runtime.runner_fingerprint

@@ -160,6 +160,7 @@ class CapsuleInstaller:
                 prepared_workspace = self.workspace_preparer.prepare(
                     capsule_lock,
                     model_view_dir=model_view_path,
+                    model_view_fingerprint=model_view.view_fingerprint if model_view is not None else None,
                     install_transaction=install_transaction,
                 )
         except RuntimeProfileResolutionError as exc:

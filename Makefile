@@ -1,7 +1,8 @@
 .PHONY: test test-backend test-frontend test-exporter phase5e-real-smoke
 
 BACKEND_PYTHON ?= .venv/bin/python
-PYTEST ?= pytest
+ROOT_BACKEND_PYTHON ?= backend/.venv/bin/python
+PYTEST ?= $(ROOT_BACKEND_PYTHON) -m pytest
 COMFYUI_SOURCE_DIR ?= /home/ubuntu/ComfyUI
 COMFYUI_PYTHON ?= $(COMFYUI_SOURCE_DIR)/venv/bin/python
 PHASE5E_SMOKE_WORK_DIR ?= /tmp/noofy-phase5e-real-smoke

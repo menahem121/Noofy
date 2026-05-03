@@ -26,7 +26,7 @@ try:
     import folder_paths
     import nodes
 except ModuleNotFoundError as exc:
-    if exc.name != "server":
+    if exc.name not in {"aiohttp", "server"}:
         raise
     web = None
     PromptServer = None
