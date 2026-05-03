@@ -168,6 +168,7 @@ async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> Non
 async def test_start_merges_runner_environment_with_parent_environment(tmp_path: Path, monkeypatch) -> None:
     created: list[tuple[list[str], dict]] = []
     monkeypatch.setenv("NOOFY_PARENT_ENV", "kept")
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
     async def process_factory(command: list[str], **kwargs):
         created.append((command, kwargs))
@@ -189,6 +190,31 @@ async def test_start_merges_runner_environment_with_parent_environment(tmp_path:
     process_env = created[0][1]["env"]
     assert process_env["NOOFY_PARENT_ENV"] == "kept"
     assert process_env["NOOFY_WORKFLOW_ID"] == "text_to_image_v0"
+    assert "NOOFY_API_TOKEN" not in process_env
+
+
+@pytest.mark.anyio
+async def test_start_strips_api_token_even_without_spec_env(tmp_path: Path, monkeypatch) -> None:
+    created: list[tuple[list[str], dict]] = []
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+
+    async def process_factory(command: list[str], **kwargs):
+        created.append((command, kwargs))
+        return FakeProcess()
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+    )
+
+    await supervisor.start(_launch_spec(tmp_path).model_copy(update={"env": None}))
+
+    assert "NOOFY_API_TOKEN" not in created[0][1]["env"]
 
 
 @pytest.mark.anyio

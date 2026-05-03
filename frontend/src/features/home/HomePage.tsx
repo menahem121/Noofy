@@ -205,11 +205,10 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
           <section className="page-heading" aria-labelledby="home-title">
             <div>
-              <p className="eyebrow">Private local workflows</p>
-              <h1 id="home-title">Choose a workflow</h1>
+              <p className="eyebrow">PRIVATE LOCAL AI STUDIO</p>
+              <h1 id="home-title">Powerful AI workflows without the complexity</h1>
               <p>
-                Start with a ready-made workflow, open one from your computer, or create a simple
-                interface for a workflow you already use.
+                Noofy turns advanced image workflows into simple creative tools that run privately on your machine.
               </p>
             </div>
             <button className="primary-button" type="button">

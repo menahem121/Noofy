@@ -130,9 +130,10 @@ class RunnerProcessSupervisor:
                 *spec.extra_args,
             ]
         )
-        process_env = None
+        process_env = dict(os.environ)
         if spec.env is not None:
-            process_env = {**os.environ, **spec.env}
+            process_env.update(spec.env)
+        process_env.pop("NOOFY_API_TOKEN", None)
         descriptor = RunnerDescriptor(
             runner_id=spec.runner_id,
             kind=spec.kind,

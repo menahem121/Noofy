@@ -25,6 +25,24 @@ async def list_logs(level: str | None = None, limit: int = 200):
     return engine_service.list_logs(level=level, limit=limit)
 
 
+@router.get("/diagnostics")
+async def diagnostics(
+    workflow_id: str | None = None,
+    developer_details: bool = False,
+    limit: int = 200,
+):
+    return engine_service.diagnostics_payload(
+        workflow_id=workflow_id,
+        include_developer_details=developer_details,
+        limit=limit,
+    )
+
+
+@router.get("/storage/diagnostics")
+async def storage_diagnostics():
+    return engine_service.storage_diagnostics_payload()
+
+
 @router.get("/runtime")
 async def runtime_status():
     return await engine_service.runtime_status()
@@ -89,9 +107,22 @@ async def get_workflow_install_state(workflow_id: str):
     return engine_service.get_install_state(workflow_id)
 
 
+@router.get("/workflows/{workflow_id}/status")
+async def get_workflow_status(workflow_id: str):
+    try:
+        return engine_service.workflow_status(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/workflows/{workflow_id}/prepare")
 async def prepare_workflow(workflow_id: str):
     return await engine_service.prepare_workflow(workflow_id)
+
+
+@router.delete("/workflows/{workflow_id}/prepare")
+async def cancel_workflow_preparation(workflow_id: str):
+    return engine_service.cancel_preparation(workflow_id)
 
 
 @router.post("/workflows/{workflow_id}/runner/start")

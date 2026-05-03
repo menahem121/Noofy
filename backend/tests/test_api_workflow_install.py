@@ -56,6 +56,69 @@ class FakeEngineService:
             "last_error": None,
         }
 
+    def workflow_status(self, workflow_id: str):
+        if workflow_id == "missing":
+            raise KeyError(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "workflow": {"id": workflow_id, "name": "Text to Image"},
+            "install": self.get_install_state(workflow_id),
+            "required_actions": [
+                {
+                    "kind": "prepare_workflow",
+                    "status": "available",
+                    "user_facing_message": "Prepare this workflow before running it.",
+                }
+            ],
+            "runner": None,
+            "runner_status": "not_started",
+            "can_prepare": True,
+            "can_cancel_preparation": False,
+            "can_cancel_job": False,
+        }
+
+    def cancel_preparation(self, workflow_id: str):
+        return {
+            "workflow_id": workflow_id,
+            "status": "no_active_cancelable_preparation",
+            "user_facing_message": "No preparation is currently running for this workflow.",
+            "cancelable": False,
+        }
+
+    def diagnostics_payload(self, *, workflow_id=None, include_developer_details=False, limit=200):
+        event = {
+            "id": 1,
+            "timestamp": "2026-05-03T00:00:00+00:00",
+            "level": "warning",
+            "message": "Capsule preparation failed",
+            "source": "engine.service",
+            "workflow_id": workflow_id,
+            "job_id": None,
+            "correlation_ids": {"workflow_id": workflow_id, "runner_id": "runner-1"},
+        }
+        if include_developer_details:
+            event["developer_details"] = {"runner_id": "runner-1", "token": "[redacted]"}
+        return {"events": [event]}
+
+    def storage_diagnostics_payload(self):
+        return {
+            "artifacts": [
+                {
+                    "kind": "dependency_env",
+                    "path": "/tmp/noofy/runtime-store/envs/dep-env-a",
+                    "size_bytes": 12,
+                    "created_at": "2026-05-03T00:00:00+00:00",
+                    "last_used_at": "2026-05-03T00:00:00+00:00",
+                    "referenced_workflows": ["text_to_image_v0"],
+                    "status": "ready",
+                    "trust_level": "noofy_verified",
+                    "fingerprint": "sha256:a",
+                    "protected": False,
+                    "developer_details": {},
+                }
+            ]
+        }
+
     async def prepare_workflow(self, workflow_id: str):
         self.prepared_workflows.append(workflow_id)
         return {
@@ -205,6 +268,31 @@ def test_install_state_unknown_workflow_uses_unsupported_payload(monkeypatch) ->
     assert response.json()["status"] == "unsupported"
 
 
+def test_workflow_status_endpoint_includes_install_required_actions_and_runner_state(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/workflows/text_to_image_v0/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflow_id"] == "text_to_image_v0"
+    assert payload["install"]["status"] == "pending"
+    assert payload["required_actions"][0]["kind"] == "prepare_workflow"
+    assert payload["runner_status"] == "not_started"
+
+
+def test_workflow_status_unknown_workflow_returns_404(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/workflows/missing/status")
+
+    assert response.status_code == 404
+
+
 def test_prepare_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
@@ -216,6 +304,52 @@ def test_prepare_endpoint_calls_service(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
     assert fake_service.prepared_workflows == ["text_to_image_v0"]
+
+
+def test_cancel_prepare_endpoint_reports_no_active_cancelable_preparation(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.delete("/api/workflows/text_to_image_v0/prepare")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "no_active_cancelable_preparation"
+
+
+def test_diagnostics_endpoint_hides_developer_details_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/diagnostics?workflow_id=text_to_image_v0")
+
+    assert response.status_code == 200
+    event = response.json()["events"][0]
+    assert event["correlation_ids"]["runner_id"] == "runner-1"
+    assert "developer_details" not in event
+
+
+def test_diagnostics_endpoint_exposes_redacted_developer_details_when_requested(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/diagnostics?workflow_id=text_to_image_v0&developer_details=true")
+
+    assert response.status_code == 200
+    assert response.json()["events"][0]["developer_details"]["token"] == "[redacted]"
+
+
+def test_storage_diagnostics_endpoint_returns_reference_index(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/storage/diagnostics")
+
+    assert response.status_code == 200
+    assert response.json()["artifacts"][0]["kind"] == "dependency_env"
 
 
 def test_start_workflow_runner_endpoint_calls_service(monkeypatch) -> None:

@@ -70,6 +70,7 @@ from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runt
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
+from app.runtime.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
@@ -141,6 +142,69 @@ class EngineService:
 
     def list_runners(self) -> list[RunnerDescriptor]:
         return self.runner_supervisor.list_runners()
+
+    def workflow_status(self, workflow_id: str) -> dict[str, object]:
+        package = self.workflow_loader.get_package(workflow_id)
+        install = self.get_install_state(workflow_id)
+        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        required_actions = _required_actions_for_workflow(package, install)
+        return {
+            "workflow_id": workflow_id,
+            "workflow": self._workflow_summary(package),
+            "install": install,
+            "required_actions": required_actions,
+            "compatibility_guidance": _compatibility_guidance(package),
+            "runner": runner.model_dump(mode="json") if runner is not None else None,
+            "runner_status": runner.status.value if runner is not None else "not_started",
+            "can_prepare": install["status"] not in {InstallStatus.UNSUPPORTED.value, InstallStatus.BLOCKED_BY_POLICY.value},
+            "can_cancel_preparation": False,
+            "can_cancel_job": runner.current_job_id is not None if runner is not None else False,
+        }
+
+    def cancel_preparation(self, workflow_id: str) -> dict[str, object]:
+        self.log_store.add(
+            "info",
+            "Workflow preparation cancellation requested",
+            "engine.service",
+            workflow_id=workflow_id,
+            details={"status": "no_active_cancelable_preparation"},
+        )
+        return {
+            "workflow_id": workflow_id,
+            "status": "no_active_cancelable_preparation",
+            "user_facing_message": "No preparation is currently running for this workflow.",
+            "cancelable": False,
+        }
+
+    def diagnostics_payload(
+        self,
+        *,
+        workflow_id: str | None = None,
+        include_developer_details: bool = False,
+        limit: int = 200,
+    ) -> dict[str, object]:
+        events = self.log_store.list_events(limit=limit).events
+        if workflow_id is not None:
+            events = [event for event in events if event.workflow_id == workflow_id]
+        return {
+            "events": [
+                _diagnostic_event_payload(event, include_developer_details=include_developer_details)
+                for event in events[-limit:]
+            ]
+        }
+
+    def storage_diagnostics_payload(self) -> dict[str, object]:
+        if self.capsule_installer is None:
+            states: list[InstallState] = []
+        else:
+            states = self.capsule_installer.install_state_store.list_states()
+        collector = RuntimeStorageGarbageCollector(
+            roots=RuntimeStorageRoots.from_paths(settings.paths),
+            install_states=states,
+            runner_descriptors=self.runner_supervisor.list_runners(),
+            log_store=self.log_store,
+        )
+        return collector.build_reference_index().to_diagnostics()
 
     def get_workflow_package(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)
@@ -1534,6 +1598,118 @@ def _runtime_python_executable(runtime_manager: RuntimeManager) -> str:
     if environment is not None:
         return environment.python_executable
     return runtime_manager.python_executable
+
+
+def _required_actions_for_workflow(package: WorkflowPackage, install: dict[str, object]) -> list[dict[str, object]]:
+    actions: list[dict[str, object]] = []
+    if package.unresolved_runtime_inputs:
+        actions.append(
+            {
+                "kind": "input_setup",
+                "status": "required",
+                "user_facing_message": "Choose the missing input files before running this workflow.",
+                "count": len(package.unresolved_runtime_inputs),
+            }
+        )
+    status = install.get("status")
+    if status in {InstallStatus.PENDING.value, InstallStatus.IMPORTED.value, InstallStatus.NEEDS_INPUT_SETUP.value}:
+        actions.append(
+            {
+                "kind": "prepare_workflow",
+                "status": "available",
+                "user_facing_message": "Prepare this workflow before running it.",
+            }
+        )
+    if status in {
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value,
+        InstallStatus.BLOCKED_BY_POLICY.value,
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE.value,
+        InstallStatus.FAILED.value,
+        InstallStatus.UNSUPPORTED.value,
+    }:
+        actions.append(
+            {
+                "kind": "review_preparation_issue",
+                "status": "required",
+                "user_facing_message": install.get("user_facing_message") or "This workflow needs attention.",
+            }
+        )
+    return actions
+
+
+def _compatibility_guidance(package: WorkflowPackage) -> dict[str, object] | None:
+    observed = package.observed_hardware or {}
+    if not observed:
+        return None
+    return {
+        "kind": "observed_creator_hardware",
+        "user_facing_message": "This hardware information is guidance from previous runs, not a guaranteed requirement.",
+        "observed_hardware": observed,
+    }
+
+
+def _diagnostic_event_payload(event, *, include_developer_details: bool) -> dict[str, object]:
+    details = _redact_diagnostic_details(event.details)
+    payload: dict[str, object] = {
+        "id": event.id,
+        "timestamp": event.timestamp.isoformat(),
+        "level": event.level,
+        "message": event.message,
+        "source": event.source,
+        "workflow_id": event.workflow_id,
+        "job_id": event.job_id,
+        "correlation_ids": _diagnostic_correlation_ids(event, details),
+    }
+    if include_developer_details:
+        payload["developer_details"] = details
+    return payload
+
+
+def _diagnostic_correlation_ids(event, details: dict[str, object]) -> dict[str, object]:
+    correlations: dict[str, object] = {}
+    if event.workflow_id is not None:
+        correlations["workflow_id"] = event.workflow_id
+    if event.job_id is not None:
+        correlations["job_id"] = event.job_id
+    for key in (
+        "runner_id",
+        "install_transaction_id",
+        "transaction_id",
+        "queue_id",
+        "memory_decision_id",
+    ):
+        value = details.get(key)
+        if value is not None:
+            correlations[key] = value
+    return correlations
+
+
+def _redact_diagnostic_details(value):
+    if isinstance(value, dict):
+        return {
+            key: "[redacted]" if _is_secret_key(key) else _redact_diagnostic_details(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_diagnostic_details(item) for item in value]
+    if isinstance(value, str) and _looks_sensitive(value):
+        return "[redacted]"
+    return value
+
+
+def _is_secret_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return any(part in normalized for part in ("token", "secret", "authorization", "api_key", "signed_url"))
+
+
+def _looks_sensitive(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        "authorization:" in lowered
+        or "token=" in lowered
+        or "x-amz-signature=" in lowered
+        or "x-goog-signature=" in lowered
+    )
 
 
 def _read_dependency_manifest(path: Path) -> DependencyEnvManifest:

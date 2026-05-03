@@ -841,6 +841,21 @@ Acceptance criteria:
 - GC never deletes `user_local` originals.
 - Quarantine retention, LRU cap, orphan materialized view, and large-model confirm behavior are tested.
 
+Current implementation notes:
+
+- `RuntimeStorageGarbageCollector` now builds a derived reference index from `install-state.json` records, package/capsule records, and live runner descriptors. It does not write or maintain reference-count files.
+- The index records dependency envs, runner workspaces, model blobs, materialized model views, install transactions, wheel-cache entries, custom-node source-cache entries, and package archives with timestamps, size, status, referenced workflows, trust where derivable, and developer diagnostics.
+- GC roots include `ready` and `prepared_needs_input_setup` install states, active/queued/loading runners, idle-warm runners, open workflow leases, closed-view cooldown runners, configured pinned artifacts, and protected user-local model sources.
+- Cleanup deletes unreferenced dependency envs and runner workspaces after the 14-day retention window, orphan materialized model views after 7 days, and expired quarantined transactions after their `retain_until` timestamp.
+- Configurable LRU caps are implemented for wheel cache, custom-node source cache, and imported package archive cache. Referenced cache entries are kept when applying caps.
+- Noofy-owned unreferenced model blobs can be deleted during manual cleanup, but blobs larger than the configured threshold defaulting to 1 GB require explicit confirmation. `user_local` source files are surfaced as protected diagnostics and are never deleted.
+- `RuntimeStorageReferenceIndex.to_diagnostics()` exposes structured storage diagnostics for future API/UI work.
+- Focused tests cover shared references, one-workflow removal with shared artifacts, active/idle-warm runner protection, user-local source protection, quarantine retention, LRU cap behavior, orphan model-view cleanup, large-model confirmation, and cache/archive metadata indexing.
+
+Phase 5h backend completion:
+
+- Derived reference indexing, GC policy, retention windows, configurable cache caps, protected-root behavior, diagnostics, and regression tests are implemented. Remaining work belongs to Phase 5i API exposure and future UI controls for manual cleanup.
+
 ### Phase 5i: Diagnostics, API States, And Frontend-Readable Status
 
 Goal: make preparation, runtime switching, and failure modes understandable to the UI and useful to developers without exposing raw technical noise by default.
@@ -879,6 +894,16 @@ Acceptance criteria:
 - Technical failure details are available behind developer details.
 - User-facing status text avoids Python setup terminology by default.
 - Tests verify that runner environment variables do not include the frontend/backend API token.
+
+Current implementation notes:
+
+- `GET /api/workflows/{workflow_id}/status` now returns a consolidated frontend-readable payload with workflow summary, install/preparation state, required actions, runner lifecycle state, cancel capabilities, and compatibility guidance that labels observed hardware as advisory.
+- Existing preparation, runner start/stop, runner lease, queued runner cancellation, job cancellation, install-state, and validation endpoints cover the main frontend workflow-control surface. `DELETE /api/workflows/{workflow_id}/prepare` reports that no active cancellation is available for the current synchronous preparation path.
+- `GET /api/diagnostics` exposes structured diagnostic events with extracted correlation IDs for workflow, job, runner, install transaction, queue, and memory decisions. Developer details are hidden by default and available only with `developer_details=true`.
+- Default diagnostics redact token/secret/authorization/signed-url fields and sensitive signed URL strings. Technical setup details remain in developer details rather than beginner-facing status payloads.
+- `GET /api/storage/diagnostics` exposes the Phase 5h storage reference index for developer details and future UI cleanup views.
+- Runner process launch now always passes an explicit environment with `NOOFY_API_TOKEN` removed, even when the runner launch spec does not define custom environment variables.
+- Focused tests cover workflow status payloads, preparation cancellation reporting, redacted diagnostics, storage diagnostics, diagnostic correlation IDs/developer details, and runner API-token environment stripping.
 
 ### Phase 5j: Integration Tests And Phase Acceptance Gate
 
