@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -28,11 +29,8 @@ import {
   NODE_ICONS,
   VALUE_KIND_ICONS,
   buildInitialDashboard,
+  createDashboardWidgetForValue,
   widgetTypesForKind,
-  defaultGroupFor,
-  suggestWidgetType,
-  suggestDescription,
-  suggestTitle,
   type WidgetType,
   type DashboardWidget,
   type DashboardSchema,
@@ -44,7 +42,9 @@ import {
 interface DashboardBuilderPageProps {
   workflowId?: string;
   workflowName?: string;
+  initialSchema?: DashboardSchema;
   onBack: () => void;
+  onContinue: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
@@ -56,7 +56,9 @@ interface RuntimeState {
 export function DashboardBuilderPage({
   workflowId,
   workflowName,
+  initialSchema,
   onBack,
+  onContinue,
   onNavigate,
 }: DashboardBuilderPageProps) {
   const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
@@ -85,7 +87,7 @@ export function DashboardBuilderPage({
     };
   }, [workflowId, workflowName]);
 
-  const [schema, setSchema] = useState<DashboardSchema>(() => buildInitialDashboard(workflow));
+  const [schema, setSchema] = useState<DashboardSchema>(() => initialSchema ?? buildInitialDashboard(workflow));
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -94,13 +96,17 @@ export function DashboardBuilderPage({
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
 
   useEffect(() => {
-    setSchema(buildInitialDashboard(workflow));
-    const firstWidget = buildInitialDashboard(workflow).widgets[0];
+    const nextSchema = initialSchema ?? buildInitialDashboard(workflow);
+    setSchema(nextSchema);
+    const firstWidget = nextSchema.widgets[0];
     if (firstWidget) {
       setSelectedWidgetId(firstWidget.id);
       setSelectedValueId(firstWidget.valueId);
+    } else {
+      setSelectedWidgetId(null);
+      setSelectedValueId(null);
     }
-  }, [workflow]);
+  }, [workflow, initialSchema]);
 
   const valueIndex = useMemo(() => {
     const map = new Map<string, { node: WorkflowNode; value: WorkflowNodeValue }>();
@@ -152,7 +158,7 @@ export function DashboardBuilderPage({
       return;
     }
 
-    const newWidget = createWidgetForValue(record.value, record.node);
+    const newWidget = createDashboardWidgetForValue(record.value, record.node);
     setSchema((current) => ({ ...current, widgets: [...current.widgets, newWidget] }));
     setSelectedValueId(valueId);
     setSelectedWidgetId(newWidget.id);
@@ -210,9 +216,9 @@ export function DashboardBuilderPage({
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
-  function handleSaveAndContinue() {
-    setSavedFlash("saved");
-    window.setTimeout(() => setSavedFlash(null), 2400);
+  function handleContinue() {
+    if (schema.widgets.length === 0) return;
+    onContinue(schema);
   }
 
   const simpleWidgets = schema.widgets.filter((c) => c.group === "simple");
@@ -244,9 +250,14 @@ export function DashboardBuilderPage({
                 <Save size={15} aria-hidden="true" />
                 Save as draft
               </button>
-              <button className="primary-button primary-button--compact" type="button" onClick={handleSaveAndContinue}>
-                <CheckCircle2 size={16} aria-hidden="true" />
-                Save dashboard
+              <button
+                className="primary-button primary-button--compact"
+                type="button"
+                onClick={handleContinue}
+                disabled={schema.widgets.length === 0}
+              >
+                <ArrowRight size={16} aria-hidden="true" />
+                Continue
               </button>
             </div>
           </div>
@@ -1014,25 +1025,4 @@ function BuilderEmptyState() {
       </p>
     </div>
   );
-}
-
-function createWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
-  const widgetType = suggestWidgetType(value);
-  return {
-    id: `ctrl-${value.id}`,
-    valueId: value.id,
-    binding: { nodeId: value.nodeId, inputName: value.inputName },
-    widgetType,
-    title: suggestTitle(value, node.title),
-    description: suggestDescription(value),
-    orientation: "vertical",
-    group: defaultGroupFor(value),
-    defaultValue: value.rawValue,
-    options: value.options,
-    min: value.numberRange?.min,
-    max: value.numberRange?.max,
-    step: value.numberRange?.step,
-    showDownload: widgetType === "display_image" ? true : undefined,
-    drawMask: widgetType === "load_image_mask" ? true : undefined,
-  };
 }

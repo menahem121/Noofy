@@ -1,7 +1,9 @@
 import { useState } from "react";
 
 import type { AppRouteId } from "./features/app/AppLayout";
+import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
 import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
+import { DashboardBuilderLayoutPage } from "./features/dashboard-builder/DashboardBuilderLayoutPage";
 import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
 import { GalleryPage } from "./features/gallery/GalleryPage";
 import { HistoryPage } from "./features/history/HistoryPage";
@@ -16,7 +18,8 @@ type AppRoute =
   | { name: "models" }
   | { name: "settings" }
   | { name: "workflow"; workflowId: string }
-  | { name: "dashboard-builder"; workflowId?: string; workflowName?: string };
+  | { name: "dashboard-builder"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema }
+  | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema };
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>({ name: "home" });
@@ -56,7 +59,36 @@ export default function App() {
       <DashboardBuilderPage
         workflowId={route.workflowId}
         workflowName={route.workflowName}
+        initialSchema={route.initialSchema}
         onBack={() => setRoute({ name: "home" })}
+        onContinue={(schema) =>
+          setRoute({
+            name: "dashboard-builder-layout",
+            workflowId: route.workflowId,
+            workflowName: route.workflowName,
+            initialSchema: schema,
+          })
+        }
+        onNavigate={navigate}
+      />
+    );
+  }
+
+  if (route.name === "dashboard-builder-layout") {
+    return (
+      <DashboardBuilderLayoutPage
+        workflowId={route.workflowId}
+        workflowName={route.workflowName}
+        initialSchema={route.initialSchema}
+        onBackToWidgets={(schema) =>
+          setRoute({
+            name: "dashboard-builder",
+            workflowId: route.workflowId,
+            workflowName: route.workflowName,
+            initialSchema: schema,
+          })
+        }
+        onSaveComplete={(workflowId) => setRoute({ name: "workflow", workflowId })}
         onNavigate={navigate}
       />
     );

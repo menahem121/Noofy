@@ -79,6 +79,14 @@ class CapsuleInstaller:
     ) -> InstallState:
         fingerprint = capsule_lock.runtime.capsule_fingerprint
         workflow_id = capsule_lock.workflow.package_id
+        install_transaction = (
+            self.workspace_preparer.install_transaction_store.open(
+                workflow_id=workflow_id,
+                capsule_fingerprint=fingerprint,
+            )
+            if self.workspace_preparer is not None
+            else None
+        )
 
         self._transition(fingerprint, InstallStatus.PREPARING, workflow_id, last_error=None)
         if not _trust_level_can_prepare_dependencies(capsule_lock.workflow.trust_level) or not _trust_level_can_prepare_dependencies(capsule_lock.trust.level):
@@ -88,12 +96,18 @@ class CapsuleInstaller:
                 workflow_id,
                 last_error="This workflow is blocked by the dependency preparation policy.",
             )
+            if install_transaction is not None:
+                self.workspace_preparer.install_transaction_store.quarantine(
+                    install_transaction,
+                    reason=state.last_error or "Blocked by policy",
+                )
             raise CapsuleInstallError(state.last_error or "Unsupported capsule", state=state)
 
         self._transition(fingerprint, InstallStatus.DOWNLOADING, workflow_id)
 
         model_references: list[InstalledModelReference] = []
         model_view_path = None
+        model_view = None
         try:
             for model_lock in capsule_lock.models:
                 self.log_store.add(
@@ -113,6 +127,8 @@ class CapsuleInstaller:
                     view_id=fingerprint,
                     model_locks=capsule_lock.models,
                     local_model_requirements=local_model_requirements,
+                    staged_views_dir=install_transaction.model_views_dir if install_transaction is not None else None,
+                    staged_blobs_dir=install_transaction.model_blobs_dir if install_transaction is not None else None,
                 )
                 model_references = model_view.model_references
                 model_view_path = model_view.view_path
@@ -123,6 +139,8 @@ class CapsuleInstaller:
                 workflow_id,
                 last_error=str(exc),
             )
+            if install_transaction is not None:
+                self.workspace_preparer.install_transaction_store.quarantine(install_transaction, reason=str(exc))
             raise CapsuleInstallError(str(exc), state=state) from exc
         except ModelDownloadError as exc:
             state = self._transition(
@@ -131,6 +149,8 @@ class CapsuleInstaller:
                 workflow_id,
                 last_error=str(exc),
             )
+            if install_transaction is not None:
+                self.workspace_preparer.install_transaction_store.quarantine(install_transaction, reason=str(exc))
             raise CapsuleInstallError(str(exc), state=state) from exc
 
         self._transition(fingerprint, InstallStatus.RESOLVING_DEPENDENCIES, workflow_id)
@@ -140,6 +160,7 @@ class CapsuleInstaller:
                 prepared_workspace = self.workspace_preparer.prepare(
                     capsule_lock,
                     model_view_dir=model_view_path,
+                    install_transaction=install_transaction,
                 )
         except RuntimeProfileResolutionError as exc:
             state = self._transition(
@@ -190,8 +211,10 @@ class CapsuleInstaller:
                     prepared_workspace,
                     workflow_execution_smoke_allowed=workflow_execution_smoke_allowed,
                 )
+                self._write_transaction_smoke_report(prepared_workspace, smoke_test_report)
             except RunnerSmokeTestError as exc:
                 smoke_test_report = exc.report
+                self._write_transaction_smoke_report(prepared_workspace, smoke_test_report)
                 self._quarantine_failed_workspace(
                     prepared_workspace,
                     workflow_id=workflow_id,
@@ -223,6 +246,7 @@ class CapsuleInstaller:
                 raise CapsuleInstallError(str(exc), state=state) from exc
             if _smoke_report_has_failed_stage(smoke_test_report):
                 failure_message = _smoke_report_failure_message(smoke_test_report)
+                self._write_transaction_smoke_report(prepared_workspace, smoke_test_report)
                 self._quarantine_failed_workspace(
                     prepared_workspace,
                     workflow_id=workflow_id,
@@ -241,6 +265,15 @@ class CapsuleInstaller:
                 smoke_test_status = SmokeTestStatus.PASSED
 
         if prepared_workspace is not None and self.workspace_preparer is not None and smoke_test_status is SmokeTestStatus.PASSED:
+            if model_view is not None and model_view.is_staged:
+                model_view = self.model_store.promote_model_view(model_view)
+                model_references = model_view.model_references
+                model_view_path = model_view.view_path
+                self.workspace_preparer.replace_staged_model_view(
+                    prepared_workspace,
+                    model_view_dir=model_view_path,
+                    workflow_id=workflow_id,
+                )
             prepared_workspace = self.workspace_preparer.mark_ready(
                 prepared_workspace,
                 smoke_test_status=smoke_test_status,
@@ -334,6 +367,18 @@ class CapsuleInstaller:
             prepared_workspace,
             workflow_id=workflow_id,
             reason=reason,
+        )
+
+    def _write_transaction_smoke_report(
+        self,
+        prepared_workspace: PreparedRuntimeWorkspace,
+        report: SmokeTestReport,
+    ) -> None:
+        if self.workspace_preparer is None or prepared_workspace.install_transaction is None:
+            return
+        self.workspace_preparer.install_transaction_store.write_smoke_report(
+            prepared_workspace.install_transaction,
+            report=report.model_dump(mode="json"),
         )
 
     # ------------------------------------------------------------------

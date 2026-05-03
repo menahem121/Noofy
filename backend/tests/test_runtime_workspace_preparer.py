@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -154,8 +155,11 @@ def test_prepare_creates_staged_dependency_and_runner_manifests(tmp_path: Path) 
     assert prepared.runner_workspace_path.name == f"runner-workspace-{capsule.runtime.runner_fingerprint.removeprefix('sha256:')}"
     assert (prepared.dependency_env_path / "manifest.json").exists()
     assert (prepared.runner_workspace_path / "manifest.json").exists()
-    assert preparer.dependency_env_store.read(prepared.dependency_env_manifest.fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
-    assert preparer.runner_workspace_store.read(prepared.runner_workspace_manifest.fingerprint).status is InstallStatus.CHECKING_COMPATIBILITY
+    assert prepared.install_transaction is not None
+    assert prepared.dependency_env_path.is_relative_to(prepared.install_transaction.root_dir)
+    assert prepared.runner_workspace_path.is_relative_to(prepared.install_transaction.root_dir)
+    assert not preparer.dependency_env_store.manifest_path(prepared.dependency_env_manifest.fingerprint).exists()
+    assert not preparer.runner_workspace_store.manifest_path(prepared.runner_workspace_manifest.fingerprint).exists()
 
 
 def test_prepare_installs_dependency_env_in_transaction_before_promotion(tmp_path: Path) -> None:
@@ -173,11 +177,13 @@ def test_prepare_installs_dependency_env_in_transaction_before_promotion(tmp_pat
     prepared = preparer.prepare(capsule)
 
     assert len(installer.requests) == 1
-    assert installer.requests[0].target_dir.parent == tmp_path / "transactions"
+    assert prepared.install_transaction is not None
+    assert installer.requests[0].target_dir == prepared.dependency_env_path
+    assert installer.requests[0].target_dir.is_relative_to(prepared.install_transaction.root_dir)
     assert (prepared.dependency_env_path / "install.marker").read_text(encoding="utf-8") == "installed"
     assert (prepared.dependency_env_path / "manifest.json").exists()
-    transactions_dir = tmp_path / "transactions"
-    assert not transactions_dir.exists() or list(transactions_dir.iterdir()) == []
+    assert prepared.install_transaction.root_dir.exists()
+    assert not preparer.dependency_env_store.manifest_path(prepared.dependency_env_manifest.fingerprint).exists()
 
 
 def test_prepare_reuses_ready_dependency_env_without_reinstalling(tmp_path: Path) -> None:
@@ -202,6 +208,40 @@ def test_prepare_reuses_ready_dependency_env_without_reinstalling(tmp_path: Path
     assert len(installer.requests) == 1
     assert second.dependency_env_path == ready.dependency_env_path
     assert second.dependency_env_manifest.status is InstallStatus.READY
+
+
+def test_duplicate_staged_preparations_promote_one_ready_dependency_env(tmp_path: Path) -> None:
+    capsule, lock = _capsule_with_dependency_lock()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    first = preparer.prepare(capsule)
+    second = preparer.prepare(capsule)
+
+    ready_first = preparer.mark_ready(
+        first,
+        smoke_test_status=SmokeTestStatus.PASSED,
+        workflow_id=capsule.workflow.package_id,
+    )
+    ready_second = preparer.mark_ready(
+        second,
+        smoke_test_status=SmokeTestStatus.PASSED,
+        workflow_id=capsule.workflow.package_id,
+    )
+
+    assert ready_first.dependency_env_path == ready_second.dependency_env_path
+    assert ready_first.dependency_env_manifest.status is InstallStatus.READY
+    assert ready_second.dependency_env_manifest.status is InstallStatus.READY
+    assert len(list((tmp_path / "envs").glob("dep-env-*"))) == 1
+    assert len(list((tmp_path / "runner-workspaces").glob("runner-workspace-*"))) == 1
+    assert list((tmp_path / "transactions").glob("install-*")) == []
 
 
 def test_prepare_loads_resolved_dependency_lock_from_store(tmp_path: Path) -> None:
@@ -376,7 +416,10 @@ def test_failed_dependency_env_install_leaves_no_ready_manifest(tmp_path: Path) 
     assert len(installer.requests) == 1
     assert list((tmp_path / "envs").glob("*")) == []
     transactions_dir = tmp_path / "transactions"
-    assert not transactions_dir.exists() or list(transactions_dir.iterdir()) == []
+    quarantines = list(transactions_dir.glob("install-*/quarantine.json"))
+    assert len(quarantines) == 1
+    marker = json.loads(quarantines[0].read_text(encoding="utf-8"))
+    assert marker["reason"] == "dependency install failed"
 
 
 def test_prepare_requires_matching_resolved_dependency_lock_for_env_install(tmp_path: Path) -> None:

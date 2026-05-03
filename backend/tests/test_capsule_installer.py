@@ -213,9 +213,15 @@ async def test_prepare_records_runtime_workspace_paths_when_preparer_is_configur
         log_store=log_store,
         downloader=downloader,
     )
+    source_dir = tmp_path / "ComfyUI-source"
+    source_dir.mkdir()
+    (source_dir / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
+    (source_dir / "custom_nodes").mkdir()
+    (source_dir / "models").mkdir()
     workspace_preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
         runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=source_dir,
         log_store=log_store,
     )
     installer = CapsuleInstaller(
@@ -251,9 +257,15 @@ async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) ->
         log_store=log_store,
         downloader=downloader,
     )
+    source_dir = tmp_path / "ComfyUI-source"
+    source_dir.mkdir()
+    (source_dir / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
+    (source_dir / "custom_nodes").mkdir()
+    (source_dir / "models").mkdir()
     workspace_preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
         runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=source_dir,
         log_store=log_store,
     )
     smoke_calls = []
@@ -292,6 +304,123 @@ async def test_prepare_runs_workspace_smoke_test_before_ready(tmp_path: Path) ->
     runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
     assert runner_manifest.status is InstallStatus.READY
     assert runner_manifest.smoke_test_status is SmokeTestStatus.PASSED
+
+
+@pytest.mark.anyio
+async def test_prepare_stages_model_view_in_install_transaction_then_promotes_after_smoke(tmp_path: Path) -> None:
+    payload = b"transactional-model-view"
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(fingerprint="fp-transactional-model-view", models=[_model_record(payload)])
+    )
+    download_targets: list[Path] = []
+
+    async def downloader(url: str, dest: Path) -> int:
+        download_targets.append(dest)
+        dest.write_bytes(payload)
+        return len(payload)
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    source_dir = tmp_path / "ComfyUI-source-transactional-model-view"
+    source_dir.mkdir()
+    (source_dir / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
+    (source_dir / "custom_nodes").mkdir()
+    (source_dir / "models").mkdir()
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=source_dir,
+        log_store=log_store,
+    )
+    staged_model_paths: list[Path] = []
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        models_path = prepared_workspace.runner_workspace_path / "models"
+        assert models_path.exists()
+        staged_model_paths.append(models_path.resolve())
+        assert "transactions" in str(models_path.resolve())
+        return _passed_smoke_report()
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.READY
+    assert staged_model_paths
+    assert download_targets
+    assert "transactions" in str(download_targets[0])
+    assert "model-blobs" in str(download_targets[0])
+    materialized = Path(state.model_references[0].materialized_path)
+    assert materialized.exists()
+    assert "transactions" not in str(materialized)
+    assert materialized.is_relative_to(tmp_path / "materialized" / "views")
+    assert list((tmp_path / "transactions").glob("install-*")) == []
+    assert Path(state.runner_workspace_path or "").exists()
+
+
+@pytest.mark.anyio
+async def test_prepare_writes_smoke_report_into_failed_install_transaction(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(_capsule_lock_data(fingerprint="fp-smoke-report", models=[]))
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        return SmokeTestReport(
+            dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            custom_node_import=SmokeStageResult(status=SmokeStageStatus.SKIPPED),
+            runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            workflow_execution=SmokeStageResult(
+                status=SmokeStageStatus.FAILED,
+                message="fixture output was missing",
+            ),
+        )
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    with pytest.raises(CapsuleInstallError, match="fixture output was missing"):
+        await installer.prepare(capsule)
+
+    transaction_dir = next((tmp_path / "transactions").glob("install-*"))
+    smoke_report = json.loads((transaction_dir / "smoke-logs" / "smoke-report.json").read_text(encoding="utf-8"))
+    assert smoke_report["workflow_id"] == "test_workflow"
+    assert smoke_report["report"]["workflow_execution"]["status"] == "failed"
 
 
 @pytest.mark.anyio
@@ -339,19 +468,14 @@ async def test_prepare_smoke_failure_marks_state_failed_and_not_ready(tmp_path: 
     assert persisted is not None
     assert persisted.status is InstallStatus.FAILED
     assert persisted.smoke_test_status is SmokeTestStatus.FAILED
-    runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
-    assert runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
-    assert runner_manifest.smoke_test_status is SmokeTestStatus.NOT_RUN
-    dependency_quarantine = (
-        workspace_preparer.dependency_env_store.artifact_dir(capsule.runtime.dependency_env_fingerprint)
-        / RUNTIME_QUARANTINE_FILENAME
-    )
-    runner_quarantine = (
-        workspace_preparer.runner_workspace_store.artifact_dir(capsule.runtime.runner_fingerprint)
-        / RUNTIME_QUARANTINE_FILENAME
-    )
+    assert not workspace_preparer.runner_workspace_store.manifest_path(capsule.runtime.runner_fingerprint).exists()
+    quarantined_transaction = next((tmp_path / "transactions").glob("install-*"))
+    dependency_quarantine = next(quarantined_transaction.glob("dependency-envs/*/" + RUNTIME_QUARANTINE_FILENAME))
+    runner_quarantine = next(quarantined_transaction.glob("runner-workspaces/*/" + RUNTIME_QUARANTINE_FILENAME))
+    transaction_quarantine = quarantined_transaction / RUNTIME_QUARANTINE_FILENAME
     assert dependency_quarantine.exists()
     assert runner_quarantine.exists()
+    assert transaction_quarantine.exists()
     dependency_marker = json.loads(dependency_quarantine.read_text(encoding="utf-8"))
     runner_marker = json.loads(runner_quarantine.read_text(encoding="utf-8"))
     assert dependency_marker["artifact_kind"] == "dependency_env"
@@ -407,14 +531,9 @@ async def test_prepare_failed_smoke_stage_quarantines_staged_workspace(tmp_path:
     with pytest.raises(CapsuleInstallError, match="fixture output was missing"):
         await installer.prepare(capsule)
 
-    dependency_quarantine = (
-        workspace_preparer.dependency_env_store.artifact_dir(capsule.runtime.dependency_env_fingerprint)
-        / RUNTIME_QUARANTINE_FILENAME
-    )
-    runner_quarantine = (
-        workspace_preparer.runner_workspace_store.artifact_dir(capsule.runtime.runner_fingerprint)
-        / RUNTIME_QUARANTINE_FILENAME
-    )
+    quarantined_transaction = next((tmp_path / "transactions").glob("install-*"))
+    dependency_quarantine = next(quarantined_transaction.glob("dependency-envs/*/" + RUNTIME_QUARANTINE_FILENAME))
+    runner_quarantine = next(quarantined_transaction.glob("runner-workspaces/*/" + RUNTIME_QUARANTINE_FILENAME))
     assert json.loads(dependency_quarantine.read_text(encoding="utf-8"))["reason"] == "fixture output was missing"
     assert json.loads(runner_quarantine.read_text(encoding="utf-8"))["reason"] == "fixture output was missing"
 
@@ -704,8 +823,8 @@ async def test_prepare_can_retry_after_smoke_failure_and_promote_staged_workspac
 
     with pytest.raises(CapsuleInstallError):
         await installer.prepare(capsule)
-    first_runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
-    assert first_runner_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
+    assert not workspace_preparer.runner_workspace_store.manifest_path(capsule.runtime.runner_fingerprint).exists()
+    assert len(list((tmp_path / "transactions").glob("install-*/quarantine.json"))) == 1
 
     second = await installer.prepare(capsule)
 

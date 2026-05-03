@@ -66,6 +66,22 @@ export interface MockWorkflow {
 
 export type WidgetGroup = "simple" | "advanced";
 
+export interface DashboardWidgetLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+}
+
+export interface DashboardCanvasLayout {
+  gridColumns: number;
+  rowHeight: number;
+  gridGap: number;
+  responsive: boolean;
+}
+
 export interface DashboardWidget {
   id: string;
   binding: { nodeId: string; inputName: string };
@@ -82,6 +98,7 @@ export interface DashboardWidget {
   options?: string[];
   showDownload?: boolean;
   drawMask?: boolean;
+  layout?: DashboardWidgetLayout;
 }
 
 export interface DashboardSchema {
@@ -89,6 +106,7 @@ export interface DashboardSchema {
   workflowId: string;
   workflowName: string;
   widgets: DashboardWidget[];
+  layout: DashboardCanvasLayout;
 }
 
 export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
@@ -251,6 +269,27 @@ export function defaultGroupFor(value: WorkflowNodeValue): WidgetGroup {
     return "advanced";
   }
   return "simple";
+}
+
+export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
+  const widgetType = suggestWidgetType(value);
+  return {
+    id: `ctrl-${value.id}`,
+    valueId: value.id,
+    binding: { nodeId: value.nodeId, inputName: value.inputName },
+    widgetType,
+    title: suggestTitle(value, node.title),
+    description: suggestDescription(value),
+    orientation: "vertical",
+    group: defaultGroupFor(value),
+    defaultValue: value.rawValue,
+    options: value.options,
+    min: value.numberRange?.min,
+    max: value.numberRange?.max,
+    step: value.numberRange?.step,
+    showDownload: widgetType === "display_image" ? true : undefined,
+    drawMask: widgetType === "load_image_mask" ? true : undefined,
+  };
 }
 
 export const MOCK_WORKFLOW: MockWorkflow = {
@@ -490,5 +529,11 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     workflowId: workflow.id,
     workflowName: workflow.name,
     widgets,
+    layout: {
+      gridColumns: 12,
+      rowHeight: 64,
+      gridGap: 14,
+      responsive: true,
+    },
   };
 }

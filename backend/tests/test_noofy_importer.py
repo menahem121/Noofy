@@ -45,7 +45,7 @@ class StubAdapter:
 
 def _archive_bytes() -> bytes:
     root = Path(__file__).resolve().parents[2]
-    return (root / "exported-workflow-for-testing.noofy").read_bytes()
+    return (root / "test_workflows" / "exported-workflow-for-testing.noofy").read_bytes()
 
 
 def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() -> None:
@@ -56,11 +56,11 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
         original_filename="exported-workflow-for-testing.noofy",
     ).normalize()
 
-    assert package.metadata.id == "unknown__eraserv4.5__0.1.0"
-    assert package.metadata.name == "EraserV4.5"
+    assert package.metadata.id == "unknown__controlnet_two_model_workflow__0.1.0"
+    assert package.metadata.name == "controlnet_two_model_workflow"
     assert package.identity is not None
     assert package.identity.publisher_id == "unknown"
-    assert package.identity.package_id == "eraserv4.5"
+    assert package.identity.package_id == "controlnet_two_model_workflow"
     assert package.identity.trust_level == "quarantined_community"
     assert len(package.custom_nodes) == 5
     assert {model.folder for model in package.required_models} == {"checkpoints", "controlnet"}
@@ -79,7 +79,7 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert package.unresolved_runtime_inputs[0].reason == "creator_local_image_not_bundled"
     assert package.dashboard.sections[0].title == "Input setup needed"
     assert package.assets.thumbnail == "source-files/assets/thumbnail.png"
-    assert package.observed_hardware["observed_peak_ram_mb"] == 5567
+    assert package.observed_hardware["observed_peak_ram_mb"] == 6657
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
     assert package.import_metadata.user_facing_message == "Needs input setup"
@@ -96,7 +96,7 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
         original_filename="exported-workflow-for-testing.noofy",
     )
 
-    package_dir = tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0"
+    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
     assert (package_dir / "package.json").exists()
     assert (package_dir / "capsule.lock.json").exists()
     assert (package_dir / "exported-capsule.lock.json").exists()
@@ -109,7 +109,7 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
 
     loader = WorkflowPackageLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages")
     loaded = loader.get_package(package.metadata.id)
-    assert loaded.metadata.name == "EraserV4.5"
+    assert loaded.metadata.name == "controlnet_two_model_workflow"
     assert loaded.custom_nodes[0].included is True
     assert loaded.required_models[0].checksum is not None
     assert loaded.import_metadata is not None
@@ -119,7 +119,7 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
         package.metadata.id
     )
-    assert capsule.workflow.package_id == "eraserv4.5"
+    assert capsule.workflow.package_id == "controlnet_two_model_workflow"
     assert len(capsule.custom_nodes) == 5
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
 
@@ -149,7 +149,7 @@ def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(monkeypat
 def test_imported_real_archive_can_materialize_custom_node_workspace(tmp_path: Path) -> None:
     store = ImportedWorkflowPackageStore(tmp_path / "packages")
     package = store.import_archive(_archive_bytes(), original_filename="exported-workflow-for-testing.noofy")
-    package_dir = tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0"
+    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
     capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
         package.metadata.id
     )
@@ -180,7 +180,7 @@ def test_import_store_rejects_exported_launch_options(tmp_path: Path) -> None:
             original_filename="launch-options.noofy",
         )
 
-    assert not (tmp_path / "packages" / "unknown" / "eraserv4.5" / "0.1.0").exists()
+    assert not (tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0").exists()
 
 
 def test_importer_normalizes_untrusted_model_identity_and_ownership_values() -> None:
@@ -290,7 +290,7 @@ def test_engine_service_imports_real_archive_and_exposes_normalized_package(tmp_
     summaries = service.list_workflows()
 
     assert result["status"] == "needs_input_setup"
-    assert package["metadata"]["name"] == "EraserV4.5"
+    assert package["metadata"]["name"] == "controlnet_two_model_workflow"
     assert package["unresolved_runtime_inputs"][0]["reason"] == "creator_local_image_not_bundled"
     assert summaries[0]["status"] == "needs_input_setup"
     assert summaries[0]["status_label"] == "Needs input setup"

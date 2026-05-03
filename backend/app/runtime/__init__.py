@@ -72,6 +72,15 @@ from app.runtime.install_state import (
     now_iso,
     user_facing_install_message,
 )
+from app.runtime.install_transactions import (
+    DEFAULT_QUARANTINE_RETENTION_DAYS,
+    INSTALL_QUARANTINE_FILENAME,
+    INSTALL_TRANSACTION_FILENAME,
+    INSTALL_TRANSACTION_SCHEMA_VERSION,
+    InstallTransaction,
+    InstallTransactionStore,
+    StartupSweepReport,
+)
 from app.runtime.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
@@ -221,7 +230,13 @@ __all__ = [
     "DependencySourceKind",
     "DuplicateJobRegistrationError",
     "FINGERPRINT_SCHEMA_VERSION",
+    "DEFAULT_QUARANTINE_RETENTION_DAYS",
+    "INSTALL_QUARANTINE_FILENAME",
     "INSTALL_STATE_SCHEMA_VERSION",
+    "INSTALL_TRANSACTION_FILENAME",
+    "INSTALL_TRANSACTION_SCHEMA_VERSION",
+    "InstallTransaction",
+    "InstallTransactionStore",
     "InstallState",
     "InstallStateStore",
     "InstallStatus",
@@ -273,6 +288,7 @@ __all__ = [
     "RunnerProcessSupervisor",
     "RunnerSelectionAction",
     "RunnerSelectionDecision",
+    "StartupSweepReport",
     "SmokeExecutionFixture",
     "SmokePromptTimeoutError",
     "RunnerSmokeTestError",

@@ -34,6 +34,7 @@ from app.runtime.install_state import (
     InstallStateStore,
     user_facing_install_message,
 )
+from app.runtime.install_transactions import InstallTransactionStore
 from app.runtime.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
@@ -1767,6 +1768,25 @@ def _safe_store_segment(value: str) -> str:
 def create_default_engine_service() -> EngineService:
     paths = settings.paths
     paths.ensure_directories()
+    log_store = LogStore()
+    sweep_report = InstallTransactionStore(paths.install_transactions_dir, log_store=log_store).sweep_startup()
+    if (
+        sweep_report.stale_transactions_quarantined
+        or sweep_report.expired_quarantines_removed
+        or sweep_report.stale_tmp_files_removed
+        or sweep_report.stale_lock_files_removed
+    ):
+        log_store.add(
+            "info",
+            "Runtime install startup sweep completed",
+            "runtime.install_transaction",
+            details={
+                "stale_transactions_quarantined": sweep_report.stale_transactions_quarantined,
+                "expired_quarantines_removed": sweep_report.expired_quarantines_removed,
+                "stale_tmp_files_removed": sweep_report.stale_tmp_files_removed,
+                "stale_lock_files_removed": sweep_report.stale_lock_files_removed,
+            },
+        )
 
     loader = WorkflowPackageLoader(
         settings.workflows_dir,
@@ -1774,7 +1794,6 @@ def create_default_engine_service() -> EngineService:
         imported_packages_dir=paths.workflow_packages_store_dir,
     )
     validator = WorkflowPackageValidator()
-    log_store = LogStore()
     runtime_environment = RuntimeEnvironment(
         repo_dir=settings.comfyui_repo_dir,
         runtime_dir=settings.runtime_dir,
@@ -1802,6 +1821,7 @@ def create_default_engine_service() -> EngineService:
         environment=runtime_environment,
         pid_dir=paths.runtime_dir,
     )
+    runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
         runtime_manager.base_url,
         settings.comfyui_models_dir,
@@ -1840,6 +1860,14 @@ def create_default_engine_service() -> EngineService:
         if not capsule_lock.custom_nodes:
             dependency_lock_store.write(core_dependency_lock_from_capsule(capsule_lock))
     install_state_store = InstallStateStore(paths.workflow_store_dir / "install-state")
+    stale_install_state_temps = install_state_store.remove_stale_temp_files()
+    if stale_install_state_temps:
+        log_store.add(
+            "info",
+            "Removed stale install-state temp files",
+            "runtime.install_state",
+            details={"removed_count": stale_install_state_temps},
+        )
     model_store = ModelStore(
         blobs_dir=paths.model_blobs_dir,
         refs_dir=paths.model_refs_dir,
@@ -1849,11 +1877,28 @@ def create_default_engine_service() -> EngineService:
         downloader=http_streaming_downloader,
         local_model_roots=[settings.comfyui_models_dir],
     )
+    orphan_model_links_removed = model_store.sweep_orphan_materialized_links()
+    if orphan_model_links_removed:
+        log_store.add(
+            "info",
+            "Removed orphan materialized model links",
+            "model.store",
+            details={"removed_count": orphan_model_links_removed},
+        )
     runner_process_supervisor = RunnerProcessSupervisor(
         log_store=log_store,
         startup_timeout_seconds=settings.comfyui_startup_timeout_seconds,
         health_poll_interval_seconds=settings.comfyui_health_poll_interval_seconds,
+        pid_dir=paths.runtime_store_dir / "runners",
     )
+    stale_runner_pids_cleaned = runner_process_supervisor.cleanup_stale_pid_files()
+    if stale_runner_pids_cleaned:
+        log_store.add(
+            "info",
+            "Cleaned stale workflow runner PID files",
+            "runtime.runner_process",
+            details={"cleaned_count": stale_runner_pids_cleaned},
+        )
     runner_smoke_tester = RunnerSmokeTester(
         process_supervisor=runner_process_supervisor,
         launch_spec_factory=lambda capsule_lock, prepared_workspace: _workflow_runner_launch_spec(

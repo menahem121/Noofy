@@ -16,7 +16,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
 from app.engine.diagnostics import LogStore
 from app.runtime.custom_nodes import (
@@ -41,6 +40,7 @@ from app.runtime.dependency_resolver import (
     custom_node_dependency_source_dirs,
 )
 from app.runtime.fingerprints import runner_workspace_fingerprint, sha256_fingerprint
+from app.runtime.install_transactions import InstallTransaction, InstallTransactionStore
 from app.runtime.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
@@ -71,6 +71,7 @@ class PreparedRuntimeWorkspace:
     runner_workspace_manifest: RunnerWorkspaceManifest
     dependency_env_path: Path
     runner_workspace_path: Path
+    install_transaction: InstallTransaction | None = None
 
 
 class RuntimeWorkspacePreparer:
@@ -90,6 +91,7 @@ class RuntimeWorkspacePreparer:
         custom_node_source_files_dir: Path | None = None,
         custom_node_source_files_dir_resolver: Callable[[str], Path | None] | None = None,
         dependency_transactions_dir: Path | None = None,
+        install_transaction_store: InstallTransactionStore | None = None,
         log_store: LogStore | None = None,
     ) -> None:
         self.dependency_env_store = dependency_env_store
@@ -108,48 +110,67 @@ class RuntimeWorkspacePreparer:
             dependency_env_store.root_dir.parent / "transactions"
         )
         self.log_store = log_store or LogStore()
+        self.install_transaction_store = install_transaction_store or InstallTransactionStore(
+            self.dependency_transactions_dir,
+            log_store=self.log_store,
+        )
 
     def prepare(
         self,
         capsule_lock: CapsuleLock,
         *,
         model_view_dir: Path | None = None,
+        install_transaction: InstallTransaction | None = None,
     ) -> PreparedRuntimeWorkspace:
-        profile_selection = self._resolve_runtime_profile(capsule_lock)
-        custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
-        dependency_manifest = self._dependency_env_manifest(
-            capsule_lock,
-            status=InstallStatus.CHECKING_COMPATIBILITY,
+        transaction = install_transaction or self.install_transaction_store.open(
+            workflow_id=capsule_lock.workflow.package_id,
+            capsule_fingerprint=capsule_lock.runtime.capsule_fingerprint,
         )
-        dependency_manifest = self._maybe_resolve_dependency_manifest(
-            capsule_lock,
-            dependency_manifest,
-            profile_selection,
-        )
-        runner_manifest = self._runner_workspace_manifest(
-            capsule_lock,
-            dependency_env_fingerprint=dependency_manifest.fingerprint,
-            profile_selection=profile_selection,
-            custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
-            model_view_dir=model_view_dir,
-            status=InstallStatus.CHECKING_COMPATIBILITY,
-        )
+        try:
+            profile_selection = self._resolve_runtime_profile(capsule_lock)
+            custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
+            dependency_manifest = self._dependency_env_manifest(
+                capsule_lock,
+                status=InstallStatus.CHECKING_COMPATIBILITY,
+            )
+            dependency_manifest = self._maybe_resolve_dependency_manifest(
+                capsule_lock,
+                dependency_manifest,
+                profile_selection,
+            )
+            runner_manifest = self._runner_workspace_manifest(
+                capsule_lock,
+                dependency_env_fingerprint=dependency_manifest.fingerprint,
+                profile_selection=profile_selection,
+                custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
+                model_view_dir=model_view_dir,
+                status=InstallStatus.CHECKING_COMPATIBILITY,
+            )
 
-        dependency_manifest = self._ensure_staged_dependency_env(dependency_manifest, capsule_lock.workflow.package_id)
-        runner_manifest = self._ensure_staged_runner_workspace(
-            runner_manifest,
-            capsule_lock.workflow.package_id,
-            custom_node_manifest=custom_node_manifest,
-            source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
-            model_view_dir=model_view_dir,
-        )
+            dependency_manifest, dependency_env_path = self._ensure_staged_dependency_env(
+                dependency_manifest,
+                capsule_lock.workflow.package_id,
+                transaction=transaction,
+            )
+            runner_manifest, runner_workspace_path = self._ensure_staged_runner_workspace(
+                runner_manifest,
+                capsule_lock.workflow.package_id,
+                transaction=transaction,
+                custom_node_manifest=custom_node_manifest,
+                source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+                model_view_dir=model_view_dir,
+            )
 
-        return PreparedRuntimeWorkspace(
-            dependency_env_manifest=dependency_manifest,
-            runner_workspace_manifest=runner_manifest,
-            dependency_env_path=self.dependency_env_store.artifact_dir(dependency_manifest.fingerprint),
-            runner_workspace_path=self.runner_workspace_store.artifact_dir(runner_manifest.fingerprint),
-        )
+            return PreparedRuntimeWorkspace(
+                dependency_env_manifest=dependency_manifest,
+                runner_workspace_manifest=runner_manifest,
+                dependency_env_path=dependency_env_path,
+                runner_workspace_path=runner_workspace_path,
+                install_transaction=transaction,
+            )
+        except Exception as exc:
+            self.install_transaction_store.quarantine(transaction, reason=str(exc))
+            raise
 
     def mark_ready(
         self,
@@ -171,42 +192,53 @@ class RuntimeWorkspacePreparer:
             }
         )
 
-        stored_dependency = self.dependency_env_store.read(dependency_manifest.fingerprint)
-        if stored_dependency.status is InstallStatus.READY:
-            dependency_manifest = stored_dependency
-        else:
-            self.dependency_env_store.save_staged(dependency_manifest)
-            self.log_store.add(
-                "info",
-                "Promoted dependency environment manifest",
-                "runtime.workspace",
-                workflow_id=workflow_id,
-                details={
-                    "fingerprint": dependency_manifest.fingerprint,
-                    "smoke_test_status": smoke_test_status.value,
-                },
-            )
-        stored_runner = self.runner_workspace_store.read(runner_manifest.fingerprint)
-        if stored_runner.status is InstallStatus.READY:
-            runner_manifest = stored_runner
-        else:
-            self.runner_workspace_store.save_staged(runner_manifest)
-            self.log_store.add(
-                "info",
-                "Promoted runner workspace manifest",
-                "runtime.workspace",
-                workflow_id=workflow_id,
-                details={
-                    "fingerprint": runner_manifest.fingerprint,
-                    "smoke_test_status": smoke_test_status.value,
-                },
-            )
+        dependency_manifest = self._promote_dependency_env(
+            prepared_workspace.dependency_env_path,
+            dependency_manifest,
+            workflow_id=workflow_id,
+            smoke_test_status=smoke_test_status,
+        )
+        runner_manifest = self._promote_runner_workspace(
+            prepared_workspace.runner_workspace_path,
+            runner_manifest,
+            workflow_id=workflow_id,
+            smoke_test_status=smoke_test_status,
+        )
+
+        if prepared_workspace.install_transaction is not None:
+            self.install_transaction_store.mark_promoted(prepared_workspace.install_transaction)
+            self.install_transaction_store.remove(prepared_workspace.install_transaction)
 
         return PreparedRuntimeWorkspace(
             dependency_env_manifest=dependency_manifest,
             runner_workspace_manifest=runner_manifest,
-            dependency_env_path=prepared_workspace.dependency_env_path,
-            runner_workspace_path=prepared_workspace.runner_workspace_path,
+            dependency_env_path=self.dependency_env_store.artifact_dir(dependency_manifest.fingerprint),
+            runner_workspace_path=self.runner_workspace_store.artifact_dir(runner_manifest.fingerprint),
+            install_transaction=None,
+        )
+
+    def replace_staged_model_view(
+        self,
+        prepared_workspace: PreparedRuntimeWorkspace,
+        *,
+        model_view_dir: Path,
+        workflow_id: str,
+    ) -> None:
+        models_target = prepared_workspace.runner_workspace_path / "models"
+        if models_target.is_symlink() or models_target.is_file():
+            models_target.unlink()
+        elif models_target.exists():
+            shutil.rmtree(models_target)
+        self._link_or_copy(model_view_dir, models_target)
+        self.log_store.add(
+            "info",
+            "Updated staged runner workspace model view",
+            "runtime.workspace",
+            workflow_id=workflow_id,
+            details={
+                "runner_workspace_path": str(prepared_workspace.runner_workspace_path),
+                "model_view_dir": str(model_view_dir),
+            },
         )
 
     def quarantine_failed(
@@ -263,12 +295,20 @@ class RuntimeWorkspacePreparer:
                     "retain_until": retain_until.isoformat(),
                 },
             )
+        if prepared_workspace.install_transaction is not None:
+            self.install_transaction_store.quarantine(
+                prepared_workspace.install_transaction,
+                reason=reason,
+                retention_days=retention_days,
+            )
 
     def _ensure_staged_dependency_env(
         self,
         manifest: DependencyEnvManifest,
         workflow_id: str,
-    ) -> DependencyEnvManifest:
+        *,
+        transaction: InstallTransaction,
+    ) -> tuple[DependencyEnvManifest, Path]:
         if self.dependency_env_store.exists(manifest.fingerprint):
             existing = self.dependency_env_store.read(manifest.fingerprint)
             if existing.status is InstallStatus.READY:
@@ -282,11 +322,14 @@ class RuntimeWorkspacePreparer:
                         "status": existing.status.value,
                     },
                 )
-                return existing
+                return existing, self.dependency_env_store.artifact_dir(existing.fingerprint)
             if self.dependency_env_installer is not None:
-                return self._install_staged_dependency_env(manifest, workflow_id)
+                return self._install_staged_dependency_env(manifest, workflow_id, transaction=transaction)
             if existing != manifest:
-                self.dependency_env_store.save_staged(manifest)
+                path = self._write_transaction_manifest(
+                    self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
+                    manifest,
+                )
                 self.log_store.add(
                     "info",
                     "Updated staged dependency environment manifest",
@@ -294,7 +337,7 @@ class RuntimeWorkspacePreparer:
                     workflow_id=workflow_id,
                     details={"fingerprint": manifest.fingerprint},
                 )
-                return manifest
+                return manifest, path
             self.log_store.add(
                 "info",
                 "Reusing staged dependency environment manifest",
@@ -302,10 +345,17 @@ class RuntimeWorkspacePreparer:
                 workflow_id=workflow_id,
                 details={"fingerprint": existing.fingerprint},
             )
-            return existing
+            path = self._write_transaction_manifest(
+                self.install_transaction_store.staged_dependency_env_dir(transaction, existing.fingerprint),
+                existing,
+            )
+            return existing, path
         if self.dependency_env_installer is not None:
-            return self._install_staged_dependency_env(manifest, workflow_id)
-        self.dependency_env_store.save_staged(manifest)
+            return self._install_staged_dependency_env(manifest, workflow_id, transaction=transaction)
+        path = self._write_transaction_manifest(
+            self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
+            manifest,
+        )
         self.log_store.add(
             "info",
             "Created staged dependency environment manifest",
@@ -313,7 +363,7 @@ class RuntimeWorkspacePreparer:
             workflow_id=workflow_id,
             details={"fingerprint": manifest.fingerprint},
         )
-        return manifest
+        return manifest, path
 
     def _write_quarantine_marker(self, artifact_path: Path, payload: Mapping[str, object]) -> None:
         artifact_path.mkdir(parents=True, exist_ok=True)
@@ -322,16 +372,30 @@ class RuntimeWorkspacePreparer:
             encoding="utf-8",
         )
 
+    def _write_transaction_manifest(
+        self,
+        artifact_path: Path,
+        manifest: DependencyEnvManifest | RunnerWorkspaceManifest,
+    ) -> Path:
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        (artifact_path / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        return artifact_path
+
     def _install_staged_dependency_env(
         self,
         manifest: DependencyEnvManifest,
         workflow_id: str,
-    ) -> DependencyEnvManifest:
+        *,
+        transaction: InstallTransaction,
+    ) -> tuple[DependencyEnvManifest, Path]:
         assert self.dependency_env_installer is not None
         lock = self._resolved_dependency_lock(manifest, workflow_id)
-        staging_dir = self.dependency_transactions_dir / (
-            f"dep-env-{_safe_fingerprint(manifest.fingerprint)}-{uuid4().hex}"
-        )
+        staging_dir = self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint)
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
         try:
             self.dependency_env_installer.install(
                 DependencyEnvironmentInstallRequest(
@@ -346,9 +410,7 @@ class RuntimeWorkspacePreparer:
                 manifest.model_dump_json(indent=2),
                 encoding="utf-8",
             )
-            self._promote_dependency_env_staging(staging_dir, manifest)
         except Exception:
-            shutil.rmtree(staging_dir, ignore_errors=True)
             raise
 
         self.log_store.add(
@@ -361,7 +423,7 @@ class RuntimeWorkspacePreparer:
                 "dependency_lock_hash": manifest.dependency_lock_hash,
             },
         )
-        return self.dependency_env_store.read(manifest.fingerprint)
+        return manifest, staging_dir
 
     def _resolved_dependency_lock(self, manifest: DependencyEnvManifest, workflow_id: str) -> ResolvedDependencyLock:
         lock = self._find_existing_dependency_lock(
@@ -482,36 +544,100 @@ class RuntimeWorkspacePreparer:
             return self.custom_node_source_files_dir_resolver(workflow_id)
         return self.custom_node_source_files_dir
 
-    def _promote_dependency_env_staging(
+    def _promote_dependency_env(
         self,
         staging_dir: Path,
         manifest: DependencyEnvManifest,
-    ) -> None:
+        *,
+        workflow_id: str,
+        smoke_test_status: SmokeTestStatus,
+    ) -> DependencyEnvManifest:
         artifact_dir = self.dependency_env_store.artifact_dir(manifest.fingerprint)
-        if self.dependency_env_store.exists(manifest.fingerprint):
-            existing = self.dependency_env_store.read(manifest.fingerprint)
-            if existing.status is InstallStatus.READY:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                return
-        if artifact_dir.exists():
-            shutil.rmtree(artifact_dir)
-        artifact_dir.parent.mkdir(parents=True, exist_ok=True)
-        staging_dir.replace(artifact_dir)
+        with self.install_transaction_store.artifact_lock(
+            artifact_kind="dependency-env",
+            fingerprint=manifest.fingerprint,
+        ):
+            if self.dependency_env_store.exists(manifest.fingerprint):
+                existing = self.dependency_env_store.read(manifest.fingerprint)
+                if existing.status is InstallStatus.READY:
+                    if staging_dir != artifact_dir:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
+                    return existing
+            self._write_transaction_manifest(staging_dir, manifest)
+            if artifact_dir.exists() and artifact_dir != staging_dir:
+                shutil.rmtree(artifact_dir)
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            if staging_dir != artifact_dir:
+                staging_dir.replace(artifact_dir)
+            else:
+                self.dependency_env_store.save_staged(manifest)
+        self.log_store.add(
+            "info",
+            "Promoted dependency environment manifest",
+            "runtime.workspace",
+            workflow_id=workflow_id,
+            details={
+                "fingerprint": manifest.fingerprint,
+                "smoke_test_status": smoke_test_status.value,
+            },
+        )
+        return self.dependency_env_store.read(manifest.fingerprint)
+
+    def _promote_runner_workspace(
+        self,
+        staging_dir: Path,
+        manifest: RunnerWorkspaceManifest,
+        *,
+        workflow_id: str,
+        smoke_test_status: SmokeTestStatus,
+    ) -> RunnerWorkspaceManifest:
+        artifact_dir = self.runner_workspace_store.artifact_dir(manifest.fingerprint)
+        with self.install_transaction_store.artifact_lock(
+            artifact_kind="runner-workspace",
+            fingerprint=manifest.fingerprint,
+        ):
+            if self.runner_workspace_store.exists(manifest.fingerprint):
+                existing = self.runner_workspace_store.read(manifest.fingerprint)
+                if existing.status is InstallStatus.READY:
+                    if staging_dir != artifact_dir:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
+                    return existing
+            self._write_transaction_manifest(staging_dir, manifest)
+            if artifact_dir.exists() and artifact_dir != staging_dir:
+                shutil.rmtree(artifact_dir)
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            if staging_dir != artifact_dir:
+                staging_dir.replace(artifact_dir)
+            else:
+                self.runner_workspace_store.save_staged(manifest)
+        self.log_store.add(
+            "info",
+            "Promoted runner workspace manifest",
+            "runtime.workspace",
+            workflow_id=workflow_id,
+            details={
+                "fingerprint": manifest.fingerprint,
+                "smoke_test_status": smoke_test_status.value,
+            },
+        )
+        return self.runner_workspace_store.read(manifest.fingerprint)
 
     def _ensure_staged_runner_workspace(
         self,
         manifest: RunnerWorkspaceManifest,
         workflow_id: str,
         *,
+        transaction: InstallTransaction,
         custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
         source_files_dir: Path | None = None,
         model_view_dir: Path | None = None,
-    ) -> RunnerWorkspaceManifest:
-        workspace_path = self.runner_workspace_store.artifact_dir(manifest.fingerprint)
+    ) -> tuple[RunnerWorkspaceManifest, Path]:
+        workspace_path = self.install_transaction_store.staged_runner_workspace_dir(transaction, manifest.fingerprint)
         if self.runner_workspace_store.exists(manifest.fingerprint):
             existing = self.runner_workspace_store.read(manifest.fingerprint)
             if existing.status is InstallStatus.READY:
-                self._validate_ready_runner_workspace(workspace_path)
+                ready_path = self.runner_workspace_store.artifact_dir(existing.fingerprint)
+                self._validate_ready_runner_workspace(ready_path)
                 self.log_store.add(
                     "info",
                     "Reusing runner workspace manifest",
@@ -522,7 +648,7 @@ class RuntimeWorkspacePreparer:
                         "status": existing.status.value,
                     },
                 )
-                return existing
+                return existing, ready_path
             self._materialize_runner_workspace(
                 workspace_path,
                 workflow_id,
@@ -531,7 +657,7 @@ class RuntimeWorkspacePreparer:
                 model_view_dir=model_view_dir,
             )
             if existing != manifest:
-                self.runner_workspace_store.save_staged(manifest)
+                self._write_transaction_manifest(workspace_path, manifest)
                 self.log_store.add(
                     "info",
                     "Updated staged runner workspace manifest",
@@ -539,7 +665,7 @@ class RuntimeWorkspacePreparer:
                     workflow_id=workflow_id,
                     details={"fingerprint": manifest.fingerprint},
                 )
-                return manifest
+                return manifest, workspace_path
             self.log_store.add(
                 "info",
                 "Reusing staged runner workspace manifest",
@@ -547,7 +673,8 @@ class RuntimeWorkspacePreparer:
                 workflow_id=workflow_id,
                 details={"fingerprint": existing.fingerprint},
             )
-            return existing
+            self._write_transaction_manifest(workspace_path, existing)
+            return existing, workspace_path
         self._materialize_runner_workspace(
             workspace_path,
             workflow_id,
@@ -555,7 +682,7 @@ class RuntimeWorkspacePreparer:
             source_files_dir=source_files_dir,
             model_view_dir=model_view_dir,
         )
-        self.runner_workspace_store.save_staged(manifest)
+        self._write_transaction_manifest(workspace_path, manifest)
         self.log_store.add(
             "info",
             "Created staged runner workspace manifest",
@@ -563,7 +690,7 @@ class RuntimeWorkspacePreparer:
             workflow_id=workflow_id,
             details={"fingerprint": manifest.fingerprint},
         )
-        return manifest
+        return manifest, workspace_path
 
     def _dependency_env_manifest(
         self,

@@ -616,7 +616,7 @@ Current implementation notes:
 - The current `RunnerSmokeTester` runs dependency wheel import smoke from the staged dependency environment before runner startup, preferring explicit dependency-lock `import_names` over best-effort wheel metadata inference. It verifies `/object_info` node registration when custom node types or a smoke fixture require it, and can execute a package-declared lightweight prompt fixture from `smoke_tests.workflow_execution`. For custom-node capsules, a declared execution fixture must exercise at least one declared custom node type before the fixture can pass. Fixture execution can assert expected output node count and output node ids, and timeout failures report fixture name, timeout seconds, and prompt id when available. Without a workflow execution fixture it marks workflow execution as blocked. Health-only smoke is not sufficient for `ready`.
 - Runner startup smoke failures now carry the split smoke report through to install state, so `runner_health=failed` is preserved instead of being flattened to an empty report.
 - Workflows with unresolved runtime inputs force the workflow-execution stage to `blocked` and remain `prepared_needs_input_setup`.
-- Failed smoke exceptions or failed smoke report stages write `quarantine.json` markers with `retain_until` metadata into staged runtime artifact directories. The sweep that deletes expired quarantine artifacts remains Phase 5g storage cleanup work.
+- Failed smoke exceptions or failed smoke report stages write `quarantine.json` markers with `retain_until` metadata into staged runtime artifact directories. Phase 5g startup sweep now deletes expired quarantine artifacts.
 - Fake/lightweight tests cover full-pass smoke reports, dependency import failure, runner health failure, missing execution smoke, object-info node registration failures, custom-node fixture exercise requirements, failed-staging quarantine markers, and unresolved runtime input blocking.
 - The optional external real ComfyUI smoke validation can be run with `NOOFY_REAL_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_BASE_URL` / `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT`.
 - The optional staged real ComfyUI smoke validation can be run with `NOOFY_REAL_STAGED_COMFYUI_SMOKE=1`, `NOOFY_REAL_COMFYUI_SOURCE_DIR=<ComfyUI checkout>`, `NOOFY_REAL_COMFYUI_PYTHON=<Python with ComfyUI deps>`, `NOOFY_REAL_COMFYUI_SMOKE_PROMPT=<small ComfyUI API prompt JSON>`, and optionally `NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT` / `NOOFY_REAL_COMFYUI_SMOKE_MIN_OUTPUTS`. It materializes a Noofy staged runner workspace and executes through `RunnerSmokeTester`, so it is the preferred Phase 5e hardware-readiness check. Both real smoke paths are intentionally skipped in default test runs until suitable hardware is available.
@@ -776,6 +776,23 @@ Acceptance criteria:
 - Concurrent preparation of two workflows with the same dependency lock reuses or promotes exactly one dependency environment.
 - Failed preparation does not mutate trusted core runtime or any ready artifact.
 - Install state is updated atomically and remains readable after interrupted writes.
+
+Current implementation notes:
+
+- Install preparation now opens `runtime-store/transactions/install-<id>/` transactions with typed transaction metadata, staged dependency-env, staged runner-workspace, staged model-view, staged model-blob download, and smoke-log directories.
+- Dependency environments and runner workspaces are written under the install transaction first. They are promoted only after required smoke stages pass, with per-fingerprint lock files and a ready-artifact re-check before promotion.
+- Model downloads and model views can be staged under the install transaction, used by smoke through the staged runner workspace, and then promoted to canonical blob/view paths before install state records final model references.
+- Failed preparation and smoke failure quarantine the install transaction and staged artifacts with a bounded retention marker. Ready dependency-env and runner-workspace manifests are not written on failure.
+- Backend startup runs an idempotent install-transaction sweep that quarantines stale install transactions, removes stale temp and lock files, removes legacy unscoped transaction directories, expires old quarantines, removes orphan materialized model links whose recorded blobs are gone, and cleans stale managed ComfyUI PID files.
+- Isolated workflow runner processes now write backend-owned runner PID files while running. Backend startup removes stale runner PID files and attempts to terminate orphan workflow-runner processes from a previous backend crash.
+- Smoke reports are persisted under the install transaction's `smoke-logs/` directory before transaction promotion or quarantine, giving failed smoke attempts bounded diagnostic artifacts without writing ready manifests.
+- Install state writes remain atomic through temp-file replacement and are updated with final ready artifact paths only after promotion.
+- Stale interrupted `install-state/*.json.tmp` writes are ignored by normal reads and removed during backend startup cleanup.
+
+Phase 5g backend completion:
+
+- The transactional preparation path, promotion order, rollback/quarantine behavior, startup sweep, stale runner PID cleanup, install-state temp cleanup, importer fixture relocation, and focused regression coverage are implemented.
+- Remaining validation is operational crash testing on long-running real installs and real-hardware smoke runs; no known backend implementation task is left for Phase 5g.
 
 ### Phase 5h: Reference Tracking And Garbage Collection
 

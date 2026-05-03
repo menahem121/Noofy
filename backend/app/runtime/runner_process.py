@@ -93,6 +93,7 @@ class RunnerProcessSupervisor:
         process_tree_terminator: RunnerProcessTreeTerminator | None = None,
         startup_timeout_seconds: float = 60,
         health_poll_interval_seconds: float = 0.5,
+        pid_dir: Path | None = None,
     ) -> None:
         self.log_store = log_store or LogStore()
         self._process_factory = process_factory or self._create_process
@@ -101,6 +102,7 @@ class RunnerProcessSupervisor:
         self._owns_process_tree = process_factory is None
         self.startup_timeout_seconds = startup_timeout_seconds
         self.health_poll_interval_seconds = health_poll_interval_seconds
+        self.pid_dir = pid_dir
         self._records: dict[str, _RunnerProcessRecord] = {}
 
     async def start(self, spec: RunnerLaunchSpec) -> RunnerProcessHandle:
@@ -175,6 +177,7 @@ class RunnerProcessSupervisor:
         )
         record.log_task = asyncio.create_task(self._capture_process_output(record))
         self._records[spec.runner_id] = record
+        self._write_pid_file(spec.runner_id, process.pid)
         self.log_store.add(
             "info",
             "Runner process started",
@@ -243,6 +246,7 @@ class RunnerProcessSupervisor:
         )
         status = self._status_from_record(record)
         self._records.pop(runner_id, None)
+        self._remove_pid_file(runner_id)
         return status
 
     async def stop_all(self) -> list[RunnerProcessStatus]:
@@ -265,6 +269,7 @@ class RunnerProcessSupervisor:
             returncode = getattr(record.process, "returncode", None)
             record.last_error = f"Runner process exited with code {returncode}"
             record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.STOPPED})
+            self._remove_pid_file(runner_id)
             self.log_store.add(
                 "error",
                 "Runner process exited",
@@ -285,6 +290,29 @@ class RunnerProcessSupervisor:
         if record is None:
             return None
         return record.descriptor
+
+    def cleanup_stale_pid_files(self) -> int:
+        if self.pid_dir is None or not self.pid_dir.exists():
+            return 0
+        cleaned = 0
+        for pid_file in sorted(self.pid_dir.glob("runner-*.pid")):
+            try:
+                pid = int(pid_file.read_text(encoding="utf-8").strip())
+            except (ValueError, OSError):
+                pid_file.unlink(missing_ok=True)
+                cleaned += 1
+                continue
+            if _is_pid_alive(pid):
+                self.log_store.add(
+                    "warning",
+                    "Killing orphan workflow runner process from previous run",
+                    "runtime.runner_process",
+                    details={"pid": pid, "pid_file": str(pid_file)},
+                )
+                _terminate_stale_pid(pid)
+            pid_file.unlink(missing_ok=True)
+            cleaned += 1
+        return cleaned
 
     def _handle(self, record: _RunnerProcessRecord) -> RunnerProcessHandle:
         return RunnerProcessHandle(
@@ -430,6 +458,28 @@ class RunnerProcessSupervisor:
             return False, str(exc)
         return True, None
 
+    def _pid_file(self, runner_id: str) -> Path | None:
+        if self.pid_dir is None:
+            return None
+        return self.pid_dir / f"runner-{_safe_runner_id(runner_id)}.pid"
+
+    def _write_pid_file(self, runner_id: str, pid: int) -> None:
+        pid_file = self._pid_file(runner_id)
+        if pid_file is None:
+            return
+        try:
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            pid_file.write_text(str(pid), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _remove_pid_file(self, runner_id: str) -> None:
+        pid_file = self._pid_file(runner_id)
+        if pid_file is None:
+            return
+        with contextlib.suppress(OSError):
+            pid_file.unlink(missing_ok=True)
+
 
 def _default_ws_url(base_url: str) -> str:
     parsed = urlparse(base_url)
@@ -441,3 +491,32 @@ def _process_tree_start_kwargs() -> dict[str, object]:
     if os.name == "nt":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
+
+
+def _safe_runner_id(runner_id: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in runner_id)
+
+
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_stale_pid(pid: int) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass

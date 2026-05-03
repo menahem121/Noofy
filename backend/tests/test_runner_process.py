@@ -86,6 +86,48 @@ async def test_start_returns_ready_handle_and_descriptor(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
+async def test_runner_pid_file_written_and_removed(tmp_path: Path) -> None:
+    async def process_factory(command: list[str], **kwargs):
+        return FakeProcess(pid=1234)
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        pid_dir=tmp_path / "runner-pids",
+    )
+
+    await supervisor.start(_launch_spec(tmp_path))
+    pid_file = tmp_path / "runner-pids" / "runner-runner-1.pid"
+
+    assert pid_file.read_text(encoding="utf-8") == "1234"
+
+    await supervisor.stop("runner-1")
+
+    assert not pid_file.exists()
+
+
+def test_runner_startup_sweep_removes_stale_pid_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list[int] = []
+    pid_dir = tmp_path / "runner-pids"
+    pid_dir.mkdir()
+    (pid_dir / "runner-old.pid").write_text("4321", encoding="utf-8")
+    monkeypatch.setattr("app.runtime.runner_process._is_pid_alive", lambda pid: True)
+    monkeypatch.setattr("app.runtime.runner_process._terminate_stale_pid", lambda pid: killed.append(pid))
+    supervisor = RunnerProcessSupervisor(pid_dir=pid_dir)
+
+    cleaned = supervisor.cleanup_stale_pid_files()
+
+    assert cleaned == 1
+    assert killed == [4321]
+    assert not (pid_dir / "runner-old.pid").exists()
+
+
+@pytest.mark.anyio
 async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> None:
     async def process_factory(command: list[str], **kwargs):
         return FakeProcess(pid=1234)

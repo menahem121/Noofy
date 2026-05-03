@@ -81,6 +81,11 @@ class ModelViewMaterialization:
     view_fingerprint: str
     view_path: Path
     model_references: list[InstalledModelReference]
+    final_view_path: Path | None = None
+
+    @property
+    def is_staged(self) -> bool:
+        return self.final_view_path is not None and self.view_path != self.final_view_path
 
 
 @dataclass(frozen=True)
@@ -263,6 +268,8 @@ class ModelStore:
         view_id: str,
         model_locks: list[ModelLock],
         local_model_requirements: list[LocalModelRequirement] | None = None,
+        staged_views_dir: Path | None = None,
+        staged_blobs_dir: Path | None = None,
     ) -> ModelViewMaterialization:
         """Create a per-view ComfyUI model tree from content-addressed blobs."""
         resolved_local_models = self._resolve_local_models(local_model_requirements or [])
@@ -271,7 +278,12 @@ class ModelStore:
             model_locks=model_locks,
             local_models=resolved_local_models,
         )
-        view_path = self.materialized_dir / "views" / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+        final_view_path = self._model_view_dir(view_fingerprint)
+        view_path = final_view_path
+        if staged_views_dir is not None:
+            view_path = staged_views_dir / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+            if view_path.exists():
+                shutil.rmtree(view_path)
         refs: list[InstalledModelReference] = []
         seen_targets: dict[tuple[str, str], str] = {}
         for model_lock in model_locks:
@@ -297,7 +309,10 @@ class ModelStore:
             seen_targets[key] = local_model.sha256
 
         for model_lock in model_locks:
-            blob_path, sha256, reused_existing_blob = await self._ensure_blob(model_lock)
+            blob_path, sha256, reused_existing_blob = await self._ensure_blob(
+                model_lock,
+                transactions_dir=staged_blobs_dir,
+            )
             target = self._model_view_path(view_path, model_lock)
             strategy = self._materialize_link_or_copy(blob_path, target)
             verified = self._verify_materialized_file(target, sha256, model_lock.size_bytes)
@@ -385,6 +400,38 @@ class ModelStore:
             view_fingerprint=view_fingerprint,
             view_path=view_path,
             model_references=refs,
+            final_view_path=final_view_path,
+        )
+
+    def promote_model_view(self, materialization: ModelViewMaterialization) -> ModelViewMaterialization:
+        """Promote a staged model view into the canonical materialized view path."""
+        final_view_path = materialization.final_view_path or self._model_view_dir(materialization.view_fingerprint)
+        if materialization.view_path == final_view_path:
+            return ModelViewMaterialization(
+                view_fingerprint=materialization.view_fingerprint,
+                view_path=final_view_path,
+                model_references=materialization.model_references,
+                final_view_path=final_view_path,
+            )
+
+        with self._lock:
+            if final_view_path.exists():
+                shutil.rmtree(materialization.view_path, ignore_errors=True)
+            else:
+                final_view_path.parent.mkdir(parents=True, exist_ok=True)
+                materialization.view_path.replace(final_view_path)
+            promoted_refs = _references_for_promoted_view(
+                materialization.model_references,
+                old_view_path=materialization.view_path,
+                new_view_path=final_view_path,
+            )
+            self._write_model_view_manifest(final_view_path, materialization.view_fingerprint, promoted_refs)
+
+        return ModelViewMaterialization(
+            view_fingerprint=materialization.view_fingerprint,
+            view_path=final_view_path,
+            model_references=promoted_refs,
+            final_view_path=final_view_path,
         )
 
     def has_blob(self, sha256: str) -> bool:
@@ -393,12 +440,44 @@ class ModelStore:
     def is_materialized(self, model_lock: ModelLock) -> bool:
         return self._materialized_path(model_lock).exists()
 
+    def sweep_orphan_materialized_links(self) -> int:
+        """Remove materialized links/files whose recorded model blob no longer exists."""
+        views_dir = self.materialized_dir / "views"
+        if not views_dir.exists():
+            return 0
+        removed = 0
+        for manifest_path in sorted(views_dir.glob("model-view-*/manifest.json")):
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for reference in data.get("model_references", []):
+                if not isinstance(reference, dict):
+                    continue
+                blob_path_value = reference.get("blob_path")
+                materialized_path_value = reference.get("materialized_path")
+                if not isinstance(blob_path_value, str) or not isinstance(materialized_path_value, str):
+                    continue
+                blob_path = Path(blob_path_value)
+                materialized_path = Path(materialized_path_value)
+                if blob_path.exists() or not (materialized_path.exists() or materialized_path.is_symlink()):
+                    continue
+                try:
+                    materialized_path.unlink()
+                    removed += 1
+                except OSError:
+                    continue
+        return removed
+
     # ------------------------------------------------------------------
     # Internal: paths
     # ------------------------------------------------------------------
 
     def _blob_path(self, sha256: str) -> Path:
         return self.blobs_dir / sha256 / "blob"
+
+    def _model_view_dir(self, view_fingerprint: str) -> Path:
+        return self.materialized_dir / "views" / f"model-view-{_safe_fingerprint(view_fingerprint)}"
 
     def _ref_path(self, model_id: str) -> Path:
         safe = model_id.replace("/", "_").replace("\\", "_").replace(":", "_")
@@ -425,10 +504,11 @@ class ModelStore:
     # Internal: transactions
     # ------------------------------------------------------------------
 
-    def _open_transaction(self, model_id: str) -> Path:
-        self.transactions_dir.mkdir(parents=True, exist_ok=True)
+    def _open_transaction(self, model_id: str, *, transactions_dir: Path | None = None) -> Path:
+        root_dir = transactions_dir or self.transactions_dir
+        root_dir.mkdir(parents=True, exist_ok=True)
         safe_id = model_id.replace("/", "_")
-        txn_dir = self.transactions_dir / f"model-{safe_id}-{uuid.uuid4().hex[:8]}"
+        txn_dir = root_dir / f"model-{safe_id}-{uuid.uuid4().hex[:8]}"
         txn_dir.mkdir(parents=True, exist_ok=False)
         return txn_dir
 
@@ -489,7 +569,12 @@ class ModelStore:
     # Internal: ref + materialize
     # ------------------------------------------------------------------
 
-    async def _ensure_blob(self, model_lock: ModelLock) -> tuple[Path, str, bool]:
+    async def _ensure_blob(
+        self,
+        model_lock: ModelLock,
+        *,
+        transactions_dir: Path | None = None,
+    ) -> tuple[Path, str, bool]:
         sha256 = _normalize_sha256(model_lock.sha256)
         blob_path = self._blob_path(sha256)
         if blob_path.exists():
@@ -502,7 +587,7 @@ class ModelStore:
                 f"No source URLs available to download model {model_lock.id}"
             )
 
-        txn_dir = self._open_transaction(model_lock.id)
+        txn_dir = self._open_transaction(model_lock.id, transactions_dir=transactions_dir)
         download_target = txn_dir / "blob"
         try:
             bytes_written = await self._download_with_fallback(model_lock.source_urls, download_target)
@@ -754,6 +839,23 @@ def model_view_fingerprint(
             ),
         }
     )
+
+
+def _references_for_promoted_view(
+    refs: list[InstalledModelReference],
+    *,
+    old_view_path: Path,
+    new_view_path: Path,
+) -> list[InstalledModelReference]:
+    promoted: list[InstalledModelReference] = []
+    for ref in refs:
+        try:
+            relative_path = Path(ref.materialized_path).relative_to(old_view_path)
+            materialized_path = str(new_view_path / relative_path)
+        except ValueError:
+            materialized_path = ref.materialized_path
+        promoted.append(ref.model_copy(update={"materialized_path": materialized_path}))
+    return promoted
 
 
 def _safe_fingerprint(fingerprint: str) -> str:

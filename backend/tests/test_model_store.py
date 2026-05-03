@@ -277,6 +277,48 @@ async def test_materialize_model_view_writes_per_view_tree_and_references(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_materialize_model_view_can_stage_then_promote_atomically(tmp_path: Path) -> None:
+    payload = b"staged-view-model"
+    lock = _model_lock(payload, model_id="staged/model", folder="checkpoints", filename="model.safetensors")
+    download_targets: list[Path] = []
+
+    async def downloader(url: str, dest: Path) -> int:
+        download_targets.append(dest)
+        dest.write_bytes(payload)
+        return len(payload)
+
+    store, _ = _build_store(tmp_path, downloader)
+    staged_views_dir = tmp_path / "transactions" / "install-123" / "model-views"
+    staged_blobs_dir = tmp_path / "transactions" / "install-123" / "model-blobs"
+
+    staged = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[lock],
+        staged_views_dir=staged_views_dir,
+        staged_blobs_dir=staged_blobs_dir,
+    )
+
+    assert staged.is_staged is True
+    assert staged.view_path.is_relative_to(staged_views_dir)
+    assert download_targets
+    assert download_targets[0].parent.is_relative_to(staged_blobs_dir)
+    assert not download_targets[0].parent.exists()
+    assert not staged.final_view_path.exists()
+    assert Path(staged.model_references[0].materialized_path).is_relative_to(staged.view_path)
+
+    promoted = store.promote_model_view(staged)
+
+    assert promoted.view_path == staged.final_view_path
+    assert promoted.view_path.exists()
+    assert not staged.view_path.exists()
+    materialized = promoted.view_path / "checkpoints" / "model.safetensors"
+    assert materialized.read_bytes() == payload
+    assert promoted.model_references[0].materialized_path == str(materialized)
+    manifest = json.loads((promoted.view_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model_references"][0]["materialized_path"] == str(materialized)
+
+
+@pytest.mark.anyio
 async def test_materialize_model_view_reuses_existing_blob_without_download(tmp_path: Path) -> None:
     payload = b"existing-view-model"
     lock = _model_lock(payload)
@@ -528,3 +570,19 @@ async def test_materialize_model_view_rejects_windows_path_length_limit(
         await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
 
     assert any("Model materialization failed" in event.message for event in log_store.list_events().events)
+
+
+@pytest.mark.anyio
+async def test_sweep_orphan_materialized_links_removes_view_file_when_blob_missing(tmp_path: Path) -> None:
+    payload = b"orphan-view-model"
+    lock = _model_lock(payload, model_id="orphan/model", folder="checkpoints", filename="model.safetensors")
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    materialized = Path(view.model_references[0].materialized_path)
+    blob = Path(view.model_references[0].blob_path or "")
+
+    blob.unlink()
+    removed = store.sweep_orphan_materialized_links()
+
+    assert removed == 1
+    assert not materialized.exists()

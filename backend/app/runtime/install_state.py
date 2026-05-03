@@ -165,6 +165,18 @@ class InstallStateStore:
             states.append(InstallState.model_validate(data))
         return states
 
+    def remove_stale_temp_files(self) -> int:
+        if not self.root_dir.exists():
+            return 0
+        removed = 0
+        for path in self.root_dir.glob("*.json.tmp"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

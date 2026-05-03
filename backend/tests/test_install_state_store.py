@@ -147,3 +147,18 @@ def test_list_states_returns_persisted_records(tmp_path: Path) -> None:
     fingerprints = {state.capsule_fingerprint for state in store.list_states()}
 
     assert fingerprints == {"alpha-fp", "beta-fp"}
+
+
+def test_stale_temp_write_does_not_block_reads_and_can_be_swept(tmp_path: Path) -> None:
+    store = InstallStateStore(tmp_path)
+    state = store.update("phase3-fp", status=InstallStatus.READY)
+    tmp_path_for_state = tmp_path / "phase3-fp.json.tmp"
+    tmp_path_for_state.write_text("{not-valid-json", encoding="utf-8")
+
+    reloaded = store.get("phase3-fp")
+    removed = store.remove_stale_temp_files()
+
+    assert reloaded is not None
+    assert reloaded.status is state.status
+    assert removed == 1
+    assert not tmp_path_for_state.exists()
