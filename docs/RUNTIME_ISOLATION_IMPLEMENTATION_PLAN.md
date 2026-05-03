@@ -898,12 +898,17 @@ Acceptance criteria:
 Current implementation notes:
 
 - `GET /api/workflows/{workflow_id}/status` now returns a consolidated frontend-readable payload with workflow summary, install/preparation state, required actions, runner lifecycle state, cancel capabilities, and compatibility guidance that labels observed hardware as advisory.
+- `GET /api/workflows/{workflow_id}/install-state/developer-details` exposes raw preparation details such as `last_error`, smoke-stage report, and runtime artifact paths behind a developer details endpoint. Default install/status payloads keep beginner-friendly status fields and only report whether developer details are available.
 - Existing preparation, runner start/stop, runner lease, queued runner cancellation, job cancellation, install-state, and validation endpoints cover the main frontend workflow-control surface. `DELETE /api/workflows/{workflow_id}/prepare` reports that no active cancellation is available for the current synchronous preparation path.
 - `GET /api/diagnostics` exposes structured diagnostic events with extracted correlation IDs for workflow, job, runner, install transaction, queue, and memory decisions. Developer details are hidden by default and available only with `developer_details=true`.
-- Default diagnostics redact token/secret/authorization/signed-url fields and sensitive signed URL strings. Technical setup details remain in developer details rather than beginner-facing status payloads.
+- Default diagnostics redact token/secret/authorization/signed-url fields, sensitive signed URL strings, and home-directory local paths. Technical setup details remain in developer details rather than beginner-facing status payloads.
 - `GET /api/storage/diagnostics` exposes the Phase 5h storage reference index for developer details and future UI cleanup views.
 - Runner process launch now always passes an explicit environment with `NOOFY_API_TOKEN` removed, even when the runner launch spec does not define custom environment variables.
-- Focused tests cover workflow status payloads, preparation cancellation reporting, redacted diagnostics, storage diagnostics, diagnostic correlation IDs/developer details, and runner API-token environment stripping.
+- Focused tests cover workflow status payloads, preparation cancellation reporting, status distinction for the required install states, redacted diagnostics, storage diagnostics, diagnostic correlation IDs/developer details, and runner API-token environment stripping.
+
+Phase 5i backend completion:
+
+- Frontend-readable workflow status, required action state, runner lifecycle state, cancellation surfaces, redacted diagnostics, storage diagnostics, developer-detail payloads, compatibility guidance, and runner token isolation are implemented. Remaining work belongs to Phase 5j integration/acceptance coverage and any later frontend presentation polish.
 
 ### Phase 5j: Integration Tests And Phase Acceptance Gate
 

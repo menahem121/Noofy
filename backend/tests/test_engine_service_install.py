@@ -15,6 +15,7 @@ from app.engine.service import EngineService, _smoke_execution_fixture_for_capsu
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
 from app.runtime.isolation import (
+    InstallState,
     InstallStatus,
     SmokeStageResult,
     SmokeStageStatus,
@@ -319,6 +320,35 @@ def test_get_install_state_for_unknown_workflow_returns_unsupported(tmp_path: Pa
 
     assert payload["status"] == InstallStatus.UNSUPPORTED.value
     assert payload["capsule_fingerprint"] is None
+
+
+def test_install_payload_distinguishes_phase5i_statuses() -> None:
+    service = EngineService.__new__(EngineService)
+    statuses = [
+        InstallStatus.READY,
+        InstallStatus.PREPARED_NEEDS_INPUT_SETUP,
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
+        InstallStatus.BLOCKED_BY_POLICY,
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE,
+        InstallStatus.FAILED,
+    ]
+
+    payloads = [
+        service._install_payload(
+            "workflow",
+            InstallState(
+                schema_version="0.1.0",
+                capsule_fingerprint=f"capsule-{status.value}",
+                status=status,
+                smoke_test_status=SmokeTestStatus.NOT_RUN,
+            ),
+        )
+        for status in statuses
+    ]
+
+    assert [payload["status"] for payload in payloads] == [status.value for status in statuses]
+    assert all(payload["user_facing_message"] for payload in payloads)
+    assert all("developer_details_available" in payload for payload in payloads)
 
 
 def test_smoke_execution_fixture_resolver_reads_workflow_package_fixture(tmp_path: Path) -> None:

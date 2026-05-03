@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -253,6 +254,18 @@ class EngineService:
 
         state = self.capsule_installer.get_state(capsule_lock)
         return self._install_payload(workflow_id, state)
+
+    def get_install_state_developer_details(self, workflow_id: str) -> dict[str, object]:
+        if self.capsule_loader is None or self.capsule_installer is None:
+            return {"workflow_id": workflow_id, "developer_details": {}}
+        capsule_lock = self._preparable_capsule_lock(workflow_id)
+        if capsule_lock is None:
+            return {"workflow_id": workflow_id, "developer_details": {}}
+        state = self.capsule_installer.get_state(capsule_lock)
+        return {
+            "workflow_id": workflow_id,
+            "developer_details": _install_developer_details(state),
+        }
 
     async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
@@ -1040,6 +1053,7 @@ class EngineService:
             "smoke_test_status": state.smoke_test_status.value,
             "smoke_test_report": state.smoke_test_report.model_dump(mode="json"),
             "last_error": state.last_error,
+            "developer_details_available": state.last_error is not None or bool(state.smoke_test_report.model_dump(mode="json")),
         }
 
     def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
@@ -1648,13 +1662,23 @@ def _compatibility_guidance(package: WorkflowPackage) -> dict[str, object] | Non
     }
 
 
+def _install_developer_details(state: InstallState) -> dict[str, object]:
+    details: dict[str, object] = {}
+    if state.last_error is not None:
+        details["last_error"] = state.last_error
+    details["smoke_test_report"] = state.smoke_test_report.model_dump(mode="json")
+    details["dependency_env_path"] = state.dependency_env_path
+    details["runner_workspace_path"] = state.runner_workspace_path
+    return _redact_diagnostic_details(details)
+
+
 def _diagnostic_event_payload(event, *, include_developer_details: bool) -> dict[str, object]:
     details = _redact_diagnostic_details(event.details)
     payload: dict[str, object] = {
         "id": event.id,
         "timestamp": event.timestamp.isoformat(),
         "level": event.level,
-        "message": event.message,
+        "message": event.message if include_developer_details else _redact_user_private_paths(event.message),
         "source": event.source,
         "workflow_id": event.workflow_id,
         "job_id": event.job_id,
@@ -1694,6 +1718,8 @@ def _redact_diagnostic_details(value):
         return [_redact_diagnostic_details(item) for item in value]
     if isinstance(value, str) and _looks_sensitive(value):
         return "[redacted]"
+    if isinstance(value, str):
+        return _redact_user_private_paths(value)
     return value
 
 
@@ -1710,6 +1736,20 @@ def _looks_sensitive(value: str) -> bool:
         or "x-amz-signature=" in lowered
         or "x-goog-signature=" in lowered
     )
+
+
+_LOCAL_PATH_PATTERNS = (
+    re.compile(r"/Users/[^/\s]+(?:/[^\s,;)]+)*"),
+    re.compile(r"/home/[^/\s]+(?:/[^\s,;)]+)*"),
+    re.compile(r"(?i)[A-Z]:\\Users\\[^\\\s]+(?:\\[^\s,;)]+)*"),
+)
+
+
+def _redact_user_private_paths(value: str) -> str:
+    redacted = value
+    for pattern in _LOCAL_PATH_PATTERNS:
+        redacted = pattern.sub("[local-path-redacted]", redacted)
+    return redacted
 
 
 def _read_dependency_manifest(path: Path) -> DependencyEnvManifest:

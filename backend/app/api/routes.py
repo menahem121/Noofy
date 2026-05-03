@@ -107,6 +107,11 @@ async def get_workflow_install_state(workflow_id: str):
     return engine_service.get_install_state(workflow_id)
 
 
+@router.get("/workflows/{workflow_id}/install-state/developer-details")
+async def get_workflow_install_state_developer_details(workflow_id: str):
+    return engine_service.get_install_state_developer_details(workflow_id)
+
+
 @router.get("/workflows/{workflow_id}/status")
 async def get_workflow_status(workflow_id: str):
     try:

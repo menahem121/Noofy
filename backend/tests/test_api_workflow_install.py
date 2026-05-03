@@ -54,6 +54,16 @@ class FakeEngineService:
             "runner_workspace_path": "/tmp/noofy/runner-workspace",
             "smoke_test_status": "not_run",
             "last_error": None,
+            "developer_details_available": False,
+        }
+
+    def get_install_state_developer_details(self, workflow_id: str):
+        return {
+            "workflow_id": workflow_id,
+            "developer_details": {
+                "last_error": "runner import failed",
+                "dependency_env_path": "[local-path-redacted]",
+            },
         }
 
     def workflow_status(self, workflow_id: str):
@@ -255,6 +265,18 @@ def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
     assert payload["user_facing_message"] == "Not started"
     assert payload["dependency_env_path"] == "/tmp/noofy/dep-env"
     assert payload["runner_workspace_path"] == "/tmp/noofy/runner-workspace"
+    assert payload["developer_details_available"] is False
+
+
+def test_install_state_developer_details_endpoint_returns_technical_details(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/workflows/text_to_image_v0/install-state/developer-details")
+
+    assert response.status_code == 200
+    assert response.json()["developer_details"]["last_error"] == "runner import failed"
 
 
 def test_install_state_unknown_workflow_uses_unsupported_payload(monkeypatch) -> None:
