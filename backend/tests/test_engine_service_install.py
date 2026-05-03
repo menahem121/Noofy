@@ -28,6 +28,7 @@ from app.runtime.supervisor import (
     CORE_RUNNER_ID,
     RunnerDescriptor,
     RunnerKind,
+    RunnerMemoryClass,
     RunnerStatus,
     RunnerSupervisor,
 )
@@ -249,6 +250,14 @@ class RecordingRunnerCoordinator:
             ws_url=f"ws://{spec.host}:9100/ws",
             fingerprint=spec.fingerprint,
             status=RunnerStatus.READY,
+            runner_workspace_fingerprint=spec.runner_workspace_fingerprint,
+            dependency_env_fingerprint=spec.dependency_env_fingerprint,
+            runner_process_compatibility_key=spec.runner_process_compatibility_key,
+            model_view_fingerprint=spec.model_view_fingerprint,
+            runtime_profile_id=spec.runtime_profile_id,
+            runtime_profile_variant_id=spec.runtime_profile_variant_id,
+            memory_class=spec.memory_class,
+            pid=4242,
         )
         self.runner_supervisor.upsert_runner(descriptor, StubAdapter())
         if workflow_id is not None:
@@ -503,6 +512,12 @@ async def test_start_workflow_runner_binds_ready_isolated_runner(tmp_path: Path)
     assert result["runner"]["kind"] == RunnerKind.ISOLATED_COMFYUI.value
     assert coordinator is not None
     assert coordinator.started_specs[0].fingerprint == "sha256:" + ("2" * 64)
+    assert coordinator.started_specs[0].runner_workspace_fingerprint == "sha256:" + ("2" * 64)
+    assert coordinator.started_specs[0].dependency_env_fingerprint == "phase4-dep"
+    assert coordinator.started_specs[0].runner_process_compatibility_key == "sha256:" + ("2" * 64)
+    assert coordinator.started_specs[0].runtime_profile_id == "noofy-comfyui-v1-default"
+    assert coordinator.started_specs[0].runtime_profile_variant_id == "darwin-arm64-mps-dev"
+    assert coordinator.started_specs[0].memory_class is RunnerMemoryClass.GPU_HEAVY
     assert coordinator.started_specs[0].python_executable == "/opt/noofy/python"
     assert coordinator.started_specs[0].working_dir.name.startswith("runner-workspace-")
     assert coordinator.started_specs[0].runner_workspace_path == coordinator.started_specs[0].working_dir
@@ -515,8 +530,120 @@ async def test_start_workflow_runner_binds_ready_isolated_runner(tmp_path: Path)
     ]
     assert "--disable-all-custom-nodes" in coordinator.started_specs[0].extra_args
     assert coordinator.started_specs[0].env["NOOFY_WORKFLOW_ID"] == "runner_workflow"
+    assert result["runner"]["runner_process_compatibility_key"] == "sha256:" + ("2" * 64)
     package = service.workflow_loader.get_package("runner_workflow")
     assert service.runner_supervisor.acquire_runner(package).runner_id == result["runner"]["runner_id"]
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_reuses_compatible_resident_runner(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    first = await service.start_workflow_runner("runner_workflow")
+    second = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert first["runner"]["runner_id"] == second["runner"]["runner_id"]
+    assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_queues_pending_switch_when_incompatible_runner_is_busy(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="busy-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("9" * 64),
+            status=RunnerStatus.RUNNING,
+            runner_process_compatibility_key="sha256:" + ("9" * 64),
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-1",
+            pid=9200,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert result["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
+    assert result["runner"]["runner_id"] == "busy-runner"
+    assert result["pid"] == 9200
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_evicts_idle_incompatible_runner_before_switch(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="idle-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("9" * 64),
+            status=RunnerStatus.IDLE,
+            runner_process_compatibility_key="sha256:" + ("9" * 64),
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert result["status"] == RunnerStatus.READY.value
+    assert result["runner"]["runner_id"] != "idle-runner"
+    assert coordinator.stopped_runner_ids == ["idle-runner"]
+    assert len(coordinator.started_specs) == 1
 
 
 @pytest.mark.anyio

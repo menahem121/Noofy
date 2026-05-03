@@ -10,6 +10,8 @@ class FakeEngineService:
         self.prepared_workflows: list[str] = []
         self.started_workflow_runners: list[str] = []
         self.stopped_workflow_runners: list[str] = []
+        self.opened_runner_leases: list[str] = []
+        self.closed_runner_leases: list[tuple[str, str]] = []
 
     def list_runners(self):
         return [
@@ -91,6 +93,38 @@ class FakeEngineService:
             "runner": None,
             "pid": None,
             "error": None,
+        }
+
+    def open_workflow_runner_lease(self, workflow_id: str):
+        self.opened_runner_leases.append(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "idle_warm",
+            "lease_id": "lease-1",
+            "runner": {
+                "runner_id": f"runner-{workflow_id}",
+                "kind": "isolated_comfyui",
+                "base_url": "http://127.0.0.1:9100",
+                "ws_url": "ws://127.0.0.1:9100/ws",
+                "fingerprint": "runner-fp",
+                "status": "idle_warm",
+            },
+        }
+
+    def close_workflow_runner_lease(self, workflow_id: str, lease_id: str):
+        self.closed_runner_leases.append((workflow_id, lease_id))
+        return {
+            "workflow_id": workflow_id,
+            "status": "idle",
+            "lease_id": lease_id,
+            "runner": {
+                "runner_id": f"runner-{workflow_id}",
+                "kind": "isolated_comfyui",
+                "base_url": "http://127.0.0.1:9100",
+                "ws_url": "ws://127.0.0.1:9100/ws",
+                "fingerprint": "runner-fp",
+                "status": "idle",
+            },
         }
 
     async def validate_workflow(self, workflow_id: str):
@@ -181,6 +215,34 @@ def test_stop_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "stopped"
     assert fake_service.stopped_workflow_runners == ["text_to_image_v0"]
+
+
+def test_open_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.post("/api/workflows/text_to_image_v0/runner/leases")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "idle_warm"
+    assert response.json()["lease_id"] == "lease-1"
+    assert fake_service.opened_runner_leases == ["text_to_image_v0"]
+
+
+def test_close_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.delete("/api/workflows/text_to_image_v0/runner/leases/lease-1")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "idle"
+    assert response.json()["lease_id"] == "lease-1"
+    assert fake_service.closed_runner_leases == [("text_to_image_v0", "lease-1")]
 
 
 def test_validate_unknown_workflow_returns_404(monkeypatch) -> None:

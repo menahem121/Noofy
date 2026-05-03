@@ -16,6 +16,18 @@ A package should contain:
 - output mapping for generated images or files
 - dashboard schema for the end-user interface
 
+## Hardware And Memory Observations
+
+A `.noofy` package may include creator/export-time hardware observations, such as peak RAM/VRAM, tested resolution, batch size, backend, GPU name, model set, and run duration.
+
+These observations are advisory first-run hints. They describe the machine and settings used by the creator/exporter. They are not universal requirements and must not be treated as proof that the workflow will fit on another user's machine.
+
+Noofy learned memory metrics from normal local use are stored in the app's local data, not written back into the `.noofy` package. Local learned metrics are machine-specific and can include successful runs, memory failures, retry outcomes, observed peaks, confidence changes, and warm-runner behavior on the user's device.
+
+Normal app usage must not mutate imported `.noofy` packages with local memory history. This preserves portability, privacy, and package trust/signing semantics.
+
+If a future creator/re-export flow includes local observations, they must be explicitly included as advisory metadata and clearly marked as observations from that exporting machine. A recipient's own local observations still take priority for Memory Governor decisions.
+
 ## Dashboard Schema
 
 The dashboard schema describes what the end user sees. It should support:

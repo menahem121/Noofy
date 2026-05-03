@@ -13,6 +13,8 @@ The app owns the engine contract. UI code should depend on this contract, not on
 - `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability.
 - `listLogs(level?, limit?)`: return recent backend and engine diagnostic events.
 - `listJobLogs(jobId, level?, limit?)`: return diagnostic events for a specific job.
+- `listRunners()`: report runner lifecycle and memory-governor state through the backend API.
+- `openWorkflowRunnerLease(workflowId)` / `closeWorkflowRunnerLease(workflowId, leaseId)`: report workflow view open/close intent so the backend can decide warm retention.
 
 ## Adapter Boundary
 
@@ -29,9 +31,10 @@ For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI si
 ```text
 Load workflow package
   -> validate package and dashboard bindings
-  -> ask active EngineAdapter for available models
-  -> check required models against active engine
-  -> submit graph to active EngineAdapter
+  -> ask RunnerSupervisor / Memory Governor for the runner decision
+  -> check required models against the selected runner's EngineAdapter
+  -> queue, reuse, start, evict, or wait for memory according to backend policy
+  -> submit graph to selected EngineAdapter
   -> stream progress
   -> record diagnostics and errors
   -> collect outputs
@@ -56,6 +59,7 @@ The backend should record app-readable diagnostic events for:
 - ComfyUI HTTP and WebSocket failures
 - job completion, cancellation, and execution errors
 - managed sidecar lifecycle events
+- runner reuse, queueing, switching, eviction, memory cleanup, retry, and blocked-by-memory decisions
 
 Diagnostics are for both the desktop UI and future agents. Prefer structured events over ad hoc print output.
 - Read queue and job state through `/queue` and `/history`.
@@ -73,3 +77,7 @@ The app owns ComfyUI runtime lifecycle for product builds:
 - expose health and logs through the backend
 - recover or report crashes cleanly
 - stop ComfyUI when the app exits
+
+The app also owns runner memory policy. The frontend must not choose ComfyUI endpoints, decide which runner to evict, or decide whether multiple runners can stay warm. Those decisions belong to the backend `RunnerSupervisor` and Memory Governor.
+
+Memory Governor decisions should become more machine-specific over time. Creator-side `.noofy` observations are initial hints; local run observations gathered through the backend are stronger evidence for future confidence, warm retention, co-residence, eviction, retry, and user-facing explanations.

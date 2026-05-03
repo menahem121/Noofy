@@ -13,6 +13,8 @@ Current feedback surfaces:
 - `GET /api/jobs/{job_id}/logs`: diagnostics for a single workflow job.
 - `GET /api/jobs/{job_id}/progress`: latest normalized progress.
 - `GET /api/jobs/{job_id}/events`: frontend-ready progress/result stream.
+- `GET /api/runners`: runner lifecycle state, including warm/queued/memory-related state.
+- Workflow runner lease endpoints: frontend reports open/close intent; backend decides warm retention.
 
 Diagnostics should be structured events, not ad hoc print output. Events should include source, level, message, job id when relevant, workflow id when relevant, and useful details.
 
@@ -27,6 +29,7 @@ Add diagnostic events for important state transitions:
 - ComfyUI HTTP errors
 - ComfyUI WebSocket disconnects or execution errors
 - managed sidecar start, stop, crash, and recovery events
+- Memory Governor estimates, signal confidence, local learning updates, co-residence admits/denies, runner evictions, memory-release waits, retry-after-cleanup attempts, and blocked-by-memory outcomes
 
 Avoid logging secrets, full prompts by default, API keys, local private paths beyond what is needed for debugging, or large binary payloads.
 
@@ -48,6 +51,7 @@ When changing behavior, add or update tests that prove:
 - the likely failure path is reported clearly
 - diagnostics/logs are emitted when useful
 - frontend-facing response shapes remain stable
+- Memory Governor decisions remain deterministic for the same fake memory snapshots, local observation history, and runner states
 
 ## Monitoring Direction
 
@@ -59,6 +63,8 @@ Later product builds may add:
 - crash reports
 - startup timing metrics
 - model download/install progress
+- local memory observation history and confidence changes over repeated runs
+- Memory Governor decision traces
 - user-visible troubleshooting bundles
 - optional privacy-respecting telemetry if the project ever chooses to support it
 

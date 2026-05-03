@@ -1,10 +1,12 @@
 from pathlib import Path
+import os
+import subprocess
 
 import pytest
 
 from app.engine.diagnostics import LogStore
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.supervisor import RunnerKind, RunnerStatus
+from app.runtime.supervisor import RunnerKind, RunnerMemoryClass, RunnerStatus
 
 
 class FakeProcess:
@@ -64,6 +66,7 @@ async def test_start_returns_ready_handle_and_descriptor(tmp_path: Path) -> None
 
     assert handle.pid == 1234
     assert handle.descriptor.status is RunnerStatus.READY
+    assert handle.descriptor.pid == 1234
     assert handle.descriptor.base_url == "http://127.0.0.1:8188"
     assert handle.descriptor.ws_url == "ws://127.0.0.1:8188/ws"
     assert created[0][0] == [
@@ -75,7 +78,48 @@ async def test_start_returns_ready_handle_and_descriptor(tmp_path: Path) -> None
         "8188",
     ]
     assert created[0][1]["cwd"] == tmp_path
+    if os.name == "nt":
+        assert created[0][1]["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert created[0][1]["start_new_session"] is True
     assert any(event.message == "Runner process ready" for event in log_store.list_events().events)
+
+
+@pytest.mark.anyio
+async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> None:
+    async def process_factory(command: list[str], **kwargs):
+        return FakeProcess(pid=1234)
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+    )
+    spec = _launch_spec(tmp_path).model_copy(
+        update={
+            "runner_workspace_fingerprint": "runner-fp",
+            "dependency_env_fingerprint": "dep-fp",
+            "runner_process_compatibility_key": "compat-key",
+            "model_view_fingerprint": "model-view-fp",
+            "runtime_profile_id": "noofy-comfyui-v1-default",
+            "runtime_profile_variant_id": "linux-x64-cuda130",
+            "memory_class": RunnerMemoryClass.GPU_HEAVY,
+        }
+    )
+
+    handle = await supervisor.start(spec)
+
+    assert handle.descriptor.runner_workspace_fingerprint == "runner-fp"
+    assert handle.descriptor.dependency_env_fingerprint == "dep-fp"
+    assert handle.descriptor.runner_process_compatibility_key == "compat-key"
+    assert handle.descriptor.model_view_fingerprint == "model-view-fp"
+    assert handle.descriptor.runtime_profile_id == "noofy-comfyui-v1-default"
+    assert handle.descriptor.runtime_profile_variant_id == "linux-x64-cuda130"
+    assert handle.descriptor.memory_class is RunnerMemoryClass.GPU_HEAVY
 
 
 @pytest.mark.anyio
@@ -156,6 +200,38 @@ async def test_stop_is_idempotent_and_terminates_running_process(tmp_path: Path)
     assert first.status is RunnerStatus.STOPPED
     assert second.status is RunnerStatus.STOPPED
     assert process.terminated
+
+
+@pytest.mark.anyio
+async def test_stop_uses_process_tree_terminator_when_configured(tmp_path: Path) -> None:
+    process = FakeProcess()
+    terminated: list[int] = []
+
+    async def process_factory(command: list[str], **kwargs):
+        return process
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    async def terminate_tree(running_process) -> None:
+        terminated.append(running_process.pid)
+        running_process.returncode = 0
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        process_tree_terminator=terminate_tree,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+    )
+    await supervisor.start(_launch_spec(tmp_path))
+
+    status = await supervisor.stop("runner-1")
+
+    assert status.status is RunnerStatus.STOPPED
+    assert terminated == [1001]
+    assert not process.terminated
+    assert not process.killed
 
 
 @pytest.mark.anyio

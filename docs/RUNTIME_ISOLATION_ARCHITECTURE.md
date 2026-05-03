@@ -99,7 +99,7 @@ The architecture distinguishes three concerns:
 - No OS-level sandboxing guarantee until it is implemented and tested per platform.
 - No responsibility for malicious or unsafe workflows imported from untrusted creators.
 - No marketplace trust/signing system in the first foundation pass.
-- No multi-runner warm pool in the first foundation pass.
+- No uncontrolled multi-runner warm pool. V1 may keep multiple runners warm only through the Memory Governor policy, with memory estimates, local memory learning, eviction, retry, and diagnostics.
 
 ### Unsupported
 
@@ -400,7 +400,7 @@ Rules:
 - Each runner process uses one dependency environment and one runner workspace.
 - A runner can execute multiple workflows only when they share a compatible runner fingerprint.
 - Switching to an incompatible workflow starts the correct runner and stops or idles the old runner according to policy.
-- Noofy keeps at most one GPU-heavy runner active by default.
+- The safe fallback is one resident GPU-heavy runner, but the Memory Governor may keep multiple runners warm when memory class, local learned observations, machine profile, and safety margins make co-residence low risk.
 - The backend tracks `job_id -> runner_id`.
 - Runner processes receive only runner-scoped secrets if needed.
 - Runner processes must not receive the frontend/backend API token injected by Tauri.
@@ -418,6 +418,7 @@ Responsibilities:
 - expose runner endpoint details to engine adapters
 - track `job_id -> runner_id`
 - stop or idle incompatible runners
+- delegate RAM/VRAM co-residence, eviction, and retry decisions to the Memory Governor
 - collect runner status and diagnostics
 - prevent custom node code from entering the trusted backend process
 
@@ -702,7 +703,7 @@ Future sandboxing work must be evaluated per platform:
 
 Hardware metadata records observations, not guarantees.
 
-Store:
+Creator/export package metadata may store:
 
 - observed peak VRAM
 - observed peak RAM
@@ -715,6 +716,13 @@ Store:
 - recommended VRAM with margin
 - recommended RAM with margin
 
+Local app data may store learned Memory Governor observations:
+
+- local observed runner idle footprint
+- local observed load/execution peaks
+- local memory errors and retry outcomes
+- memory class and confidence used by the Memory Governor
+
 UI language must be probabilistic:
 
 - "This workflow was tested with 8 GB VRAM."
@@ -722,6 +730,12 @@ UI language must be probabilistic:
 - "It may run slowly or fail."
 
 Runtime checks must account for resolution, batch size, model, precision, backend, driver, OS, memory fragmentation, and other running apps.
+
+Creator `.noofy` hardware observations are first-run hints. Local observations on the user's machine are more authoritative and should replace creator observations for Memory Governor decisions once enough evidence exists.
+
+Noofy should learn memory behavior over time. Repeated successful local runs under similar settings increase confidence for warm retention and co-residence. Local memory failures reduce confidence and make future decisions more conservative for that workflow, backend, machine profile, and similar settings. These learned observations are evidence, not guarantees.
+
+Learned local Memory Governor observations must be stored in mutable local app data, not written back into imported `.noofy` packages or immutable capsule locks during normal use. This keeps workflow packages portable, avoids leaking machine-specific usage details, and preserves package trust/signing semantics. Future explicit re-export may include anonymized local observations only as advisory metadata.
 
 ## Risks
 
@@ -733,7 +747,7 @@ Runtime checks must account for resolution, batch size, model, precision, backen
 - Linux filesystem permissions, mount layout, and GPU device access can complicate runner isolation.
 - macOS and Windows app signing/notarization can be affected by bundled interpreters and downloaded executable code.
 - Untrusted Python code remains dangerous even in a separate virtualenv.
-- Multiple warm ComfyUI runners can exhaust VRAM quickly.
+- Multiple warm ComfyUI runners can exhaust VRAM quickly if admitted without Memory Governor estimates, margins, eviction, and recovery.
 - Install times and model downloads may be long.
 - Reliable process-tree cleanup is OS-specific and must be tested on Linux, Windows, and macOS.
 - Registry locks generated on the user's machine can fail in technical and unpredictable ways.
@@ -744,6 +758,7 @@ Runtime checks must account for resolution, batch size, model, precision, backen
 - exact product Python distribution strategy for Linux, Windows, and macOS
 - whether backend packaging uses managed Python directly or a standalone executable
 - process-tree cleanup implementation for Linux, Windows, and macOS
+- Memory Governor platform observer fidelity for CUDA, MPS, DirectML, and CPU-only systems
 - package signature format and verification process
 - Noofy Verified package publishing process
 - registry metadata format and hosting

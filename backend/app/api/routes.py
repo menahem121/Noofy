@@ -99,6 +99,22 @@ async def stop_workflow_runner(workflow_id: str):
     return await engine_service.stop_workflow_runner(workflow_id)
 
 
+@router.post("/workflows/{workflow_id}/runner/leases")
+async def open_workflow_runner_lease(workflow_id: str):
+    try:
+        return engine_service.open_workflow_runner_lease(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/workflows/{workflow_id}/runner/leases/{lease_id}")
+async def close_workflow_runner_lease(workflow_id: str, lease_id: str):
+    try:
+        return engine_service.close_workflow_runner_lease(workflow_id, lease_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/workflows/{workflow_id}/validate")
 async def validate_workflow(workflow_id: str):
     try:

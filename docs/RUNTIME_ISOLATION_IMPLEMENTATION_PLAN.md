@@ -287,11 +287,12 @@ Phase 5 product scope:
 - Do not silently fall back to a close-enough runtime profile.
 - Support bundled custom node source from imported `.noofy` packages first.
 - Defer registry lookup, non-bundled custom-node source resolution, and broad candidate lock generation until the locked/bundled path works end to end.
-- Keep at most one GPU-heavy runner resident by default.
-- Keep loaded runners and models warm while a compatible workflow is currently open in Noofy and there is no memory pressure.
+- Implement the v1 [Memory Governor](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md): one GPU-heavy resident remains the safe fallback, but multiple warm runners are allowed when memory class, local learned observations, machine profile, and safety margins make co-residence low risk.
+- Keep loaded runners and models warm while a compatible workflow is currently open in Noofy and the Memory Governor allows retention.
+- Store creator/export memory observations in `.noofy` packages as advisory hints. Store learned local Memory Governor metrics only in local app data during normal use.
 - Queue incompatible workflow runs while another job is running.
 - Expose normal job cancellation, but do not add a dedicated "cancel and switch" action in v1.
-- Do not implement a multi-runner warm pool in v1.
+- Do not implement an uncontrolled multi-runner warm pool outside Memory Governor admission, observation, eviction, retry, and diagnostics.
 - Treat dependency environments as conflict isolation, not as a security sandbox.
 - Product builds must use Noofy-managed Python.
 - Process-tree cleanup must be designed before deeper runner switching work: process groups on macOS/Linux, and Job Objects or equivalent on Windows.
@@ -634,12 +635,13 @@ Completion gate:
 
 - None for Phase 5e on the current Ubuntu CUDA qualification host. Re-run `make phase5e-real-smoke` after changes to runtime staging, smoke execution, dependency handling, model-view materialization, custom-node materialization, or ComfyUI runner launch behavior.
 
-### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Safety
+### Phase 5f: RunnerSupervisor Switching, Idle-Warm Policy, And Memory Governor
 
-Goal: make runtime switching predictable without accidentally unloading expensive models or exhausting RAM/VRAM.
+Goal: make runtime switching predictable and fast by using a v1 Memory Governor that can keep multiple runners warm when safe, evict intelligently when needed, retry after memory cleanup when safe, and fall back to one GPU-heavy resident runner when signals are weak.
 
 Tasks:
 
+- Implement the v1 Memory Governor described in [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md).
 - Design process-tree cleanup before implementing deeper runner switching:
   - use process groups or equivalent process-tree termination on macOS/Linux
   - use Windows Job Objects or equivalent containment on Windows
@@ -651,7 +653,11 @@ Tasks:
   - runner process compatibility key
   - model-view fingerprint when required
   - runtime profile ID and variant ID
-  - memory class (`gpu_heavy`, `gpu_light`, `cpu_only`, `unknown`)
+  - memory class (`gpu_heavy`, `gpu_medium`, `gpu_light`, `cpu_only`, `unknown`)
+  - memory estimate confidence and source
+  - observed idle RAM/VRAM footprint
+  - observed load/execution RAM/VRAM peaks
+  - recent memory error state
   - base URL and WebSocket URL
   - process ID
   - state
@@ -667,32 +673,70 @@ Tasks:
   - `running`
   - `queued`
   - `queued_pending_switch`
+  - `queued_pending_memory`
   - `idle_warm`
   - `stopping`
   - `switching`
+  - `evicting_runner`
+  - `waiting_for_memory_release`
+  - `loading_model`
+  - `retrying_after_memory_cleanup`
   - `failed`
   - `blocked_by_memory`
+  - `memory_cleanup_failed`
+  - `evicted_for_memory`
+  - `co_resident`
 - Make workflow run requests ask `RunnerSupervisor` for the correct runner. The frontend must not choose runner endpoints.
 - Add backend APIs for workflow-open leases so the frontend can report when a workflow view opens and closes. The backend remains authoritative and may evict runners for memory pressure, process failure, shutdown, or explicit cancellation.
 - Reuse the current runner when the requested workflow is compatible with the current runner process key.
 - If an incompatible runner is requested while the current runner is running a job, queue the new job as `queued_pending_switch` by default.
 - Add a normal Cancel action for the currently running job. Do not add a dedicated "cancel current and switch" action in v1.
-- Keep at most one resident GPU-heavy runner by default. Treat unknown memory class as GPU-heavy.
+- Keep one resident GPU-heavy runner as the safe fallback, not the whole policy. Treat unknown memory class as GPU-heavy/high-risk until local observations prove otherwise.
+- Add memory observations for CUDA first, with conservative interfaces for MPS, DirectML, CPU-only, and unavailable metrics.
+- Build memory estimates from repeated local observations, single local observations, `.noofy` creator observations, model metadata, workflow type, resolution, batch size, and conservative heuristics.
+- Persist local run observations in local app data, not in `.noofy` packages or immutable capsule locks: workflow ID, runner fingerprint, models, resolution, batch size, backend, machine profile, duration, idle/load/execution RAM/VRAM peaks, success/failure, memory error, eviction, and retry.
+- Feed local learning into Memory Governor confidence: repeated local successes under similar settings raise confidence; local memory failures lower confidence and trigger more conservative future decisions for that workflow, backend, machine profile, and similar settings.
+- Treat creator `.noofy` metrics as initial hints only until local evidence exists. Learned local metrics improve confidence but never become absolute guarantees.
+- Add a co-residence policy that allows multiple warm runners only when memory class combinations, estimates, local history, current memory snapshots, safety margins, and recent error state make the decision low-risk.
 - Keep a compatible runner `idle_warm` while at least one compatible workflow view is open and no incompatible GPU-heavy runner or memory-pressure condition requires eviction.
 - When the last compatible workflow view closes, start a closed-view cooldown. Default closed-view cooldown is 90 seconds and is configurable.
-- Evict idle-warm GPU-heavy runners before starting an incompatible GPU-heavy runner.
-- Allow co-resident CPU-only or GPU-light runners only when explicitly classified and memory policy allows it.
-- Before starting a new GPU-heavy runner, stop the evicted runner process tree and wait for bounded VRAM/RAM release checks. The check may be heuristic but must time out and produce diagnostics.
-- Record observed startup time, stop time, crash count, restart count, idle-warm evictions, and blocked-by-memory events.
+- Evict idle-warm runners before starting incompatible or memory-risky workflows when the Memory Governor cannot keep co-residence within margin.
+- Allow co-resident runners only through the Memory Governor. `gpu_light` and `cpu_only` can co-reside more often; `gpu_medium` requires reliable estimates and margin; `gpu_heavy + gpu_heavy` requires large machines, high-confidence local observations, and large safety margin.
+- Before starting a new memory-risky runner, stop selected evicted runner process trees and wait for bounded VRAM/RAM release checks. The check may be heuristic but must time out and produce diagnostics.
+- Detect likely memory errors, stop idle runners, wait for memory release, retry once when safe, and record the outcome so Noofy avoids repeating the same optimistic decision.
+- Record observed startup time, stop time, crash count, restart count, idle-warm evictions, co-residence admits/denies, memory estimates, safety margins, retry attempts, and blocked-by-memory events.
 
 Acceptance criteria:
 
 - Switching tabs does not start or stop runners.
 - Running an incompatible workflow while another job is active queues by default.
 - Cancel stops the currently running job through the job registry. There is no dedicated cancel-and-switch action in v1.
-- At most one GPU-heavy runner remains resident by default.
-- Idle-warm reuse while a workflow remains open, closed-view cooldown expiry, memory-pressure eviction, process crash, process-tree cleanup, and VRAM-release timeout cases are tested.
+- The Memory Governor admits multiple warm runners only when memory classes, estimates, local learned observations, current memory snapshots, safety margins, and recent memory-error state allow it.
+- If Memory Governor confidence is low, Noofy falls back to one resident GPU-heavy runner.
+- Repeated successful local runs under similar settings raise confidence for warm retention and co-residence. Local memory failures lower confidence and prevent repeating risky decisions automatically.
+- Idle-warm reuse while a workflow remains open, co-resident warm runners, co-residence denial, closed-view cooldown expiry, memory-pressure eviction, process crash, process-tree cleanup, memory-release timeout, memory-error retry, and blocked-by-memory cases are tested.
 - Job progress, cancellation, and result lookup continue to route through `job_id -> runner_id`.
+
+Current implementation notes:
+
+- `RunnerDescriptor` now carries runner-workspace and dependency-env fingerprints, runner-process compatibility key, optional model-view fingerprint, runtime profile identity, memory class, memory estimate confidence/source, observed idle/load/execution RAM/VRAM peaks, recent memory error counters, PID, current job, last-used timestamp, workflow lease IDs, and closed-view cooldown expiry.
+- `RunnerStatus` includes the Phase 5f lifecycle states needed for switching and memory policy: `missing_runtime`, `preparing`, `idle`, `running`, `queued`, `queued_pending_switch`, `queued_pending_memory`, `idle_warm`, `switching`, `evicting_runner`, `waiting_for_memory_release`, `loading_model`, `retrying_after_memory_cleanup`, `failed`, `blocked_by_memory`, `memory_cleanup_failed`, `evicted_for_memory`, `evicted_after_cooldown`, and `co_resident`.
+- `RunnerSupervisor.runner_selection_for(...)` returns a structured decision to reuse a compatible resident runner, switch from an idle incompatible GPU-heavy runner, queue behind a busy incompatible GPU-heavy runner, or start a co-resident CPU/GPU-light runner. Until the full Memory Governor can prove margin, `unknown` and `gpu_medium` are treated conservatively as GPU-heavy by the fallback policy.
+- Workflow-open leases keep compatible runners `idle_warm` while views are open, and closing the final lease starts the default 90-second closed-view cooldown.
+- Backend endpoints now expose workflow view leases through `POST /api/workflows/{workflow_id}/runner/leases` and `DELETE /api/workflows/{workflow_id}/runner/leases/{lease_id}`. These endpoints report lease state without exposing runner selection to the frontend.
+- Isolated runner launch specs propagate compatibility fingerprints, runtime profile IDs, memory class, and process PID into the registered runner descriptor, so process supervision and engine routing share one descriptor shape.
+- Bound workflows now reuse `ready`, `idle`, or `idle_warm` runners through the backend supervisor. Job progress, cancellation, and result lookup still route through `job_id -> runner_id`.
+- Runner processes now launch in a dedicated process group/session on macOS/Linux and a new process group on Windows. Runner stop uses a bounded process-tree termination path, with fallback direct parent termination for injected/custom process factories.
+- Workflow runner start now applies `RunnerSupervisor.runner_selection_for(...)`: compatible resident runners are reused, busy incompatible GPU-heavy runners return `queued_pending_switch`, and idle incompatible isolated GPU-heavy runners are stopped before the requested runner starts.
+- Focused tests cover reuse, queue-pending-switch, idle incompatible GPU-heavy eviction decisions, CPU-only co-residency decisions, `gpu_medium` conservative fallback, unknown-as-GPU-heavy behavior, Memory Governor descriptor fields, core-runner non-eviction, workflow lease cooldowns, job start/finish markers, launch metadata propagation, process-tree containment flags, process-tree termination hooks, install-service launch spec metadata, and runner-start reuse/queue/switch behavior.
+
+Remaining Phase 5f work:
+
+- Implement Memory Governor schemas, observers, estimates, local learning/observation history, co-residence matrix, eviction scoring, memory-release checks, retry-after-cleanup, UI/API memory states, and diagnostics from [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md).
+- Add a persisted in-memory queue handoff so `queued_pending_switch` runner-start requests can automatically continue after the active job exits instead of requiring a retry.
+- Add bounded RAM/VRAM release checks and diagnostics before starting a replacement or co-resident memory-risky runner.
+- Record observed startup/stop timing, crash/restart counts, idle-warm eviction counts, co-residence decisions, memory estimates, retry outcomes, and blocked-by-memory events.
+- Expand integration tests for process crash, real process-tree cleanup, memory-release timeout, memory-pressure eviction, co-residence admit/deny, retry-after-cleanup, and closed-view cooldown expiry.
 
 ### Phase 5g: Transactional Install Promotion, Rollback, Quarantine, And Startup Sweep
 
@@ -798,7 +842,7 @@ Tasks:
   - smoke test start/pass/failure by stage
   - install promotion/rollback/quarantine
   - runner queue/switch/start/stop/idle-warm/eviction
-  - memory pressure and blocked-by-memory cases
+  - Memory Governor estimates, co-residence admits/denies, memory pressure, memory cleanup, retry, and blocked-by-memory cases
   - garbage collection decisions
 - Use beginner-friendly status summaries by default. Keep `pip`, `venv`, `site-packages`, stack traces, raw Python exceptions, and raw node import errors behind developer details.
 - Ensure runner processes do not receive the frontend/backend API token.
@@ -846,7 +890,7 @@ Phase 5 locked/bundled acceptance criteria:
 - Failed dependency install, custom-node materialization, model materialization, runner start, or smoke execution does not mutate trusted core runtime or ready artifacts.
 - Workflows become `ready` only after required smoke stages pass. Test archives must not be marked `ready` without a real smoke run or an explicitly controlled fake-runner test.
 - Workflows with unresolved runtime inputs remain not-ready with beginner-friendly required-action status.
-- Runner switching honors queueing, normal cancellation, workflow-open warm retention, closed-view cooldown, and one GPU-heavy resident runner policy.
+- Runner switching honors queueing, normal cancellation, workflow-open warm retention, closed-view cooldown, and Memory Governor co-residence/eviction policy with one-GPU-heavy fallback when confidence is low.
 - Reference tracking and GC do not delete assets still referenced by installed workflows or active runners.
 - Backend and frontend tests pass through the documented project test commands.
 

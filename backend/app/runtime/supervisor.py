@@ -17,6 +17,9 @@ result lookups.
 from __future__ import annotations
 
 import threading
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,16 +32,66 @@ CORE_RUNNER_FINGERPRINT = "core"
 
 class RunnerStatus(StrEnum):
     UNKNOWN = "unknown"
+    MISSING_RUNTIME = "missing_runtime"
+    PREPARING = "preparing"
     STARTING = "starting"
     READY = "ready"
+    IDLE = "idle"
+    RUNNING = "running"
+    QUEUED = "queued"
+    QUEUED_PENDING_SWITCH = "queued_pending_switch"
+    QUEUED_PENDING_MEMORY = "queued_pending_memory"
+    IDLE_WARM = "idle_warm"
     STOPPING = "stopping"
     STOPPED = "stopped"
+    SWITCHING = "switching"
+    EVICTING_RUNNER = "evicting_runner"
+    WAITING_FOR_MEMORY_RELEASE = "waiting_for_memory_release"
+    LOADING_MODEL = "loading_model"
+    RETRYING_AFTER_MEMORY_CLEANUP = "retrying_after_memory_cleanup"
+    FAILED = "failed"
+    BLOCKED_BY_MEMORY = "blocked_by_memory"
+    MEMORY_CLEANUP_FAILED = "memory_cleanup_failed"
+    EVICTED_FOR_MEMORY = "evicted_for_memory"
+    EVICTED_AFTER_COOLDOWN = "evicted_after_cooldown"
+    CO_RESIDENT = "co_resident"
     UNREACHABLE = "unreachable"
 
 
 class RunnerKind(StrEnum):
     CORE_COMFYUI = "core_comfyui"
     ISOLATED_COMFYUI = "isolated_comfyui"
+
+
+class RunnerMemoryClass(StrEnum):
+    GPU_HEAVY = "gpu_heavy"
+    GPU_MEDIUM = "gpu_medium"
+    GPU_LIGHT = "gpu_light"
+    CPU_ONLY = "cpu_only"
+    UNKNOWN = "unknown"
+
+
+class RunnerMemoryEstimateConfidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNKNOWN = "unknown"
+
+
+class RunnerMemoryEstimateSource(StrEnum):
+    DECLARED = "declared"
+    CREATOR_OBSERVED = "creator_observed"
+    LOCAL_OBSERVED = "local_observed"
+    HEURISTIC = "heuristic"
+    UNKNOWN = "unknown"
+
+
+class RunnerSelectionAction(StrEnum):
+    REUSE = "reuse"
+    SWITCH = "switch"
+    QUEUE_PENDING_SWITCH = "queue_pending_switch"
+    START_NEW = "start_new"
+    BLOCKED_BY_MEMORY = "blocked_by_memory"
 
 
 class RunnerDescriptor(BaseModel):
@@ -52,6 +105,39 @@ class RunnerDescriptor(BaseModel):
     ws_url: str | None = None
     fingerprint: str = Field(min_length=1)
     status: RunnerStatus = RunnerStatus.UNKNOWN
+    runner_workspace_fingerprint: str | None = None
+    dependency_env_fingerprint: str | None = None
+    runner_process_compatibility_key: str | None = None
+    model_view_fingerprint: str | None = None
+    runtime_profile_id: str | None = None
+    runtime_profile_variant_id: str | None = None
+    memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN
+    memory_estimate_confidence: RunnerMemoryEstimateConfidence = RunnerMemoryEstimateConfidence.UNKNOWN
+    memory_estimate_source: RunnerMemoryEstimateSource = RunnerMemoryEstimateSource.UNKNOWN
+    observed_idle_vram_mb: int | None = Field(default=None, ge=0)
+    observed_idle_ram_mb: int | None = Field(default=None, ge=0)
+    observed_load_peak_vram_mb: int | None = Field(default=None, ge=0)
+    observed_load_peak_ram_mb: int | None = Field(default=None, ge=0)
+    observed_execution_peak_vram_mb: int | None = Field(default=None, ge=0)
+    observed_execution_peak_ram_mb: int | None = Field(default=None, ge=0)
+    recent_memory_error_at: str | None = None
+    recent_memory_error_count: int = Field(default=0, ge=0)
+    pid: int | None = None
+    current_job_id: str | None = None
+    last_used_at: str | None = None
+    open_workflow_lease_count: int = 0
+    open_workflow_lease_ids: list[str] = Field(default_factory=list)
+    closed_view_cooldown_expires_at: str | None = None
+
+
+class RunnerSelectionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: RunnerSelectionAction
+    runner_id: str | None = None
+    evict_runner_id: str | None = None
+    queued_behind_runner_id: str | None = None
+    reason: str | None = None
 
 
 class RunnerNotFoundError(LookupError):
@@ -106,13 +192,21 @@ class RunnerSupervisor:
     phases need to route a workflow at runtime to its own isolated runner.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        closed_view_cooldown_seconds: float = 90,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._descriptors: dict[str, RunnerDescriptor] = {}
         self._adapters: dict[str, EngineAdapter] = {}
         self._core_runner_id: str | None = None
         self._workflow_runners: dict[str, str] = {}
+        self._workflow_leases: dict[str, tuple[str, str]] = {}
         self._registry = JobRunnerRegistry()
+        self.closed_view_cooldown_seconds = closed_view_cooldown_seconds
+        self._now = now or (lambda: datetime.now(UTC))
 
     # ------------------------------------------------------------------
     # Registration
@@ -181,7 +275,11 @@ class RunnerSupervisor:
         workflow_id = self._workflow_id(workflow_package)
         if workflow_id is not None:
             bound_runner = self.runner_for_workflow(workflow_id)
-            if bound_runner is not None and bound_runner.status is RunnerStatus.READY:
+            if bound_runner is not None and bound_runner.status in {
+                RunnerStatus.READY,
+                RunnerStatus.IDLE,
+                RunnerStatus.IDLE_WARM,
+            }:
                 return bound_runner
         return self.core_runner()
 
@@ -235,6 +333,13 @@ class RunnerSupervisor:
                 for workflow_id, bound_runner_id in self._workflow_runners.items()
                 if bound_runner_id != runner_id
             }
+            lease_ids = [
+                lease_id
+                for lease_id, (_, lease_runner_id) in self._workflow_leases.items()
+                if lease_runner_id == runner_id
+            ]
+            for lease_id in lease_ids:
+                self._workflow_leases.pop(lease_id, None)
 
     # ------------------------------------------------------------------
     # Job routing
@@ -258,8 +363,203 @@ class RunnerSupervisor:
     def forget_job(self, job_id: str) -> None:
         self._registry.unregister(job_id)
 
+    # ------------------------------------------------------------------
+    # Phase 5f lifecycle policy
+    # ------------------------------------------------------------------
+
+    def runner_selection_for(
+        self,
+        *,
+        runner_process_compatibility_key: str,
+        memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN,
+    ) -> RunnerSelectionDecision:
+        """Decide whether a requested workflow should reuse, switch, or queue.
+
+        This does not start or stop processes. It is the policy decision the
+        process coordinator can act on while the job registry keeps progress,
+        cancellation, and result lookup routed by job id.
+        """
+        requested_memory = _effective_memory_class(memory_class)
+        with self._lock:
+            runners = list(self._descriptors.values())
+
+        compatible = [
+            runner
+            for runner in runners
+            if runner.runner_process_compatibility_key == runner_process_compatibility_key
+            and _runner_is_resident(runner)
+        ]
+        if compatible:
+            runner = _preferred_runner(compatible)
+            return RunnerSelectionDecision(
+                action=RunnerSelectionAction.REUSE,
+                runner_id=runner.runner_id,
+                reason="compatible_runner_resident",
+            )
+
+        if requested_memory is not RunnerMemoryClass.GPU_HEAVY:
+            return RunnerSelectionDecision(
+                action=RunnerSelectionAction.START_NEW,
+                reason="no_compatible_runner",
+            )
+
+        incompatible_gpu = [
+            runner
+            for runner in runners
+            if _runner_is_resident(runner)
+            and runner.kind is RunnerKind.ISOLATED_COMFYUI
+            and _effective_memory_class(runner.memory_class) is RunnerMemoryClass.GPU_HEAVY
+        ]
+        running = [runner for runner in incompatible_gpu if runner.status is RunnerStatus.RUNNING or runner.current_job_id]
+        if running:
+            runner = _preferred_runner(running)
+            return RunnerSelectionDecision(
+                action=RunnerSelectionAction.QUEUE_PENDING_SWITCH,
+                queued_behind_runner_id=runner.runner_id,
+                reason="incompatible_gpu_runner_running",
+            )
+
+        if incompatible_gpu:
+            runner = _preferred_runner(incompatible_gpu)
+            return RunnerSelectionDecision(
+                action=RunnerSelectionAction.SWITCH,
+                evict_runner_id=runner.runner_id,
+                reason="evict_idle_incompatible_gpu_runner",
+            )
+
+        return RunnerSelectionDecision(
+            action=RunnerSelectionAction.START_NEW,
+            reason="no_resident_gpu_runner",
+        )
+
+    def mark_runner_job_started(self, runner_id: str, job_id: str) -> RunnerDescriptor:
+        descriptor = self.get_runner(runner_id)
+        updated = descriptor.model_copy(
+            update={
+                "status": RunnerStatus.RUNNING,
+                "current_job_id": job_id,
+                "last_used_at": _iso(self._now()),
+            }
+        )
+        with self._lock:
+            self._descriptors[runner_id] = updated
+        return updated
+
+    def mark_runner_job_finished(self, runner_id: str, job_id: str | None = None) -> RunnerDescriptor:
+        descriptor = self.get_runner(runner_id)
+        if job_id is not None and descriptor.current_job_id not in {None, job_id}:
+            return descriptor
+        next_status = RunnerStatus.IDLE_WARM if descriptor.open_workflow_lease_count > 0 else RunnerStatus.IDLE
+        updated = descriptor.model_copy(
+            update={
+                "status": next_status,
+                "current_job_id": None,
+                "last_used_at": _iso(self._now()),
+            }
+        )
+        with self._lock:
+            self._descriptors[runner_id] = updated
+        return updated
+
+    def open_workflow_lease(
+        self,
+        workflow_id: str,
+        runner_id: str,
+        *,
+        lease_id: str | None = None,
+    ) -> str:
+        descriptor = self.get_runner(runner_id)
+        lease_id = lease_id or f"lease-{uuid.uuid4().hex}"
+        with self._lock:
+            self._workflow_leases[lease_id] = (workflow_id, runner_id)
+            lease_ids = sorted(
+                existing_lease_id
+                for existing_lease_id, (_, existing_runner_id) in self._workflow_leases.items()
+                if existing_runner_id == runner_id
+            )
+            status = (
+                RunnerStatus.IDLE_WARM
+                if descriptor.status in {RunnerStatus.READY, RunnerStatus.IDLE, RunnerStatus.IDLE_WARM}
+                else descriptor.status
+            )
+            updated = descriptor.model_copy(
+                update={
+                    "status": status,
+                    "open_workflow_lease_count": len(lease_ids),
+                    "open_workflow_lease_ids": lease_ids,
+                    "closed_view_cooldown_expires_at": None,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
+            self._descriptors[runner_id] = updated
+        return lease_id
+
+    def close_workflow_lease(self, lease_id: str) -> RunnerDescriptor | None:
+        with self._lock:
+            lease = self._workflow_leases.pop(lease_id, None)
+            if lease is None:
+                return None
+            _, runner_id = lease
+            descriptor = self._descriptors.get(runner_id)
+            if descriptor is None:
+                return None
+            lease_ids = sorted(
+                existing_lease_id
+                for existing_lease_id, (_, existing_runner_id) in self._workflow_leases.items()
+                if existing_runner_id == runner_id
+            )
+            expires_at = None
+            status = descriptor.status
+            if not lease_ids:
+                expires_at = _iso(self._now() + timedelta(seconds=self.closed_view_cooldown_seconds))
+                if status is RunnerStatus.IDLE_WARM:
+                    status = RunnerStatus.IDLE
+            updated = descriptor.model_copy(
+                update={
+                    "status": status,
+                    "open_workflow_lease_count": len(lease_ids),
+                    "open_workflow_lease_ids": lease_ids,
+                    "closed_view_cooldown_expires_at": expires_at,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
+            self._descriptors[runner_id] = updated
+            return updated
+
     @staticmethod
     def _workflow_id(workflow_package: object) -> str | None:
         metadata = getattr(workflow_package, "metadata", None)
         workflow_id = getattr(metadata, "id", None)
         return workflow_id if isinstance(workflow_id, str) else None
+
+
+def _effective_memory_class(memory_class: RunnerMemoryClass) -> RunnerMemoryClass:
+    # Until the Memory Governor can prove a medium runner has enough margin to
+    # co-reside, the conservative fallback treats medium/unknown as heavy.
+    if memory_class in {RunnerMemoryClass.UNKNOWN, RunnerMemoryClass.GPU_MEDIUM}:
+        return RunnerMemoryClass.GPU_HEAVY
+    return memory_class
+
+
+def _runner_is_resident(runner: RunnerDescriptor) -> bool:
+    return runner.status in {
+        RunnerStatus.READY,
+        RunnerStatus.IDLE,
+        RunnerStatus.IDLE_WARM,
+        RunnerStatus.RUNNING,
+        RunnerStatus.QUEUED,
+        RunnerStatus.QUEUED_PENDING_SWITCH,
+        RunnerStatus.QUEUED_PENDING_MEMORY,
+        RunnerStatus.LOADING_MODEL,
+        RunnerStatus.CO_RESIDENT,
+    }
+
+
+def _preferred_runner(runners: list[RunnerDescriptor]) -> RunnerDescriptor:
+    return sorted(runners, key=lambda runner: (runner.last_used_at or "", runner.runner_id), reverse=True)[0]
+
+
+def _iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,10 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.diagnostics import LogStore
 from app.runtime.manager import select_free_port
-from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
+from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerMemoryClass, RunnerStatus
 
 RunnerProcessFactory = Callable[..., Awaitable[Any]]
 RunnerHealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
+RunnerProcessTreeTerminator = Callable[[Any], Awaitable[None]]
 
 
 class RunnerLaunchSpec(BaseModel):
@@ -36,6 +39,13 @@ class RunnerLaunchSpec(BaseModel):
     working_dir: Path
     dependency_env_path: Path | None = None
     runner_workspace_path: Path | None = None
+    runner_workspace_fingerprint: str | None = None
+    dependency_env_fingerprint: str | None = None
+    runner_process_compatibility_key: str | None = None
+    model_view_fingerprint: str | None = None
+    runtime_profile_id: str | None = None
+    runtime_profile_variant_id: str | None = None
+    memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN
     host: str = "127.0.0.1"
     port: int | None = None
     entrypoint: str = "main.py"
@@ -80,12 +90,15 @@ class RunnerProcessSupervisor:
         log_store: LogStore | None = None,
         process_factory: RunnerProcessFactory | None = None,
         health_check: RunnerHealthCheck | None = None,
+        process_tree_terminator: RunnerProcessTreeTerminator | None = None,
         startup_timeout_seconds: float = 60,
         health_poll_interval_seconds: float = 0.5,
     ) -> None:
         self.log_store = log_store or LogStore()
         self._process_factory = process_factory or self._create_process
         self._health_check = health_check or self._default_health_check
+        self._process_tree_terminator = process_tree_terminator
+        self._owns_process_tree = process_factory is None
         self.startup_timeout_seconds = startup_timeout_seconds
         self.health_poll_interval_seconds = health_poll_interval_seconds
         self._records: dict[str, _RunnerProcessRecord] = {}
@@ -125,15 +138,25 @@ class RunnerProcessSupervisor:
             ws_url=ws_url,
             fingerprint=spec.fingerprint,
             status=RunnerStatus.STARTING,
+            runner_workspace_fingerprint=spec.runner_workspace_fingerprint,
+            dependency_env_fingerprint=spec.dependency_env_fingerprint,
+            runner_process_compatibility_key=spec.runner_process_compatibility_key,
+            model_view_fingerprint=spec.model_view_fingerprint,
+            runtime_profile_id=spec.runtime_profile_id,
+            runtime_profile_variant_id=spec.runtime_profile_variant_id,
+            memory_class=spec.memory_class,
         )
 
         try:
             process = await self._process_factory(
                 list(command),
-                cwd=spec.working_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=process_env,
+                **{
+                    "cwd": spec.working_dir,
+                    "stdout": asyncio.subprocess.PIPE,
+                    "stderr": asyncio.subprocess.STDOUT,
+                    "env": process_env,
+                    **_process_tree_start_kwargs(),
+                },
             )
         except Exception as exc:
             self.log_store.add(
@@ -146,7 +169,7 @@ class RunnerProcessSupervisor:
 
         record = _RunnerProcessRecord(
             spec=spec.model_copy(update={"port": port}),
-            descriptor=descriptor,
+            descriptor=descriptor.model_copy(update={"pid": process.pid}),
             process=process,
             command=command,
         )
@@ -203,12 +226,7 @@ class RunnerProcessSupervisor:
 
         if self._is_running(record.process):
             record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.STOPPING})
-            record.process.terminate()
-            try:
-                await asyncio.wait_for(record.process.wait(), timeout=10)
-            except TimeoutError:
-                record.process.kill()
-                await asyncio.wait_for(record.process.wait(), timeout=10)
+            await self._terminate_runner_process(record)
 
         if record.log_task is not None:
             record.log_task.cancel()
@@ -319,6 +337,85 @@ class RunnerProcessSupervisor:
     def _is_running(process: Any) -> bool:
         return process is not None and getattr(process, "returncode", None) is None
 
+    async def _terminate_runner_process(self, record: _RunnerProcessRecord) -> None:
+        process = record.process
+        if self._process_tree_terminator is not None:
+            await self._process_tree_terminator(process)
+            return
+        if self._owns_process_tree:
+            await self._terminate_owned_process_tree(process, record.spec.runner_id)
+            return
+        await self._terminate_direct_process(process)
+
+    async def _terminate_owned_process_tree(self, process: Any, runner_id: str) -> None:
+        pid = getattr(process, "pid", None)
+        if not isinstance(pid, int):
+            await self._terminate_direct_process(process)
+            return
+
+        self.log_store.add(
+            "info",
+            "Stopping runner process tree",
+            "runtime.runner_process",
+            details={"runner_id": runner_id, "pid": pid},
+        )
+        if os.name == "nt":
+            await self._terminate_windows_process_tree(process, pid)
+            return
+
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            self.log_store.add(
+                "warning",
+                "Runner process-group termination failed; falling back to parent process",
+                "runtime.runner_process",
+                details={"runner_id": runner_id, "pid": pid, "error": str(exc)},
+            )
+            await self._terminate_direct_process(process)
+            return
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            await asyncio.wait_for(process.wait(), timeout=10)
+
+    async def _terminate_windows_process_tree(self, process: Any, pid: int) -> None:
+        with contextlib.suppress(Exception):
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+            return
+        except TimeoutError:
+            pass
+
+        taskkill = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/PID",
+            str(pid),
+            "/T",
+            "/F",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(taskkill.wait(), timeout=10)
+        if self._is_running(process):
+            with contextlib.suppress(Exception):
+                process.kill()
+            await asyncio.wait_for(process.wait(), timeout=10)
+
+    async def _terminate_direct_process(self, process: Any) -> None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            process.kill()
+            await asyncio.wait_for(process.wait(), timeout=10)
+
     async def _create_process(self, command: list[str], **kwargs: Any) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(*command, **kwargs)
 
@@ -338,3 +435,9 @@ def _default_ws_url(base_url: str) -> str:
     parsed = urlparse(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     return urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+
+def _process_tree_start_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}

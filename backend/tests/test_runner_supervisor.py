@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+from datetime import UTC, datetime
 
 import pytest
 
@@ -14,7 +15,11 @@ from app.runtime.supervisor import (
     JobRunnerRegistry,
     RunnerDescriptor,
     RunnerKind,
+    RunnerMemoryClass,
+    RunnerMemoryEstimateConfidence,
+    RunnerMemoryEstimateSource,
     RunnerNotFoundError,
+    RunnerSelectionAction,
     RunnerStatus,
     RunnerSupervisor,
 )
@@ -76,6 +81,29 @@ def _core_descriptor() -> RunnerDescriptor:
         base_url="http://127.0.0.1:8188",
         ws_url="ws://127.0.0.1:8188/ws",
         fingerprint=CORE_RUNNER_FINGERPRINT,
+    )
+
+
+def _isolated_descriptor(
+    runner_id: str = "isolated-1",
+    *,
+    compatibility_key: str = "runner-key-a",
+    status: RunnerStatus = RunnerStatus.READY,
+    memory_class: RunnerMemoryClass = RunnerMemoryClass.GPU_HEAVY,
+    current_job_id: str | None = None,
+    last_used_at: str | None = None,
+) -> RunnerDescriptor:
+    return RunnerDescriptor(
+        runner_id=runner_id,
+        kind=RunnerKind.ISOLATED_COMFYUI,
+        base_url="http://127.0.0.1:9001",
+        ws_url="ws://127.0.0.1:9001/ws",
+        fingerprint="sha256:" + ("a" * 64),
+        status=status,
+        runner_process_compatibility_key=compatibility_key,
+        memory_class=memory_class,
+        current_job_id=current_job_id,
+        last_used_at=last_used_at,
     )
 
 
@@ -209,6 +237,30 @@ def test_supervisor_upserts_isolated_runner() -> None:
     assert supervisor.get_adapter("isolated-1") is adapter
 
 
+def test_runner_descriptor_exposes_memory_governor_observation_fields() -> None:
+    descriptor = _isolated_descriptor().model_copy(
+        update={
+            "memory_class": RunnerMemoryClass.GPU_MEDIUM,
+            "memory_estimate_confidence": RunnerMemoryEstimateConfidence.MEDIUM,
+            "memory_estimate_source": RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            "observed_idle_vram_mb": 1200,
+            "observed_idle_ram_mb": 900,
+            "observed_load_peak_vram_mb": 3200,
+            "observed_load_peak_ram_mb": 1800,
+            "observed_execution_peak_vram_mb": 7600,
+            "observed_execution_peak_ram_mb": 2600,
+            "recent_memory_error_at": "2026-05-03T12:00:00+00:00",
+            "recent_memory_error_count": 1,
+        }
+    )
+
+    assert descriptor.memory_class is RunnerMemoryClass.GPU_MEDIUM
+    assert descriptor.memory_estimate_confidence is RunnerMemoryEstimateConfidence.MEDIUM
+    assert descriptor.memory_estimate_source is RunnerMemoryEstimateSource.LOCAL_OBSERVED
+    assert descriptor.observed_execution_peak_vram_mb == 7600
+    assert descriptor.recent_memory_error_count == 1
+
+
 def test_supervisor_upsert_rejects_core_runner_kind() -> None:
     supervisor = RunnerSupervisor()
 
@@ -234,6 +286,18 @@ def test_supervisor_acquires_ready_bound_workflow_runner() -> None:
     package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
     assert supervisor.acquire_runner(package).runner_id == "isolated-1"
     assert supervisor.runner_for_workflow("text_to_image_v0").runner_id == "isolated-1"
+
+
+def test_supervisor_acquires_warm_bound_workflow_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = _isolated_descriptor(status=RunnerStatus.IDLE_WARM)
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+
+    assert supervisor.acquire_runner(package).runner_id == "isolated-1"
 
 
 def test_supervisor_falls_back_to_core_when_bound_runner_is_not_ready() -> None:
@@ -295,6 +359,179 @@ def test_supervisor_unbind_runner_removes_all_workflow_bindings_for_runner() -> 
 
 
 # ----------------------------------------------------------------------
+# Phase 5f runner lifecycle policy
+# ----------------------------------------------------------------------
+
+
+def test_runner_selection_reuses_compatible_resident_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.IDLE_WARM),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(runner_process_compatibility_key="runner-key-a")
+
+    assert decision.action is RunnerSelectionAction.REUSE
+    assert decision.runner_id == "isolated-1"
+    assert decision.reason == "compatible_runner_resident"
+
+
+def test_runner_selection_queues_when_incompatible_gpu_runner_is_busy() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            compatibility_key="runner-key-a",
+            status=RunnerStatus.RUNNING,
+            current_job_id="job-1",
+        ),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(runner_process_compatibility_key="runner-key-b")
+
+    assert decision.action is RunnerSelectionAction.QUEUE_PENDING_SWITCH
+    assert decision.queued_behind_runner_id == "isolated-1"
+    assert decision.reason == "incompatible_gpu_runner_running"
+
+
+def test_runner_selection_switches_idle_incompatible_gpu_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            compatibility_key="runner-key-a",
+            status=RunnerStatus.IDLE,
+        ),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(runner_process_compatibility_key="runner-key-b")
+
+    assert decision.action is RunnerSelectionAction.SWITCH
+    assert decision.evict_runner_id == "isolated-1"
+    assert decision.reason == "evict_idle_incompatible_gpu_runner"
+
+
+def test_runner_selection_allows_cpu_only_runner_to_start_beside_gpu_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            compatibility_key="runner-key-a",
+            status=RunnerStatus.RUNNING,
+            current_job_id="job-1",
+        ),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(
+        runner_process_compatibility_key="runner-key-b",
+        memory_class=RunnerMemoryClass.CPU_ONLY,
+    )
+
+    assert decision.action is RunnerSelectionAction.START_NEW
+    assert decision.reason == "no_compatible_runner"
+
+
+def test_runner_selection_does_not_evict_core_runner() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        _core_descriptor().model_copy(update={"status": RunnerStatus.READY}),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(runner_process_compatibility_key="runner-key-a")
+
+    assert decision.action is RunnerSelectionAction.START_NEW
+    assert decision.evict_runner_id is None
+
+
+def test_gpu_medium_is_conservative_until_memory_governor_can_prove_margin() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            compatibility_key="runner-key-a",
+            status=RunnerStatus.IDLE,
+            memory_class=RunnerMemoryClass.GPU_MEDIUM,
+        ),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(
+        runner_process_compatibility_key="runner-key-b",
+        memory_class=RunnerMemoryClass.GPU_MEDIUM,
+    )
+
+    assert decision.action is RunnerSelectionAction.SWITCH
+    assert decision.evict_runner_id == "isolated-1"
+
+
+def test_unknown_memory_class_is_treated_as_gpu_heavy_for_switching() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            compatibility_key="runner-key-a",
+            status=RunnerStatus.IDLE,
+            memory_class=RunnerMemoryClass.UNKNOWN,
+        ),
+        RecordingAdapter(),
+    )
+
+    decision = supervisor.runner_selection_for(runner_process_compatibility_key="runner-key-b")
+
+    assert decision.action is RunnerSelectionAction.SWITCH
+    assert decision.evict_runner_id == "isolated-1"
+
+
+def test_workflow_lease_keeps_runner_warm_until_closed_view_cooldown() -> None:
+    now = datetime(2026, 5, 3, 12, 0, tzinfo=UTC)
+    supervisor = RunnerSupervisor(closed_view_cooldown_seconds=30, now=lambda: now)
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+
+    lease_id = supervisor.open_workflow_lease(
+        "text_to_image_v0",
+        "isolated-1",
+        lease_id="lease-1",
+    )
+    leased = supervisor.get_runner("isolated-1")
+
+    assert lease_id == "lease-1"
+    assert leased.status is RunnerStatus.IDLE_WARM
+    assert leased.open_workflow_lease_count == 1
+    assert leased.open_workflow_lease_ids == ["lease-1"]
+    assert leased.closed_view_cooldown_expires_at is None
+
+    closed = supervisor.close_workflow_lease("lease-1")
+
+    assert closed is not None
+    assert closed.status is RunnerStatus.IDLE
+    assert closed.open_workflow_lease_count == 0
+    assert closed.open_workflow_lease_ids == []
+    assert closed.closed_view_cooldown_expires_at == "2026-05-03T12:00:30+00:00"
+
+
+def test_runner_job_markers_track_active_job_and_warm_status() -> None:
+    now = datetime(2026, 5, 3, 12, 0, tzinfo=UTC)
+    supervisor = RunnerSupervisor(now=lambda: now)
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+    supervisor.open_workflow_lease("text_to_image_v0", "isolated-1", lease_id="lease-1")
+
+    running = supervisor.mark_runner_job_started("isolated-1", "job-1")
+    finished = supervisor.mark_runner_job_finished("isolated-1", "job-1")
+
+    assert running.status is RunnerStatus.RUNNING
+    assert running.current_job_id == "job-1"
+    assert running.last_used_at == "2026-05-03T12:00:00+00:00"
+    assert finished.status is RunnerStatus.IDLE_WARM
+    assert finished.current_job_id is None
+
+
+# ----------------------------------------------------------------------
 # Job routing through the supervisor
 # ----------------------------------------------------------------------
 
@@ -352,6 +589,37 @@ def _build_service(adapter: RecordingAdapter) -> tuple[EngineService, RunnerSupe
         log_store=LogStore(),
     )
     return service, supervisor
+
+
+def test_engine_service_runner_lease_round_trip_uses_bound_runner() -> None:
+    service, supervisor = _build_service(RecordingAdapter())
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    opened = service.open_workflow_runner_lease("text_to_image_v0")
+    closed = service.close_workflow_runner_lease("text_to_image_v0", opened["lease_id"])
+
+    assert opened["status"] == RunnerStatus.IDLE_WARM.value
+    assert opened["runner"]["open_workflow_lease_count"] == 1
+    assert closed["status"] == RunnerStatus.IDLE.value
+    assert closed["runner"]["open_workflow_lease_count"] == 0
+    assert closed["runner"]["closed_view_cooldown_expires_at"] is not None
+
+
+def test_engine_service_runner_lease_reports_no_bound_runner() -> None:
+    service, _ = _build_service(RecordingAdapter())
+
+    result = service.open_workflow_runner_lease("text_to_image_v0")
+
+    assert result == {
+        "workflow_id": "text_to_image_v0",
+        "status": "no_runner",
+        "lease_id": None,
+        "runner": None,
+    }
 
 
 @pytest.mark.anyio

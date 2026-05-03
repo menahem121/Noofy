@@ -54,6 +54,8 @@ from app.runtime.supervisor import (
     JobRunnerNotFoundError,
     RunnerDescriptor,
     RunnerKind,
+    RunnerMemoryClass,
+    RunnerSelectionAction,
     RunnerStatus,
     RunnerSupervisor,
 )
@@ -288,7 +290,68 @@ class EngineService:
                 "install_status": install_state.status.value,
                 "error": str(exc),
             }
+        decision = self.runner_supervisor.runner_selection_for(
+            runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
+            memory_class=spec.memory_class,
+        )
+        if decision.action is RunnerSelectionAction.REUSE and decision.runner_id is not None:
+            descriptor = self.runner_supervisor.bind_workflow_runner(workflow_id, decision.runner_id)
+            self.log_store.add(
+                "info",
+                "Workflow runner reused",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "runner_id": descriptor.runner_id,
+                    "runner_process_compatibility_key": descriptor.runner_process_compatibility_key,
+                },
+            )
+            return {
+                "workflow_id": workflow_id,
+                "status": descriptor.status.value,
+                "runner": descriptor.model_dump(),
+                "pid": descriptor.pid,
+                "install_status": InstallStatus.READY.value,
+                "error": None,
+            }
+        if decision.action is RunnerSelectionAction.QUEUE_PENDING_SWITCH:
+            queued_behind = (
+                self.runner_supervisor.get_runner(decision.queued_behind_runner_id)
+                if decision.queued_behind_runner_id is not None
+                else None
+            )
+            self.log_store.add(
+                "info",
+                "Workflow runner start queued pending switch",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "queued_behind_runner_id": decision.queued_behind_runner_id,
+                    "reason": decision.reason,
+                },
+            )
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "runner": queued_behind.model_dump() if queued_behind is not None else None,
+                "pid": queued_behind.pid if queued_behind is not None else None,
+                "install_status": InstallStatus.READY.value,
+                "error": None,
+            }
         try:
+            if decision.action is RunnerSelectionAction.SWITCH and decision.evict_runner_id is not None:
+                stopped = await self.runner_process_coordinator.stop_runner(decision.evict_runner_id)
+                self.log_store.add(
+                    "info",
+                    "Evicted idle runner before workflow runner switch",
+                    "engine.service",
+                    workflow_id=workflow_id,
+                    details={
+                        "evicted_runner_id": decision.evict_runner_id,
+                        "stop_status": stopped.status.value,
+                        "reason": decision.reason,
+                    },
+                )
             handle = await self.runner_process_coordinator.start_runner(spec, workflow_id=workflow_id)
         except Exception as exc:
             self.log_store.add(
@@ -389,6 +452,82 @@ class EngineService:
             },
             "pid": status.pid,
             "error": status.error,
+        }
+
+    def open_workflow_runner_lease(self, workflow_id: str) -> dict[str, object]:
+        """Record that a workflow view is open and should keep its runner warm."""
+        self.workflow_loader.get_package(workflow_id)
+        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        if runner is None:
+            self.log_store.add(
+                "info",
+                "Workflow runner lease opened without a bound runner",
+                "engine.service",
+                workflow_id=workflow_id,
+            )
+            return {
+                "workflow_id": workflow_id,
+                "status": "no_runner",
+                "lease_id": None,
+                "runner": None,
+            }
+
+        lease_id = self.runner_supervisor.open_workflow_lease(workflow_id, runner.runner_id)
+        updated = self.runner_supervisor.get_runner(runner.runner_id)
+        self.log_store.add(
+            "info",
+            "Workflow runner lease opened",
+            "engine.service",
+            workflow_id=workflow_id,
+            details={
+                "runner_id": updated.runner_id,
+                "lease_id": lease_id,
+                "open_workflow_lease_count": updated.open_workflow_lease_count,
+            },
+        )
+        return {
+            "workflow_id": workflow_id,
+            "status": updated.status.value,
+            "lease_id": lease_id,
+            "runner": updated.model_dump(),
+        }
+
+    def close_workflow_runner_lease(self, workflow_id: str, lease_id: str) -> dict[str, object]:
+        """Record that a workflow view closed and may enter cooldown."""
+        self.workflow_loader.get_package(workflow_id)
+        updated = self.runner_supervisor.close_workflow_lease(lease_id)
+        if updated is None:
+            self.log_store.add(
+                "warning",
+                "Workflow runner lease close requested for an unknown lease",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={"lease_id": lease_id},
+            )
+            return {
+                "workflow_id": workflow_id,
+                "status": "lease_not_found",
+                "lease_id": lease_id,
+                "runner": None,
+            }
+
+        self.log_store.add(
+            "info",
+            "Workflow runner lease closed",
+            "engine.service",
+            workflow_id=workflow_id,
+            details={
+                "runner_id": updated.runner_id,
+                "lease_id": lease_id,
+                "open_workflow_lease_count": updated.open_workflow_lease_count,
+                "closed_view_cooldown_expires_at": updated.closed_view_cooldown_expires_at,
+            },
+        )
+        return {
+            "workflow_id": workflow_id,
+            "status": updated.status.value,
+            "lease_id": lease_id,
+            "runner": updated.model_dump(),
         }
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
@@ -764,6 +903,15 @@ def _workflow_runner_launch_spec(
         working_dir=runner_workspace_path,
         dependency_env_path=dependency_env_path,
         runner_workspace_path=runner_workspace_path,
+        runner_workspace_fingerprint=capsule_lock.runtime.runner_fingerprint,
+        dependency_env_fingerprint=capsule_lock.runtime.dependency_env_fingerprint,
+        runner_process_compatibility_key=(
+            capsule_lock.runtime.runner_process_compatibility_key
+            or capsule_lock.runtime.runner_fingerprint
+        ),
+        runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
+        runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
+        memory_class=RunnerMemoryClass.GPU_HEAVY,
         host=runtime_manager.managed_host,
         extra_args=extra_args,
         env={

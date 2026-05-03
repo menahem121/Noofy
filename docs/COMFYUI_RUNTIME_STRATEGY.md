@@ -31,8 +31,9 @@ Firm decisions:
 - Noofy supports one pinned runtime profile family in v1, with explicit platform/backend variants as needed for Linux, Windows, macOS, CPU, MPS, CUDA, or other supported backends. The schema must support multiple profile families and variants so older or alternative profiles can be added later without migration.
 - Noofy targets the most recent stable ComfyUI release when a Noofy runtime profile is generated. It does not use a floating "latest ComfyUI" at runtime; the product contract is a named, pinned runtime profile with exact source and dependency hashes.
 - Noofy does not install a full isolated runtime per workflow. Workflows that share a fingerprint share the runtime artifact.
-- Noofy keeps at most one GPU-heavy runner resident by default. A workflow-open warm retention policy is part of v1, but it must not imply a general multi-runner warm pool.
-- Noofy does not implement a multi-runner warm pool in v1.
+- Noofy v1 includes a Memory Governor. The safe fallback is one GPU-heavy runner resident, but multiple warm runners are allowed when memory class, local learned observations, machine profile, and safety margins make co-residence low risk.
+- Noofy does not implement an uncontrolled multi-runner warm pool. All co-resident runners are admitted, monitored, evicted, retried, and explained through the Memory Governor policy in [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md).
+- Noofy v1 learns memory behavior locally over time. Creator `.noofy` hardware observations are first-run hints; repeated local successes and failures on the user's machine become the stronger evidence for warm retention, co-residence, eviction, retry, and user-facing explanations.
 - Fingerprints are compatibility and reuse boundaries. They do not guarantee identical output. Practical readiness is established by smoke tests.
 - Dependency isolation is not a security sandbox. Noofy protects its own architecture from dependency conflicts and broken installs. It does not claim arbitrary community Python code is safe.
 - Product builds use Noofy-managed Python. Product builds must not depend on system Python, Homebrew Python, user PATH, Conda, or developer virtualenvs.
@@ -275,23 +276,24 @@ A change in materialization strategy (for example: user moved data dir to anothe
 
 Materialization must also handle platform edge cases: case-insensitive filename collisions, Windows path length limits, Windows junction/symlink permissions, antivirus or file-lock interference during large copies, cross-volume hardlink failures, and stale links whose target blob has been garbage-collected.
 
-## Runner Switching And Warm Runner Policy
+## Runner Switching, Warm Runners, And Memory Governor
 
-`RunnerSupervisor` owns runner selection and lifecycle. The frontend never controls runners directly; switching tabs does not stop or start anything.
+`RunnerSupervisor` owns runner selection and lifecycle. The Memory Governor owns RAM/VRAM risk decisions. The frontend never controls runners directly; switching tabs does not stop or start anything.
 
-V1 runner switching policy:
+V1 runner and memory policy:
 
 - If the requested workflow shares the runner workspace fingerprint of the current runner, reuse the current runner.
-- If a different runner is needed and the current runner is executing a job, do not kill it automatically. Queue the new job by default.
+- If a different runner is needed and the current runner is executing a job, do not kill it automatically. Queue the new job by default as `queued_pending_switch` or `queued_pending_memory`, depending on the blocker.
 - The UI exposes a normal Cancel action for the currently running job. V1 does not implement a dedicated "cancel and switch" action.
-- If a different runner is needed and the current runner is idle, switch runners.
-- Keep at most one GPU-heavy runner resident by default. Unknown runner memory class is treated as GPU-heavy.
-- After a workflow finishes, its runner may remain `idle_warm` while at least one compatible workflow is currently open in Noofy and no memory pressure or incompatible GPU-heavy runner requires eviction. If the user leaves the computer and returns to the same still-open workflow, Noofy should reuse the loaded runner and models when memory policy allows it.
+- If a different runner is needed and existing runners are idle, the Memory Governor decides whether to start co-resident, evict first, wait for memory release, or block with a clear memory reason.
+- The safe fallback is one resident GPU-heavy runner. Unknown runner memory class is treated as GPU-heavy and high risk until local observations prove otherwise.
+- Multiple warm runners are allowed in v1 only through the Memory Governor. The decision must consider memory class, VRAM/RAM snapshots, safety margins, local run history, creator `.noofy` observations, recent memory errors, active/idle state, and runner compatibility fingerprints.
+- The Memory Governor's confidence model is local-learning driven: repeated successful runs under similar settings can make a workflow more likely to stay warm or co-reside safely; memory failures make future decisions more conservative for that workflow, backend, machine profile, and similar settings.
+- After a workflow finishes, its runner may remain `idle_warm` while at least one compatible workflow is currently open in Noofy and the Memory Governor allows retention. If the user leaves the computer and returns to the same still-open workflow, Noofy should reuse the loaded runner and models when memory policy allows it.
 - When the last compatible workflow view closes, the runner may enter a short closed-view cooldown before eviction. The default closed-view cooldown is 90 seconds and is configurable.
-- Starting an incompatible GPU-heavy runner evicts the current idle-warm GPU-heavy runner before launch unless the current runner is still executing a job, in which case the new job queues. Co-resident runners are allowed in v1 only for explicitly classified CPU-only or GPU-light runners and only when memory policy allows it.
 - If memory pressure appears, or the next runner cannot allocate, evict idle-warm runners before reporting failure.
-- When a runner is stopped, the supervisor must wait and verify that VRAM is released before starting the next runner. Process termination does not always free VRAM cleanly on every driver and OS combination.
-- Do not build a multi-runner warm pool in v1. Multi-runner support is deferred to a later phase that includes per-runner memory accounting.
+- When a runner is stopped for memory, the supervisor must wait and verify bounded RAM/VRAM release before starting the next runner. Process termination does not always free VRAM cleanly on every driver and OS combination.
+- If a workflow fails due to likely memory pressure, Noofy may stop idle runners, wait for memory release, and retry once when the run is safe to retry. Repeated failures lower future confidence and should not loop.
 
 Runner warm retention depends on workflow-open leases reported through the backend API. The frontend reports when workflow views open and close; the backend remains authoritative and may evict runners for memory pressure, process failure, shutdown, or explicit cancellation.
 
@@ -304,13 +306,23 @@ Runner warm retention depends on workflow-open leases reported through the backe
 - `running`
 - `queued`
 - `queued_pending_switch`
+- `queued_pending_memory`
 - `idle_warm`
 - `stopping`
 - `switching`
+- `evicting_runner`
+- `waiting_for_memory_release`
+- `loading_model`
+- `retrying_after_memory_cleanup`
 - `failed`
 - `blocked_by_memory`
+- `memory_cleanup_failed`
+- `evicted_for_memory`
+- `co_resident`
 
 State transitions emit structured diagnostics so support, telemetry, and the UI can explain what happened.
+
+The detailed v1 Memory Governor policy, including memory classes, signal reliability, local memory learning, co-residence matrix, safety margins, eviction order, recovery behavior, UI text, and implementation gates, lives in [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md).
 
 ## Smoke Testing Policy
 
@@ -415,7 +427,8 @@ Scope:
 - transactional promote-on-success / quarantine-on-failure
 - startup sweep for stale transactions and unpromoted staging directories
 - baseline reference tracking and garbage collection
-- `RunnerSupervisor` runner-switch policy with workflow-open warm retention, closed-view cooldown, and memory-pressure eviction
+- `RunnerSupervisor` runner-switch policy with workflow-open warm retention, closed-view cooldown, and Memory Governor controlled co-resident warm runners
+- Memory Governor schemas, estimates, local-learning observations, co-residence decisions, eviction, bounded memory-release checks, retry-after-cleanup behavior, user-facing memory states, and developer diagnostics
 - expanded runner state surface in the API
 
 Out of scope for 5a:
@@ -424,7 +437,7 @@ Out of scope for 5a:
 - non-bundled custom node source resolution
 - candidate lock generation from remote custom-node sources
 - multi-runtime-profile UI surfaces
-- multi-runner warm pool
+- uncontrolled multi-runner warm pool outside Memory Governor policy
 - OS-level sandboxing
 
 ### Phase 5b — Community Runtime Resolution
@@ -441,7 +454,7 @@ Scope:
 Out of scope for 5b:
 
 - multi-runtime-profile catalog expansion (still ships one profile family in v1)
-- multi-runner warm pool
+- uncontrolled multi-runner warm pool outside Memory Governor policy
 - OS-level sandboxing
 
 ## Deferred Work
@@ -449,7 +462,7 @@ Out of scope for 5b:
 The following are intentionally not part of v1. They are recorded so the schema and `RunnerSupervisor` design accommodate them later without rework.
 
 - Multiple runtime profile families in the catalog (older ComfyUI versions, alternative behavior profiles, alternative Torch major versions). The schema supports this from day one; the catalog ships with one family.
-- Multi-runner warm pool with per-runner memory accounting.
+- Uncontrolled multi-runner warm pool without Memory Governor admission, observation, eviction, and diagnostics.
 - OS-level sandboxing per platform (macOS App Sandbox, Windows AppContainer, Linux namespaces/seccomp/cgroups, network restrictions, per-runner filesystem allowlists).
 - Verified publishing and signing pipeline for Noofy Verified packages.
 - Marketplace and registry hosting infrastructure.

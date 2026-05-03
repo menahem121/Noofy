@@ -74,6 +74,7 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation.
 - Implement runtime isolation through the phased [runtime isolation implementation plan](RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md).
 - Use the [ComfyUI runtime strategy](COMFYUI_RUNTIME_STRATEGY.md) for runtime profiles, compatibility fingerprints, runner switching, idle-warm behavior, and model-view rules.
+- Use the [Memory Governor implementation plan](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
 
 ## App Data Directories
 
