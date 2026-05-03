@@ -44,7 +44,9 @@ _PROTECTED_CUSTOM_NODE_FOLDER_NAMES = {
 class CustomNodeMaterializationErrorCode(StrEnum):
     CASE_INSENSITIVE_PATH_COLLISION = "case_insensitive_path_collision"
     CUSTOM_NODE_SOURCE_NOT_BUNDLED = "custom_node_source_not_bundled"
+    CUSTOM_NODE_SOURCE_NOT_CACHED = "custom_node_source_not_cached"
     MISSING_BUNDLED_SOURCE = "missing_bundled_source"
+    MISSING_RESOLVED_SOURCE_FACTS = "missing_resolved_source_facts"
     OVERSIZED_SOURCE = "oversized_source"
     PATH_TRAVERSAL = "path_traversal"
     PROTECTED_PATH_SHADOWING = "protected_path_shadowing"
@@ -115,6 +117,7 @@ class CoreNodeManifestCatalog(BaseModel):
 
 class CustomNodeSourceKind(StrEnum):
     BUNDLED_ARCHIVE = "bundled_archive"
+    NOOFY_CACHED_ARCHIVE = "noofy_cached_archive"
 
 
 class CustomNodeWorkspaceEntry(BaseModel):
@@ -204,6 +207,7 @@ class CustomNodeWorkspaceMaterializer:
         *,
         capsule_lock: CapsuleLock,
         source_files_dir: Path | None,
+        cached_source_dirs: dict[str, Path] | None = None,
         profile_selection: RuntimeProfileSelection | None = None,
     ) -> CustomNodeWorkspaceManifest:
         core_manifest = self.core_node_manifest_catalog.get(
@@ -228,6 +232,7 @@ class CustomNodeWorkspaceMaterializer:
                 custom_node,
                 import_order_index=index,
                 source_files_dir=source_files_dir,
+                cached_source_dirs=cached_source_dirs or {},
                 package_trust_level=capsule_lock.trust.level,
             )
             for index, custom_node in enumerate(required_custom_nodes)
@@ -248,17 +253,18 @@ class CustomNodeWorkspaceMaterializer:
         *,
         manifest: CustomNodeWorkspaceManifest,
         source_files_dir: Path | None,
+        cached_source_dirs: dict[str, Path] | None = None,
         runner_workspace_dir: Path,
     ) -> None:
         custom_nodes_target = runner_workspace_dir / "custom_nodes"
         custom_nodes_target.mkdir(parents=True, exist_ok=True)
         for entry in manifest.entries:
-            if source_files_dir is None:
+            if entry.source_kind is CustomNodeSourceKind.BUNDLED_ARCHIVE and source_files_dir is None:
                 raise CustomNodeMaterializationError(
                     CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_BUNDLED,
                     "Workflow requires bundled custom nodes, but no imported source files are available.",
                 )
-            source_dir = _source_dir_for_entry(source_files_dir, entry)
+            source_dir = _source_dir_for_entry(source_files_dir, entry, cached_source_dirs or {})
             target_dir = runner_workspace_dir / entry.materialized_relative_path
             _copy_validated_tree(
                 source_dir,
@@ -276,15 +282,25 @@ class CustomNodeWorkspaceMaterializer:
         *,
         import_order_index: int,
         source_files_dir: Path | None,
+        cached_source_dirs: dict[str, Path],
         package_trust_level: TrustLevel,
     ) -> CustomNodeWorkspaceEntry:
-        source_dir = _find_custom_node_source_dir(source_files_dir, custom_node) if source_files_dir is not None else None
+        source_kind = _custom_node_source_kind(custom_node)
+        if source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE:
+            source_dir = _cached_source_dir_for_custom_node(custom_node, cached_source_dirs)
+        else:
+            source_dir = _find_custom_node_source_dir(source_files_dir, custom_node) if source_files_dir is not None else None
         if source_dir is None or not source_dir.is_dir():
-            raise CustomNodeMaterializationError(
-                CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE,
-                f"Bundled source for custom node {custom_node.package_id} was not found.",
+            code = (
+                CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_CACHED
+                if source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE
+                else CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE
             )
-        folder_name = _safe_relative_posix_path(source_dir.name, allow_nested=False)
+            raise CustomNodeMaterializationError(
+                code,
+                f"Source for custom node {custom_node.package_id} was not found.",
+            )
+        folder_name = _custom_node_target_folder_name(custom_node, source_dir, source_kind)
         source_content_hash, dependency_marker_hashes = _source_tree_facts(
             source_dir,
             max_files=self.max_files,
@@ -292,8 +308,8 @@ class CustomNodeWorkspaceMaterializer:
         )
         return CustomNodeWorkspaceEntry(
             custom_node_package_id=custom_node.package_id,
-            source_kind=CustomNodeSourceKind.BUNDLED_ARCHIVE,
-            source_ref=custom_node.source,
+            source_kind=source_kind or CustomNodeSourceKind.BUNDLED_ARCHIVE,
+            source_ref=_custom_node_source_ref(custom_node),
             source_content_hash=source_content_hash,
             materialized_relative_path=f"custom_nodes/{folder_name}",
             import_order_index=import_order_index,
@@ -331,10 +347,10 @@ def _required_custom_nodes(
 
     required_custom_nodes = sorted(required_by_id.values(), key=lambda item: (item.package_id, item.source))
     for custom_node in required_custom_nodes:
-        if _custom_node_source_kind(custom_node) is not CustomNodeSourceKind.BUNDLED_ARCHIVE:
+        if _custom_node_source_kind(custom_node) is None:
             raise CustomNodeMaterializationError(
                 CustomNodeMaterializationErrorCode.UNSUPPORTED_SOURCE_KIND,
-                f"Custom node {custom_node.package_id} does not use bundled archive source.",
+                f"Custom node {custom_node.package_id} does not use a supported Noofy source.",
             )
     return required_custom_nodes
 
@@ -346,6 +362,13 @@ def _custom_node_source_kind(custom_node: CustomNodeLock) -> CustomNodeSourceKin
         or custom_node.source.startswith("bundled_archive:")
     ):
         return CustomNodeSourceKind.BUNDLED_ARCHIVE
+    if custom_node.source_cache_ref is not None:
+        if custom_node.source_ref is None or custom_node.source_content_hash is None:
+            raise CustomNodeMaterializationError(
+                CustomNodeMaterializationErrorCode.MISSING_RESOLVED_SOURCE_FACTS,
+                f"Custom node {custom_node.package_id} is missing pinned source facts.",
+            )
+        return CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE
     return None
 
 
@@ -452,7 +475,19 @@ def _validate_materialized_source_path(
         )
 
 
-def _source_dir_for_entry(source_files_dir: Path, entry: CustomNodeWorkspaceEntry) -> Path:
+def _source_dir_for_entry(
+    source_files_dir: Path | None,
+    entry: CustomNodeWorkspaceEntry,
+    cached_source_dirs: dict[str, Path],
+) -> Path:
+    if entry.source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE:
+        source_dir = cached_source_dirs.get(entry.custom_node_package_id)
+        if source_dir is None:
+            raise CustomNodeMaterializationError(
+                CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_CACHED,
+                f"Cached source for custom node {entry.custom_node_package_id} was not found.",
+            )
+        return source_dir
     relative = entry.materialized_relative_path.removeprefix("custom_nodes/")
     return _custom_node_source_dir(source_files_dir, relative)
 
@@ -484,6 +519,29 @@ def _custom_node_source_name_from_source(source: str) -> str | None:
     if source.startswith("bundled_archive:"):
         return _safe_relative_posix_path(source.split(":", 1)[1], allow_nested=False)
     return None
+
+
+def _cached_source_dir_for_custom_node(
+    custom_node: CustomNodeLock,
+    cached_source_dirs: dict[str, Path],
+) -> Path | None:
+    return cached_source_dirs.get(custom_node.package_id)
+
+
+def _custom_node_target_folder_name(
+    custom_node: CustomNodeLock,
+    source_dir: Path,
+    source_kind: CustomNodeSourceKind | None,
+) -> str:
+    if source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE:
+        return _safe_relative_posix_path(custom_node.package_id, allow_nested=False)
+    return _safe_relative_posix_path(source_dir.name, allow_nested=False)
+
+
+def _custom_node_source_ref(custom_node: CustomNodeLock) -> str:
+    if custom_node.source_cache_ref is not None and custom_node.source_ref is not None:
+        return custom_node.source_ref
+    return custom_node.source
 
 
 def _normalized_source_dir_name(value: str) -> str:

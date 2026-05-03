@@ -84,11 +84,16 @@ async def list_workflows() -> list[dict[str, object]]:
 
 
 @router.post("/workflows/import")
-async def import_workflow(request: Request, filename: str | None = None):
+async def import_workflow(
+    request: Request,
+    filename: str | None = None,
+    allow_unverified_community_preparation: bool = False,
+):
     try:
         return engine_service.import_workflow_archive(
             await request.body(),
             original_filename=filename,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
     except NoofyImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

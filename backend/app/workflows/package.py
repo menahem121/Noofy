@@ -89,6 +89,11 @@ class WorkflowCustomNodeRecord(BaseModel):
     requirements_files: list[str] = Field(default_factory=list)
     has_install_py: bool = False
     sha256_manifest: str | None = None
+    source_ref: str | None = None
+    source_content_hash: str | None = None
+    source_cache_ref: str | None = None
+    source_archive_subdir: str | None = None
+    resolution_method: str | None = None
 
 
 class UnresolvedRuntimeInput(BaseModel):
@@ -109,6 +114,7 @@ class WorkflowImportMetadata(BaseModel):
     source_archive_sha256: str | None = None
     status: str = "imported"
     user_facing_message: str = "Imported"
+    developer_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowExecutionSmokeFixture(BaseModel):

@@ -67,6 +67,7 @@ from app.runtime.memory_governor import (
     wait_for_memory_release,
 )
 from app.runtime.model_store import LocalModelRequirement, ModelStore, http_streaming_downloader
+from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver, NoofyNodeRegistry
 from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
@@ -216,12 +217,14 @@ class EngineService:
         data: bytes,
         *,
         original_filename: str | None = None,
+        allow_unverified_community_preparation: bool = False,
     ) -> dict[str, object]:
         if self.imported_package_store is None:
             raise NoofyImportError("Workflow import is not configured.")
         package = self.imported_package_store.import_archive(
             data,
             original_filename=original_filename,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
@@ -2047,6 +2050,14 @@ def create_default_engine_service() -> EngineService:
     imported_package_store = ImportedWorkflowPackageStore(
         paths.workflow_packages_store_dir,
         log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="noofy-empty-local-registry"),
+            log_store=log_store,
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=paths.custom_node_cache_dir,
+            log_store=log_store,
+        ),
     )
 
     supervisor = RunnerSupervisor()
@@ -2157,6 +2168,7 @@ def create_default_engine_service() -> EngineService:
                 workflow_loader=workflow_loader,
                 imported_package_store=imported_package_store,
             ),
+            custom_node_source_cache_dir=paths.custom_node_cache_dir,
             dependency_transactions_dir=paths.install_transactions_dir,
             log_store=log_store,
         ),

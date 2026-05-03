@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sys
 import zipfile
@@ -14,6 +15,7 @@ from app.runtime.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CustomNodeWorkspaceMaterializer,
 )
+from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver, NoofyNodeRegistry
 from app.runtime.profiles import load_runtime_profile_catalog
 from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerSupervisor
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
@@ -41,6 +43,16 @@ class StubAdapter:
 
     async def list_available_models(self):
         return []
+
+
+class FakeSourceFetcher:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.urls: list[str] = []
+
+    def fetch(self, url: str) -> bytes:
+        self.urls.append(url)
+        return self.payload
 
 
 def _archive_bytes() -> bytes:
@@ -122,6 +134,112 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     assert capsule.workflow.package_id == "controlnet_two_model_workflow"
     assert len(capsule.custom_nodes) == 5
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
+
+
+def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(tmp_path: Path) -> None:
+    source_archive = _source_archive_bytes({"node.py": "NODE_CLASS_MAPPINGS = {}\n"})
+    archive = _archive_bytes_with_custom_node_update(
+        0,
+        {
+            "included": False,
+            "source": "https://example.test/comfyui-jps/archive/pinned.zip",
+            "source_ref": "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21",
+            "source_content_hash": f"sha256:{hashlib.sha256(source_archive).hexdigest()}",
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+
+    package = store.import_archive(archive, original_filename="community.noofy")
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "blocked_by_policy"
+    assert package.import_metadata.developer_details["source_resolution"]["reason"] == "community_opt_in_required"
+    assert package.identity is not None
+    assert package.identity.trust_level == "unsupported"
+    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    import_report = json.loads((package_dir / "import-report.json").read_text(encoding="utf-8"))
+    assert import_report["source_resolution"]["status"] == "blocked_by_policy"
+    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
+        package.metadata.id
+    )
+    assert capsule.workflow.trust_level == "unsupported"
+    assert capsule.trust.level.value == "unsupported"
+
+
+def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(tmp_path: Path) -> None:
+    source_archive = _source_archive_bytes(
+        {
+            "repo-root/node.py": "NODE_CLASS_MAPPINGS = {}\n",
+            "repo-root/requirements.txt": "numpy==1.26.4\n",
+            "other-root/ignored.py": "ignored\n",
+        }
+    )
+    source_digest = hashlib.sha256(source_archive).hexdigest()
+    fetcher = FakeSourceFetcher(source_archive)
+    archive = _archive_bytes_with_custom_node_update(
+        0,
+        {
+            "included": False,
+            "source": "https://example.test/comfyui-jps/archive/pinned.zip",
+            "source_ref": "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21",
+            "source_content_hash": f"sha256:{source_digest}",
+            "source_archive_subdir": "repo-root",
+        },
+    )
+    source_cache_dir = tmp_path / "custom-node-cache"
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(registry=NoofyNodeRegistry(registry_id="empty-test-registry")),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=source_cache_dir,
+            fetcher=fetcher,
+        ),
+    )
+
+    package = store.import_archive(
+        archive,
+        original_filename="community.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    resolved_node = next(node for node in package.custom_nodes if node.id == "comfyui_jps-nodes")
+    assert fetcher.urls == ["https://example.test/comfyui-jps/archive/pinned.zip"]
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    assert package.import_metadata.developer_details["source_resolution"]["status"] == "resolved"
+    assert resolved_node.included is True
+    assert resolved_node.source_cache_ref == f"{source_digest}/source"
+    assert resolved_node.source_ref == "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21"
+    assert resolved_node.source_content_hash == f"sha256:{source_digest}"
+    assert resolved_node.source_archive_subdir == "repo-root"
+
+    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
+        package.metadata.id
+    )
+    cached_lock = next(node for node in capsule.custom_nodes if node.package_id == "comfyui_jps-nodes")
+    assert cached_lock.source_cache_ref == f"{source_digest}/source"
+    assert cached_lock.source_ref == "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21"
+    assert cached_lock.source_content_hash == f"sha256:{source_digest}"
+
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        custom_node_materializer=CustomNodeWorkspaceMaterializer(),
+        custom_node_source_files_dir=package_dir / "source-files",
+        custom_node_source_cache_dir=source_cache_dir,
+    )
+    prepared = preparer.prepare(capsule)
+    cached_node_path = prepared.runner_workspace_path / "custom_nodes" / "comfyui_jps-nodes" / "node.py"
+    assert cached_node_path.exists()
+    assert "NODE_CLASS_MAPPINGS" in cached_node_path.read_text(encoding="utf-8")
+    manifest = json.loads(
+        (prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    cached_entry = next(entry for entry in manifest["entries"] if entry["custom_node_package_id"] == "comfyui_jps-nodes")
+    assert cached_entry["source_kind"] == "noofy_cached_archive"
 
 
 def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,4 +433,28 @@ def _archive_bytes_with_capsule_update(update: dict) -> bytes:
                 capsule.update(update)
                 contents = json.dumps(capsule).encode("utf-8")
             rewritten.writestr(info, contents)
+    return payload.getvalue()
+
+
+def _archive_bytes_with_custom_node_update(index: int, update: dict) -> bytes:
+    source = io.BytesIO(_archive_bytes())
+    payload = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(payload, "w") as rewritten:
+        for info in original.infolist():
+            contents = original.read(info)
+            if info.filename == "capsule.lock.json":
+                capsule = json.loads(contents.decode("utf-8"))
+                custom_nodes = list(capsule["custom_nodes"])
+                custom_nodes[index] = {**custom_nodes[index], **update}
+                capsule["custom_nodes"] = custom_nodes
+                contents = json.dumps(capsule).encode("utf-8")
+            rewritten.writestr(info, contents)
+    return payload.getvalue()
+
+
+def _source_archive_bytes(files: dict[str, str]) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, contents in files.items():
+            archive.writestr(name, contents)
     return payload.getvalue()

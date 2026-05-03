@@ -55,6 +55,7 @@ from app.runtime.profiles import (
     RuntimeProfileSelection,
     resolve_runtime_profile,
 )
+from app.runtime.node_registry import CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME
 from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
@@ -90,6 +91,7 @@ class RuntimeWorkspacePreparer:
         custom_node_materializer: CustomNodeWorkspaceMaterializer | None = None,
         custom_node_source_files_dir: Path | None = None,
         custom_node_source_files_dir_resolver: Callable[[str], Path | None] | None = None,
+        custom_node_source_cache_dir: Path | None = None,
         dependency_transactions_dir: Path | None = None,
         install_transaction_store: InstallTransactionStore | None = None,
         log_store: LogStore | None = None,
@@ -106,6 +108,7 @@ class RuntimeWorkspacePreparer:
         self.custom_node_materializer = custom_node_materializer
         self.custom_node_source_files_dir = custom_node_source_files_dir
         self.custom_node_source_files_dir_resolver = custom_node_source_files_dir_resolver
+        self.custom_node_source_cache_dir = custom_node_source_cache_dir
         self.dependency_transactions_dir = dependency_transactions_dir or (
             dependency_env_store.root_dir.parent / "transactions"
         )
@@ -160,6 +163,7 @@ class RuntimeWorkspacePreparer:
                 transaction=transaction,
                 custom_node_manifest=custom_node_manifest,
                 source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+                cached_source_dirs=self._custom_node_cached_source_dirs(capsule_lock),
                 model_view_dir=model_view_dir,
             )
 
@@ -435,11 +439,11 @@ class RuntimeWorkspacePreparer:
             runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
             install_policy_version=manifest.install_policy_version,
         )
-        source_files_dir = self._custom_node_source_files_dir(workflow_id)
-        if lock is None and self.dependency_lock_resolver is not None and source_files_dir is not None:
+        source_dirs = self._custom_node_dependency_source_dirs(workflow_id, None)
+        if lock is None and self.dependency_lock_resolver is not None and source_dirs:
             lock = self.dependency_lock_resolver.resolve(
                 DependencyResolutionRequest(
-                    source_dirs=custom_node_dependency_source_dirs(source_files_dir),
+                    source_dirs=source_dirs,
                     runtime_profile_id=manifest.runtime_profile_id,
                     runtime_profile_variant_id=manifest.runtime_profile_variant_id,
                     runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
@@ -546,6 +550,55 @@ class RuntimeWorkspacePreparer:
             return self.custom_node_source_files_dir_resolver(workflow_id)
         return self.custom_node_source_files_dir
 
+    def _custom_node_cached_source_dirs(self, capsule_lock: CapsuleLock) -> dict[str, Path]:
+        if self.custom_node_source_cache_dir is None:
+            return {}
+        cached: dict[str, Path] = {}
+        for custom_node in capsule_lock.custom_nodes:
+            if custom_node.source_cache_ref is None:
+                continue
+            source_dir = self.custom_node_source_cache_dir / custom_node.source_cache_ref
+            self._validate_custom_node_source_cache_manifest(
+                custom_node.package_id,
+                custom_node.source_cache_ref,
+                source_dir,
+                source_ref=custom_node.source_ref,
+                source_content_hash=custom_node.source_content_hash,
+            )
+            cached[custom_node.package_id] = source_dir
+        return cached
+
+    def _validate_custom_node_source_cache_manifest(
+        self,
+        package_id: str,
+        source_cache_ref: str,
+        source_dir: Path,
+        source_ref: str | None,
+        source_content_hash: str | None,
+    ) -> None:
+        manifest_path = source_dir.parent / CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME
+        if not manifest_path.exists():
+            raise RuntimeError(f"Cached source for custom node {package_id} is missing Noofy source cache metadata.")
+        with manifest_path.open("r", encoding="utf-8") as file:
+            manifest = json.load(file)
+        if manifest.get("source_cache_ref") != source_cache_ref:
+            raise RuntimeError(f"Cached source metadata for custom node {package_id} does not match the capsule lock.")
+        if source_ref is None or source_content_hash is None:
+            raise RuntimeError(f"Cached source for custom node {package_id} is missing pinned source facts.")
+        if manifest.get("source_ref") != source_ref or manifest.get("source_content_hash") != source_content_hash:
+            raise RuntimeError(f"Cached source metadata for custom node {package_id} does not match the pinned source facts.")
+
+    def _custom_node_dependency_source_dirs(
+        self,
+        workflow_id: str,
+        capsule_lock: CapsuleLock | None,
+    ) -> list[Path]:
+        source_files_dir = self._custom_node_source_files_dir(workflow_id)
+        source_dirs = custom_node_dependency_source_dirs(source_files_dir) if source_files_dir is not None else []
+        if capsule_lock is not None:
+            source_dirs.extend(self._custom_node_cached_source_dirs(capsule_lock).values())
+        return sorted(dict.fromkeys(source_dirs), key=lambda path: path.as_posix())
+
     def _promote_dependency_env(
         self,
         staging_dir: Path,
@@ -632,6 +685,7 @@ class RuntimeWorkspacePreparer:
         transaction: InstallTransaction,
         custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
         source_files_dir: Path | None = None,
+        cached_source_dirs: dict[str, Path] | None = None,
         model_view_dir: Path | None = None,
     ) -> tuple[RunnerWorkspaceManifest, Path]:
         workspace_path = self.install_transaction_store.staged_runner_workspace_dir(transaction, manifest.fingerprint)
@@ -656,6 +710,7 @@ class RuntimeWorkspacePreparer:
                 workflow_id,
                 custom_node_manifest=custom_node_manifest,
                 source_files_dir=source_files_dir,
+                cached_source_dirs=cached_source_dirs,
                 model_view_dir=model_view_dir,
             )
             if existing != manifest:
@@ -682,6 +737,7 @@ class RuntimeWorkspacePreparer:
             workflow_id,
             custom_node_manifest=custom_node_manifest,
             source_files_dir=source_files_dir,
+            cached_source_dirs=cached_source_dirs,
             model_view_dir=model_view_dir,
         )
         self._write_transaction_manifest(workspace_path, manifest)
@@ -729,8 +785,10 @@ class RuntimeWorkspacePreparer:
     ) -> DependencyEnvManifest:
         if self.dependency_env_installer is None:
             return manifest
-        source_files_dir = self._custom_node_source_files_dir(capsule_lock.workflow.package_id)
-        source_dirs = custom_node_dependency_source_dirs(source_files_dir) if source_files_dir is not None else []
+        source_dirs = self._custom_node_dependency_source_dirs(
+            capsule_lock.workflow.package_id,
+            capsule_lock,
+        )
         if self.dependency_lock_resolver is not None and source_dirs:
             existing_core_lock = self._find_existing_dependency_lock(
                 manifest.dependency_lock_hash,
@@ -882,11 +940,12 @@ class RuntimeWorkspacePreparer:
         capsule_lock: CapsuleLock,
         profile_selection: RuntimeProfileSelection | None,
     ) -> CustomNodeWorkspaceManifest | None:
-        if self.custom_node_materializer is None or profile_selection is None or not capsule_lock.custom_nodes:
+        if self.custom_node_materializer is None or not capsule_lock.custom_nodes:
             return None
         return self.custom_node_materializer.build_manifest(
             capsule_lock=capsule_lock,
             source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+            cached_source_dirs=self._custom_node_cached_source_dirs(capsule_lock),
             profile_selection=profile_selection,
         )
 
@@ -897,6 +956,7 @@ class RuntimeWorkspacePreparer:
         *,
         custom_node_manifest: CustomNodeWorkspaceManifest | None = None,
         source_files_dir: Path | None = None,
+        cached_source_dirs: dict[str, Path] | None = None,
         model_view_dir: Path | None = None,
     ) -> None:
         if self.comfyui_source_dir is None:
@@ -904,6 +964,7 @@ class RuntimeWorkspacePreparer:
                 self.custom_node_materializer.materialize(
                     manifest=custom_node_manifest,
                     source_files_dir=source_files_dir,
+                    cached_source_dirs=cached_source_dirs,
                     runner_workspace_dir=workspace_path,
                 )
             return
@@ -935,6 +996,7 @@ class RuntimeWorkspacePreparer:
             self.custom_node_materializer.materialize(
                 manifest=custom_node_manifest,
                 source_files_dir=source_files_dir,
+                cached_source_dirs=cached_source_dirs,
                 runner_workspace_dir=workspace_path,
             )
 

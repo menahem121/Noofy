@@ -968,6 +968,43 @@ Goal: expand beyond bundled custom node source only after locked/bundled prepara
 
 This sub-phase is intentionally last. Do not begin it until Phases 5a through 5j are implemented and tested.
 
+Status: Backend implementation complete for the current Phase 5k slice. Noofy now has
+node registry/source-resolution schemas, quarantined-community opt-in enforcement,
+pinned source/hash policy checks, structured resolver diagnostics, and a hash-verified
+custom-node source archive cache. Verified cached sources connect to import-time
+candidate lock generation, dependency candidate-lock generation, and staged
+runner-workspace materialization without mutating trusted core.
+
+ComfyUI Manager reference review:
+
+- Manager's legacy mapping data uses `extension-node-map.json` keyed by repository/file
+  source, with values shaped like `[node_type_names, metadata]`.
+- Metadata can include `nodename_pattern` regexes and `preemptions` for node classes
+  that should resolve to a preferred source even when names collide.
+- Its workflow extraction handles UI workflow JSON and embedded PNG workflow metadata,
+  skips virtual `Reroute` / `Note` nodes, and descends into grouped nodes.
+- Many node class names are claimed by multiple repositories. Noofy should keep these
+  unsupported unless explicit Noofy metadata, registry metadata, or maintained
+  node-type mappings identify one pinned source.
+- Manager's install path mutates ComfyUI's global `custom_nodes` tree and runs global
+  install/dependency behavior. Noofy must not copy that model; the Manager data shape
+  is useful only as a resolution reference.
+
+Phase 5k backend continuation:
+
+- Cached non-bundled custom-node sources now participate in generated dependency
+  candidate locks through the same Noofy dependency resolver path as bundled `.noofy`
+  custom-node sources.
+- Runner workspace materialization can stage custom-node source from Noofy's verified
+  source cache when capsule locks include pinned `source_ref`, `source_content_hash`,
+  and `source_cache_ref` facts matching the cache manifest.
+- Cached non-bundled custom-node workflows remain staged until the same dependency,
+  runner-health, workflow-execution, and custom-node import smoke gates pass.
+- Workflow import can resolve opted-in non-bundled sources from explicit pinned
+  metadata into cached `source_cache_ref` capsule locks; when opt-in, source facts,
+  dependency policy, or trust policy cannot be satisfied, the imported package is
+  persisted as unsupported/blocked and is not preparable.
+
 Tasks:
 
 - Add Noofy node registry schema.

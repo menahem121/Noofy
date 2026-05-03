@@ -33,6 +33,15 @@ from app.runtime.isolation import (
     TrustMetadata,
     TrustLevel,
 )
+from app.runtime.node_registry import (
+    CustomNodeSourceCache,
+    CustomNodeSourceResolutionRequest,
+    NodeRegistryResolutionError,
+    NodeRegistryResolutionErrorCode,
+    NodeRegistryResolver,
+    NodeRegistrySource,
+    NodeRegistrySourceKind,
+)
 from app.runtime.profiles import (
     DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
     RuntimeProfile,
@@ -81,15 +90,34 @@ class NoofyImportError(RuntimeError):
 class ImportedWorkflowPackageStore:
     """Stores normalized imported workflow packages under workflow-store."""
 
-    def __init__(self, root_dir: Path, *, log_store: LogStore | None = None) -> None:
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        log_store: LogStore | None = None,
+        node_registry_resolver: NodeRegistryResolver | None = None,
+        custom_node_source_cache: CustomNodeSourceCache | None = None,
+    ) -> None:
         self.root_dir = root_dir
         self.log_store = log_store or LogStore()
+        self.node_registry_resolver = node_registry_resolver
+        self.custom_node_source_cache = custom_node_source_cache
 
-    def import_archive(self, data: bytes, *, original_filename: str | None = None) -> WorkflowPackage:
+    def import_archive(
+        self,
+        data: bytes,
+        *,
+        original_filename: str | None = None,
+        allow_unverified_community_preparation: bool = False,
+    ) -> WorkflowPackage:
         transaction_dir: Path | None = None
         try:
             importer = NoofyArchiveImporter(data, original_filename=original_filename)
             package = importer.normalize()
+            package = self._with_resolved_community_sources(
+                package,
+                allow_unverified_community_preparation=allow_unverified_community_preparation,
+            )
             target_dir = self.package_dir(package)
             transaction_dir = self.root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
             source_files_dir = transaction_dir / "source-files"
@@ -126,6 +154,9 @@ class ImportedWorkflowPackageStore:
                             "runtime_profile_manifest_hash": app_capsule_lock.runtime.runtime_profile_manifest_hash,
                             "selection_stage": "import_time_phase5c",
                         },
+                        "source_resolution": package.import_metadata.developer_details.get("source_resolution", {})
+                        if package.import_metadata
+                        else {},
                     },
                     indent=2,
                     sort_keys=True,
@@ -175,6 +206,120 @@ class ImportedWorkflowPackageStore:
             / _safe_store_segment(package.identity.publisher_id)
             / _safe_store_segment(package.identity.package_id)
             / _safe_store_segment(package.identity.version)
+        )
+
+    def _with_resolved_community_sources(
+        self,
+        package: WorkflowPackage,
+        *,
+        allow_unverified_community_preparation: bool,
+    ) -> WorkflowPackage:
+        required_records = _non_bundled_required_custom_node_records(package)
+        if not required_records:
+            return package
+
+        if package.identity is None:
+            return _package_with_import_resolution_status(
+                package,
+                status="unsupported",
+                message="Unsupported workflow",
+                source_resolution={
+                    "status": "failed",
+                    "reason": "missing_identity",
+                },
+            )
+        trust_level = _trust_level_from_string(package.identity.trust_level)
+        if trust_level is TrustLevel.QUARANTINED_COMMUNITY and not allow_unverified_community_preparation:
+            return _package_with_import_resolution_status(
+                package,
+                status="blocked_by_policy",
+                message="Needs permission to prepare community workflow",
+                source_resolution={
+                    "status": "blocked_by_policy",
+                    "reason": "community_opt_in_required",
+                    "unresolved_custom_nodes": [record.id for record in required_records],
+                },
+            )
+        if self.node_registry_resolver is None or self.custom_node_source_cache is None:
+            return _package_with_import_resolution_status(
+                package,
+                status="unsupported",
+                message="Unsupported workflow",
+                source_resolution={
+                    "status": "failed",
+                    "reason": "source_resolution_not_configured",
+                    "unresolved_custom_nodes": [record.id for record in required_records],
+                },
+            )
+
+        records_by_id = {record.id: record for record in package.custom_nodes}
+        resolved_reports: list[dict[str, object]] = []
+        for record in required_records:
+            try:
+                explicit_source = _explicit_node_registry_source(record)
+                resolved = self.node_registry_resolver.resolve(
+                    CustomNodeSourceResolutionRequest(
+                        package_id=record.id,
+                        node_types=record.node_types,
+                        trust_level=trust_level,
+                        allow_unverified_community_preparation=allow_unverified_community_preparation,
+                        explicit_source=explicit_source,
+                    )
+                )
+                cached = self.custom_node_source_cache.materialize(resolved.source)
+            except NodeRegistryResolutionError as exc:
+                self.log_store.add(
+                    "warning",
+                    "Imported workflow custom-node source resolution failed",
+                    "workflow.import",
+                    workflow_id=package.metadata.id,
+                    details={
+                        "package_id": record.id,
+                        "code": exc.code.value,
+                        **exc.developer_details,
+                    },
+                )
+                return _package_with_import_resolution_status(
+                    package,
+                    status="unsupported",
+                    message="Unsupported workflow",
+                    source_resolution={
+                        "status": "failed",
+                        "package_id": record.id,
+                        "code": exc.code.value,
+                        "developer_details": exc.developer_details,
+                    },
+                )
+            records_by_id[record.id] = record.model_copy(
+                update={
+                    "included": True,
+                    "source": resolved.source.source_url,
+                    "source_ref": resolved.source.source_ref,
+                    "source_content_hash": resolved.source.source_content_hash,
+                    "source_cache_ref": cached.source_cache_ref,
+                    "source_archive_subdir": resolved.source.archive_subdir,
+                    "resolution_method": resolved.resolution_method,
+                }
+            )
+            resolved_reports.append(
+                {
+                    "package_id": resolved.package_id,
+                    "resolution_method": resolved.resolution_method,
+                    "source_ref": resolved.source.source_ref,
+                    "source_cache_ref": cached.source_cache_ref,
+                    "source_archive_subdir": resolved.source.archive_subdir,
+                }
+            )
+
+        updated_package = package.model_copy(update={"custom_nodes": list(records_by_id.values())})
+        return _package_with_import_resolution_status(
+            updated_package,
+            status=_import_status(updated_package.unresolved_runtime_inputs),
+            message=_import_status_message(_import_status(updated_package.unresolved_runtime_inputs)),
+            source_resolution={
+                "status": "resolved",
+                "resolved_custom_nodes": resolved_reports,
+            },
         )
 
 
@@ -342,9 +487,113 @@ def _import_status(unresolved_inputs: list[UnresolvedRuntimeInput]) -> str:
 def _import_status_message(status: str) -> str:
     if status == "needs_input_setup":
         return "Needs input setup"
+    if status == "blocked_by_policy":
+        return "Needs permission to prepare community workflow"
+    if status == "unsupported":
+        return "Unsupported workflow"
     if status == "cannot_prepare_automatically":
         return "Cannot prepare automatically"
     return "Imported"
+
+
+def _package_with_import_resolution_status(
+    package: WorkflowPackage,
+    *,
+    status: str,
+    message: str,
+    source_resolution: dict[str, object],
+) -> WorkflowPackage:
+    import_metadata = package.import_metadata or WorkflowImportMetadata(
+        imported_at=datetime.now(UTC).isoformat(),
+    )
+    developer_details = dict(import_metadata.developer_details)
+    developer_details["source_resolution"] = source_resolution
+    updated_identity = package.identity
+    if status in {"blocked_by_policy", "unsupported"} and package.identity is not None:
+        updated_identity = package.identity.model_copy(update={"trust_level": TrustLevel.UNSUPPORTED.value})
+    return package.model_copy(
+        update={
+            "identity": updated_identity,
+            "import_metadata": import_metadata.model_copy(
+                update={
+                    "status": status,
+                    "user_facing_message": message,
+                    "developer_details": developer_details,
+                }
+            ),
+        }
+    )
+
+
+def _non_bundled_required_custom_node_records(package: WorkflowPackage) -> list[WorkflowCustomNodeRecord]:
+    graph_node_types = _graph_node_types(package.comfyui_graph)
+    required: list[WorkflowCustomNodeRecord] = []
+    for record in package.custom_nodes:
+        if record.included:
+            continue
+        if record.node_types and not any(node_type in graph_node_types for node_type in record.node_types):
+            continue
+        required.append(record)
+    return required
+
+
+def _graph_node_types(graph: dict[str, Any]) -> set[str]:
+    node_types: set[str] = set()
+
+    def visit_node(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        class_type = node.get("class_type") or node.get("type")
+        if isinstance(class_type, str) and _is_resolvable_workflow_node_type(class_type):
+            node_types.add(class_type)
+        group_nodes = node.get("nodes") or node.get("groupNodes")
+        if isinstance(group_nodes, list):
+            for group_node in group_nodes:
+                visit_node(group_node)
+        elif isinstance(group_nodes, dict):
+            for group_node in group_nodes.values():
+                visit_node(group_node)
+
+    for node in graph.values():
+        visit_node(node)
+    return node_types
+
+
+def _is_resolvable_workflow_node_type(node_type: str) -> bool:
+    if node_type in {"Reroute", "Note"}:
+        return False
+    return not (node_type.startswith("workflow/") or node_type.startswith("workflow>"))
+
+
+def _explicit_node_registry_source(record: WorkflowCustomNodeRecord) -> NodeRegistrySource | None:
+    if not record.source.startswith("https://"):
+        return None
+    if record.source_ref is None:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.MISSING_PINNED_SOURCE_REF,
+            "Noofy cannot prepare a workflow extension without a pinned source version.",
+            developer_details={"package_id": record.id, "source_url": record.source},
+        )
+    if record.source_content_hash is None:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.MISSING_SOURCE_CONTENT_HASH,
+            "Noofy cannot prepare a workflow extension without a verified source hash.",
+            developer_details={"package_id": record.id, "source_url": record.source},
+        )
+    try:
+        return NodeRegistrySource(
+            source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+            source_url=record.source,
+            source_ref=record.source_ref,
+            source_content_hash=record.source_content_hash,
+            archive_subdir=record.source_archive_subdir,
+        )
+    except ValidationError as exc:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.UNPINNED_SOURCE_REF,
+            "Noofy cannot prepare a workflow extension without pinned and verified source facts.",
+            developer_details={"package_id": record.id, "source_url": record.source, "validation_error": str(exc)},
+        ) from exc
 
 
 def _safe_archive_name(name: str) -> str:
@@ -415,6 +664,13 @@ def _string_field(data: dict[str, Any], key: str, *, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback
+
+
+def _optional_string_field(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _normalized_display_name(data: dict[str, Any], *, fallback: str) -> str:
@@ -539,6 +795,18 @@ def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustom
                 sha256_manifest=node.get("sha256_manifest")
                 if isinstance(node.get("sha256_manifest"), str)
                 else None,
+                source_ref=node.get("source_ref") if isinstance(node.get("source_ref"), str) else None,
+                source_content_hash=node.get("source_content_hash")
+                if isinstance(node.get("source_content_hash"), str)
+                else None,
+                source_cache_ref=node.get("source_cache_ref")
+                if isinstance(node.get("source_cache_ref"), str)
+                else None,
+                source_archive_subdir=_optional_string_field(node, "source_archive_subdir")
+                or _optional_string_field(node, "archive_subdir"),
+                resolution_method=node.get("resolution_method")
+                if isinstance(node.get("resolution_method"), str)
+                else None,
             )
         )
     return normalized
@@ -608,6 +876,9 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
         CustomNodeLock(
             package_id=node.id,
             source=node.source,
+            source_ref=node.source_ref,
+            source_content_hash=node.source_content_hash,
+            source_cache_ref=node.source_cache_ref,
             trust_level=trust_level,
             node_types=node.node_types,
         )

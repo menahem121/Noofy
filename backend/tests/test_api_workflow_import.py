@@ -8,11 +8,19 @@ class FakeImportService:
     def __init__(self) -> None:
         self.imported_payload: bytes | None = None
         self.imported_filename: str | None = None
+        self.allow_unverified_community_preparation = False
         self.shutdown_called = False
 
-    def import_workflow_archive(self, data: bytes, *, original_filename: str | None = None):
+    def import_workflow_archive(
+        self,
+        data: bytes,
+        *,
+        original_filename: str | None = None,
+        allow_unverified_community_preparation: bool = False,
+    ):
         self.imported_payload = data
         self.imported_filename = original_filename
+        self.allow_unverified_community_preparation = allow_unverified_community_preparation
         return {
             "workflow_id": "unknown__eraserv4.5__0.1.0",
             "status": "needs_input_setup",
@@ -61,6 +69,23 @@ def test_import_workflow_endpoint_passes_archive_bytes_to_service(monkeypatch) -
     assert response.json()["workflow"]["trust_level"] == "quarantined_community"
     assert fake_service.imported_payload == b"archive-bytes"
     assert fake_service.imported_filename == "test.noofy"
+    assert fake_service.allow_unverified_community_preparation is False
+
+
+def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/api/workflows/import?filename=test.noofy&allow_unverified_community_preparation=true",
+            content=b"archive-bytes",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    assert response.status_code == 200
+    assert fake_service.allow_unverified_community_preparation is True
 
 
 def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) -> None:

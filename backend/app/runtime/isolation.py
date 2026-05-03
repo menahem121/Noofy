@@ -126,10 +126,20 @@ class CustomNodeLock(BaseModel):
 
     package_id: str = Field(min_length=1)
     source: str = Field(min_length=1)
+    source_ref: str | None = None
+    source_content_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    source_cache_ref: str | None = None
     commit: str | None = None
     version: str | None = None
     trust_level: TrustLevel
     node_types: list[str] = Field(default_factory=list)
+
+    @field_validator("source_cache_ref")
+    @classmethod
+    def _validate_source_cache_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_relative_path(value, field_name="source_cache_ref", allow_nested=True)
 
 
 class DependencyLock(BaseModel):

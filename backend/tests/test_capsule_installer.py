@@ -10,6 +10,7 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
+from app.runtime.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
 from app.runtime.dependency_env import DependencyEnvironmentInstallError, DependencyEnvironmentInstallRequest
 from app.runtime.dependency_lock import (
     DependencyPolicyErrorCode,
@@ -140,6 +141,43 @@ def _passed_smoke_report(*, custom_nodes: bool = False) -> SmokeTestReport:
         ),
         runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
         workflow_execution=SmokeStageResult(status=SmokeStageStatus.PASSED),
+    )
+
+
+def _cached_node_materializer() -> CustomNodeWorkspaceMaterializer:
+    return CustomNodeWorkspaceMaterializer(
+        core_node_manifest_catalog=CoreNodeManifestCatalog(
+            manifests=[
+                CoreNodeManifest(
+                    runtime_profile_id="noofy-comfyui-v1-default",
+                    runtime_profile_variant_id="darwin-arm64-mps-dev",
+                    runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+                    node_types=["KSampler", "LoadImage", "SaveImage"],
+                )
+            ]
+        )
+    )
+
+
+def _write_source_cache_manifest(
+    source_dir: Path,
+    *,
+    source_cache_ref: str = "abc123/source",
+    source_ref: str = "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+    source_content_hash: str = "sha256:" + ("1" * 64),
+) -> None:
+    (source_dir.parent / "noofy-custom-node-source-cache-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1.0",
+                "source_kind": "git_zip_archive",
+                "source_url": "https://example.test/cached-node/archive/7b3f5d0.zip",
+                "source_ref": source_ref,
+                "source_content_hash": source_content_hash,
+                "source_cache_ref": source_cache_ref,
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -642,6 +680,75 @@ async def test_prepare_custom_node_capsule_marks_ready_after_all_smoke_stages_pa
     assert state.smoke_test_status is SmokeTestStatus.PASSED
     runner_manifest = workspace_preparer.runner_workspace_store.read(capsule.runtime.runner_fingerprint)
     assert runner_manifest.status is InstallStatus.READY
+
+
+@pytest.mark.anyio
+async def test_cached_non_bundled_custom_node_stays_staged_until_smoke_passes(tmp_path: Path) -> None:
+    source_files_dir = tmp_path / "source-files"
+    source_files_dir.mkdir()
+    (source_files_dir / "comfyui_graph.json").write_text(
+        json.dumps({"1": {"class_type": "CachedNode", "inputs": {}}}),
+        encoding="utf-8",
+    )
+    cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source_dir.mkdir(parents=True)
+    (cached_source_dir / "node.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    _write_source_cache_manifest(cached_source_dir)
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-cached-custom-node",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "cached-node",
+                    "source": "registry_metadata:cached-node",
+                    "source_ref": "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                    "source_content_hash": "sha256:" + ("1" * 64),
+                    "source_cache_ref": "abc123/source",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CachedNode"],
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_files_dir=source_files_dir,
+        custom_node_source_cache_dir=tmp_path / "source-cache",
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+    )
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.PREPARED_NEEDS_INPUT_SETUP
+    assert state.smoke_test_status is SmokeTestStatus.NOT_RUN
+    assert state.runner_workspace_path is not None
+    runner_workspace = Path(state.runner_workspace_path)
+    assert (runner_workspace / "custom_nodes" / "cached-node" / "node.py").exists()
+    assert not workspace_preparer.runner_workspace_store.exists(capsule.runtime.runner_fingerprint)
 
 
 @pytest.mark.anyio

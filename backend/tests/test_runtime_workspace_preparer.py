@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.runtime.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
 from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
 from app.runtime.dependency_lock import (
     DependencyRelationship,
@@ -398,6 +399,131 @@ def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Pat
     assert lock_store.exists(installed_lock.lock_hash)
 
 
+def test_prepare_generates_candidate_dependency_lock_from_cached_non_bundled_source(tmp_path: Path) -> None:
+    base = _capsule_lock()
+    capsule = _with_cached_custom_node(base, source_cache_ref="abc123/source")
+    custom_lock = with_computed_lock_hash(
+        ResolvedDependencyLock(
+            runtime_profile_id=capsule.runtime.runtime_profile_id,
+            runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+            install_policy_version=capsule.dependencies.install_policy,
+            resolver=ResolverMetadata(name="uv", version="0.9.0"),
+            wheels=[
+                ResolvedDependencyWheel(
+                    name="Demo_Package",
+                    version="1.0.0",
+                    wheel_filename="demo-package-1.0.0-py3-none-any.whl",
+                    sha256="sha256:" + ("a" * 64),
+                    source_kind=DependencySourceKind.APPROVED_CACHE,
+                    approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
+                    platform_tags=["py3-none-any"],
+                    relationship=DependencyRelationship.DIRECT,
+                    requested_by=["cached-node"],
+                    resolver_name="uv",
+                    resolver_version="0.9.0",
+                )
+            ],
+        )
+    )
+    cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source_dir.mkdir(parents=True)
+    (cached_source_dir / "requirements.txt").write_text("demo-package==1.0.0\n", encoding="utf-8")
+    _write_source_cache_manifest(cached_source_dir)
+
+    class FakeResolver:
+        def __init__(self) -> None:
+            self.source_dirs: list[Path] = []
+
+        def resolve(self, request) -> ResolvedDependencyLock:
+            self.source_dirs = request.source_dirs
+            return custom_lock
+
+    resolver = FakeResolver()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_resolver=resolver,
+        custom_node_source_cache_dir=tmp_path / "source-cache",
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert resolver.source_dirs == [cached_source_dir]
+    installed_lock = installer.requests[0].lock
+    assert prepared.dependency_env_manifest.dependency_lock_hash == installed_lock.lock_hash
+    assert installed_lock.lock_hash != base.runtime.dependency_lock_hash
+    assert [wheel.name for wheel in installed_lock.wheels] == ["demo-package"]
+
+
+def test_prepare_materializes_cached_non_bundled_source_into_runner_workspace(tmp_path: Path) -> None:
+    trusted_core = tmp_path / "trusted-comfyui"
+    trusted_custom_nodes = trusted_core / "custom_nodes"
+    trusted_custom_nodes.mkdir(parents=True)
+    trusted_file = trusted_custom_nodes / "trusted.py"
+    trusted_file.write_text("trusted\n", encoding="utf-8")
+    (trusted_core / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
+
+    source_files_dir = tmp_path / "source-files"
+    source_files_dir.mkdir()
+    graph = {"1": {"class_type": "CachedNode", "inputs": {}}}
+    (source_files_dir / "comfyui_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source_dir.mkdir(parents=True)
+    (cached_source_dir / "node.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    _write_source_cache_manifest(cached_source_dir)
+
+    capsule = _with_cached_custom_node(_capsule_lock(), source_cache_ref="abc123/source")
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=trusted_core,
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_files_dir=source_files_dir,
+        custom_node_source_cache_dir=tmp_path / "source-cache",
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert (prepared.runner_workspace_path / "custom_nodes" / "cached-node" / "node.py").exists()
+    assert trusted_file.read_text(encoding="utf-8") == "trusted\n"
+
+
+def test_cached_non_bundled_source_requires_pinned_source_facts(tmp_path: Path) -> None:
+    source_files_dir = tmp_path / "source-files"
+    source_files_dir.mkdir()
+    (source_files_dir / "comfyui_graph.json").write_text(
+        json.dumps({"1": {"class_type": "CachedNode", "inputs": {}}}),
+        encoding="utf-8",
+    )
+    capsule = _with_cached_custom_node(
+        _capsule_lock(),
+        source_cache_ref="abc123/source",
+        source_ref=None,
+    )
+    cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source_dir.mkdir(parents=True)
+    _write_source_cache_manifest(cached_source_dir)
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_files_dir=source_files_dir,
+        custom_node_source_cache_dir=tmp_path / "source-cache",
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(RuntimeError, match="missing pinned source facts"):
+        preparer.prepare(capsule)
+
+
 def test_failed_dependency_env_install_leaves_no_ready_manifest(tmp_path: Path) -> None:
     capsule, lock = _capsule_with_dependency_lock()
     installer = _FakeDependencyEnvInstaller(fail=True)
@@ -611,3 +737,65 @@ def _capsule_with_catalog_profile() -> CapsuleLock:
         }
     )
     return CapsuleLock.model_validate(data)
+
+
+def _with_cached_custom_node(
+    capsule: CapsuleLock,
+    *,
+    source_cache_ref: str,
+    source_ref: str | None = "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+    source_content_hash: str | None = "sha256:" + ("1" * 64),
+) -> CapsuleLock:
+    data = capsule.model_dump(mode="json")
+    data["workflow"]["trust_level"] = "quarantined_community"
+    data["dependencies"]["install_policy"] = "quarantined-community-v1"
+    data["trust"] = {"level": "quarantined_community", "publisher": "Noofy"}
+    data["custom_nodes"] = [
+        {
+            "package_id": "cached-node",
+            "source": "registry_metadata:cached-node",
+            "source_ref": source_ref,
+            "source_content_hash": source_content_hash,
+            "source_cache_ref": source_cache_ref,
+            "trust_level": "quarantined_community",
+            "node_types": ["CachedNode"],
+        }
+    ]
+    return CapsuleLock.model_validate(data)
+
+
+def _cached_node_materializer() -> CustomNodeWorkspaceMaterializer:
+    return CustomNodeWorkspaceMaterializer(
+        core_node_manifest_catalog=CoreNodeManifestCatalog(
+            manifests=[
+                CoreNodeManifest(
+                    runtime_profile_id="noofy-comfyui-v1-default",
+                    runtime_profile_variant_id="darwin-arm64-mps-dev",
+                    runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+                    node_types=["KSampler", "LoadImage", "SaveImage"],
+                )
+            ]
+        )
+    )
+
+
+def _write_source_cache_manifest(
+    source_dir: Path,
+    *,
+    source_cache_ref: str = "abc123/source",
+    source_ref: str = "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+    source_content_hash: str = "sha256:" + ("1" * 64),
+) -> None:
+    (source_dir.parent / "noofy-custom-node-source-cache-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1.0",
+                "source_kind": "git_zip_archive",
+                "source_url": "https://example.test/cached-node/archive/7b3f5d0.zip",
+                "source_ref": source_ref,
+                "source_content_hash": source_content_hash,
+                "source_cache_ref": source_cache_ref,
+            }
+        ),
+        encoding="utf-8",
+    )
