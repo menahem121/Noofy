@@ -492,7 +492,7 @@ function WidgetEditor({
       </div>
 
       <FormCard title="Widget details">
-        <FieldRow label="Display title">
+        <FieldRow label="Widget title">
           <input
             type="text"
             className="builder-input"
