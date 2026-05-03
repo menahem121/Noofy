@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   Eye,
   EyeOff,
   GripVertical,
@@ -189,19 +188,6 @@ export function DashboardBuilderPage({
     }
   }
 
-  function moveWidget(widgetId: string, direction: "up" | "down") {
-    setSchema((current) => {
-      const index = current.widgets.findIndex((c) => c.id === widgetId);
-      if (index === -1) return current;
-      const target = direction === "up" ? index - 1 : index + 1;
-      if (target < 0 || target >= current.widgets.length) return current;
-      const next = [...current.widgets];
-      const [moved] = next.splice(index, 1);
-      next.splice(target, 0, moved);
-      return { ...current, widgets: next };
-    });
-  }
-
   function toggleNode(nodeId: string) {
     setExpandedNodes((current) => {
       const next = new Set(current);
@@ -372,7 +358,6 @@ export function DashboardBuilderPage({
                       selectedWidgetId={selectedWidgetId}
                       onSelect={handleSelectWidget}
                       onRemove={removeWidget}
-                      onMove={moveWidget}
                     />
                   )}
 
@@ -381,7 +366,6 @@ export function DashboardBuilderPage({
                       selectedWidgetId={selectedWidgetId}
                       onSelect={handleSelectWidget}
                       onRemove={removeWidget}
-                      onMove={moveWidget}
                       muted
                     />
                   )}
@@ -502,9 +486,8 @@ function WidgetEditor({
             This widget is connected to a workflow value. People running this workflow will see your clear label instead of the ComfyUI node name.
           </p>
         </div>
-        <button className="secondary-button secondary-button--small secondary-button--danger" type="button" onClick={onRemove}>
-          <Trash2 size={13} aria-hidden="true" />
-          Remove widget
+        <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
+          <Trash2 size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -811,7 +794,6 @@ function PreviewSection({
   selectedWidgetId,
   onSelect,
   onRemove,
-  onMove,
   muted,
 }: {
   title: string;
@@ -819,7 +801,6 @@ function PreviewSection({
   selectedWidgetId: string | null;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
-  onMove: (id: string, direction: "up" | "down") => void;
   muted?: boolean;
 }) {
   return (
@@ -828,16 +809,13 @@ function PreviewSection({
         <h4>{title}</h4>
       </header>
       <div className="preview-stack">
-        {widgets.map((widget, index) => (
+        {widgets.map((widget) => (
           <PreviewWidget
             key={widget.id}
             widget={widget}
             isSelected={selectedWidgetId === widget.id}
-            isFirst={index === 0}
-            isLast={index === widgets.length - 1}
             onSelect={() => onSelect(widget.id)}
             onRemove={() => onRemove(widget.id)}
-            onMove={(direction) => onMove(widget.id, direction)}
           />
         ))}
       </div>
@@ -848,19 +826,13 @@ function PreviewSection({
 function PreviewWidget({
   widget,
   isSelected,
-  isFirst,
-  isLast,
   onSelect,
   onRemove,
-  onMove,
 }: {
   widget: DashboardWidget;
   isSelected: boolean;
-  isFirst: boolean;
-  isLast: boolean;
   onSelect: () => void;
   onRemove: () => void;
-  onMove: (direction: "up" | "down") => void;
 }) {
   return (
     <article
@@ -880,26 +852,6 @@ function PreviewWidget({
       </div>
 
       <div className="preview-widget__actions" onClick={(e) => e.stopPropagation()}>
-        <button
-          className="icon-button icon-button--card"
-          type="button"
-          onClick={() => onMove("up")}
-          disabled={isFirst}
-          aria-label="Move up"
-          title="Move up"
-        >
-          <ChevronUp size={14} aria-hidden="true" />
-        </button>
-        <button
-          className="icon-button icon-button--card"
-          type="button"
-          onClick={() => onMove("down")}
-          disabled={isLast}
-          aria-label="Move down"
-          title="Move down"
-        >
-          <ChevronDown size={14} aria-hidden="true" />
-        </button>
         <button
           className="icon-button icon-button--card"
           type="button"

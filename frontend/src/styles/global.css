@@ -1088,6 +1088,15 @@ button:disabled {
   background: var(--purple-soft);
 }
 
+.icon-button--danger {
+  color: var(--text-muted);
+}
+
+.icon-button--danger:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }
