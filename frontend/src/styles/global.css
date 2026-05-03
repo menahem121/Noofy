@@ -3321,12 +3321,13 @@ button:disabled {
   margin: 0;
 }
 
-.builder-heading__text h1 {
+.builder-heading__inline-title {
   margin: 0;
   font-family: Manrope, Inter, sans-serif;
-  font-size: clamp(26px, 3vw, 32px);
-  line-height: 1.2;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  line-height: 1;
 }
 
 .builder-heading__text p {

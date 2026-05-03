@@ -234,9 +234,8 @@ export function DashboardBuilderPage({
                 <ArrowLeft size={15} aria-hidden="true" />
                 Back to workflows
               </button>
-              <p className="eyebrow">Creator setup · Dashboard builder</p>
+              <h1 id="builder-title" className="builder-heading__inline-title">Dashboard Builder · {workflow.name}</h1>
             </div>
-            <h1 id="builder-title">Dashboard Builder · {workflow.name}</h1>
             <p>Choose which workflow values become simple widgets.</p>
           </div>
 
