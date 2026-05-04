@@ -25,7 +25,7 @@ interface HomeDataState {
   workflows: WorkflowSummary[];
   error: string | null;
   importing: boolean;
-  allowCommunityPreparation: boolean;
+  allowCommunityPreparation: true;
   importResult: WorkflowImportResponse | null;
   importError: string | null;
 }
@@ -36,7 +36,7 @@ const initialHomeState: HomeDataState = {
   workflows: [],
   error: null,
   importing: false,
-  allowCommunityPreparation: false,
+  allowCommunityPreparation: true,
   importResult: null,
   importError: null,
 };
@@ -172,7 +172,7 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
         workflows,
         error: firstError instanceof Error ? firstError.message : firstError ? String(firstError) : null,
         importing: false,
-        allowCommunityPreparation: false,
+        allowCommunityPreparation: true,
         importResult: null,
         importError: null,
       });
@@ -304,19 +304,6 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
                 <h2>Open Workflow File</h2>
                 <p>Choose a saved workflow package and run it through Noofy.</p>
               </div>
-              <label className="option-check">
-                <input
-                  type="checkbox"
-                  checked={homeData.allowCommunityPreparation}
-                  onChange={(event) =>
-                    setHomeData((current) => ({
-                      ...current,
-                      allowCommunityPreparation: event.target.checked,
-                    }))
-                  }
-                />
-                <span>Allow community workflow preparation</span>
-              </label>
               <label className="secondary-button action-card__button">
                 <input
                   className="sr-only"
