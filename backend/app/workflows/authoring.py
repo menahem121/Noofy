@@ -133,6 +133,13 @@ class DashboardAuthoringService:
         dashboard_file = package_dir / "dashboard.json"
         _atomic_write_json(dashboard_file, on_disk)
 
+        # If package.json still has import_metadata.status = "needs_input_setup",
+        # promote it to "imported" now that the dashboard is configured.
+        package_file = package_dir / "package.json"
+        if package_file.exists() and package.import_metadata is not None:
+            if package.import_metadata.status == "needs_input_setup":
+                _promote_import_status(package_file)
+
         self.log_store.add(
             "info",
             "Dashboard saved",
@@ -301,6 +308,21 @@ def _widget_types_for_kind(kind: str) -> list[str]:
 # ------------------------------------------------------------------
 # Atomic file write
 # ------------------------------------------------------------------
+
+
+def _promote_import_status(package_file: Path) -> None:
+    """Update import_metadata.status in package.json from needs_input_setup to imported."""
+    try:
+        with package_file.open("r", encoding="utf-8") as f:
+            data: dict[str, Any] = json.load(f)
+    except Exception:
+        return
+    meta = data.get("import_metadata")
+    if not isinstance(meta, dict) or meta.get("status") != "needs_input_setup":
+        return
+    meta["status"] = "imported"
+    meta["user_facing_message"] = "Imported"
+    _atomic_write_json(package_file, data)
 
 
 def _atomic_write_json(target: Path, data: dict[str, Any]) -> None:

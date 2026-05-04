@@ -129,9 +129,16 @@ def test_round_trip_graph_and_identity_unchanged(tmp_path: Path) -> None:
     )
     pkg = loader2.get_package(workflow_id)
 
-    # Graph and identity bytes must be byte-for-byte unchanged.
-    assert package_json_path.read_bytes() == package_bytes_before
+    # comfyui_graph.json must be byte-for-byte unchanged.
     assert graph_json_path.read_bytes() == graph_bytes_before
+
+    # package.json identity/graph fields must be structurally unchanged,
+    # but import_metadata.status is promoted to "imported" after save.
+    pkg_before = json.loads(package_bytes_before)
+    pkg_after = json.loads(package_json_path.read_bytes())
+    assert pkg_after.get("engine") == pkg_before.get("engine")
+    assert pkg_after.get("identity") == pkg_before.get("identity")
+    assert pkg_after.get("import_metadata", {}).get("status") == "imported"
 
     # Dashboard changes are visible.
     assert pkg.dashboard.status == "configured"
