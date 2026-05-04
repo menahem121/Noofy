@@ -23,6 +23,7 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/OS_SANDBOXING_FEASIBILITY.md](docs/OS_SANDBOXING_FEASIBILITY.md): OS sandboxing feasibility and product-claim boundaries for community workflow execution.
 - [docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md): v1 Memory Governor strategy for RAM/VRAM estimates, runner co-residence, eviction, retry, UI states, and diagnostics.
 - [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.
+- [docs/MILESTONE_2_DASHBOARD_CANVAS.md](docs/MILESTONE_2_DASHBOARD_CANVAS.md): second milestone — production canvas dashboard, user value/layout persistence, asset store, classic mode setting.
 - [docs/MANAGED_COMFYUI_SIDECAR.md](docs/MANAGED_COMFYUI_SIDECAR.md): v1 requirement for app-managed ComfyUI startup, isolation, logs, health, and shutdown.
 - [docs/FEEDBACK_TESTING_MONITORING.md](docs/FEEDBACK_TESTING_MONITORING.md): diagnostics, automated tests, progress feedback, logs, and monitoring direction.
 
