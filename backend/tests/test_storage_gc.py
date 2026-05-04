@@ -345,3 +345,113 @@ def test_reference_index_tracks_cache_and_package_archive_metadata(tmp_path: Pat
     kinds = {artifact.kind for artifact in index.artifacts}
     assert RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY in kinds
     assert RuntimeStorageArtifactKind.PACKAGE_ARCHIVE in kinds
+
+
+def test_gc_keeps_custom_node_source_cache_referenced_by_installed_workflow(tmp_path: Path) -> None:
+    roots = _roots(tmp_path)
+    referenced_cache_entry = roots.custom_node_cache_dir / "abc123"
+    orphan_cache_entry = roots.custom_node_cache_dir / "orphan"
+    (referenced_cache_entry / "source").mkdir(parents=True)
+    (referenced_cache_entry / "source" / "node.py").write_text("x = 1\n", encoding="utf-8")
+    (orphan_cache_entry / "source").mkdir(parents=True)
+    (orphan_cache_entry / "source" / "node.py").write_text("x = 'orphan' * 100\n", encoding="utf-8")
+    _write_workflow_with_cached_custom_node(
+        roots,
+        workflow_id="publisher__cached-workflow__0.1.0",
+        capsule_fingerprint="capsule-cached",
+        source_cache_ref="abc123/source",
+    )
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[_state("capsule-cached")],
+        config=RuntimeStorageGcConfig(custom_node_source_cache_cap_bytes=1),
+    ).collect_garbage()
+
+    assert referenced_cache_entry.exists()
+    assert not orphan_cache_entry.exists()
+    assert any(
+        decision.path == referenced_cache_entry
+        and decision.action is RuntimeStorageGcAction.SKIP_REFERENCED
+        and decision.referenced_workflows == ("publisher__cached-workflow__0.1.0",)
+        for decision in result.decisions
+    )
+
+
+def _write_workflow_with_cached_custom_node(
+    roots: RuntimeStorageRoots,
+    *,
+    workflow_id: str,
+    capsule_fingerprint: str,
+    source_cache_ref: str,
+) -> None:
+    package_dir = roots.workflow_packages_store_dir / "publisher" / "cached-workflow" / "0.1.0"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": workflow_id, "name": "Cached Workflow", "version": "0.1.0"},
+                "identity": {
+                    "publisher_id": "publisher",
+                    "package_id": "cached-workflow",
+                    "version": "0.1.0",
+                    "trust_level": "quarantined_community",
+                    "source": "test",
+                },
+                "engine": "comfyui",
+                "comfyui_graph": {},
+                "dashboard": {"version": "0.1.0", "sections": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "capsule.lock.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1.0",
+                "workflow": {
+                    "publisher_id": "publisher",
+                    "package_id": "cached-workflow",
+                    "version": "0.1.0",
+                    "trust_level": "quarantined_community",
+                    "source": "test",
+                },
+                "engine": {
+                    "type": "comfyui",
+                    "comfyui_version": "test",
+                    "core_source_hash": "sha256:" + ("c" * 64),
+                },
+                "runtime": {
+                    "runtime_profile_id": "profile",
+                    "runtime_profile_variant_id": "variant",
+                    "runtime_profile_manifest_hash": "sha256:" + ("a" * 64),
+                    "runtime_profile_catalog_version": "0.1.0",
+                    "fingerprint_schema_version": "0.1.0",
+                    "dependency_env_fingerprint": "sha256:" + ("d" * 64),
+                    "runner_fingerprint": "sha256:" + ("r" * 64),
+                    "capsule_fingerprint": capsule_fingerprint,
+                    "os": "linux",
+                    "architecture": "x64",
+                    "python_version": "3.12",
+                    "python_build_id": "cpython-3.12",
+                    "gpu_backend": "cpu",
+                    "dependency_lock_hash": "sha256:" + ("e" * 64),
+                    "runner_workspace_hash": "sha256:" + ("f" * 64),
+                },
+                "custom_nodes": [
+                    {
+                        "package_id": "cached-node",
+                        "source": "registry_metadata:cached-node",
+                        "source_ref": "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                        "source_content_hash": "sha256:" + ("b" * 64),
+                        "source_cache_ref": source_cache_ref,
+                        "trust_level": "quarantined_community",
+                        "node_types": ["CachedNode"],
+                    }
+                ],
+                "dependencies": {"lock_file": "lock", "install_policy": "quarantined-community-v1"},
+                "trust": {"level": "quarantined_community", "publisher": "publisher"},
+            }
+        ),
+        encoding="utf-8",
+    )

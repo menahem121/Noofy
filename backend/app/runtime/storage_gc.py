@@ -170,6 +170,7 @@ class _WorkflowRecord:
     trust_level: str | None
     package_dir: Path
     source_archive_path: Path | None
+    custom_node_source_cache_refs: tuple[str, ...] = ()
 
 
 class RuntimeStorageGarbageCollector:
@@ -260,6 +261,10 @@ class RuntimeStorageGarbageCollector:
                 ).add(workflow_id)
 
         referenced_wheels = self._referenced_wheel_cache_paths(referenced_dependency_envs)
+        referenced_custom_node_sources = self._referenced_custom_node_source_cache_paths(
+            workflow_records,
+            workflow_for_state,
+        )
         package_archive_refs = self._referenced_package_archives(workflow_records, workflow_for_state)
 
         artifacts: list[RuntimeStorageArtifactMetadata] = []
@@ -277,7 +282,7 @@ class RuntimeStorageGarbageCollector:
             self._cache_entry_artifacts(
                 RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY,
                 self.roots.custom_node_cache_dir,
-                {},
+                referenced_custom_node_sources,
             )
         )
         artifacts.extend(self._package_archive_artifacts(package_archive_refs))
@@ -703,6 +708,25 @@ class RuntimeStorageGarbageCollector:
                 refs.setdefault(record.source_archive_path, set()).add(record.workflow_id)
         return refs
 
+    def _referenced_custom_node_source_cache_paths(
+        self,
+        workflow_records: list[_WorkflowRecord],
+        workflow_for_state: dict[str, str],
+    ) -> dict[Path, set[str]]:
+        rooted_workflows = set(workflow_for_state.values())
+        refs: dict[Path, set[str]] = {}
+        for record in workflow_records:
+            if record.workflow_id not in rooted_workflows:
+                continue
+            for source_cache_ref in record.custom_node_source_cache_refs:
+                refs.setdefault(
+                    _custom_node_source_cache_entry_path(self.roots.custom_node_cache_dir, source_cache_ref),
+                    set(),
+                ).add(
+                    record.workflow_id,
+                )
+        return refs
+
 
 def _metadata_for_path(
     kind: RuntimeStorageArtifactKind,
@@ -754,9 +778,22 @@ def _scan_workflow_records(roots: Iterable[Path]) -> list[_WorkflowRecord]:
                     source_archive_path=(package_dir / "source-archive.noofy")
                     if (package_dir / "source-archive.noofy").exists()
                     else None,
+                    custom_node_source_cache_refs=tuple(
+                        sorted(
+                            custom_node.source_cache_ref
+                            for custom_node in capsule.custom_nodes
+                            if custom_node.source_cache_ref is not None
+                        )
+                    )
+                    if capsule
+                    else (),
                 )
             )
     return records
+
+
+def _custom_node_source_cache_entry_path(root: Path, source_cache_ref: str) -> Path:
+    return root / Path(source_cache_ref).parts[0]
 
 
 def _read_package(path: Path) -> WorkflowPackage | None:
