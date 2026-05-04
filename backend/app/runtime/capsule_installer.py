@@ -16,6 +16,7 @@ from app.runtime.custom_nodes import (
     CustomNodeMaterializationErrorCode,
 )
 from app.engine.diagnostics import LogStore
+from app.runtime.dependency_lock import DependencyPolicyError
 from app.runtime.dependency_env import DependencyEnvironmentInstallError
 from app.runtime.install_state import (
     InstallStateStore,
@@ -42,6 +43,7 @@ from app.runtime.model_store import (
 from app.runtime.profiles import RuntimeProfileResolutionError
 from app.runtime.smoke_test import RunnerSmokeTestError
 from app.runtime.workspace_preparer import PreparedRuntimeWorkspace, RuntimeWorkspacePreparer
+from app.trust import capsule_source_policy
 
 WorkspaceSmokeTest = Callable[[CapsuleLock, PreparedRuntimeWorkspace], Awaitable[SmokeTestReport | None]]
 
@@ -89,12 +91,17 @@ class CapsuleInstaller:
         )
 
         self._transition(fingerprint, InstallStatus.PREPARING, workflow_id, last_error=None)
-        if not _trust_level_can_prepare_dependencies(capsule_lock.workflow.trust_level) or not _trust_level_can_prepare_dependencies(capsule_lock.trust.level):
+        source_policy = capsule_source_policy(capsule_lock)
+        if (
+            not _trust_level_can_prepare_dependencies(capsule_lock.workflow.trust_level)
+            or not _trust_level_can_prepare_dependencies(capsule_lock.trust.level)
+            or not source_policy.automatic_preparation_allowed
+        ):
             state = self._transition(
                 fingerprint,
                 InstallStatus.BLOCKED_BY_POLICY,
                 workflow_id,
-                last_error="This workflow is blocked by the dependency preparation policy.",
+                last_error="This workflow is blocked by the source policy.",
             )
             if install_transaction is not None:
                 self.workspace_preparer.install_transaction_store.quarantine(
@@ -129,6 +136,7 @@ class CapsuleInstaller:
                     local_model_requirements=local_model_requirements,
                     staged_views_dir=install_transaction.model_views_dir if install_transaction is not None else None,
                     staged_blobs_dir=install_transaction.model_blobs_dir if install_transaction is not None else None,
+                    source_policy=source_policy,
                 )
                 model_references = model_view.model_references
                 model_view_path = model_view.view_path
@@ -172,6 +180,14 @@ class CapsuleInstaller:
             )
             raise CapsuleInstallError(str(exc), state=state) from exc
         except DependencyEnvironmentInstallError as exc:
+            state = self._transition(
+                fingerprint,
+                InstallStatus.BLOCKED_BY_POLICY,
+                workflow_id,
+                last_error=str(exc),
+            )
+            raise CapsuleInstallError(str(exc), state=state) from exc
+        except DependencyPolicyError as exc:
             state = self._transition(
                 fingerprint,
                 InstallStatus.BLOCKED_BY_POLICY,
@@ -318,23 +334,32 @@ class CapsuleInstaller:
         workflow_execution_smoke_allowed: bool,
     ) -> SmokeTestReport:
         if self.workspace_smoke_test is None:
-            return SmokeTestReport(
-                dependency_env=SmokeStageResult(
-                    status=SmokeStageStatus.BLOCKED,
-                    message="No dependency environment smoke check is configured.",
+            return _with_source_policy_smoke_diagnostics(
+                SmokeTestReport(
+                    dependency_env=SmokeStageResult(
+                        status=SmokeStageStatus.BLOCKED,
+                        message="No dependency environment smoke check is configured.",
+                    ),
+                    custom_node_import=_custom_node_stage_result(capsule_lock),
+                    runner_health=SmokeStageResult(
+                        status=SmokeStageStatus.BLOCKED,
+                        message="No runner health smoke check is configured.",
+                    ),
+                    workflow_execution=SmokeStageResult(
+                        status=SmokeStageStatus.BLOCKED,
+                        message="No workflow execution smoke check is configured.",
+                    ),
                 ),
-                custom_node_import=_custom_node_stage_result(capsule_lock),
-                runner_health=SmokeStageResult(
-                    status=SmokeStageStatus.BLOCKED,
-                    message="No runner health smoke check is configured.",
-                ),
-                workflow_execution=SmokeStageResult(
-                    status=SmokeStageStatus.BLOCKED,
-                    message="No workflow execution smoke check is configured.",
-                ),
+                capsule_lock,
             )
 
-        report = await self.workspace_smoke_test(capsule_lock, prepared_workspace)
+        try:
+            report = await self.workspace_smoke_test(capsule_lock, prepared_workspace)
+        except RunnerSmokeTestError as exc:
+            raise RunnerSmokeTestError(
+                str(exc),
+                report=_with_source_policy_smoke_diagnostics(exc.report, capsule_lock),
+            ) from exc
         smoke_report = report or SmokeTestReport(
             dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
             custom_node_import=_custom_node_stage_result(capsule_lock),
@@ -353,7 +378,7 @@ class CapsuleInstaller:
                     )
                 }
             )
-        return smoke_report
+        return _with_source_policy_smoke_diagnostics(smoke_report, capsule_lock)
 
     def _quarantine_failed_workspace(
         self,
@@ -450,6 +475,24 @@ def _custom_node_stage_result(capsule_lock: CapsuleLock) -> SmokeStageResult:
         status=SmokeStageStatus.SKIPPED,
         message="Workflow has no custom nodes.",
     )
+
+
+def _with_source_policy_smoke_diagnostics(
+    report: SmokeTestReport,
+    capsule_lock: CapsuleLock,
+) -> SmokeTestReport:
+    source_policy = capsule_source_policy(capsule_lock).model_dump(mode="json", exclude_none=True)
+    updates: dict[str, SmokeStageResult] = {}
+    for stage_name in ("dependency_env", "custom_node_import", "runner_health", "workflow_execution"):
+        stage = getattr(report, stage_name)
+        if stage.status not in {SmokeStageStatus.BLOCKED, SmokeStageStatus.FAILED}:
+            continue
+        updates[stage_name] = stage.model_copy(
+            update={"details": {**stage.details, "source_policy": source_policy}}
+        )
+    if not updates:
+        return report
+    return report.model_copy(update=updates)
 
 
 def _required_smoke_stages_passed(

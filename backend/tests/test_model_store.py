@@ -16,9 +16,11 @@ from app.runtime.isolation import ModelLock
 from app.runtime.model_store import (
     LocalModelRequirement,
     ModelDownloadError,
+    ModelSourcePolicyError,
     ModelStore,
     probe_symlink_capability,
 )
+from app.source_policy import SourcePolicy
 
 
 def _model_store_paths(root: Path) -> dict[str, Path]:
@@ -61,6 +63,24 @@ def _make_downloader(content_by_url: dict[str, bytes]):
         return len(data)
 
     return downloader
+
+
+def _source_policy(
+    *,
+    model_source_trust: str = "hashed",
+    allowed_model_origins: list[str] | None = None,
+) -> SourcePolicy:
+    return SourcePolicy(
+        trust_level="quarantined_community",
+        source_policy="explicit_opt_in_and_isolated_capsule_required",
+        package_source_type="noofy_archive_import",
+        automatic_preparation_allowed=True,
+        allowed_source_origins=["explicit-metadata"],
+        allowed_model_origins=allowed_model_origins or ["hashed-download"],
+        model_source_trust=model_source_trust,
+        community_preparation_opt_in_required=True,
+        community_preparation_opted_in=True,
+    )
 
 
 @pytest.mark.anyio
@@ -274,6 +294,56 @@ async def test_materialize_model_view_writes_per_view_tree_and_references(tmp_pa
     assert view.model_references[0].materialized_file_verified is True
     manifest = json.loads((view.view_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["view_fingerprint"] == view.view_fingerprint
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_blocks_download_when_policy_disallows_model_origin(tmp_path: Path) -> None:
+    payload = b"policy-model"
+    lock = _model_lock(payload)
+    call_count = 0
+
+    async def downloader(url: str, dest: Path) -> int:
+        nonlocal call_count
+        call_count += 1
+        dest.write_bytes(payload)
+        return len(payload)
+
+    store, _ = _build_store(tmp_path, downloader)
+
+    with pytest.raises(ModelSourcePolicyError, match="source policy"):
+        await store.materialize_model_view(
+            view_id="capsule-fp",
+            model_locks=[lock],
+            source_policy=_source_policy(allowed_model_origins=["registry-locked"]),
+        )
+
+    assert call_count == 0
+    assert not (tmp_path / "blobs").exists()
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_blocks_local_reuse_when_policy_requires_hashed_models(tmp_path: Path) -> None:
+    model_root = tmp_path / "local-models"
+    local_model = model_root / "checkpoints" / "local.safetensors"
+    local_model.parent.mkdir(parents=True)
+    local_model.write_bytes(b"local-bytes")
+    requirement = LocalModelRequirement(
+        requirement_id="checkpoints/local.safetensors",
+        comfyui_folder="checkpoints",
+        filename="local.safetensors",
+        size_bytes=len(b"local-bytes"),
+    )
+    store, _ = _build_store(tmp_path, _make_downloader({}), local_model_roots=[model_root])
+
+    with pytest.raises(ModelSourcePolicyError, match="requires hash-verified"):
+        await store.materialize_model_view(
+            view_id="capsule-fp",
+            model_locks=[],
+            local_model_requirements=[requirement],
+            source_policy=_source_policy(model_source_trust="hashed", allowed_model_origins=["hashed-download"]),
+        )
+
+    assert not (tmp_path / "materialized").exists()
 
 
 @pytest.mark.anyio

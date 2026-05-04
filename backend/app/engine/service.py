@@ -85,12 +85,13 @@ from app.runtime.supervisor import (
     RunnerStatus,
     RunnerSupervisor,
 )
+from app.source_policy import ModelSourceTrust, SourcePolicy
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
-from app.trust import load_trust_verifier, workflow_trust_payload
+from app.trust import capsule_source_policy, load_trust_verifier, workflow_source_policy, workflow_trust_payload
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
@@ -275,7 +276,7 @@ class EngineService:
             return self._unsupported_install_payload(workflow_id)
 
         state = self.capsule_installer.get_state(capsule_lock)
-        return self._install_payload(workflow_id, state)
+        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
 
     def get_install_state_developer_details(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
@@ -311,6 +312,15 @@ class EngineService:
 
         package = self.workflow_loader.get_package(workflow_id)
         local_model_requirements = _local_model_requirements(package, capsule_lock)
+        capsule_lock = capsule_lock.model_copy(
+            update={
+                "source_policy": _effective_prepare_source_policy(
+                    package,
+                    capsule_lock,
+                    local_model_requirements=local_model_requirements,
+                )
+            }
+        )
         model_resolution_error = _unresolved_model_requirement_message(package, capsule_lock)
         if model_resolution_error is not None:
             state = self.capsule_installer.install_state_store.update(
@@ -329,7 +339,7 @@ class EngineService:
                     "error": model_resolution_error,
                 },
             )
-            return self._install_payload(workflow_id, state)
+            return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
 
         try:
             state = await self.capsule_installer.prepare(
@@ -348,8 +358,8 @@ class EngineService:
                     "error": str(exc),
                 },
             )
-            return self._install_payload(workflow_id, exc.state)
-        return self._install_payload(workflow_id, state)
+            return self._install_payload(workflow_id, exc.state, capsule_lock=capsule_lock)
+        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         """Start and bind an isolated runner for a prepared verified workflow."""
@@ -1062,7 +1072,13 @@ class EngineService:
         missing_models = self.workflow_validator.validate_models(package, available_models)
         return self.workflow_validator.combine(package, structure_result, missing_models)
 
-    def _install_payload(self, workflow_id: str, state: InstallState) -> dict[str, object]:
+    def _install_payload(
+        self,
+        workflow_id: str,
+        state: InstallState,
+        *,
+        capsule_lock: CapsuleLock | None = None,
+    ) -> dict[str, object]:
         return {
             "workflow_id": workflow_id,
             "capsule_fingerprint": state.capsule_fingerprint,
@@ -1076,6 +1092,9 @@ class EngineService:
             "smoke_test_report": state.smoke_test_report.model_dump(mode="json"),
             "last_error": state.last_error,
             "developer_details_available": state.last_error is not None or bool(state.smoke_test_report.model_dump(mode="json")),
+            "source_policy": capsule_source_policy(capsule_lock).model_dump(mode="json")
+            if capsule_lock is not None
+            else None,
         }
 
     def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
@@ -1094,6 +1113,11 @@ class EngineService:
             "package_id": package.identity.package_id if package.identity else package.metadata.id,
             "trust_level": package.identity.trust_level if package.identity else "noofy_verified",
             "trust": workflow_trust_payload(package),
+            "source_policy": (
+                package.source_policy.model_dump(mode="json")
+                if package.source_policy is not None
+                else workflow_source_policy(package).model_dump(mode="json")
+            ),
             "status": status,
             "status_label": user_facing_status,
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
@@ -1909,6 +1933,24 @@ def _local_model_requirements(
                 )
             )
     return requirements
+
+
+def _effective_prepare_source_policy(
+    package: WorkflowPackage,
+    capsule_lock: CapsuleLock,
+    *,
+    local_model_requirements: list[LocalModelRequirement],
+) -> SourcePolicy:
+    policy = package.source_policy or workflow_source_policy(package)
+    if capsule_lock.models and local_model_requirements:
+        model_source_trust = ModelSourceTrust.MIXED
+    elif capsule_lock.models:
+        model_source_trust = ModelSourceTrust.HASHED
+    elif local_model_requirements:
+        model_source_trust = ModelSourceTrust.FILENAME_SIZE
+    else:
+        model_source_trust = policy.model_source_trust
+    return policy.model_copy(update={"model_source_trust": model_source_trust})
 
 
 def _workflow_source_files_dir(

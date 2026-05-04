@@ -270,7 +270,11 @@ def _load_package(archive_path: Path) -> WorkflowPackage:
 def _import_package(config: RealSmokeConfig, scenario: RealSmokeScenario) -> ImportedWorkflowPackageStore:
     archive_path = config.test_workflows_dir / scenario.archive_name
     store = ImportedWorkflowPackageStore(config.work_dir / "packages")
-    store.import_archive(archive_path.read_bytes(), original_filename=scenario.archive_name)
+    store.import_archive(
+        archive_path.read_bytes(),
+        original_filename=scenario.archive_name,
+        allow_unverified_community_preparation=True,
+    )
     return store
 
 

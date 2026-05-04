@@ -16,9 +16,11 @@ from app.runtime.dependency_lock import (
     merge_resolved_dependency_locks,
     normalize_package_name,
     resolved_dependency_lock_hash,
+    validate_dependency_lock_source_policy,
     validate_quarantined_community_lock,
     with_computed_lock_hash,
 )
+from app.source_policy import SourcePolicy
 
 
 def _resolver() -> ResolverMetadata:
@@ -78,6 +80,22 @@ def _lock(
         install_policy_version=install_policy_version,
         resolver=_resolver(),
         wheels=wheels,
+    )
+
+
+def _source_policy(
+    *,
+    allowed_source_origins: list[str] | None = None,
+) -> SourcePolicy:
+    return SourcePolicy(
+        trust_level="quarantined_community",
+        source_policy="explicit_opt_in_and_isolated_capsule_required",
+        package_source_type="noofy_archive_import",
+        automatic_preparation_allowed=True,
+        allowed_source_origins=allowed_source_origins or ["explicit-metadata"],
+        model_source_trust="hashed",
+        community_preparation_opt_in_required=True,
+        community_preparation_opted_in=True,
     )
 
 
@@ -168,6 +186,36 @@ def test_merge_resolved_dependency_locks_combines_duplicate_wheel_facts() -> Non
     assert merged.wheels[0].relationship is DependencyRelationship.CORE
     assert merged.wheels[0].requested_by == ["custom-node-a", "runtime-profile"]
     assert merged.lock_hash is not None
+
+
+def test_merge_resolved_dependency_locks_carries_custom_source_policy() -> None:
+    policy = _source_policy()
+    core = _lock([])
+    custom = _lock([_wheel("pillow")]).model_copy(update={"source_policy": policy})
+
+    merged = merge_resolved_dependency_locks(core, [custom])
+
+    assert merged.source_policy == policy
+    validate_dependency_lock_source_policy(merged, policy)
+
+
+def test_dependency_lock_source_policy_validation_blocks_missing_policy() -> None:
+    with pytest.raises(DependencyPolicyError) as error:
+        validate_dependency_lock_source_policy(_lock([_wheel("pillow")]), _source_policy())
+
+    assert error.value.code is DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH
+
+
+def test_dependency_lock_source_policy_validation_blocks_mismatched_policy() -> None:
+    expected = _source_policy(allowed_source_origins=["explicit-metadata"])
+    stale = _lock([_wheel("pillow")]).model_copy(
+        update={"source_policy": _source_policy(allowed_source_origins=["registry-locked"])}
+    )
+
+    with pytest.raises(DependencyPolicyError) as error:
+        validate_dependency_lock_source_policy(stale, expected)
+
+    assert error.value.code is DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH
 
 
 def test_merge_resolved_dependency_locks_blocks_conflicting_versions() -> None:

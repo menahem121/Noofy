@@ -54,3 +54,8 @@ When adding workflow behavior, prefer workflow packages and dashboard schema ove
 When in doubt during Milestone 1, keep the implementation small: start with one text-to-image workflow that proves the architecture. This is not a long-term product limit.
 
 When adapting large files from `ComfyUI-official-repo/`, do not manually rewrite big chunks. If most of a file is needed, copy it with a terminal command into the app-owned codebase, rename it clearly, and then make focused edits from there. Keep ComfyUI-derived files identifiable and listed for maintenance reasons.
+
+### Testing
+Use the repo-level test command by default:
+```bash
+make test

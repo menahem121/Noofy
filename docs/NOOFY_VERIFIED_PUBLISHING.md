@@ -1,6 +1,6 @@
 # Noofy Verified Publishing Process
 
-Status: Phase 6 definition for marketplace readiness.
+Status: Phase 6 definition and local backend implementation notes for marketplace readiness.
 
 This document defines what "Noofy Verified" means operationally. It does not implement the full in-app marketplace.
 
@@ -53,7 +53,7 @@ Before a package can be published as Noofy Verified:
 
 ## Signing Requirements
 
-The current local implementation supports `hmac-sha256` trust roots for policy tests and local development. Public marketplace publishing must use asymmetric signatures so product builds only need public verification keys.
+The current backend implementation verifies Ed25519 package signatures and signed registry metadata using public trust roots. The older `hmac-sha256` verifier remains available only for local tests/development and must be explicitly enabled by a development verifier/keyring.
 
 Production signing must support:
 
@@ -66,7 +66,7 @@ Production signing must support:
 - policy-version compatibility
 - tamper-resistant canonical payloads
 
-No production trust keyring may contain private signing keys or HMAC secrets.
+No production trust keyring may contain private signing keys or HMAC secrets. Ed25519 trust-root records contain public verification keys only; local HMAC records contain a shared secret and are rejected unless development HMAC trust is explicitly enabled.
 
 ## Registry Locked Publishing
 

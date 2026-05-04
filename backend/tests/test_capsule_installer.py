@@ -47,8 +47,9 @@ def _capsule_lock_data(
     fingerprint: str,
     models: list[dict],
     custom_nodes: list[dict] | None = None,
+    source_policy: dict | None = None,
 ) -> dict:
-    return {
+    data = {
         "schema_version": "0.1.0",
         "workflow": {
             "publisher_id": "noofy",
@@ -84,6 +85,9 @@ def _capsule_lock_data(
         "models": models,
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }
+    if source_policy is not None:
+        data["source_policy"] = source_policy
+    return data
 
 
 def _model_record(content: bytes, *, model_id: str = "m1", folder: str = "checkpoints", filename: str = "m.safetensors") -> dict:
@@ -276,6 +280,12 @@ async def test_prepare_records_runtime_workspace_paths_when_preparer_is_configur
     assert state.runner_workspace_path is not None
     assert (Path(state.dependency_env_path) / "manifest.json").exists()
     assert (Path(state.runner_workspace_path) / "manifest.json").exists()
+    dependency_policy = state.smoke_test_report.dependency_env.details["source_policy"]
+    runner_policy = state.smoke_test_report.runner_health.details["source_policy"]
+    assert dependency_policy["trust_level"] == "noofy_verified"
+    assert dependency_policy["source_policy"] == "noofy_verified_sources_only"
+    assert dependency_policy["policy_status"] == "active"
+    assert runner_policy == dependency_policy
 
 
 @pytest.mark.anyio
@@ -625,6 +635,10 @@ async def test_prepare_runner_startup_failure_persists_smoke_report(tmp_path: Pa
     assert exc_info.value.state.smoke_test_status is SmokeTestStatus.FAILED
     assert exc_info.value.state.smoke_test_report.runner_health.status is SmokeStageStatus.FAILED
     assert exc_info.value.state.smoke_test_report.runner_health.message == "startup timeout"
+    assert (
+        exc_info.value.state.smoke_test_report.runner_health.details["source_policy"]["source_policy"]
+        == "noofy_verified_sources_only"
+    )
 
 
 @pytest.mark.anyio
@@ -838,6 +852,46 @@ async def test_prepare_dependency_policy_failure_marks_blocked_by_policy(tmp_pat
     assert persisted is not None
     assert persisted.status is InstallStatus.BLOCKED_BY_POLICY
     assert list((tmp_path / "envs").glob("*")) == []
+
+
+@pytest.mark.anyio
+async def test_prepare_source_policy_blocked_capsule_marks_blocked_before_model_download(tmp_path: Path) -> None:
+    data = _capsule_lock_data(
+        fingerprint="fp-source-policy-blocked",
+        models=[
+            {
+                "id": "m1",
+                "sha256": "sha256:" + ("1" * 64),
+                "size_bytes": 10,
+                "source_urls": ["https://example.invalid/model"],
+                "comfyui_folder": "checkpoints",
+                "filename": "model.safetensors",
+            }
+        ],
+        source_policy={
+            "trust_level": "unsupported",
+            "source_policy": "blocked",
+            "package_source_type": "noofy_archive_import",
+            "automatic_preparation_allowed": False,
+            "model_source_trust": "hashed",
+            "policy_status": "blocked_by_policy",
+        },
+    )
+    capsule = CapsuleLock.model_validate(data)
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("source-policy blocked capsules must not download models")
+
+    installer, state_store, _ = _build_installer(tmp_path, downloader=downloader)
+
+    with pytest.raises(CapsuleInstallError, match="source policy") as exc:
+        await installer.prepare(capsule)
+
+    assert exc.value.state.status is InstallStatus.BLOCKED_BY_POLICY
+    persisted = state_store.get("fp-source-policy-blocked")
+    assert persisted is not None
+    assert persisted.status is InstallStatus.BLOCKED_BY_POLICY
+    assert list((tmp_path / "blobs").glob("*")) == []
 
 
 @pytest.mark.anyio

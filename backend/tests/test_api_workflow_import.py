@@ -52,12 +52,17 @@ class FakeImportService:
         return {
             "schema_version": "0.1.0",
             "signature_payload_schema_version": "0.1.0",
+            "development_hmac_allowed": False,
             "trusted_key_count": 1,
             "trusted_keys": [
                 {
                     "key_id": "registry-test-key",
-                    "algorithm": "hmac-sha256",
+                    "algorithm": "ed25519",
                     "purpose": "registry",
+                    "revoked": False,
+                    "not_before": None,
+                    "expires_at": None,
+                    "policy_versions": ["phase6-local-0.1"],
                 }
             ],
             "trust_levels": {},
@@ -138,8 +143,12 @@ def test_trust_policy_endpoint_returns_public_key_metadata_only(monkeypatch) -> 
     assert payload["trusted_key_count"] == 1
     assert payload["trusted_keys"][0] == {
         "key_id": "registry-test-key",
-        "algorithm": "hmac-sha256",
+        "algorithm": "ed25519",
         "purpose": "registry",
+        "revoked": False,
+        "not_before": None,
+        "expires_at": None,
+        "policy_versions": ["phase6-local-0.1"],
     }
     assert payload["secrets_exposed"] is False
     assert "secret" not in str(payload["trusted_keys"]).casefold()

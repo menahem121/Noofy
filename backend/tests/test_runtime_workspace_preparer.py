@@ -344,29 +344,27 @@ def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Pat
         resolver=ResolverMetadata(name="uv", version="0.9.0"),
         wheels=[],
     )
-    custom_lock = with_computed_lock_hash(
-        ResolvedDependencyLock(
-            runtime_profile_id=base.runtime.runtime_profile_id,
-            runtime_profile_variant_id=base.runtime.runtime_profile_variant_id,
-            runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
-            install_policy_version=base.dependencies.install_policy,
-            resolver=ResolverMetadata(name="uv", version="0.9.0"),
-            wheels=[
-                ResolvedDependencyWheel(
-                    name="Demo_Package",
-                    version="1.0.0",
-                    wheel_filename="demo-package-1.0.0-py3-none-any.whl",
-                    sha256="sha256:" + ("a" * 64),
-                    source_kind=DependencySourceKind.APPROVED_CACHE,
-                    approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
-                    platform_tags=["py3-none-any"],
-                    relationship=DependencyRelationship.DIRECT,
-                    requested_by=["node-a"],
-                    resolver_name="uv",
-                    resolver_version="0.9.0",
-                )
-            ],
-        )
+    custom_lock = ResolvedDependencyLock(
+        runtime_profile_id=base.runtime.runtime_profile_id,
+        runtime_profile_variant_id=base.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=base.runtime.runtime_profile_manifest_hash,
+        install_policy_version=base.dependencies.install_policy,
+        resolver=ResolverMetadata(name="uv", version="0.9.0"),
+        wheels=[
+            ResolvedDependencyWheel(
+                name="Demo_Package",
+                version="1.0.0",
+                wheel_filename="demo-package-1.0.0-py3-none-any.whl",
+                sha256="sha256:" + ("a" * 64),
+                source_kind=DependencySourceKind.APPROVED_CACHE,
+                approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
+                platform_tags=["py3-none-any"],
+                relationship=DependencyRelationship.DIRECT,
+                requested_by=["node-a"],
+                resolver_name="uv",
+                resolver_version="0.9.0",
+            )
+        ],
     )
     source_files_dir = tmp_path / "source-files"
     (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
@@ -374,7 +372,7 @@ def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Pat
 
     class FakeResolver:
         def resolve(self, request) -> ResolvedDependencyLock:
-            return custom_lock
+            return with_computed_lock_hash(custom_lock.model_copy(update={"source_policy": request.source_policy}))
 
     installer = _FakeDependencyEnvInstaller()
     lock_store = ResolvedDependencyLockStore(tmp_path / "dependency-locks")
@@ -402,29 +400,27 @@ def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Pat
 def test_prepare_generates_candidate_dependency_lock_from_cached_non_bundled_source(tmp_path: Path) -> None:
     base = _capsule_lock()
     capsule = _with_cached_custom_node(base, source_cache_ref="abc123/source")
-    custom_lock = with_computed_lock_hash(
-        ResolvedDependencyLock(
-            runtime_profile_id=capsule.runtime.runtime_profile_id,
-            runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
-            runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
-            install_policy_version=capsule.dependencies.install_policy,
-            resolver=ResolverMetadata(name="uv", version="0.9.0"),
-            wheels=[
-                ResolvedDependencyWheel(
-                    name="Demo_Package",
-                    version="1.0.0",
-                    wheel_filename="demo-package-1.0.0-py3-none-any.whl",
-                    sha256="sha256:" + ("a" * 64),
-                    source_kind=DependencySourceKind.APPROVED_CACHE,
-                    approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
-                    platform_tags=["py3-none-any"],
-                    relationship=DependencyRelationship.DIRECT,
-                    requested_by=["cached-node"],
-                    resolver_name="uv",
-                    resolver_version="0.9.0",
-                )
-            ],
-        )
+    custom_lock = ResolvedDependencyLock(
+        runtime_profile_id=capsule.runtime.runtime_profile_id,
+        runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+        install_policy_version=capsule.dependencies.install_policy,
+        resolver=ResolverMetadata(name="uv", version="0.9.0"),
+        wheels=[
+            ResolvedDependencyWheel(
+                name="Demo_Package",
+                version="1.0.0",
+                wheel_filename="demo-package-1.0.0-py3-none-any.whl",
+                sha256="sha256:" + ("a" * 64),
+                source_kind=DependencySourceKind.APPROVED_CACHE,
+                approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
+                platform_tags=["py3-none-any"],
+                relationship=DependencyRelationship.DIRECT,
+                requested_by=["cached-node"],
+                resolver_name="uv",
+                resolver_version="0.9.0",
+            )
+        ],
     )
     cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
     cached_source_dir.mkdir(parents=True)
@@ -437,7 +433,7 @@ def test_prepare_generates_candidate_dependency_lock_from_cached_non_bundled_sou
 
         def resolve(self, request) -> ResolvedDependencyLock:
             self.source_dirs = request.source_dirs
-            return custom_lock
+            return with_computed_lock_hash(custom_lock.model_copy(update={"source_policy": request.source_policy}))
 
     resolver = FakeResolver()
     installer = _FakeDependencyEnvInstaller()

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.engine.diagnostics import LogStore
 from app.runtime.isolation import SHA256_PATTERN, CustomNodeLock, TrustLevel
+from app.source_policy import SourcePolicy
 
 NODE_REGISTRY_SCHEMA_VERSION = "0.1.0"
 CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME = "noofy-custom-node-source-cache-manifest.json"
@@ -40,7 +41,9 @@ class NodeRegistryResolutionErrorCode(StrEnum):
     MISSING_PINNED_SOURCE_REF = "missing_pinned_source_ref"
     MISSING_SOURCE_CONTENT_HASH = "missing_source_content_hash"
     POLICY_BLOCKED_TRUST_LEVEL = "policy_blocked_trust_level"
+    REGISTRY_SNAPSHOT_MISMATCH = "registry_snapshot_mismatch"
     SOURCE_RESOLVED = "source_resolved"
+    SOURCE_POLICY_BLOCKED = "source_policy_blocked"
     UNAPPROVED_SOURCE_URL = "unapproved_source_url"
     UNKNOWN_NODE_TYPE = "unknown_node_type"
     UNKNOWN_PACKAGE = "unknown_package"
@@ -155,6 +158,7 @@ class CustomNodeSourceResolutionRequest(BaseModel):
     trust_level: TrustLevel
     allow_unverified_community_preparation: bool = False
     explicit_source: NodeRegistrySource | None = None
+    source_policy: SourcePolicy | None = None
 
     @field_validator("node_types")
     @classmethod
@@ -173,6 +177,18 @@ class ResolvedCustomNodeSource(BaseModel):
     source: NodeRegistrySource
     resolution_method: str = Field(min_length=1)
     diagnostics: list[NodeRegistryDiagnostic] = Field(default_factory=list)
+
+    def source_policy_origins(self) -> list[str]:
+        origins: list[str] = []
+        if self.registry_id:
+            origins.append(self.registry_id)
+        if self.resolution_method == "explicit_metadata":
+            origins.append("explicit-metadata")
+        if self.trust_level is TrustLevel.NOOFY_VERIFIED:
+            origins.append("noofy-verified")
+        if self.trust_level is TrustLevel.REGISTRY_LOCKED:
+            origins.append("registry-locked")
+        return sorted(set(origins))
 
     def to_custom_node_lock(self, cached_source: CachedCustomNodeSource | None = None) -> CustomNodeLock:
         return CustomNodeLock(
@@ -201,7 +217,9 @@ class NodeRegistryResolver:
     def resolve(self, request: CustomNodeSourceResolutionRequest) -> ResolvedCustomNodeSource:
         try:
             self._check_opt_in(request)
+            self._check_source_policy_is_preparable(request)
             if request.explicit_source is not None:
+                self._check_explicit_source_policy(request)
                 package_id = request.package_id or _package_id_from_source_url(request.explicit_source.source_url)
                 resolved = ResolvedCustomNodeSource(
                     package_id=package_id,
@@ -223,6 +241,7 @@ class NodeRegistryResolver:
             entry, method = self._resolve_registry_entry(request)
             source = entry.sources[0]
             _validate_source_policy(source)
+            self._check_registry_source_policy(request, entry)
             self._check_trust_policy(request, entry)
             resolved = ResolvedCustomNodeSource(
                 package_id=entry.package_id,
@@ -264,6 +283,30 @@ class NodeRegistryResolver:
                 NodeRegistryResolutionErrorCode.COMMUNITY_OPT_IN_REQUIRED,
                 "This community workflow needs permission before Noofy prepares workflow extensions.",
                 developer_details={"trust_level": request.trust_level.value},
+            )
+
+    def _check_source_policy_is_preparable(self, request: CustomNodeSourceResolutionRequest) -> None:
+        policy = request.source_policy
+        if policy is None:
+            return
+        if policy.trust_level != request.trust_level.value:
+            raise NodeRegistryResolutionError(
+                NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+                "Noofy cannot prepare this workflow extension because its source policy does not match the workflow trust level.",
+                developer_details={
+                    "policy_trust_level": policy.trust_level,
+                    "request_trust_level": request.trust_level.value,
+                },
+            )
+        if not policy.automatic_preparation_allowed:
+            raise NodeRegistryResolutionError(
+                NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+                "This workflow needs permission before Noofy prepares workflow extensions.",
+                developer_details={
+                    "trust_level": policy.trust_level,
+                    "policy_status": policy.policy_status,
+                    "source_policy": policy.source_policy,
+                },
             )
 
     def _resolve_registry_entry(
@@ -308,6 +351,72 @@ class NodeRegistryResolver:
                 developer_details={"package_ids": sorted(matching_entries)},
             )
         return next(iter(matching_entries.values())), "registry_metadata"
+
+    def _check_explicit_source_policy(self, request: CustomNodeSourceResolutionRequest) -> None:
+        policy = request.source_policy
+        if policy is None:
+            return
+        if "explicit-metadata" not in set(policy.allowed_source_origins):
+            raise NodeRegistryResolutionError(
+                NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+                "Noofy cannot prepare this workflow extension from package metadata under the current source policy.",
+                developer_details={
+                    "source_policy": policy.source_policy,
+                    "allowed_source_origins": policy.allowed_source_origins,
+                    "source_url": request.explicit_source.source_url if request.explicit_source else None,
+                },
+            )
+
+    def _check_registry_source_policy(
+        self,
+        request: CustomNodeSourceResolutionRequest,
+        entry: NodeRegistryEntry,
+    ) -> None:
+        policy = request.source_policy
+        if policy is None:
+            return
+        allowed_registries = set(policy.allowed_registry_origins)
+        if allowed_registries and self.registry.registry_id not in allowed_registries:
+            raise NodeRegistryResolutionError(
+                NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+                "Noofy cannot prepare this workflow extension from the active registry under the current source policy.",
+                developer_details={
+                    "registry_id": self.registry.registry_id,
+                    "allowed_registry_origins": sorted(allowed_registries),
+                    "package_id": entry.package_id,
+                },
+            )
+        if policy.registry_snapshot_hash is not None:
+            if self.registry.registry_snapshot_hash != policy.registry_snapshot_hash:
+                raise NodeRegistryResolutionError(
+                    NodeRegistryResolutionErrorCode.REGISTRY_SNAPSHOT_MISMATCH,
+                    "Noofy cannot prepare this workflow extension because the registry snapshot does not match the package policy.",
+                    developer_details={
+                        "registry_id": self.registry.registry_id,
+                        "policy_registry_snapshot_hash": policy.registry_snapshot_hash,
+                        "active_registry_snapshot_hash": self.registry.registry_snapshot_hash,
+                        "package_id": entry.package_id,
+                    },
+                )
+        allowed_sources = set(policy.allowed_source_origins)
+        if not allowed_sources:
+            return
+        accepted_sources = {self.registry.registry_id}
+        if entry.trust_level is TrustLevel.NOOFY_VERIFIED:
+            accepted_sources.add("noofy-verified")
+        if entry.trust_level is TrustLevel.REGISTRY_LOCKED:
+            accepted_sources.add("registry-locked")
+        if accepted_sources.isdisjoint(allowed_sources):
+            raise NodeRegistryResolutionError(
+                NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+                "Noofy cannot prepare this workflow extension from the resolved source under the current source policy.",
+                developer_details={
+                    "package_id": entry.package_id,
+                    "entry_trust_level": entry.trust_level.value,
+                    "registry_id": self.registry.registry_id,
+                    "allowed_source_origins": sorted(allowed_sources),
+                },
+            )
 
     def _check_trust_policy(
         self,
@@ -371,8 +480,19 @@ class CustomNodeSourceCache:
         self.fetcher = fetcher or UrlLibSourceArchiveFetcher()
         self.log_store = log_store or LogStore()
 
-    def materialize(self, source: NodeRegistrySource) -> CachedCustomNodeSource:
+    def materialize(
+        self,
+        source: NodeRegistrySource,
+        *,
+        source_policy: SourcePolicy | None = None,
+        source_origins: list[str] | None = None,
+    ) -> CachedCustomNodeSource:
         _validate_source_policy(source)
+        _validate_cache_source_policy(
+            source_policy,
+            source_origins=source_origins or [],
+            source_url=source.source_url,
+        )
         archive_bytes = self.fetcher.fetch(source.source_url)
         expected_hash = _normalized_sha256(source.source_content_hash)
         actual_hash = hashlib.sha256(archive_bytes).hexdigest()
@@ -489,6 +609,38 @@ def _validate_source_policy(source: NodeRegistrySource) -> None:
             NodeRegistryResolutionErrorCode.UNAPPROVED_SOURCE_URL,
             "Noofy cannot prepare a workflow extension from this source.",
             developer_details={"source_url": source.source_url},
+        )
+
+
+def _validate_cache_source_policy(
+    source_policy: SourcePolicy | None,
+    *,
+    source_origins: list[str],
+    source_url: str,
+) -> None:
+    if source_policy is None:
+        return
+    if not source_policy.automatic_preparation_allowed:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+            "This workflow needs permission before Noofy downloads workflow extensions.",
+            developer_details={
+                "source_policy": source_policy.source_policy,
+                "policy_status": source_policy.policy_status,
+                "source_url": source_url,
+            },
+        )
+    allowed_sources = set(source_policy.allowed_source_origins)
+    if allowed_sources and allowed_sources.isdisjoint(source_origins):
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+            "Noofy cannot download this workflow extension under the current source policy.",
+            developer_details={
+                "source_policy": source_policy.source_policy,
+                "allowed_source_origins": sorted(allowed_sources),
+                "source_origins": sorted(set(source_origins)),
+                "source_url": source_url,
+            },
         )
 
 

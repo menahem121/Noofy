@@ -18,11 +18,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
+from urllib.parse import urlparse
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.diagnostics import LogStore
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.isolation import InstalledModelReference, ModelLock
+from app.source_policy import ModelSourceTrust, SourcePolicy
 
 REF_SCHEMA_VERSION = "0.1.0"
 MODEL_VIEW_SCHEMA_VERSION = "0.1.0"
@@ -54,6 +56,10 @@ class ModelDownloadError(RuntimeError):
 
 class LocalModelCandidateError(ModelDownloadError):
     """Raised when a filename+size local model candidate cannot be reused."""
+
+
+class ModelSourcePolicyError(ModelDownloadError):
+    """Raised when model materialization is blocked by source policy."""
 
 
 class AsyncDownloader(Protocol):
@@ -270,8 +276,14 @@ class ModelStore:
         local_model_requirements: list[LocalModelRequirement] | None = None,
         staged_views_dir: Path | None = None,
         staged_blobs_dir: Path | None = None,
+        source_policy: SourcePolicy | None = None,
     ) -> ModelViewMaterialization:
         """Create a per-view ComfyUI model tree from content-addressed blobs."""
+        self._validate_model_source_policy(
+            source_policy,
+            model_locks=model_locks,
+            local_model_requirements=local_model_requirements or [],
+        )
         resolved_local_models = self._resolve_local_models(local_model_requirements or [])
         view_fingerprint = model_view_fingerprint(
             view_id=view_id,
@@ -756,6 +768,45 @@ class ModelStore:
             f"No local model candidate found for {requirement.requirement_id}; checked {checked}"
         )
 
+    def _validate_model_source_policy(
+        self,
+        source_policy: SourcePolicy | None,
+        *,
+        model_locks: list[ModelLock],
+        local_model_requirements: list[LocalModelRequirement],
+    ) -> None:
+        if source_policy is None:
+            return
+        if not source_policy.automatic_preparation_allowed:
+            raise ModelSourcePolicyError("Model preparation is blocked by the workflow source policy.")
+        allowed_origins = set(source_policy.allowed_model_origins)
+        if model_locks and source_policy.model_source_trust not in {
+            ModelSourceTrust.HASHED,
+            ModelSourceTrust.MIXED,
+        }:
+            raise ModelSourcePolicyError(
+                "Model download is blocked because the workflow policy does not allow hash-verified model sources."
+            )
+        if local_model_requirements and source_policy.model_source_trust not in {
+            ModelSourceTrust.FILENAME_SIZE,
+            ModelSourceTrust.MIXED,
+        }:
+            raise ModelSourcePolicyError(
+                "Local model reuse is blocked because the workflow policy requires hash-verified model sources."
+            )
+        if not allowed_origins:
+            return
+        for model_lock in model_locks:
+            origins = _model_lock_origins(model_lock)
+            if origins.isdisjoint(allowed_origins):
+                raise ModelSourcePolicyError(
+                    "Model download is blocked because no model source URL matches the workflow source policy."
+                )
+        if local_model_requirements and "user-local" not in allowed_origins:
+            raise ModelSourcePolicyError(
+                "Local model reuse is blocked by the workflow model source policy."
+            )
+
     def _write_model_view_manifest(
         self,
         view_path: Path,
@@ -864,6 +915,17 @@ def _safe_fingerprint(fingerprint: str) -> str:
 
 def _model_view_conflict_message(comfyui_folder: str, filename: str) -> str:
     return f"Model view has conflicting requirements for {comfyui_folder}/{filename}."
+
+
+def _model_lock_origins(model_lock: ModelLock) -> set[str]:
+    origins = {"hashed-download"}
+    for url in model_lock.source_urls:
+        parsed = urlparse(url)
+        if parsed.scheme:
+            origins.add(parsed.scheme)
+        if parsed.netloc:
+            origins.add(parsed.netloc.lower())
+    return origins
 
 
 def _validate_materialized_target_path(target: Path) -> None:

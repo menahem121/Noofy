@@ -53,6 +53,7 @@ from app.trust import (
     TrustVerificationStatus,
     TrustVerifier,
     imported_archive_trust_payload,
+    workflow_source_policy,
 )
 from app.workflows.package import (
     DashboardSchema,
@@ -125,6 +126,11 @@ class ImportedWorkflowPackageStore:
             importer = NoofyArchiveImporter(data, original_filename=original_filename)
             package = importer.normalize()
             package = self._with_verified_import_trust(package, importer.trust_payload())
+            package = _package_with_source_policy(
+                package,
+                community_preparation_opted_in=allow_unverified_community_preparation,
+                policy_status=_source_policy_status_for_import(package),
+            )
             package = self._with_resolved_community_sources(
                 package,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
@@ -171,6 +177,9 @@ class ImportedWorkflowPackageStore:
                         "trust_verification": package.import_metadata.developer_details.get("trust_verification", {})
                         if package.import_metadata
                         else {},
+                        "source_policy": package.source_policy.model_dump(mode="json")
+                        if package.source_policy
+                        else None,
                     },
                     indent=2,
                     sort_keys=True,
@@ -280,9 +289,14 @@ class ImportedWorkflowPackageStore:
                         trust_level=trust_level,
                         allow_unverified_community_preparation=allow_unverified_community_preparation,
                         explicit_source=explicit_source,
+                        source_policy=package.source_policy,
                     )
                 )
-                cached = self.custom_node_source_cache.materialize(resolved.source)
+                cached = self.custom_node_source_cache.materialize(
+                    resolved.source,
+                    source_policy=package.source_policy,
+                    source_origins=resolved.source_policy_origins(),
+                )
             except NodeRegistryResolutionError as exc:
                 self.log_store.add(
                     "warning",
@@ -579,7 +593,7 @@ def _package_with_import_resolution_status(
     updated_identity = package.identity
     if status in {"blocked_by_policy", "unsupported"} and package.identity is not None:
         updated_identity = package.identity.model_copy(update={"trust_level": TrustLevel.UNSUPPORTED.value})
-    return package.model_copy(
+    updated = package.model_copy(
         update={
             "identity": updated_identity,
             "import_metadata": import_metadata.model_copy(
@@ -590,6 +604,15 @@ def _package_with_import_resolution_status(
                 }
             ),
         }
+    )
+    return _package_with_source_policy(
+        updated,
+        community_preparation_opted_in=(
+            package.source_policy.community_preparation_opted_in
+            if package.source_policy is not None
+            else False
+        ),
+        policy_status=status if status in {"blocked_by_policy", "unsupported"} else "active",
     )
 
 
@@ -609,6 +632,30 @@ def _package_with_trust_verification(
             ),
         }
     )
+
+
+def _package_with_source_policy(
+    package: WorkflowPackage,
+    *,
+    community_preparation_opted_in: bool,
+    policy_status: str = "active",
+) -> WorkflowPackage:
+    return package.model_copy(
+        update={
+            "source_policy": workflow_source_policy(
+                package,
+                community_preparation_opted_in=community_preparation_opted_in,
+                policy_status=policy_status,
+            )
+        }
+    )
+
+
+def _source_policy_status_for_import(package: WorkflowPackage) -> str:
+    status = package.import_metadata.status if package.import_metadata is not None else "active"
+    if status in {"blocked_by_policy", "unsupported"}:
+        return status
+    return "active"
 
 
 def _non_bundled_required_custom_node_records(package: WorkflowPackage) -> list[WorkflowCustomNodeRecord]:
@@ -1006,6 +1053,10 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
         publisher=package.identity.publisher_id,
         signatures=signature_values,
     )
+    source_policy = package.source_policy or workflow_source_policy(
+        package,
+        community_preparation_opted_in=True,
+    )
     custom_nodes = [
         CustomNodeLock(
             package_id=node.id,
@@ -1097,6 +1148,7 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
             "models": [model.model_dump(mode="json", exclude_none=True) for model in models],
             "hardware_observations": _hardware_observations_from_package(package).model_dump(mode="json", exclude_none=True),
             "trust": trust.model_dump(mode="json", exclude_none=True),
+            "source_policy": source_policy.model_dump(mode="json", exclude_none=True),
         }
     )
 

@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
+from app.source_policy import SourcePolicy
 
 
 class WorkflowPackageIdentity(BaseModel):
@@ -171,3 +172,4 @@ class WorkflowPackage(BaseModel):
     observed_hardware: dict[str, Any] = Field(default_factory=dict)
     smoke_tests: WorkflowSmokeTests = Field(default_factory=WorkflowSmokeTests)
     import_metadata: WorkflowImportMetadata | None = None
+    source_policy: SourcePolicy | None = None

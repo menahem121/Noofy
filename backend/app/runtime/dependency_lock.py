@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.runtime.fingerprints import dependency_env_fingerprint, sha256_fingerprint
 from app.runtime.isolation import SHA256_PATTERN, CapsuleLock
+from app.source_policy import SourcePolicy
 
 DEPENDENCY_LOCK_SCHEMA_VERSION = "0.1.0"
 DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION = "quarantined-community-v1"
@@ -62,6 +63,7 @@ class DependencyPolicyErrorCode(StrEnum):
     MISSING_WHEEL = "missing_wheel"
     NATIVE_BUILD_NOT_ALLOWED = "native_build_not_allowed"
     PROJECT_CODE_EXECUTION_REQUIRED = "project_code_execution_required"
+    SOURCE_POLICY_MISMATCH = "source_policy_mismatch"
     SDIST_NOT_ALLOWED = "sdist_not_allowed"
     UNSUPPORTED_DEPENDENCY_DECLARATION = "unsupported_dependency_declaration"
     UNAPPROVED_SOURCE = "unapproved_source"
@@ -155,6 +157,7 @@ class ResolvedDependencyLock(BaseModel):
     runtime_profile_variant_id: str = Field(min_length=1)
     runtime_profile_manifest_hash: str = Field(min_length=1)
     install_policy_version: str = Field(min_length=1)
+    source_policy: SourcePolicy | None = None
     resolver: ResolverMetadata
     wheels: list[ResolvedDependencyWheel] = Field(default_factory=list)
 
@@ -214,6 +217,7 @@ def core_dependency_lock_from_capsule(capsule_lock: CapsuleLock) -> ResolvedDepe
         runtime_profile_variant_id=runtime.runtime_profile_variant_id,
         runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
         install_policy_version=capsule_lock.dependencies.install_policy,
+        source_policy=capsule_lock.source_policy,
         resolver=ResolverMetadata(
             name="noofy-managed-core",
             version=DEPENDENCY_LOCK_SCHEMA_VERSION,
@@ -256,7 +260,8 @@ def merge_resolved_dependency_locks(
 ) -> ResolvedDependencyLock:
     """Merge profile-core and custom-node locks into one dependency-env lock."""
     merged: dict[str, ResolvedDependencyWheel] = {}
-    for lock in (core_lock, *tuple(custom_node_locks)):
+    custom_locks = tuple(custom_node_locks)
+    for lock in (core_lock, *custom_locks):
         _require_same_runtime(core_lock, lock)
         for wheel in lock.wheels:
             existing = merged.get(wheel.name)
@@ -268,6 +273,7 @@ def merge_resolved_dependency_locks(
     merged_lock = core_lock.model_copy(
         update={
             "wheels": sorted(merged.values(), key=lambda item: (item.name, item.version, item.wheel_filename)),
+            "source_policy": _merged_source_policy(core_lock, custom_locks),
             "lock_hash": None,
         }
     )
@@ -313,6 +319,29 @@ def validate_quarantined_community_lock(
             _verify_cached_wheel(wheel, wheel_cache_dir)
 
 
+def validate_dependency_lock_source_policy(
+    lock: ResolvedDependencyLock,
+    expected_policy: SourcePolicy | None,
+) -> None:
+    if expected_policy is None or not lock.wheels:
+        return
+    if lock.source_policy is None:
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH,
+            "Resolved dependency lock is missing source-policy metadata.",
+        )
+    if not lock.source_policy.automatic_preparation_allowed:
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH,
+            "Resolved dependency lock was created under a blocked source policy.",
+        )
+    if _source_policy_identity(lock.source_policy) != _source_policy_identity(expected_policy):
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH,
+            "Resolved dependency lock source policy does not match the workflow capsule policy.",
+        )
+
+
 def inspect_dependency_marker_files(source_dir: Path) -> DependencyMarkerInspection:
     """Read standard dependency marker files as data without importing code."""
     declarations: list[DependencyDeclaration] = []
@@ -351,6 +380,45 @@ def _require_same_runtime(reference: ResolvedDependencyLock, candidate: Resolved
             DependencyPolicyErrorCode.CROSS_RUNTIME_LOCK_MERGE,
             "Resolved dependency locks target different runtime profiles or install policies.",
         )
+    if (
+        reference.source_policy is not None
+        and candidate.source_policy is not None
+        and _source_policy_identity(reference.source_policy) != _source_policy_identity(candidate.source_policy)
+    ):
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH,
+            "Resolved dependency locks were created under different source policies.",
+        )
+
+
+def _merged_source_policy(
+    core_lock: ResolvedDependencyLock,
+    custom_node_locks: Iterable[ResolvedDependencyLock],
+) -> SourcePolicy | None:
+    if core_lock.source_policy is not None:
+        return core_lock.source_policy
+    for lock in custom_node_locks:
+        if lock.source_policy is not None:
+            return lock.source_policy
+    return None
+
+
+def _source_policy_identity(policy: SourcePolicy) -> dict[str, object]:
+    return {
+        "policy_version": policy.policy_version,
+        "trust_level": policy.trust_level,
+        "source_policy": policy.source_policy,
+        "package_source_type": policy.package_source_type.value,
+        "automatic_preparation_allowed": policy.automatic_preparation_allowed,
+        "allowed_registry_origins": sorted(policy.allowed_registry_origins),
+        "allowed_source_origins": sorted(policy.allowed_source_origins),
+        "allowed_model_origins": sorted(policy.allowed_model_origins),
+        "registry_id": policy.registry_id,
+        "registry_snapshot_hash": policy.registry_snapshot_hash,
+        "model_source_trust": policy.model_source_trust.value,
+        "community_preparation_opt_in_required": policy.community_preparation_opt_in_required,
+        "community_preparation_opted_in": policy.community_preparation_opted_in,
+    }
 
 
 def _merge_wheel_or_raise(

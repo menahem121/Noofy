@@ -26,6 +26,7 @@ from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
 from app.runtime.isolation import CapsuleLock, InstallStatus
+from app.source_policy import SourcePolicy
 
 
 class _FakePackageIndexClient:
@@ -127,10 +128,22 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path
             python_version="3.13",
             python_platform="aarch64-apple-darwin",
             workflow_id="workflow",
+            source_policy=SourcePolicy(
+                trust_level="quarantined_community",
+                source_policy="explicit_opt_in_and_isolated_capsule_required",
+                package_source_type="noofy_archive_import",
+                automatic_preparation_allowed=True,
+                allowed_source_origins=["explicit-metadata"],
+                model_source_trust="hashed",
+                community_preparation_opt_in_required=True,
+                community_preparation_opted_in=True,
+            ),
         )
     )
 
     assert lock.lock_hash is not None
+    assert lock.source_policy is not None
+    assert lock.source_policy.trust_level == "quarantined_community"
     assert lock.resolver.name == "uv"
     assert lock.resolver.version == "0.9.0"
     assert lock.wheels[0].relationship is DependencyRelationship.DIRECT

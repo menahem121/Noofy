@@ -23,6 +23,7 @@ from app.runtime.node_registry import (
     NodeTypeMappingCatalog,
     NoofyNodeRegistry,
 )
+from app.source_policy import SourcePolicy
 
 
 class FakeFetcher:
@@ -109,6 +110,89 @@ def test_verified_workflow_cannot_resolve_registry_locked_source() -> None:
         )
 
     assert error.value.code is NodeRegistryResolutionErrorCode.POLICY_BLOCKED_TRUST_LEVEL
+
+
+def test_source_policy_blocks_explicit_source_for_verified_workflow() -> None:
+    resolver = NodeRegistryResolver(registry=_registry())
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        resolver.resolve(
+            CustomNodeSourceResolutionRequest(
+                package_id="comfyui-magic",
+                node_types=["MagicSampler"],
+                trust_level=TrustLevel.NOOFY_VERIFIED,
+                explicit_source=NodeRegistrySource(
+                    source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+                    source_url="https://example.test/comfyui-magic/archive/pinned.zip",
+                    source_ref="7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                    source_content_hash="sha256:" + ("1" * 64),
+                ),
+                source_policy=SourcePolicy(
+                    trust_level="noofy_verified",
+                    source_policy="noofy_verified_sources_only",
+                    package_source_type="noofy_archive_import",
+                    automatic_preparation_allowed=True,
+                    allowed_source_origins=["noofy-verified"],
+                    model_source_trust="hashed",
+                ),
+            )
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED
+    assert error.value.developer_details["allowed_source_origins"] == ["noofy-verified"]
+
+
+def test_source_policy_blocks_mismatched_registry_snapshot() -> None:
+    resolver = NodeRegistryResolver(registry=_registry())
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        resolver.resolve(
+            CustomNodeSourceResolutionRequest(
+                package_id="comfyui-magic",
+                node_types=["MagicSampler"],
+                trust_level=TrustLevel.REGISTRY_LOCKED,
+                source_policy=SourcePolicy(
+                    trust_level="registry_locked",
+                    source_policy="signed_registry_or_pinned_registry_sources",
+                    package_source_type="noofy_archive_import",
+                    automatic_preparation_allowed=True,
+                    allowed_registry_origins=["noofy-test-registry"],
+                    allowed_source_origins=["noofy-test-registry"],
+                    registry_id="noofy-test-registry",
+                    registry_snapshot_hash="sha256:" + ("3" * 64),
+                    model_source_trust="hashed",
+                ),
+            )
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.REGISTRY_SNAPSHOT_MISMATCH
+    assert error.value.developer_details["active_registry_snapshot_hash"] == "sha256:" + ("2" * 64)
+
+
+def test_source_policy_allows_matching_registry_locked_source() -> None:
+    resolver = NodeRegistryResolver(registry=_registry())
+
+    resolved = resolver.resolve(
+        CustomNodeSourceResolutionRequest(
+            package_id="comfyui-magic",
+            node_types=["MagicSampler"],
+            trust_level=TrustLevel.REGISTRY_LOCKED,
+            source_policy=SourcePolicy(
+                trust_level="registry_locked",
+                source_policy="signed_registry_or_pinned_registry_sources",
+                package_source_type="noofy_archive_import",
+                automatic_preparation_allowed=True,
+                allowed_registry_origins=["noofy-test-registry"],
+                allowed_source_origins=["noofy-test-registry"],
+                registry_id="noofy-test-registry",
+                registry_snapshot_hash="sha256:" + ("2" * 64),
+                model_source_trust="hashed",
+            ),
+        )
+    )
+
+    assert resolved.package_id == "comfyui-magic"
+    assert resolved.registry_id == "noofy-test-registry"
 
 
 def test_registry_reports_ambiguous_node_type_claims_without_preemption() -> None:
@@ -202,6 +286,33 @@ def test_source_cache_rejects_hash_mismatch(tmp_path: Path) -> None:
         )
 
     assert error.value.code is NodeRegistryResolutionErrorCode.HASH_MISMATCH
+
+
+def test_source_cache_blocks_download_when_source_policy_origin_does_not_match(tmp_path: Path) -> None:
+    fetcher = FakeFetcher(_zip_bytes({"node.py": "x = 1\n"}))
+    cache = CustomNodeSourceCache(cache_dir=tmp_path / "source-cache", fetcher=fetcher)
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        cache.materialize(
+            NodeRegistrySource(
+                source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+                source_url="https://example.test/node.zip",
+                source_ref="release-2026-05-03",
+                source_content_hash="sha256:" + ("1" * 64),
+            ),
+            source_policy=SourcePolicy(
+                trust_level="noofy_verified",
+                source_policy="noofy_verified_sources_only",
+                package_source_type="noofy_archive_import",
+                automatic_preparation_allowed=True,
+                allowed_source_origins=["noofy-verified"],
+                model_source_trust="hashed",
+            ),
+            source_origins=["explicit-metadata"],
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED
+    assert fetcher.urls == []
 
 
 def test_source_cache_rejects_archive_path_traversal(tmp_path: Path) -> None:

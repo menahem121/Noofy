@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 
-Status: Accepted
+Status: Complete for implementation-plan scope as of 2026-05-04
 
 This plan implements the accepted runtime isolation architecture in [RUNTIME_ISOLATION_ARCHITECTURE.md](RUNTIME_ISOLATION_ARCHITECTURE.md).
 
@@ -20,7 +20,7 @@ The runtime isolation system should be considered complete for this plan only wh
 - OS-level sandboxing has an explicit feasibility decision and Noofy product copy does not imply a security sandbox that does not exist.
 - Full backend/frontend/exporter test suites pass, and the real ComfyUI staged smoke suite passes on the Linux validation host.
 
-Remaining Phase 6 blockers:
+Former Phase 6 blockers, now completed:
 
 - **P6-R1: Production asymmetric signing.** Add asymmetric package-signature and signed-registry-metadata verification with public trust roots, key rotation/revocation metadata, and tamper tests. The existing `hmac-sha256` verifier is a local policy foundation and test harness, not a public marketplace trust mechanism.
 - **P6-R2: Persistent package/source policy.** Add a durable source-policy record to imported package metadata, generated capsule locks, import reports, and frontend/API payloads. Enforce approved registry/source origins, model source trust, registry snapshot identity, and policy version compatibility before preparation.
@@ -1062,7 +1062,7 @@ Goal: prepare the runtime model for community distribution without weakening iso
 
 This phase does not implement the full in-app marketplace. It adds the trust, signing, source-policy, and UI foundations required before marketplace workflows can be distributed safely.
 
-Status: Partially complete. The local trust and UI foundations are implemented; production marketplace trust and durable source-policy enforcement remain.
+Status: Complete for the Phase 6 implementation scope as of May 4, 2026. The local trust model, Ed25519 signature verification, UI foundations, source-policy persistence/enforcement, marketplace acceptance coverage, and final validation gates are implemented and verified. The full in-app marketplace and operational publication of production trust-root files remain future product/release work outside this phase.
 
 ### Completed
 
@@ -1081,47 +1081,77 @@ Status: Partially complete. The local trust and UI foundations are implemented; 
 - [x] Add a dependency-free `hmac-sha256` trust verifier for local policy enforcement and regression tests. The signed payload includes canonical package metadata plus hashes for the graph, dashboard, capsule lock, and export report.
 - [x] Load trust roots from `<data_dir>/trust/trusted-keys.json` or `NOOFY_TRUST_KEYS_FILE`. Missing or malformed keyrings fail closed by leaving trusted imported claims unverifiable.
 - [x] Expose `GET /api/trust/policy` with public trust policy metadata, trusted key IDs, algorithms, and purposes without exposing signing secrets.
+- [x] Add production asymmetric trust verification with Ed25519 public keys for package signatures and signed registry metadata. Product trust roots store public Ed25519 verification keys only; the HMAC verifier is now a development/local-test path that must be explicitly enabled by the verifier/keyring.
+- [x] Add key lifecycle and policy compatibility checks for trust roots:
+  - stable key IDs and multiple active keys for rotation
+  - key purpose scoping
+  - revocation
+  - not-before and expiry windows
+  - source-policy version compatibility
+- [x] Add Ed25519 trust regression coverage for valid Noofy Verified signatures, valid Registry Locked metadata, tampered package payloads, revoked keys, expired keys, future keys, policy-version mismatches, disabled HMAC trust roots, and mismatched registry snapshots.
+- [x] Add first durable source-policy records to normalized imported packages, generated capsule locks, import reports, workflow summaries/status payloads, and install/workspace preparation guards. This covers local policy visibility and blocks persisted unsupported/community-without-opt-in policies before model download or runtime workspace materialization.
+- [x] Enforce local source-policy origin compatibility during custom-node registry resolution and source archive caching. Registry-locked packages now reject mismatched active registry snapshots, and explicit package metadata cannot download custom-node sources when the policy allows only verified or registry origins.
+- [x] Enforce model-source policy before model materialization. Hash-locked capsule downloads must match an allowed model origin, filename+size local reuse must be allowed by policy, and blocked policies fail before downloads, local reuse, or model-view writes begin.
+- [x] Carry source-policy snapshots into resolved dependency locks and validate the snapshot before dependency environment installation or reuse. Stale or policy-less wheel locks for a policy-bound workflow now fail as source-policy mismatches.
+- [x] Carry redacted source-policy snapshots into blocked/failed smoke-test stage diagnostics so developer details can explain trust/policy context without exposing secrets or local paths.
+- [x] Add marketplace trust acceptance coverage as generated test archives derived from the real `.noofy` fixture rather than additional checked-in binary archives. Coverage includes signed Noofy Verified, signed Registry Locked, Quarantined Community with and without opt-in, unsupported trust evidence, and source-policy blocked packages.
+- [x] Verify signed Noofy Verified and Registry Locked generated archives can pass import and runtime preparation gates when their Ed25519 trust evidence verifies against configured public keys.
+- [x] Latest local validation for this Phase 6 slice:
+  - focused backend Phase 6/API/smoke suite: `69 passed`
+  - frontend suite: `18 passed`
+  - full backend suite: `494 passed, 2 skipped`
+  - frontend production build: passed
+  - exporter suite: `7 passed`
+  - real ComfyUI staged smoke suite on the Linux validation host: passed `5/5` scenarios, `0` failed
 - [x] Define the Noofy Verified publishing process in [NOOFY_VERIFIED_PUBLISHING.md](NOOFY_VERIFIED_PUBLISHING.md).
 - [x] Evaluate OS-level sandboxing feasibility in [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md). The current runtime isolation plan does not require OS sandbox implementation, and Noofy must not claim arbitrary community code is sandboxed.
 
 ### Revised Or Obsolete Tasks
 
 - The original task "Add package signatures or signed registry metadata" is revised to two layers:
-  - completed: schema preservation, canonical payload, fail-closed trust gate, local `hmac-sha256` verifier, and keyring loading
-  - remaining: production asymmetric signature verification and public-key trust-root distribution
+  - completed: schema preservation, canonical payload, fail-closed trust gate, local `hmac-sha256` verifier, keyring loading, Ed25519 public-key verification, key lifecycle checks, and policy-version compatibility
+  - remaining: operational publication and distribution of product trust-root files outside this repository
 - The original task "Add marketplace/package source policy" is revised to persistent source-policy enforcement. Current source-policy labels are useful for UI and diagnostics, but they are not enough for final marketplace readiness.
 - The original task "Evaluate OS-level sandboxing feasibility" is complete as an evaluation task. OS-level sandbox implementation is a future hardening project, not a completion blocker for this dependency/runtime isolation plan.
+- The original P6-R3 fixture task is implemented as generated archive fixtures in regression tests instead of adding more static binary `.noofy` files. This keeps signatures, key lifecycle metadata, and tamper cases readable in code while still exercising the archive importer and API surfaces end to end.
 
-### Remaining Required Work
+### Required Work Status
 
-- [ ] **P6-R1: Production asymmetric signing.**
-  - Add an asymmetric signature algorithm such as Ed25519 for package signatures and signed registry metadata.
-  - Store only public verification keys in product trust roots.
-  - Support key IDs, key rotation, revocation, expiry, and policy-version compatibility.
-  - Keep the existing HMAC verifier only for local/test trust roots unless a separate development policy explicitly enables it.
-  - Add success and failure tests for valid signature, tampered payload, unknown key, revoked key, expired key, unsupported algorithm, and mismatched registry snapshot.
-- [ ] **P6-R2: Persistent package/source policy.**
-  - Add a durable source-policy object to normalized package records, generated capsule locks, import reports, and workflow status payloads.
-  - Include trust level, policy version, allowed registry/source origins, registry snapshot identity, package source type, model source trust, and whether automatic preparation is allowed.
-  - Enforce source-policy compatibility before dependency locking, model materialization, custom-node source download, runner workspace materialization, and smoke testing.
-  - Add beginner-friendly unsupported/blocked states and developer diagnostics for policy failures.
-- [ ] **P6-R3: Marketplace trust acceptance coverage.**
-  - Add fixture archives for:
+- [x] **P6-R1: Production asymmetric signing.**
+  - Completed locally: add Ed25519 verification for package signatures and signed registry metadata.
+  - Completed locally: product trust roots use Ed25519 public keys; Ed25519 key records reject embedded signing secrets.
+  - Completed locally: support key IDs, rotation through multiple keys, purpose scoping, revocation, not-before/expiry windows, and policy-version compatibility.
+  - Completed locally: keep the existing HMAC verifier only for local/test trust roots behind explicit development enablement.
+  - Completed locally: add success and failure tests for valid signature, tampered payload, unknown key, revoked key, expired key, unsupported algorithm, policy-version mismatch, and mismatched registry snapshot.
+- [x] **P6-R2: Persistent package/source policy.**
+  - Completed locally: add a durable source-policy object to normalized imported package records, generated capsule locks, import reports, and workflow status payloads.
+  - Completed locally: include trust level, policy version, allowed registry/source/model origins, registry snapshot identity, package source type, model source trust, and whether automatic preparation is allowed.
+  - Completed locally: enforce persisted source-policy blocks before model materialization and runner workspace materialization; source resolution remains blocked for community workflows without explicit opt-in.
+  - Completed locally: enforce source-policy compatibility against concrete registry/source origins before custom-node source download.
+  - Completed locally: enforce source-policy compatibility against model source trust and allowed model origins before model download or filename+size local model reuse.
+  - Completed locally: carry source-policy compatibility checks into dependency-lock metadata and dependency environment reuse/install.
+  - Completed locally: carry source-policy snapshots into blocked/failed smoke-test diagnostics.
+  - Completed locally: keep beginner-friendly unsupported/blocked states while placing trust, source-policy, registry, signature, model-source, dependency-lock, and smoke-stage details in structured developer diagnostics.
+- [x] **P6-R3: Marketplace trust acceptance coverage.**
+  - Completed locally with generated importer/API fixture archives for:
     - signed Noofy Verified
     - signed Registry Locked
     - Quarantined Community with explicit opt-in
     - Quarantined Community without opt-in
     - Unsupported trust evidence
     - source-policy blocked package
-  - Add API/UI assertions that trust level and policy state remain visible in install and detail surfaces.
-- [ ] **P6-R4: Final end-to-end validation.**
-  - Run the full backend suite.
-  - Run the full frontend suite and production build.
-  - Run exporter tests.
-  - Run the real ComfyUI staged smoke suite on the Linux validation host.
-  - Record the final pass/fail status in this plan.
+  - Completed locally: add API/UI assertions that trust level and policy state remain visible in import, install/status, workflow list, and detail/run surfaces.
+  - Completed locally: verify signed Noofy Verified and Registry Locked generated archives pass import and preparation gates with public-key Ed25519 evidence.
+- [x] **P6-R4: Final end-to-end validation.**
+  - Completed May 4, 2026: full backend suite passed, `494 passed, 2 skipped`.
+  - Completed May 4, 2026: full frontend suite passed, `18 passed`, and production build passed.
+  - Completed May 4, 2026: exporter suite passed, `7 passed`.
+  - Completed May 4, 2026: real ComfyUI staged smoke suite passed on the Linux validation host, `5/5` scenarios and `0` failed.
+  - Completed May 4, 2026: final pass status recorded in this plan.
 
 ### Final Acceptance Criteria
+
+Verified on May 4, 2026.
 
 - Trust level is visible in workflow import, workflow list/card, install/status, and detail/run surfaces.
 - Unsupported workflows fail gracefully without technical setup language by default.

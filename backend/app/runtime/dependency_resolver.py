@@ -34,6 +34,7 @@ from app.runtime.dependency_lock import (
     validate_quarantined_community_lock,
     with_computed_lock_hash,
 )
+from app.source_policy import SourcePolicy
 
 _PINNED_REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^;\s]+)(?:\s*;\s*(?P<marker>.+?))?(?:\s+--hash=.+)?$"
@@ -77,6 +78,7 @@ class DependencyResolutionRequest:
     python_version: str
     python_platform: str | None
     workflow_id: str
+    source_policy: SourcePolicy | None = None
 
 
 class PackageIndexClient(Protocol):
@@ -151,6 +153,7 @@ class UvDependencyLockResolver:
                     runtime_profile_variant_id=request.runtime_profile_variant_id,
                     runtime_profile_manifest_hash=request.runtime_profile_manifest_hash,
                     install_policy_version=request.install_policy_version,
+                    source_policy=request.source_policy,
                     resolver=resolver,
                     wheels=wheels,
                 )

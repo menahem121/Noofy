@@ -55,6 +55,20 @@ class FakeEngineService:
             "smoke_test_status": "not_run",
             "last_error": None,
             "developer_details_available": False,
+            "source_policy": {
+                "policy_version": "phase6-local-0.1",
+                "trust_level": "noofy_verified",
+                "source_policy": "noofy_verified_sources_only",
+                "package_source_type": "bundled",
+                "automatic_preparation_allowed": True,
+                "allowed_registry_origins": ["noofy-verified"],
+                "allowed_source_origins": ["noofy-verified"],
+                "allowed_model_origins": ["hashed-download", "huggingface.co", "noofy-verified", "user-local"],
+                "model_source_trust": "hashed",
+                "community_preparation_opt_in_required": False,
+                "community_preparation_opted_in": False,
+                "policy_status": "active",
+            },
         }
 
     def get_install_state_developer_details(self, workflow_id: str):
@@ -142,6 +156,7 @@ class FakeEngineService:
             "runner_workspace_path": "/tmp/noofy/runner-workspace",
             "smoke_test_status": "not_run",
             "last_error": None,
+            "source_policy": self.get_install_state(workflow_id)["source_policy"],
         }
 
     async def start_workflow_runner(self, workflow_id: str):
@@ -266,6 +281,9 @@ def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
     assert payload["dependency_env_path"] == "/tmp/noofy/dep-env"
     assert payload["runner_workspace_path"] == "/tmp/noofy/runner-workspace"
     assert payload["developer_details_available"] is False
+    assert payload["source_policy"]["trust_level"] == "noofy_verified"
+    assert payload["source_policy"]["source_policy"] == "noofy_verified_sources_only"
+    assert payload["source_policy"]["automatic_preparation_allowed"] is True
 
 
 def test_install_state_developer_details_endpoint_returns_technical_details(monkeypatch) -> None:
@@ -301,6 +319,7 @@ def test_workflow_status_endpoint_includes_install_required_actions_and_runner_s
     payload = response.json()
     assert payload["workflow_id"] == "text_to_image_v0"
     assert payload["install"]["status"] == "pending"
+    assert payload["install"]["source_policy"]["policy_status"] == "active"
     assert payload["required_actions"][0]["kind"] == "prepare_workflow"
     assert payload["runner_status"] == "not_started"
 
@@ -325,6 +344,7 @@ def test_prepare_endpoint_calls_service(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
+    assert response.json()["source_policy"]["source_policy"] == "noofy_verified_sources_only"
     assert fake_service.prepared_workflows == ["text_to_image_v0"]
 
 

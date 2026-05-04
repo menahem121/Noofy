@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
+from app.source_policy import SourcePolicy
 
 SHA256_PATTERN = r"^(sha256:)?[0-9a-fA-F]{64}$"
 
@@ -244,6 +245,7 @@ class CapsuleLock(BaseModel):
     models: list[ModelLock] = Field(default_factory=list)
     hardware_observations: HardwareObservations = Field(default_factory=HardwareObservations)
     trust: TrustMetadata
+    source_policy: SourcePolicy | None = None
 
 
 class InstallState(BaseModel):

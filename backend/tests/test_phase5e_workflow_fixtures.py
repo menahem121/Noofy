@@ -181,7 +181,11 @@ def test_phase5e_custom_node_fixtures_materialize_only_into_runner_workspace(
     expected_folders: set[str],
 ) -> None:
     store = ImportedWorkflowPackageStore(tmp_path / "packages")
-    package = store.import_archive(_archive_bytes(archive_name), original_filename=archive_name)
+    package = store.import_archive(
+        _archive_bytes(archive_name),
+        original_filename=archive_name,
+        allow_unverified_community_preparation=True,
+    )
     package_dir = store.package_dir(package)
     capsule = CapsuleLockLoader(
         Path("missing-bundled"),

@@ -32,7 +32,9 @@ from app.runtime.dependency_lock import (
     dependency_env_fingerprint_for_resolved_lock,
     merge_resolved_dependency_locks,
     resolved_dependency_lock_hash,
+    validate_dependency_lock_source_policy,
 )
+from app.source_policy import SourcePolicy
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.dependency_resolver import (
     DependencyResolutionRequest,
@@ -60,6 +62,7 @@ from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
+from app.trust import capsule_source_policy
 
 RUNTIME_MANIFEST_SCHEMA_VERSION = "0.1.0"
 RUNTIME_QUARANTINE_FILENAME = "quarantine.json"
@@ -131,6 +134,9 @@ class RuntimeWorkspacePreparer:
             capsule_fingerprint=capsule_lock.runtime.capsule_fingerprint,
         )
         try:
+            source_policy = capsule_source_policy(capsule_lock)
+            if not source_policy.automatic_preparation_allowed:
+                raise RuntimeError("Workflow preparation is blocked by the source policy.")
             profile_selection = self._resolve_runtime_profile(capsule_lock)
             custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
             dependency_manifest = self._dependency_env_manifest(
@@ -156,6 +162,7 @@ class RuntimeWorkspacePreparer:
                 dependency_manifest,
                 capsule_lock.workflow.package_id,
                 transaction=transaction,
+                source_policy=source_policy,
             )
             runner_manifest, runner_workspace_path = self._ensure_staged_runner_workspace(
                 runner_manifest,
@@ -314,6 +321,7 @@ class RuntimeWorkspacePreparer:
         workflow_id: str,
         *,
         transaction: InstallTransaction,
+        source_policy: SourcePolicy | None,
     ) -> tuple[DependencyEnvManifest, Path]:
         if self.dependency_env_store.exists(manifest.fingerprint):
             existing = self.dependency_env_store.read(manifest.fingerprint)
@@ -330,7 +338,12 @@ class RuntimeWorkspacePreparer:
                 )
                 return existing, self.dependency_env_store.artifact_dir(existing.fingerprint)
             if self.dependency_env_installer is not None:
-                return self._install_staged_dependency_env(manifest, workflow_id, transaction=transaction)
+                return self._install_staged_dependency_env(
+                    manifest,
+                    workflow_id,
+                    transaction=transaction,
+                    source_policy=source_policy,
+                )
             if existing != manifest:
                 path = self._write_transaction_manifest(
                     self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
@@ -357,7 +370,12 @@ class RuntimeWorkspacePreparer:
             )
             return existing, path
         if self.dependency_env_installer is not None:
-            return self._install_staged_dependency_env(manifest, workflow_id, transaction=transaction)
+            return self._install_staged_dependency_env(
+                manifest,
+                workflow_id,
+                transaction=transaction,
+                source_policy=source_policy,
+            )
         path = self._write_transaction_manifest(
             self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
             manifest,
@@ -396,9 +414,10 @@ class RuntimeWorkspacePreparer:
         workflow_id: str,
         *,
         transaction: InstallTransaction,
+        source_policy: SourcePolicy | None,
     ) -> tuple[DependencyEnvManifest, Path]:
         assert self.dependency_env_installer is not None
-        lock = self._resolved_dependency_lock(manifest, workflow_id)
+        lock = self._resolved_dependency_lock(manifest, workflow_id, source_policy=source_policy)
         staging_dir = self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint)
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
@@ -431,7 +450,13 @@ class RuntimeWorkspacePreparer:
         )
         return manifest, staging_dir
 
-    def _resolved_dependency_lock(self, manifest: DependencyEnvManifest, workflow_id: str) -> ResolvedDependencyLock:
+    def _resolved_dependency_lock(
+        self,
+        manifest: DependencyEnvManifest,
+        workflow_id: str,
+        *,
+        source_policy: SourcePolicy | None,
+    ) -> ResolvedDependencyLock:
         lock = self._find_existing_dependency_lock(
             manifest.dependency_lock_hash,
             runtime_profile_id=manifest.runtime_profile_id,
@@ -451,6 +476,7 @@ class RuntimeWorkspacePreparer:
                     python_version=manifest.python_version,
                     python_platform=_uv_python_platform(manifest.os, manifest.architecture),
                     workflow_id=workflow_id,
+                    source_policy=source_policy,
                 )
             )
             self._remember_dependency_lock(lock)
@@ -470,6 +496,7 @@ class RuntimeWorkspacePreparer:
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
         if lock_hash != manifest.dependency_lock_hash:
             raise RuntimeError("Resolved dependency lock hash does not match dependency manifest.")
+        validate_dependency_lock_source_policy(lock, source_policy)
         return lock
 
     def _find_existing_dependency_lock(
@@ -785,6 +812,7 @@ class RuntimeWorkspacePreparer:
     ) -> DependencyEnvManifest:
         if self.dependency_env_installer is None:
             return manifest
+        source_policy = capsule_source_policy(capsule_lock)
         source_dirs = self._custom_node_dependency_source_dirs(
             capsule_lock.workflow.package_id,
             capsule_lock,
@@ -807,6 +835,7 @@ class RuntimeWorkspacePreparer:
                     python_version=manifest.python_version,
                     python_platform=_uv_python_platform(manifest.os, manifest.architecture),
                     workflow_id=capsule_lock.workflow.package_id,
+                    source_policy=source_policy,
                 )
             )
             if existing_core_lock is not None:
@@ -826,6 +855,7 @@ class RuntimeWorkspacePreparer:
             )
         if lock is None:
             return manifest
+        validate_dependency_lock_source_policy(lock, source_policy)
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
         if lock_hash == manifest.dependency_lock_hash:
             return manifest

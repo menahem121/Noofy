@@ -41,11 +41,16 @@ export interface WorkflowStatusResponse {
 export interface TrustPolicyResponse {
   schema_version: string;
   signature_payload_schema_version: string;
+  development_hmac_allowed?: boolean;
   trusted_key_count: number;
   trusted_keys: Array<{
     key_id: string;
     algorithm: string;
     purpose: string;
+    revoked?: boolean;
+    not_before?: string | null;
+    expires_at?: string | null;
+    policy_versions?: string[];
   }>;
   trust_levels: Record<string, {
     label: string;

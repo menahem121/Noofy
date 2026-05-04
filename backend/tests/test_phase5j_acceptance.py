@@ -78,6 +78,7 @@ def _installer_for_exported_archive(
     package = package_store.import_archive(
         _exported_archive_bytes(),
         original_filename="exported-workflow-for-testing.noofy",
+        allow_unverified_community_preparation=True,
     )
     package_dir = package_store.package_dir(package)
     capsule = _derived_capsule_with_tiny_models(imported_package_capsule_lock(package), model_bytes)
