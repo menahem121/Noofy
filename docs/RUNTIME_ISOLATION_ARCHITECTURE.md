@@ -8,6 +8,8 @@ Status: Accepted and implemented for the locked/bundled, registry-resolved, and 
 
 Noofy is a local AI workflow app. Community ComfyUI workflows can ship custom nodes (Python) with their own dependencies. A single global mutable ComfyUI/Python environment would make Noofy fragile: one workflow can upgrade or downgrade packages used by another, broken nodes can break the whole engine, native extensions cannot be reliably unloaded, and non-technical users cannot be expected to repair Python, pip, virtualenvs, or custom-node folders.
 
+The opposite extreme — one full runtime per workflow — also fails: disk usage explodes (Python + Torch + ComfyUI + caches duplicated each time), maintenance scales linearly with workflow count, and runtime reuse becomes impossible. Noofy instead uses **reusable compatibility-group runtimes**: workflows that resolve to the same fingerprint share immutable runtime artifacts.
+
 Runtime isolation gives Noofy a stable foundation for installs, rollback, diagnostics, and support. It is dependency/runtime isolation, **not** a malicious-code sandbox. Noofy protects its own architecture from dependency conflicts and broken installs; it does not claim arbitrary community Python code is safe.
 
 OS-level sandboxing is evaluated separately in [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md).
@@ -78,6 +80,21 @@ A workflow capsule is the resolved install unit for a workflow. Capsule data is 
 Identity always carries `publisher_id`, `package_id`, `version`, `trust_level`, and source metadata. User-imported packages cannot silently shadow Noofy Verified built-ins by reusing an ID; conflicts are namespaced or require an explicit replacement action.
 
 Models are not duplicated per capsule. Capsules reference models by SHA-256 content hash in the shared model store; install state records the per-machine resolution (blob path, materialized model-view path, materialization strategy, asset ownership).
+
+## Runtime Profile
+
+A **runtime profile** is the named, pinned ComfyUI runtime contract Noofy supports for a class of workflows. Every capsule references a `runtime_profile_id`; install state records the selected `runtime_profile_variant_id` and `runtime_profile_manifest_hash`. Workflows targeting an unknown profile, or a variant unsupported on the current OS/backend, fail closed — Noofy never silently falls back to a "close enough" runtime.
+
+A profile pins, at minimum:
+
+- ComfyUI core version + source hash + frontend version
+- Noofy-managed Python build ID
+- Torch version + wheel build tag, and GPU backend (`cuda`, `mps`, `cpu`, `directml`, …)
+- Core dependency lock hash (resolved transitive, with hashes)
+- Allowlisted launch-config surface (preview method, VRAM mode, attention backend, precision, enabled-nodes set, extra-paths mode, Noofy-controlled env vars)
+- Supported OS/architecture/backend matrix and install policy version
+
+Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation from `ComfyUI-official-repo/` (the local dev/reference checkout) is rejected for product use and only allowed for development-only profiles. Definitions live in [profile_catalog.json](../backend/app/runtime/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles.py).
 
 ## Layered Fingerprints
 
