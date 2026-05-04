@@ -17,6 +17,7 @@ import {
   fetchJobProgress,
   fetchJobResult,
   fetchRuntimeStatus,
+  fetchWorkflowStatus,
   isEngineJob,
   runWorkflow,
   validateWorkflow,
@@ -25,6 +26,7 @@ import {
   type JobResult,
   type MemoryStatus,
   type RuntimeStatus,
+  type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -39,6 +41,7 @@ interface WorkflowRunPageProps {
 interface RunPageState {
   loading: boolean;
   runtime: RuntimeStatus | null;
+  workflowStatus: WorkflowStatusResponse | null;
   validation: WorkflowValidationResult | null;
   job: EngineJob | null;
   progress: JobProgress | null;
@@ -49,6 +52,7 @@ interface RunPageState {
 const initialState: RunPageState = {
   loading: true,
   runtime: null,
+  workflowStatus: null,
   validation: null,
   job: null,
   progress: null,
@@ -78,19 +82,23 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const runtime = await fetchRuntimeStatus();
+      const [runtime, workflowStatus] = await Promise.all([
+        fetchRuntimeStatus(),
+        fetchWorkflowStatus(workflowId).catch(() => null),
+      ]);
       if (!runtime.reachable) {
-        setState((current) => ({ ...current, loading: false, runtime, validation: null }));
+        setState((current) => ({ ...current, loading: false, runtime, workflowStatus, validation: null }));
         return;
       }
 
       const validation = await validateWorkflow(workflowId);
-      setState((current) => ({ ...current, loading: false, runtime, validation }));
+      setState((current) => ({ ...current, loading: false, runtime, workflowStatus, validation }));
     } catch (error) {
       setState((current) => ({
         ...current,
         loading: false,
         runtime: null,
+        workflowStatus: null,
         validation: null,
         error: error instanceof Error ? error.message : String(error),
       }));
@@ -239,6 +247,8 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
   }
 
   const missingModels = state.validation?.missing_models ?? [];
+  const workflowSummary = state.workflowStatus?.workflow;
+  const trust = workflowSummary?.trust;
   const memoryStatus = state.result ? null : state.job?.memory_status ?? null;
   const canRun = Boolean(
     state.validation?.valid && state.runtime?.reachable && !isRunning && !isWaitingForMemory && !isBlockedByMemory,
@@ -259,9 +269,20 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
             <ArrowLeft size={16} aria-hidden="true" />
             Back to Home
           </button>
-          <p className="eyebrow">Starter workflow</p>
-          <h1 id="workflow-title">Text to Image</h1>
-          <p>Describe the image you want, then let Noofy run the local workflow in the background.</p>
+          <div className="detail-eyebrow-row">
+            <p className="eyebrow">{workflowSummary?.publisher_id ?? "Starter"} workflow</p>
+            {trust ? (
+              <span className={`trust-badge trust-badge--${trust.badge_tone}`} title={trust.summary}>
+                {trust.label}
+              </span>
+            ) : null}
+          </div>
+          <h1 id="workflow-title">{workflowSummary?.name ?? "Text to Image"}</h1>
+          <p>
+            {workflowSummary?.description
+              ? workflowSummary.description.replace(/^Milestone \d+\s*/i, "")
+              : "Describe the image you want, then let Noofy run the local workflow in the background."}
+          </p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
           <RotateCcw size={16} aria-hidden="true" />

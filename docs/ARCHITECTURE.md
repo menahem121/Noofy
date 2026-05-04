@@ -100,6 +100,8 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `logs_dir` | `data_dir/logs` | Diagnostic logs |
 | `cache_dir` | `data_dir/cache` | Transient cache |
 | `temp_dir` | `data_dir/temp` | Temporary files |
+| `trust_dir` | `data_dir/trust` | Trust keyring and future trust metadata |
+| `trust_keys_file` | `data_dir/trust/trusted-keys.json` | Trust roots for imported package verification |
 | `bundled_workflows_dir` | `backend/app/workflows/packages` | Read-only starter workflows |
 | `comfyui_repo_dir` | `ComfyUI-official-repo` (project root) | Development/reference ComfyUI copy; not the product runtime source |
 
@@ -117,6 +119,7 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `NOOFY_LOGS_DIR` | Overrides only `logs_dir` |
 | `NOOFY_CACHE_DIR` | Overrides only `cache_dir` |
 | `NOOFY_TEMP_DIR` | Overrides only `temp_dir` |
+| `NOOFY_TRUST_KEYS_FILE` | Overrides only the trust keyring file |
 | `COMFYUI_REPO_DIR` | Overrides ComfyUI checkout location |
 
 ### Bundled vs user workflows

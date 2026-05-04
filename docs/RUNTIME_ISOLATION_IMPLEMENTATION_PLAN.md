@@ -8,6 +8,31 @@ This plan implements the accepted runtime isolation architecture in [RUNTIME_ISO
 
 The implementation must stay incremental. Do not build full marketplace/community custom-node installation until the runtime-store, schema, runner-supervisor, install-state, and rollback foundations are in place.
 
+## Runtime Isolation Completion Checklist
+
+Phases 0 through 5k are treated as implemented for the current backend foundation. The remaining plan work is concentrated in Phase 6.
+
+The runtime isolation system should be considered complete for this plan only when:
+
+- Phase 6 production trust evidence is enforceable for marketplace-distributed `noofy_verified` and `registry_locked` imports.
+- Package/source policy is persisted in app-owned package, capsule, and import records, not only exposed as UI summary metadata.
+- Noofy Verified publishing is documented and backed by repeatable validation gates.
+- OS-level sandboxing has an explicit feasibility decision and Noofy product copy does not imply a security sandbox that does not exist.
+- Full backend/frontend/exporter test suites pass, and the real ComfyUI staged smoke suite passes on the Linux validation host.
+
+Remaining Phase 6 blockers:
+
+- **P6-R1: Production asymmetric signing.** Add asymmetric package-signature and signed-registry-metadata verification with public trust roots, key rotation/revocation metadata, and tamper tests. The existing `hmac-sha256` verifier is a local policy foundation and test harness, not a public marketplace trust mechanism.
+- **P6-R2: Persistent package/source policy.** Add a durable source-policy record to imported package metadata, generated capsule locks, import reports, and frontend/API payloads. Enforce approved registry/source origins, model source trust, registry snapshot identity, and policy version compatibility before preparation.
+- **P6-R3: Marketplace trust acceptance coverage.** Add end-to-end signed fixture coverage for Noofy Verified, Registry Locked, Quarantined Community opt-in, unsupported trust evidence, source-policy failures, and key rotation/revocation behavior.
+- **P6-R4: Final real-run validation.** Re-run the complete automated suites and the real ComfyUI staged smoke suite after P6-R1 through P6-R3 land.
+
+Items explicitly not required to complete this runtime isolation plan:
+
+- A full in-app marketplace UI.
+- A hard OS-level security sandbox for arbitrary community Python code.
+- Any claim that dependency isolation makes unverified community code safe or trustworthy.
+
 ## Phase 0: Decision And Boundaries
 
 Goal: make the accepted runtime direction explicit across the project before changing runtime behavior.
@@ -1037,24 +1062,76 @@ Goal: prepare the runtime model for community distribution without weakening iso
 
 This phase does not implement the full in-app marketplace. It adds the trust, signing, source-policy, and UI foundations required before marketplace workflows can be distributed safely.
 
-Tasks:
+Status: Partially complete. The local trust and UI foundations are implemented; production marketplace trust and durable source-policy enforcement remain.
 
-- Add package signatures or signed registry metadata.
-- Define Noofy Verified publishing process.
-- Add trust-level UI:
-  - Noofy Verified
-  - Registry Locked
-  - Quarantined Community
-  - Unsupported
-- Add explicit opt-in policy for unverified/community workflows.
-- Add marketplace/package source policy.
-- Evaluate OS-level sandboxing feasibility for Linux, Windows, and macOS.
+### Completed
 
-Acceptance criteria:
+- [x] Preserve detached package signature metadata and signed registry metadata fields during import normalization.
+- [x] Add workflow summary trust metadata for UI and policy decisions:
+  - trust label
+  - trust summary
+  - badge tone
+  - source policy
+  - signature status
+  - explicit opt-in requirement
+- [x] Show trust level in workflow cards and workflow detail/run surfaces.
+- [x] Add explicit community workflow preparation opt-in in the import UI. When disabled, quarantined community workflows remain blocked by policy before source resolution or preparation.
+- [x] Add initial source-policy labels for Noofy Verified, Registry Locked, Quarantined Community, and Unsupported workflows.
+- [x] Reject imported archives that claim Noofy Verified or Registry Locked trust unless trust evidence verifies before source resolution or preparation. Missing, unknown-key, unsupported-algorithm, or invalid evidence downgrades the import to Unsupported with developer diagnostics.
+- [x] Add a dependency-free `hmac-sha256` trust verifier for local policy enforcement and regression tests. The signed payload includes canonical package metadata plus hashes for the graph, dashboard, capsule lock, and export report.
+- [x] Load trust roots from `<data_dir>/trust/trusted-keys.json` or `NOOFY_TRUST_KEYS_FILE`. Missing or malformed keyrings fail closed by leaving trusted imported claims unverifiable.
+- [x] Expose `GET /api/trust/policy` with public trust policy metadata, trusted key IDs, algorithms, and purposes without exposing signing secrets.
+- [x] Define the Noofy Verified publishing process in [NOOFY_VERIFIED_PUBLISHING.md](NOOFY_VERIFIED_PUBLISHING.md).
+- [x] Evaluate OS-level sandboxing feasibility in [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md). The current runtime isolation plan does not require OS sandbox implementation, and Noofy must not claim arbitrary community code is sandboxed.
 
-- Trust level is visible in workflow install and detail surfaces.
+### Revised Or Obsolete Tasks
+
+- The original task "Add package signatures or signed registry metadata" is revised to two layers:
+  - completed: schema preservation, canonical payload, fail-closed trust gate, local `hmac-sha256` verifier, and keyring loading
+  - remaining: production asymmetric signature verification and public-key trust-root distribution
+- The original task "Add marketplace/package source policy" is revised to persistent source-policy enforcement. Current source-policy labels are useful for UI and diagnostics, but they are not enough for final marketplace readiness.
+- The original task "Evaluate OS-level sandboxing feasibility" is complete as an evaluation task. OS-level sandbox implementation is a future hardening project, not a completion blocker for this dependency/runtime isolation plan.
+
+### Remaining Required Work
+
+- [ ] **P6-R1: Production asymmetric signing.**
+  - Add an asymmetric signature algorithm such as Ed25519 for package signatures and signed registry metadata.
+  - Store only public verification keys in product trust roots.
+  - Support key IDs, key rotation, revocation, expiry, and policy-version compatibility.
+  - Keep the existing HMAC verifier only for local/test trust roots unless a separate development policy explicitly enables it.
+  - Add success and failure tests for valid signature, tampered payload, unknown key, revoked key, expired key, unsupported algorithm, and mismatched registry snapshot.
+- [ ] **P6-R2: Persistent package/source policy.**
+  - Add a durable source-policy object to normalized package records, generated capsule locks, import reports, and workflow status payloads.
+  - Include trust level, policy version, allowed registry/source origins, registry snapshot identity, package source type, model source trust, and whether automatic preparation is allowed.
+  - Enforce source-policy compatibility before dependency locking, model materialization, custom-node source download, runner workspace materialization, and smoke testing.
+  - Add beginner-friendly unsupported/blocked states and developer diagnostics for policy failures.
+- [ ] **P6-R3: Marketplace trust acceptance coverage.**
+  - Add fixture archives for:
+    - signed Noofy Verified
+    - signed Registry Locked
+    - Quarantined Community with explicit opt-in
+    - Quarantined Community without opt-in
+    - Unsupported trust evidence
+    - source-policy blocked package
+  - Add API/UI assertions that trust level and policy state remain visible in install and detail surfaces.
+- [ ] **P6-R4: Final end-to-end validation.**
+  - Run the full backend suite.
+  - Run the full frontend suite and production build.
+  - Run exporter tests.
+  - Run the real ComfyUI staged smoke suite on the Linux validation host.
+  - Record the final pass/fail status in this plan.
+
+### Final Acceptance Criteria
+
+- Trust level is visible in workflow import, workflow list/card, install/status, and detail/run surfaces.
 - Unsupported workflows fail gracefully without technical setup language by default.
+- Developer details include trust, source-policy, registry, and signature diagnostics without leaking local secrets or private paths.
 - Unverified workflows require explicit user opt-in and can still be prepared automatically when Noofy can resolve them into isolated runtime capsules.
+- Imported Noofy Verified and Registry Locked workflows cannot be prepared unless production trust evidence verifies against configured public trust roots.
+- Source policy is stored and enforced consistently from import through runtime preparation.
+- No frontend surface calls ComfyUI directly.
+- The trusted backend process never imports community custom-node Python.
+- Failed import, trust verification, policy resolution, dependency preparation, model materialization, runner startup, and smoke execution do not mutate trusted core runtime or ready artifacts.
 
 ## Cross-Phase Requirements
 

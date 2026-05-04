@@ -57,6 +57,8 @@ The end user would then open the workflow as a clean, intuitive interface design
 - [Workflow packages](docs/WORKFLOW_PACKAGES.md)
 - [Runtime isolation architecture](docs/RUNTIME_ISOLATION_ARCHITECTURE.md)
 - [Runtime isolation implementation plan](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md)
+- [Noofy Verified publishing process](docs/NOOFY_VERIFIED_PUBLISHING.md)
+- [OS sandboxing feasibility](docs/OS_SANDBOXING_FEASIBILITY.md)
 - [ComfyUI runtime strategy](docs/COMFYUI_RUNTIME_STRATEGY.md)
 - [Memory Governor implementation plan](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md)
 - [Milestone 1](docs/MILESTONE_1.md)

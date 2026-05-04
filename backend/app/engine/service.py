@@ -90,6 +90,7 @@ from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
+from app.trust import load_trust_verifier, workflow_trust_payload
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
@@ -207,6 +208,24 @@ class EngineService:
             log_store=self.log_store,
         )
         return collector.build_reference_index().to_diagnostics()
+
+    def trust_policy_payload(self) -> dict[str, object]:
+        verifier_payload: dict[str, object]
+        if self.imported_package_store is None:
+            verifier_payload = {
+                "schema_version": "0.1.0",
+                "signature_payload_schema_version": "0.1.0",
+                "trusted_key_count": 0,
+                "trusted_keys": [],
+                "trust_levels": {},
+            }
+        else:
+            verifier_payload = self.imported_package_store.trust_verifier.policy_payload()
+        return {
+            **verifier_payload,
+            "imported_trusted_claims_require_verified_evidence": True,
+            "secrets_exposed": False,
+        }
 
     def get_workflow_package(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)
@@ -1074,6 +1093,7 @@ class EngineService:
             "publisher_id": package.identity.publisher_id if package.identity else package.metadata.author,
             "package_id": package.identity.package_id if package.identity else package.metadata.id,
             "trust_level": package.identity.trust_level if package.identity else "noofy_verified",
+            "trust": workflow_trust_payload(package),
             "status": status,
             "status_label": user_facing_status,
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
@@ -2047,9 +2067,11 @@ def create_default_engine_service() -> EngineService:
         runtime_manager.ws_url,
         log_store=log_store,
     )
+    trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
     imported_package_store = ImportedWorkflowPackageStore(
         paths.workflow_packages_store_dir,
         log_store=log_store,
+        trust_verifier=trust_verifier,
         node_registry_resolver=NodeRegistryResolver(
             registry=NoofyNodeRegistry(registry_id="noofy-empty-local-registry"),
             log_store=log_store,

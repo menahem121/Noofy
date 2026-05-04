@@ -19,6 +19,8 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
 - [docs/RUNTIME_ISOLATION_ARCHITECTURE.md](docs/RUNTIME_ISOLATION_ARCHITECTURE.md): accepted runtime isolation architecture for community workflows, workflow capsules, runner processes, and trust boundaries.
 - [docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md): phased implementation plan for runtime-store paths, schemas, runner supervision, verified installs, custom node resolution, and trust/marketplace readiness.
+- [docs/NOOFY_VERIFIED_PUBLISHING.md](docs/NOOFY_VERIFIED_PUBLISHING.md): Noofy Verified publishing, signing, validation gates, and revocation process.
+- [docs/OS_SANDBOXING_FEASIBILITY.md](docs/OS_SANDBOXING_FEASIBILITY.md): OS sandboxing feasibility and product-claim boundaries for community workflow execution.
 - [docs/COMFYUI_RUNTIME_STRATEGY.md](docs/COMFYUI_RUNTIME_STRATEGY.md): Phase 5 runtime profile, compatibility fingerprint, runner switching, idle-warm, model-view, and garbage-collection strategy.
 - [docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md): v1 Memory Governor strategy for RAM/VRAM estimates, runner co-residence, eviction, retry, UI states, and diagnostics.
 - [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.

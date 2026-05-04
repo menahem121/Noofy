@@ -25,6 +25,7 @@ interface HomeDataState {
   workflows: WorkflowSummary[];
   error: string | null;
   importing: boolean;
+  allowCommunityPreparation: boolean;
   importResult: WorkflowImportResponse | null;
   importError: string | null;
 }
@@ -35,6 +36,7 @@ const initialHomeState: HomeDataState = {
   workflows: [],
   error: null,
   importing: false,
+  allowCommunityPreparation: false,
   importResult: null,
   importError: null,
 };
@@ -67,6 +69,9 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
     category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
     status: workflowStatusFromSummary(workflow),
     statusLabel: workflow.status_label ?? workflowStatusLabel(workflowStatusFromSummary(workflow)),
+    trustLabel: workflow.trust?.label ?? trustLevelLabel(workflow.trust_level),
+    trustTone: workflow.trust?.badge_tone ?? trustLevelTone(workflow.trust_level),
+    trustSummary: workflow.trust?.summary,
     Icon: fallbackWorkflow.Icon,
     source: "backend",
   }));
@@ -102,6 +107,32 @@ function workflowStatusLabel(status: WorkflowStatus) {
   }
 
   return "Installed";
+}
+
+function trustLevelLabel(level?: string) {
+  if (level === "registry_locked") {
+    return "Registry Locked";
+  }
+  if (level === "quarantined_community") {
+    return "Quarantined Community";
+  }
+  if (level === "unsupported") {
+    return "Unsupported";
+  }
+  return "Noofy Verified";
+}
+
+function trustLevelTone(level?: string) {
+  if (level === "registry_locked") {
+    return "locked";
+  }
+  if (level === "quarantined_community") {
+    return "community";
+  }
+  if (level === "unsupported") {
+    return "unsupported";
+  }
+  return "verified";
 }
 
 interface HomePageProps {
@@ -141,6 +172,7 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
         workflows,
         error: firstError instanceof Error ? firstError.message : firstError ? String(firstError) : null,
         importing: false,
+        allowCommunityPreparation: false,
         importResult: null,
         importError: null,
       });
@@ -182,7 +214,7 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     }));
 
     try {
-      const importResult = await importWorkflowPackage(file);
+      const importResult = await importWorkflowPackage(file, homeData.allowCommunityPreparation);
       const workflows = await fetchWorkflows();
       setHomeData((current) => ({
         ...current,
@@ -272,6 +304,19 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
                 <h2>Open Workflow File</h2>
                 <p>Choose a saved workflow package and run it through Noofy.</p>
               </div>
+              <label className="option-check">
+                <input
+                  type="checkbox"
+                  checked={homeData.allowCommunityPreparation}
+                  onChange={(event) =>
+                    setHomeData((current) => ({
+                      ...current,
+                      allowCommunityPreparation: event.target.checked,
+                    }))
+                  }
+                />
+                <span>Allow community workflow preparation</span>
+              </label>
               <label className="secondary-button action-card__button">
                 <input
                   className="sr-only"
@@ -402,7 +447,17 @@ function WorkflowCardView({
         <div className="workflow-card__icon" aria-hidden="true">
           <workflow.Icon size={22} />
         </div>
-        <span className="category-badge">{workflow.category}</span>
+        <div className="workflow-card__badges">
+          <span className="category-badge">{workflow.category}</span>
+          {workflow.trustLabel ? (
+            <span
+              className={`trust-badge trust-badge--${workflow.trustTone ?? "verified"}`}
+              title={workflow.trustSummary}
+            >
+              {workflow.trustLabel}
+            </span>
+          ) : null}
+        </div>
       </div>
       <h3>{workflow.title}</h3>
       <p>{workflow.description}</p>

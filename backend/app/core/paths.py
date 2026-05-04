@@ -107,6 +107,14 @@ class NoofyPaths:
     def model_materialized_dir(self) -> Path:
         return self.model_store_dir / "materialized"
 
+    @property
+    def trust_dir(self) -> Path:
+        return self.data_dir / "trust"
+
+    @property
+    def trust_keys_file(self) -> Path:
+        return self.trust_dir / "trusted-keys.json"
+
     def ensure_directories(self) -> None:
         """Lazily create all app-owned writable directories.
 
@@ -129,6 +137,7 @@ class NoofyPaths:
             self.model_blobs_dir,
             self.model_refs_dir,
             self.model_materialized_dir,
+            self.trust_dir,
             self.models_dir,
             self.user_workflows_dir,
             self.outputs_dir,
@@ -166,6 +175,8 @@ class NoofyPaths:
             ("model_blobs_dir", self.model_blobs_dir),
             ("model_refs_dir", self.model_refs_dir),
             ("model_materialized_dir", self.model_materialized_dir),
+            ("trust_dir", self.trust_dir),
+            ("trust_keys_file", self.trust_keys_file),
             ("models_dir", self.models_dir),
             ("user_workflows_dir", self.user_workflows_dir),
             ("outputs_dir", self.outputs_dir),

@@ -1,3 +1,14 @@
+export interface WorkflowTrustSummary {
+  level: string;
+  label: string;
+  summary: string;
+  badge_tone: "verified" | "locked" | "community" | "unsupported" | string;
+  can_prepare_automatically: boolean;
+  requires_explicit_opt_in: boolean;
+  source_policy: string;
+  signature_status: string;
+}
+
 export interface WorkflowSummary {
   id: string;
   name: string;
@@ -6,11 +17,45 @@ export interface WorkflowSummary {
   publisher_id?: string;
   package_id?: string;
   trust_level?: string;
+  trust?: WorkflowTrustSummary;
   status?: string;
   status_label?: string;
   unresolved_input_count?: number;
   custom_node_count?: number;
   required_model_count?: number;
+}
+
+export interface WorkflowStatusResponse {
+  workflow_id: string;
+  workflow: WorkflowSummary;
+  install: Record<string, unknown>;
+  required_actions: unknown[];
+  compatibility_guidance: unknown[];
+  runner: Record<string, unknown> | null;
+  runner_status: string;
+  can_prepare: boolean;
+  can_cancel_preparation: boolean;
+  can_cancel_job: boolean;
+}
+
+export interface TrustPolicyResponse {
+  schema_version: string;
+  signature_payload_schema_version: string;
+  trusted_key_count: number;
+  trusted_keys: Array<{
+    key_id: string;
+    algorithm: string;
+    purpose: string;
+  }>;
+  trust_levels: Record<string, {
+    label: string;
+    summary: string;
+    source_policy: string;
+    requires_explicit_opt_in: boolean;
+    can_prepare_automatically: boolean;
+  }>;
+  imported_trusted_claims_require_verified_evidence: boolean;
+  secrets_exposed: boolean;
 }
 
 export type JobStatus =
@@ -235,10 +280,18 @@ export function fetchWorkflows() {
   return getJson<WorkflowSummary[]>("/workflows");
 }
 
-export async function importWorkflowPackage(file: File) {
+export function fetchTrustPolicy() {
+  return getJson<TrustPolicyResponse>("/trust/policy");
+}
+
+export async function importWorkflowPackage(file: File, allowUnverifiedCommunityPreparation = false) {
   const data = await readFileAsArrayBuffer(file);
+  const params = [`filename=${encodeURIComponent(file.name)}`];
+  if (allowUnverifiedCommunityPreparation) {
+    params.push("allow_unverified_community_preparation=true");
+  }
   return postBytes<WorkflowImportResponse>(
-    `/workflows/import?filename=${encodeURIComponent(file.name)}`,
+    `/workflows/import?${params.join("&")}`,
     data,
   );
 }
@@ -264,6 +317,10 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 
 export function validateWorkflow(workflowId: string) {
   return postJson<WorkflowValidationResult>(`/workflows/${workflowId}/validate`);
+}
+
+export function fetchWorkflowStatus(workflowId: string) {
+  return getJson<WorkflowStatusResponse>(`/workflows/${encodeURIComponent(workflowId)}/status`);
 }
 
 export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {

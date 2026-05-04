@@ -29,6 +29,9 @@ export interface WorkflowCard {
   category: string;
   status: WorkflowStatus;
   statusLabel: string;
+  trustLabel?: string;
+  trustTone?: string;
+  trustSummary?: string;
   Icon: LucideIcon;
   source: "backend" | "starter";
 }

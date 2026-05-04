@@ -61,6 +61,23 @@ def test_text_to_image_package_loads() -> None:
     assert package.smoke_tests.workflow_execution.required_node_types == ["EmptyImage", "SaveImage"]
 
 
+def test_engine_service_workflow_summary_includes_phase6_trust_metadata() -> None:
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=_supervisor_with(StubEngineAdapter([])),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+    )
+
+    summary = service.list_workflows()[0]
+
+    assert summary["trust_level"] == "noofy_verified"
+    assert summary["trust"]["label"] == "Noofy Verified"
+    assert summary["trust"]["source_policy"] == "noofy_verified_sources_only"
+    assert summary["trust"]["requires_explicit_opt_in"] is False
+
+
 def test_workflow_package_can_declare_execution_smoke_fixture(tmp_path: Path) -> None:
     package_dir = tmp_path / "packages" / "fixture_workflow"
     package_dir.mkdir(parents=True)

@@ -300,6 +300,41 @@ Required identity fields:
 
 User-imported packages must not silently replace Noofy Verified built-ins. If an imported package conflicts with a built-in display name or legacy ID, Noofy installs it under a distinct namespace or requires an explicit replacement action with clear trust downgrade language.
 
+## Trust Evidence And Signature Policy
+
+Imported workflow archives are parsed as data first, then trust evidence is checked before source resolution or runtime preparation.
+
+An imported archive cannot make itself Noofy Verified or Registry Locked by setting `trust_level` in `package.json`. For imported packages:
+
+- `noofy_verified` requires a package signature that verifies against a trusted Noofy package key.
+- `registry_locked` requires signed registry metadata that verifies against a trusted registry key.
+- `quarantined_community` does not require a signature, but automatic preparation still requires explicit user opt-in and isolated source resolution.
+- Missing, unknown-key, unsupported-algorithm, or invalid trust evidence downgrades the imported package to `unsupported` and records developer diagnostics.
+
+The current implementation supports a dependency-free `hmac-sha256` trust-root verifier so the runtime policy, canonical payload, diagnostics, and tests can be exercised locally. Product distribution should replace or extend this with asymmetric signing, key rotation, and registry-hosted metadata before public marketplace publishing. The publishing process is defined in [NOOFY_VERIFIED_PUBLISHING.md](NOOFY_VERIFIED_PUBLISHING.md).
+
+Trust roots are loaded from the app-owned trust keyring file:
+
+```text
+<data_dir>/trust/trusted-keys.json
+```
+
+Development and test environments may override this path with `NOOFY_TRUST_KEYS_FILE`. The keyring currently stores local `hmac-sha256` keys and is intentionally not a final marketplace public-key distribution mechanism. If the keyring is absent or malformed, imported packages that claim Noofy Verified or Registry Locked trust fail closed to Unsupported.
+
+The backend exposes `GET /api/trust/policy` so the UI and future marketplace surfaces can inspect public trust policy facts. This payload includes trust levels, source policies, trusted key IDs, algorithms, and purposes. It must not expose HMAC secrets or future private key material.
+
+OS-level sandboxing feasibility is evaluated in [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md). The current architecture is dependency/runtime isolation, not a malicious-code containment sandbox.
+
+The signed package payload is canonical JSON that excludes signature evidence fields and includes hashes for:
+
+- package metadata
+- ComfyUI graph
+- dashboard schema
+- exported capsule lock
+- export report
+
+Signed registry metadata signs the registry ID, registry snapshot hash, and package-payload hash.
+
 ## Layered Fingerprints
 
 Noofy uses layered fingerprints so compatible runtime pieces can be reused without collapsing isolation boundaries.
@@ -759,10 +794,9 @@ Learned local Memory Governor observations must be stored in mutable local app d
 - whether backend packaging uses managed Python directly or a standalone executable
 - process-tree cleanup implementation for Linux, Windows, and macOS
 - Memory Governor platform observer fidelity for CUDA, MPS, DirectML, and CPU-only systems
-- package signature format and verification process
-- Noofy Verified package publishing process
-- registry metadata format and hosting
+- asymmetric package signature format, public-key distribution, and verification process
+- Noofy Verified publishing tooling and signing-key operations
+- registry metadata format, hosting, and revocation distribution
 - model source trust and license policy
-- storage quota and garbage-collection policy
-- unverified/community workflow opt-in policy
-- OS-level sandboxing feasibility and scope
+- product storage quota and manual cleanup UX
+- OS-level sandbox implementation scope if Noofy later wants to claim malicious-code containment

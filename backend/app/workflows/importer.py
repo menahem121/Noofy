@@ -48,6 +48,12 @@ from app.runtime.profiles import (
     RuntimeProfileVariant,
     load_runtime_profile_catalog,
 )
+from app.trust import (
+    TrustVerificationResult,
+    TrustVerificationStatus,
+    TrustVerifier,
+    imported_archive_trust_payload,
+)
 from app.workflows.package import (
     DashboardSchema,
     DashboardSection,
@@ -59,6 +65,8 @@ from app.workflows.package import (
     WorkflowMetadata,
     WorkflowPackage,
     WorkflowPackageIdentity,
+    SignedRegistryMetadata,
+    WorkflowPackageSignature,
     WorkflowSmokeTests,
 )
 
@@ -97,11 +105,13 @@ class ImportedWorkflowPackageStore:
         log_store: LogStore | None = None,
         node_registry_resolver: NodeRegistryResolver | None = None,
         custom_node_source_cache: CustomNodeSourceCache | None = None,
+        trust_verifier: TrustVerifier | None = None,
     ) -> None:
         self.root_dir = root_dir
         self.log_store = log_store or LogStore()
         self.node_registry_resolver = node_registry_resolver
         self.custom_node_source_cache = custom_node_source_cache
+        self.trust_verifier = trust_verifier or TrustVerifier()
 
     def import_archive(
         self,
@@ -114,6 +124,7 @@ class ImportedWorkflowPackageStore:
         try:
             importer = NoofyArchiveImporter(data, original_filename=original_filename)
             package = importer.normalize()
+            package = self._with_verified_import_trust(package, importer.trust_payload())
             package = self._with_resolved_community_sources(
                 package,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
@@ -155,6 +166,9 @@ class ImportedWorkflowPackageStore:
                             "selection_stage": "import_time_phase5c",
                         },
                         "source_resolution": package.import_metadata.developer_details.get("source_resolution", {})
+                        if package.import_metadata
+                        else {},
+                        "trust_verification": package.import_metadata.developer_details.get("trust_verification", {})
                         if package.import_metadata
                         else {},
                     },
@@ -229,6 +243,8 @@ class ImportedWorkflowPackageStore:
                 },
             )
         trust_level = _trust_level_from_string(package.identity.trust_level)
+        if trust_level is TrustLevel.UNSUPPORTED:
+            return package
         if trust_level is TrustLevel.QUARANTINED_COMMUNITY and not allow_unverified_community_preparation:
             return _package_with_import_resolution_status(
                 package,
@@ -322,6 +338,44 @@ class ImportedWorkflowPackageStore:
             },
         )
 
+    def _with_verified_import_trust(
+        self,
+        package: WorkflowPackage,
+        trust_payload: dict[str, Any],
+    ) -> WorkflowPackage:
+        if package.identity is None:
+            return package
+        requested_trust_level = _trust_level_from_string(package.identity.trust_level)
+        verification = self.trust_verifier.verify_imported_package(
+            requested_trust_level=requested_trust_level,
+            payload=trust_payload,
+            signatures=package.identity.signatures,
+            signed_registry_metadata=package.identity.signed_registry_metadata,
+        )
+        package = _package_with_trust_verification(package, verification)
+        if verification.status in {
+            TrustVerificationStatus.NOT_REQUIRED,
+            TrustVerificationStatus.VERIFIED,
+        }:
+            return package
+        self.log_store.add(
+            "warning",
+            "Imported workflow trust verification failed",
+            "workflow.import",
+            workflow_id=package.metadata.id,
+            details=verification.model_dump(mode="json"),
+        )
+        return _package_with_import_resolution_status(
+            package,
+            status="unsupported",
+            message="Unsupported workflow",
+            source_resolution={
+                "status": "failed",
+                "reason": "trust_verification_failed",
+                "trust_verification": verification.model_dump(mode="json"),
+            },
+        )
+
 
 class NoofyArchiveImporter:
     """Safely inspects a `.noofy` zip archive as data."""
@@ -376,6 +430,11 @@ class NoofyArchiveImporter:
                     version=version,
                     trust_level=trust_level,
                     source="noofy_archive_import",
+                    signature=_optional_string_field(package_json, "signature"),
+                    signatures=_normalize_signatures(package_json.get("signatures")),
+                    signed_registry_metadata=_normalize_signed_registry_metadata(
+                        package_json.get("signed_registry_metadata")
+                    ),
                 ),
                 engine="comfyui",
                 required_models=models,
@@ -405,6 +464,15 @@ class NoofyArchiveImporter:
             )
         except ValidationError as exc:
             raise NoofyImportError("Workflow package metadata could not be normalized.") from exc
+
+    def trust_payload(self) -> dict[str, Any]:
+        return imported_archive_trust_payload(
+            package_json=self._read_json("package.json"),
+            comfyui_graph=self._read_json("comfyui_graph.json"),
+            dashboard_json=self._read_json("dashboard.json"),
+            capsule_json=self._read_json("capsule.lock.json"),
+            export_report=self._read_json("export-report.json"),
+        )
 
     def extract_source_files(self, target_dir: Path) -> None:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -520,6 +588,24 @@ def _package_with_import_resolution_status(
                     "user_facing_message": message,
                     "developer_details": developer_details,
                 }
+            ),
+        }
+    )
+
+
+def _package_with_trust_verification(
+    package: WorkflowPackage,
+    verification: TrustVerificationResult,
+) -> WorkflowPackage:
+    import_metadata = package.import_metadata or WorkflowImportMetadata(
+        imported_at=datetime.now(UTC).isoformat(),
+    )
+    developer_details = dict(import_metadata.developer_details)
+    developer_details["trust_verification"] = verification.model_dump(mode="json")
+    return package.model_copy(
+        update={
+            "import_metadata": import_metadata.model_copy(
+                update={"developer_details": developer_details}
             ),
         }
     )
@@ -689,6 +775,45 @@ def _normalize_trust_level(value: Any) -> str:
     if value in {"public_unverified", "quarantined_community"}:
         return "quarantined_community"
     return "unsupported"
+
+
+def _normalize_signatures(value: Any) -> list[WorkflowPackageSignature]:
+    if not isinstance(value, list):
+        return []
+    signatures: list[WorkflowPackageSignature] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        key_id = item.get("key_id")
+        algorithm = item.get("algorithm")
+        signature_value = item.get("value")
+        if not all(isinstance(field, str) and field.strip() for field in (key_id, algorithm, signature_value)):
+            continue
+        signatures.append(
+            WorkflowPackageSignature(
+                key_id=key_id.strip(),
+                algorithm=algorithm.strip(),
+                value=signature_value.strip(),
+            )
+        )
+    return signatures
+
+
+def _normalize_signed_registry_metadata(value: Any) -> SignedRegistryMetadata | None:
+    if not isinstance(value, dict):
+        return None
+    registry_id = value.get("registry_id")
+    snapshot_hash = value.get("snapshot_hash")
+    signature = value.get("signature")
+    if not all(isinstance(field, str) and field.strip() for field in (registry_id, snapshot_hash, signature)):
+        return None
+    return SignedRegistryMetadata(
+        registry_id=registry_id.strip(),
+        snapshot_hash=snapshot_hash.strip(),
+        signature=signature.strip(),
+        key_id=_optional_string_field(value, "key_id"),
+        algorithm=_optional_string_field(value, "algorithm"),
+    )
 
 
 def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
@@ -871,7 +996,16 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
     catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
     profile, variant = _select_import_runtime_profile(catalog.profiles)
     trust_level = _trust_level_from_string(package.identity.trust_level)
-    trust = TrustMetadata(level=trust_level, publisher=package.identity.publisher_id)
+    signature_values = [signature.value for signature in package.identity.signatures]
+    if package.identity.signature:
+        signature_values.append(package.identity.signature)
+    if package.identity.signed_registry_metadata is not None:
+        signature_values.append(package.identity.signed_registry_metadata.signature)
+    trust = TrustMetadata(
+        level=trust_level,
+        publisher=package.identity.publisher_id,
+        signatures=signature_values,
+    )
     custom_nodes = [
         CustomNodeLock(
             package_id=node.id,
@@ -930,7 +1064,7 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
                 "version": package.identity.version,
                 "trust_level": trust_level.value,
                 "source": package.identity.source,
-                "signature": package.identity.signature if hasattr(package.identity, "signature") else None,
+                "signature": package.identity.signature,
             },
             "engine": {
                 "type": package.engine,

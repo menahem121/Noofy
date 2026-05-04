@@ -48,6 +48,23 @@ class FakeImportService:
             "required_models": [],
         }
 
+    def trust_policy_payload(self):
+        return {
+            "schema_version": "0.1.0",
+            "signature_payload_schema_version": "0.1.0",
+            "trusted_key_count": 1,
+            "trusted_keys": [
+                {
+                    "key_id": "registry-test-key",
+                    "algorithm": "hmac-sha256",
+                    "purpose": "registry",
+                }
+            ],
+            "trust_levels": {},
+            "imported_trusted_claims_require_verified_evidence": True,
+            "secrets_exposed": False,
+        }
+
     async def shutdown(self) -> None:
         self.shutdown_called = True
 
@@ -107,3 +124,23 @@ def test_get_workflow_package_endpoint_returns_404_for_unknown_workflow(monkeypa
         response = client.get("/api/workflows/missing/package")
 
     assert response.status_code == 404
+
+
+def test_trust_policy_endpoint_returns_public_key_metadata_only(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    monkeypatch.setattr(routes, "engine_service", FakeImportService())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/trust/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["trusted_key_count"] == 1
+    assert payload["trusted_keys"][0] == {
+        "key_id": "registry-test-key",
+        "algorithm": "hmac-sha256",
+        "purpose": "registry",
+    }
+    assert payload["secrets_exposed"] is False
+    assert "secret" not in str(payload["trusted_keys"]).casefold()
+    assert "local-secret" not in str(payload)

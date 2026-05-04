@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +13,23 @@ class WorkflowPackageIdentity(BaseModel):
     version: str
     trust_level: str = "noofy_verified"
     source: str | None = None
+    signature: str | None = None
+    signatures: list[WorkflowPackageSignature] = Field(default_factory=list)
+    signed_registry_metadata: SignedRegistryMetadata | None = None
+
+
+class WorkflowPackageSignature(BaseModel):
+    key_id: str
+    algorithm: str
+    value: str
+
+
+class SignedRegistryMetadata(BaseModel):
+    registry_id: str
+    snapshot_hash: str
+    signature: str
+    key_id: str | None = None
+    algorithm: str | None = None
 
 
 class WorkflowMetadata(BaseModel):

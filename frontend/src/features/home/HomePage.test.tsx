@@ -55,6 +55,17 @@ describe("HomePage", () => {
               name: "Text to Image",
               version: "0.1.0",
               description: "Milestone 1 text-to-image workflow package.",
+              trust_level: "noofy_verified",
+              trust: {
+                level: "noofy_verified",
+                label: "Noofy Verified",
+                summary: "Built or reviewed for Noofy's managed runtime.",
+                badge_tone: "verified",
+                can_prepare_automatically: true,
+                requires_explicit_opt_in: false,
+                source_policy: "noofy_verified_sources_only",
+                signature_status: "bundled_trusted_core",
+              },
             },
           ]),
         );
@@ -69,6 +80,7 @@ describe("HomePage", () => {
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
   });
 
   it("shows starter content and a clear status when the backend is unavailable", async () => {
@@ -101,7 +113,12 @@ describe("HomePage", () => {
         );
       }
 
-      if (url.endsWith("/api/workflows/import?filename=eraser.noofy") && init?.method === "POST") {
+      if (
+        url.endsWith(
+          "/api/workflows/import?filename=eraser.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
         return Promise.resolve(
           jsonResponse({
             workflow_id: "unknown__eraserv4.5__0.1.0",
@@ -112,6 +129,17 @@ describe("HomePage", () => {
               name: "EraserV4.5",
               version: "0.1.0",
               description: "",
+              trust_level: "quarantined_community",
+              trust: {
+                level: "quarantined_community",
+                label: "Quarantined Community",
+                summary: "Community workflow prepared only after permission and isolated resolution.",
+                badge_tone: "community",
+                can_prepare_automatically: true,
+                requires_explicit_opt_in: true,
+                source_policy: "explicit_opt_in_and_isolated_capsule_required",
+                signature_status: "missing",
+              },
             },
             required_model_count: 2,
             custom_node_count: 5,
@@ -129,6 +157,16 @@ describe("HomePage", () => {
               version: "0.1.0",
               description: "",
               trust_level: "quarantined_community",
+              trust: {
+                level: "quarantined_community",
+                label: "Quarantined Community",
+                summary: "Community workflow prepared only after permission and isolated resolution.",
+                badge_tone: "community",
+                can_prepare_automatically: true,
+                requires_explicit_opt_in: true,
+                source_policy: "explicit_opt_in_and_isolated_capsule_required",
+                signature_status: "missing",
+              },
               status: "needs_input_setup",
               status_label: "Needs input setup",
               unresolved_input_count: 1,
@@ -142,23 +180,28 @@ describe("HomePage", () => {
 
     render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
 
+    fireEvent.click(await screen.findByLabelText("Allow community workflow preparation"));
     const file = new File(["archive"], "eraser.noofy");
-    fireEvent.change(await screen.findByLabelText("Choose File"), {
+    fireEvent.change(screen.getByLabelText("Choose File"), {
       target: { files: [file] },
     });
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import?filename=eraser.noofy", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/octet-stream",
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/import?filename=eraser.noofy&allow_unverified_community_preparation=true",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/octet-stream",
+          },
+          body: expect.any(ArrayBuffer),
         },
-        body: expect.any(ArrayBuffer),
-      });
+      );
     });
     expect((await screen.findAllByText("Needs input setup")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "EraserV4.5" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Imported")).toBeInTheDocument();
+    expect(screen.getAllByText("Quarantined Community").length).toBeGreaterThan(0);
   });
 });

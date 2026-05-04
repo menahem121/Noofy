@@ -43,6 +43,11 @@ async def storage_diagnostics():
     return engine_service.storage_diagnostics_payload()
 
 
+@router.get("/trust/policy")
+async def trust_policy():
+    return engine_service.trust_policy_payload()
+
+
 @router.get("/runtime")
 async def runtime_status():
     return await engine_service.runtime_status()

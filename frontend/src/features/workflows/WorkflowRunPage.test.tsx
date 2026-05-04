@@ -30,6 +30,37 @@ const validWorkflow = {
   errors: [],
 };
 
+const workflowStatus = {
+  workflow_id: "text_to_image_v0",
+  workflow: {
+    id: "text_to_image_v0",
+    name: "Text to Image",
+    version: "0.1.0",
+    description: "Generate a new image from a simple text prompt.",
+    publisher_id: "noofy",
+    package_id: "text_to_image_v0",
+    trust_level: "noofy_verified",
+    trust: {
+      level: "noofy_verified",
+      label: "Noofy Verified",
+      summary: "Built or reviewed for Noofy's managed runtime.",
+      badge_tone: "verified",
+      can_prepare_automatically: true,
+      requires_explicit_opt_in: false,
+      source_policy: "noofy_verified_sources_only",
+      signature_status: "bundled_trusted_core",
+    },
+  },
+  install: {},
+  required_actions: [],
+  compatibility_guidance: [],
+  runner: null,
+  runner_status: "not_started",
+  can_prepare: true,
+  can_cancel_preparation: false,
+  can_cancel_job: false,
+};
+
 function renderRunPage() {
   return render(<WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />);
 }
@@ -54,6 +85,10 @@ describe("WorkflowRunPage", () => {
 
       if (url.endsWith("/api/runtime")) {
         return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
       }
 
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
@@ -116,6 +151,10 @@ describe("WorkflowRunPage", () => {
         return Promise.resolve(jsonResponse(readyRuntime));
       }
 
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
         return Promise.resolve(
           jsonResponse({
@@ -152,6 +191,10 @@ describe("WorkflowRunPage", () => {
         return Promise.resolve(jsonResponse({ ...readyRuntime, reachable: false, managed_process_running: false }));
       }
 
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -167,6 +210,10 @@ describe("WorkflowRunPage", () => {
 
       if (url.endsWith("/api/runtime")) {
         return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
       }
 
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
@@ -228,6 +275,10 @@ describe("WorkflowRunPage", () => {
         return Promise.resolve(jsonResponse(readyRuntime));
       }
 
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
         return Promise.resolve(jsonResponse(validWorkflow));
       }
@@ -278,6 +329,10 @@ describe("WorkflowRunPage", () => {
         return Promise.resolve(jsonResponse(readyRuntime));
       }
 
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
         return Promise.resolve(jsonResponse(validWorkflow));
       }
@@ -320,6 +375,10 @@ describe("WorkflowRunPage", () => {
 
       if (url.endsWith("/api/runtime")) {
         return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
       }
 
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
@@ -391,6 +450,10 @@ describe("WorkflowRunPage", () => {
 
       if (url.endsWith("/api/runtime")) {
         return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
       }
 
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {

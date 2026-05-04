@@ -46,6 +46,7 @@ class Settings:
     )
     comfyui_max_restart_attempts: int = int(os.environ.get("COMFYUI_MAX_RESTART_ATTEMPTS", "3"))
     comfyui_restart_backoff_base: float = float(os.environ.get("COMFYUI_RESTART_BACKOFF_BASE", "2.0"))
+    noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
 
     # Resolved app-owned directory contract.
     paths: NoofyPaths = field(default_factory=resolve_paths)
@@ -79,6 +80,10 @@ class Settings:
     def comfyui_port(self) -> int:
         parsed = urlparse(self.comfyui_base_url)
         return parsed.port or 8188
+
+    @property
+    def trust_keys_file(self) -> Path:
+        return Path(self.noofy_trust_keys_file) if self.noofy_trust_keys_file else self.paths.trust_keys_file
 
 
 settings = Settings()
