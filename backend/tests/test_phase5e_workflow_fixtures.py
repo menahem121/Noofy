@@ -141,9 +141,9 @@ def test_phase5e_noofy_fixtures_normalize_expected_metadata(
     assert len(package.custom_nodes) == custom_node_count
     assert len(package.unresolved_runtime_inputs) == unresolved_input_count
     assert package.import_metadata is not None
-    assert package.import_metadata.status == (
-        "needs_input_setup" if unresolved_input_count else "imported"
-    )
+    # M2 routing: needs_input_setup if unresolved inputs OR dashboard is not configured.
+    # All test fixtures have not_configured dashboards, so all route to needs_input_setup.
+    assert package.import_metadata.status == "needs_input_setup"
 
 
 def test_phase5e_wrapped_noofy_archive_imports_without_macos_metadata(tmp_path: Path) -> None:

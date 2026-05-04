@@ -19,13 +19,14 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
+import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import {
   MOCK_WORKFLOW,
   WIDGET_TYPE_LABELS,
   buildInitialDashboard,
+  toBackendPayload,
   type DashboardSchema,
   type DashboardWidget,
   type DashboardWidgetLayout,
@@ -254,11 +255,19 @@ export function DashboardBuilderLayoutPage({
 
   function handleSaveDashboard() {
     if (!allWidgetsPlaced) return;
-    saveLayoutSchema({ ...schema, status: "configured" });
-    setSavedFlash("saved");
-    window.setTimeout(() => {
-      onSaveComplete(schema.workflowId);
-    }, 300);
+    const targetId = workflowId ?? schema.workflowId;
+    const payload = toBackendPayload(schema);
+    saveDashboard(targetId, payload)
+      .then(() => {
+        setSavedFlash("saved");
+        window.setTimeout(() => onSaveComplete(targetId), 300);
+      })
+      .catch(() => {
+        // Fall back to local storage so the user doesn't lose work.
+        window.localStorage.setItem(`noofy.dashboardLayout.${targetId}`, JSON.stringify(schema));
+        setSavedFlash("saved");
+        window.setTimeout(() => onSaveComplete(targetId), 300);
+      });
   }
 
   return (

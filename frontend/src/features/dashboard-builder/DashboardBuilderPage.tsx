@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 
-import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
+import { fetchBindableInputs, fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import {
@@ -30,6 +30,7 @@ import {
   buildInitialDashboard,
   createDashboardWidgetForValue,
   widgetTypesForKind,
+  workflowFromBindableInputs,
   type WidgetType,
   type DashboardWidget,
   type DashboardSchema,
@@ -61,6 +62,12 @@ export function DashboardBuilderPage({
   onNavigate,
 }: DashboardBuilderPageProps) {
   const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
+  const [workflow, setWorkflow] = useState<MockWorkflow>(() => ({
+    ...MOCK_WORKFLOW,
+    id: workflowId ?? MOCK_WORKFLOW.id,
+    name: workflowName ?? MOCK_WORKFLOW.name,
+  }));
+  const [workflowLoading, setWorkflowLoading] = useState(Boolean(workflowId));
 
   useEffect(() => {
     let mounted = true;
@@ -76,15 +83,31 @@ export function DashboardBuilderPage({
     };
   }, []);
 
-  const appStatus = runtimeStatusCopy(runtimeState);
-
-  const workflow: MockWorkflow = useMemo(() => {
-    return {
-      ...MOCK_WORKFLOW,
-      id: workflowId ?? MOCK_WORKFLOW.id,
-      name: workflowName ?? MOCK_WORKFLOW.name,
+  useEffect(() => {
+    if (!workflowId) {
+      setWorkflow({ ...MOCK_WORKFLOW, name: workflowName ?? MOCK_WORKFLOW.name });
+      setWorkflowLoading(false);
+      return;
+    }
+    let mounted = true;
+    setWorkflowLoading(true);
+    fetchBindableInputs(workflowId)
+      .then((res) => {
+        if (!mounted) return;
+        setWorkflow(workflowFromBindableInputs(workflowId, workflowName ?? workflowId, res.nodes));
+        setWorkflowLoading(false);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setWorkflow({ ...MOCK_WORKFLOW, id: workflowId, name: workflowName ?? workflowId });
+        setWorkflowLoading(false);
+      });
+    return () => {
+      mounted = false;
     };
   }, [workflowId, workflowName]);
+
+  const appStatus = runtimeStatusCopy(runtimeState);
 
   const [schema, setSchema] = useState<DashboardSchema>(() => initialSchema ?? buildInitialDashboard(workflow));
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
@@ -95,6 +118,7 @@ export function DashboardBuilderPage({
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
 
   useEffect(() => {
+    if (workflowLoading) return;
     const nextSchema = initialSchema ?? buildInitialDashboard(workflow);
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];

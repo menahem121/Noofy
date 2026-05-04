@@ -92,7 +92,9 @@ from app.runtime.workspace_store import (
     RunnerWorkspaceManifestStore,
 )
 from app.trust import capsule_source_policy, load_trust_verifier, workflow_source_policy, workflow_trust_payload
+from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
+from app.workflows.exporter import WorkflowExportError, WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
@@ -131,6 +133,8 @@ class EngineService:
         self.imported_package_store = imported_package_store
         self.memory_observer = memory_observer
         self.memory_learning_store = memory_learning_store
+        self.dashboard_authoring: DashboardAuthoringService | None = None
+        self.workflow_exporter: WorkflowExporter | None = None
         self._job_workflows: dict[str, str] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._memory_retry_roots: dict[str, str] = {}
@@ -844,6 +848,79 @@ class EngineService:
             "lease_id": lease_id,
             "runner": updated.model_dump(),
         }
+
+    # ------------------------------------------------------------------
+    # Dashboard authoring (M2)
+    # ------------------------------------------------------------------
+
+    def get_bindable_inputs(self, workflow_id: str) -> dict[str, Any]:
+        if self.dashboard_authoring is None:
+            raise KeyError(f"Dashboard authoring not configured: {workflow_id}")
+        try:
+            return self.dashboard_authoring.get_bindable_inputs(workflow_id)
+        except DashboardAuthoringError as exc:
+            raise KeyError(str(exc)) from exc
+
+    def get_unresolved_inputs(self, workflow_id: str) -> dict[str, Any]:
+        if self.dashboard_authoring is None:
+            raise KeyError(f"Dashboard authoring not configured: {workflow_id}")
+        try:
+            return self.dashboard_authoring.get_unresolved_inputs(workflow_id)
+        except DashboardAuthoringError as exc:
+            raise KeyError(str(exc)) from exc
+
+    def validate_dashboard(self, workflow_id: str, inputs: list, dashboard: dict) -> dict[str, Any]:
+        if self.dashboard_authoring is None:
+            raise KeyError(f"Dashboard authoring not configured: {workflow_id}")
+        try:
+            return self.dashboard_authoring.validate_dashboard(workflow_id, inputs, dashboard)
+        except DashboardAuthoringError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def save_dashboard(self, workflow_id: str, inputs: list, dashboard: dict) -> dict[str, Any]:
+        if self.dashboard_authoring is None:
+            raise KeyError(f"Dashboard authoring not configured: {workflow_id}")
+        try:
+            return self.dashboard_authoring.save_dashboard(workflow_id, inputs, dashboard)
+        except DashboardAuthoringError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def export_workflow_archive(self, workflow_id: str) -> tuple[bytes, str]:
+        """Return (archive_bytes, suggested_filename) for download."""
+        if self.workflow_exporter is None:
+            raise KeyError(f"Workflow export not configured: {workflow_id}")
+        try:
+            return self.workflow_exporter.export_archive(workflow_id)
+        except WorkflowExportError as exc:
+            raise ValueError(str(exc)) from exc
+
+    async def upload_workflow_image(
+        self, workflow_id: str, filename: str, data: bytes, content_type: str
+    ) -> dict[str, str]:
+        """Proxy an image upload to the ComfyUI runner for the given workflow."""
+        import httpx
+
+        # Ensure workflow exists
+        self.workflow_loader.get_package(workflow_id)
+
+        status = await self.runtime_manager.status()
+        if not status.reachable:
+            raise ValueError("ComfyUI runtime is not reachable — cannot upload image")
+
+        base_url = self.runtime_manager.base_url.rstrip("/")
+        url = f"{base_url}/upload/image"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url,
+                files={"image": (filename, data, content_type)},
+            )
+
+        if response.status_code not in (200, 201):
+            raise ValueError(f"ComfyUI upload failed with status {response.status_code}")
+
+        result = response.json()
+        return {"filename": result.get("name", filename)}
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -2270,7 +2347,7 @@ def create_default_engine_service() -> EngineService:
             "core_runner_id": CORE_RUNNER_ID,
         },
     )
-    return EngineService(
+    service = EngineService(
         loader,
         validator,
         supervisor,
@@ -2281,3 +2358,14 @@ def create_default_engine_service() -> EngineService:
         runner_process_coordinator=runner_process_coordinator,
         imported_package_store=imported_package_store,
     )
+    service.dashboard_authoring = DashboardAuthoringService(
+        workflow_store_dir=paths.workflow_packages_store_dir,
+        workflow_loader=loader,
+        validator=validator,
+        log_store=log_store,
+    )
+    service.workflow_exporter = WorkflowExporter(
+        workflow_store_dir=paths.workflow_packages_store_dir,
+        workflow_loader=loader,
+    )
+    return service

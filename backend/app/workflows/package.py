@@ -80,11 +80,42 @@ class WorkflowOutput(BaseModel):
     type: str
 
 
+DASHBOARD_CONTROL_TYPES = frozenset(
+    {
+        "slider",
+        "int_field",
+        "string_field",
+        "textarea",
+        "toggle",
+        "load_image",
+        "load_image_mask",
+        "display_image",
+        "seed_widget",
+        "lora_loader",
+        "select",
+        "result_image",
+    }
+)
+
+
+class ControlLayout(BaseModel):
+    x: int = 0
+    y: int = 0
+    w: int = 4
+    h: int = 2
+    min_w: int | None = None
+    min_h: int | None = None
+
+
 class DashboardControl(BaseModel):
     id: str
     type: str
     label: str
     input_id: str | None = None
+    output_id: str | None = None
+    description: str = ""
+    group: Literal["simple", "advanced"] = "simple"
+    layout: ControlLayout | None = None
     visible_if: dict[str, Any] | None = None
     enabled_if: dict[str, Any] | None = None
 
@@ -97,6 +128,9 @@ class DashboardSection(BaseModel):
 
 class DashboardSchema(BaseModel):
     version: str
+    status: Literal["configured", "not_configured", "invalid"] = "not_configured"
+    inputs: list[WorkflowInput] = Field(default_factory=list)
+    outputs: list[WorkflowOutput] = Field(default_factory=list)
     sections: list[DashboardSection] = Field(default_factory=list)
 
 
@@ -162,7 +196,9 @@ class WorkflowPackage(BaseModel):
     comfyui_graph: dict[str, Any]
     inputs: list[WorkflowInput] = Field(default_factory=list)
     outputs: list[WorkflowOutput] = Field(default_factory=list)
-    dashboard: DashboardSchema
+    dashboard: DashboardSchema = Field(
+        default_factory=lambda: DashboardSchema(version="0.1.0", status="not_configured")
+    )
     custom_nodes: list[WorkflowCustomNodeRecord] = Field(default_factory=list)
     unresolved_runtime_inputs: list[UnresolvedRuntimeInput] = Field(default_factory=list)
     assets: WorkflowAssetMetadata = Field(default_factory=WorkflowAssetMetadata)

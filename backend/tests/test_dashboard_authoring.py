@@ -1,0 +1,337 @@
+"""Tests for DashboardAuthoringService.
+
+Verifies:
+- PUT writes only dashboard.json (package.json bytes unchanged)
+- PUT transitions dashboard status to 'configured'
+- PUT rejects invalid bindings
+- validate does not persist anything
+- bindable-inputs works without a runner
+"""
+
+from __future__ import annotations
+
+import json
+import zipfile
+import io
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.engine.diagnostics import LogStore
+from app.workflows.authoring import DashboardAuthoringService, DashboardAuthoringError
+from app.workflows.importer import ImportedWorkflowPackageStore
+from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.validator import WorkflowPackageValidator
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_minimal_archive(
+    graph: dict[str, Any] | None = None,
+    dashboard: dict[str, Any] | None = None,
+) -> bytes:
+    """Build a minimal .noofy archive suitable for import."""
+    if graph is None:
+        graph = {
+            "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello", "clip": ["4", 0]}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1.safetensors"}},
+            "9": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": "out"}},
+        }
+
+    package_data: dict[str, Any] = {
+        "schema_version": "0.5.0",
+        "engine": "comfyui",
+        "metadata": {"id": "test_wf", "name": "Test Workflow", "version": "1.0.0"},
+        "publisher_id": "test_publisher",
+        "package_id": "test_wf",
+        "version": "1.0.0",
+        "required_models": [],
+        "custom_nodes": [],
+    }
+
+    capsule_data: dict[str, Any] = {
+        "schema_version": "0.5.0",
+        "capsule_id": "test_wf",
+        "source_policy": "quarantined_community",
+        "custom_nodes": [],
+        "dependency_lock": {"packages": []},
+        "graph_hash": "abc123",
+        "dependency_env_hash": "def456",
+        "runner_workspace_hash": "ghi789",
+    }
+
+    export_report: dict[str, Any] = {
+        "export_timestamp": "2024-01-01T00:00:00Z",
+        "comfyui_version": "0.0.1",
+    }
+
+    stub_dashboard: dict[str, Any] = dashboard if dashboard is not None else {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "inputs": [],
+        "outputs": [],
+        "sections": [],
+    }
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("package.json", json.dumps(package_data))
+        zf.writestr("comfyui_graph.json", json.dumps(graph))
+        zf.writestr("capsule.lock.json", json.dumps(capsule_data))
+        zf.writestr("export-report.json", json.dumps(export_report))
+        zf.writestr("dashboard.json", json.dumps(stub_dashboard))
+    return buf.getvalue()
+
+
+def _import_and_setup(
+    tmp_path: Path,
+    archive_bytes: bytes,
+) -> tuple[DashboardAuthoringService, str]:
+    """Import an archive and return (service, workflow_id)."""
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+    package = store.import_archive(archive_bytes, original_filename="test.noofy")
+    workflow_id = package.metadata.id
+
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    service = DashboardAuthoringService(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+        validator=WorkflowPackageValidator(),
+        log_store=log_store,
+    )
+    return service, workflow_id
+
+
+# ---------------------------------------------------------------------------
+# Minimal valid dashboard payload
+# ---------------------------------------------------------------------------
+
+
+def _minimal_inputs_and_dashboard() -> tuple[list[dict], dict]:
+    inputs = [
+        {
+            "id": "prompt",
+            "label": "Prompt",
+            "control": "textarea",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": "hello",
+            "validation": {},
+        }
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [
+            {"id": "image_out", "label": "Image", "node_id": "9", "type": "image"}
+        ],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "ctrl_prompt",
+                        "type": "textarea",
+                        "label": "Prompt",
+                        "input_id": "prompt",
+                    },
+                    {
+                        "id": "ctrl_result",
+                        "type": "result_image",
+                        "label": "Result",
+                        "output_id": "image_out",
+                    },
+                ],
+            }
+        ],
+    }
+    return inputs, dashboard
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_save_dashboard_writes_only_dashboard_json(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    # Record package.json bytes before save.
+    # The workflow store uses publisher/package/version dirs.
+    packages_root = tmp_path / "packages"
+    found: list[Path] = list(packages_root.rglob("package.json"))
+    assert found, "package.json should exist after import"
+    package_json_path = found[0]
+    package_json_bytes_before = package_json_path.read_bytes()
+
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    result = service.save_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["status"] == "configured"
+    assert result["valid"] is True
+    assert result["errors"] == []
+
+    # package.json must be byte-for-byte unchanged.
+    assert package_json_path.read_bytes() == package_json_bytes_before, (
+        "save_dashboard must not modify package.json"
+    )
+
+    # dashboard.json must now exist and carry status: configured.
+    dashboard_json_path = package_json_path.parent / "dashboard.json"
+    assert dashboard_json_path.exists(), "dashboard.json should be written"
+    saved = json.loads(dashboard_json_path.read_text())
+    assert saved["status"] == "configured"
+    assert any(i["id"] == "prompt" for i in saved["inputs"])
+
+
+def test_save_dashboard_transitions_status(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    # Before save the dashboard is not_configured.
+    pkg = service.workflow_loader.get_package(workflow_id)
+    assert pkg.dashboard.status == "not_configured"
+
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    service.save_dashboard(workflow_id, inputs, dashboard)
+
+    # Reload the package — status should be configured.
+    # Flush cache by creating a fresh loader.
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    pkg_after = loader.get_package(workflow_id)
+    assert pkg_after.dashboard.status == "configured"
+
+
+def test_save_dashboard_rejects_invalid_binding(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [
+        {
+            "id": "bad_input",
+            "label": "Bad",
+            "control": "textarea",
+            "binding": {"node_id": "999_nonexistent", "input_name": "text"},
+            "default": "",
+            "validation": {},
+        }
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "ctrl_bad",
+                        "type": "textarea",
+                        "label": "Bad",
+                        "input_id": "bad_input",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="missing node"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
+def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    packages_root = tmp_path / "packages"
+    dashboard_files_before = set(packages_root.rglob("dashboard.json"))
+
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is True
+
+    # No new files should have been written by validate.
+    dashboard_files_after = set(packages_root.rglob("dashboard.json"))
+    assert dashboard_files_after == dashboard_files_before, (
+        "validate_dashboard must not write any files"
+    )
+
+
+def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    assert result["workflow_id"] == workflow_id
+    assert result["enrichment"] == "heuristic"
+    # The graph has CLIPTextEncode with a "text" string input.
+    nodes = result["nodes"]
+    assert isinstance(nodes, list)
+    clip_nodes = [n for n in nodes if n["node_type"] == "CLIPTextEncode"]
+    assert clip_nodes, "CLIPTextEncode should appear in bindable inputs"
+    text_inputs = [inp for inp in clip_nodes[0]["inputs"] if inp["input_name"] == "text"]
+    assert text_inputs, "text input should be classified"
+
+
+def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
+    """Bundled workflows are read-only — save must raise DashboardAuthoringError."""
+    loader = WorkflowPackageLoader(Path("app/workflows/packages"))
+    service = DashboardAuthoringService(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    # Build a valid payload against text_to_image_v0's actual graph nodes.
+    # Node "6" is CLIPTextEncode (positive prompt) in the bundled workflow.
+    pkg = loader.get_package("text_to_image_v0")
+    graph_node_ids = list(pkg.comfyui_graph.keys())
+    first_node = graph_node_ids[0]
+    first_node_data = pkg.comfyui_graph[first_node]
+    scalar_inputs = [
+        k for k, v in first_node_data.get("inputs", {}).items()
+        if not isinstance(v, list)
+    ]
+    input_name = scalar_inputs[0] if scalar_inputs else "text"
+
+    inputs = [
+        {
+            "id": "prompt",
+            "label": "Prompt",
+            "control": "textarea",
+            "binding": {"node_id": first_node, "input_name": input_name},
+            "default": "",
+            "validation": {},
+        }
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c1", "type": "textarea", "label": "P", "input_id": "prompt"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="read-only"):
+        service.save_dashboard("text_to_image_v0", inputs, dashboard)

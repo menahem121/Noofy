@@ -57,13 +57,14 @@ from app.trust import (
 )
 from app.workflows.package import (
     DashboardSchema,
-    DashboardSection,
     RequiredModel,
     UnresolvedRuntimeInput,
     WorkflowAssetMetadata,
     WorkflowCustomNodeRecord,
     WorkflowImportMetadata,
+    WorkflowInput,
     WorkflowMetadata,
+    WorkflowOutput,
     WorkflowPackage,
     WorkflowPackageIdentity,
     SignedRegistryMetadata,
@@ -79,7 +80,6 @@ MAX_JSON_BYTES = 16 * 1024 * 1024
 REQUIRED_FILES = {
     "package.json",
     "comfyui_graph.json",
-    "dashboard.json",
     "capsule.lock.json",
     "export-report.json",
 }
@@ -142,8 +142,24 @@ class ImportedWorkflowPackageStore:
             transaction_dir.mkdir(parents=True, exist_ok=False)
             importer.extract_source_files(source_files_dir)
             (transaction_dir / "source-archive.noofy").write_bytes(data)
+
+            # Write dashboard.json as a separate file (canonical M2 format).
+            # inputs[] and outputs[] live in dashboard.json, not in package.json.
+            dashboard_payload = package.dashboard.model_dump(mode="json")
+            dashboard_payload["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
+            dashboard_payload["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
+            (transaction_dir / "dashboard.json").write_text(
+                json.dumps(dashboard_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            # package.json stores identity/models/graph metadata only — no dashboard data.
+            package_data = package.model_dump(mode="json", exclude_none=True)
+            package_data.pop("inputs", None)
+            package_data.pop("outputs", None)
+            package_data.pop("dashboard", None)
             (transaction_dir / "package.json").write_text(
-                package.model_dump_json(indent=2),
+                json.dumps(package_data, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
             app_capsule_lock = imported_package_capsule_lock(package)
@@ -342,10 +358,11 @@ class ImportedWorkflowPackageStore:
             )
 
         updated_package = package.model_copy(update={"custom_nodes": list(records_by_id.values())})
+        _status = _import_status(updated_package.unresolved_runtime_inputs, updated_package.dashboard)
         return _package_with_import_resolution_status(
             updated_package,
-            status=_import_status(updated_package.unresolved_runtime_inputs),
-            message=_import_status_message(_import_status(updated_package.unresolved_runtime_inputs)),
+            status=_status,
+            message=_import_status_message(_status),
             source_resolution={
                 "status": "resolved",
                 "resolved_custom_nodes": resolved_reports,
@@ -408,7 +425,7 @@ class NoofyArchiveImporter:
     def normalize(self) -> WorkflowPackage:
         package_json = self._read_json("package.json")
         graph = self._read_json("comfyui_graph.json")
-        dashboard_json = self._read_json("dashboard.json")
+        dashboard_json = self._read_json("dashboard.json") if "dashboard.json" in self.members else {}
         capsule_json = self._read_json("capsule.lock.json")
         export_report = self._read_json("export-report.json")
 
@@ -425,9 +442,45 @@ class NoofyArchiveImporter:
         models = _normalize_models(capsule_json)
         custom_nodes = _normalize_custom_nodes(capsule_json)
         unresolved_inputs = _detect_unresolved_runtime_inputs(graph)
-        dashboard = _normalize_dashboard(dashboard_json, unresolved_inputs)
+        dashboard = _normalize_dashboard(dashboard_json)
+        dashboard_inputs = [
+            WorkflowInput.model_validate(i)
+            for i in (dashboard_json.get("inputs") or [])
+            if isinstance(i, dict)
+        ]
+        dashboard_outputs = [
+            WorkflowOutput.model_validate(o)
+            for o in (dashboard_json.get("outputs") or [])
+            if isinstance(o, dict)
+        ]
         observed_hardware = _observed_hardware(capsule_json, export_report)
-        import_status = _import_status(unresolved_inputs)
+
+        # Validate configured dashboards — an invalid one routes to needs_input_setup.
+        dashboard_valid = True
+        if dashboard.status == "configured":
+            from app.workflows.validator import WorkflowPackageValidator  # local to avoid circular import
+
+            _validator = WorkflowPackageValidator()
+            _candidate = WorkflowPackage(
+                metadata=WorkflowMetadata(
+                    id=workflow_id, name=display_name, version=version,
+                    description="", author=publisher_id,
+                ),
+                identity=None,
+                engine="comfyui",
+                required_models=[],
+                comfyui_graph=graph,
+                inputs=dashboard_inputs,
+                outputs=dashboard_outputs,
+                dashboard=dashboard,
+                custom_nodes=[],
+                unresolved_runtime_inputs=[],
+                smoke_tests=WorkflowSmokeTests(),
+            )
+            _result = _validator.validate_structure(_candidate)
+            dashboard_valid = _result.valid
+
+        import_status = _import_status(unresolved_inputs, dashboard, dashboard_valid=dashboard_valid)
 
         try:
             return WorkflowPackage(
@@ -560,8 +613,16 @@ def imported_workflow_id(publisher_id: str, package_id: str, version: str) -> st
     )
 
 
-def _import_status(unresolved_inputs: list[UnresolvedRuntimeInput]) -> str:
+def _import_status(
+    unresolved_inputs: list[UnresolvedRuntimeInput],
+    dashboard: DashboardSchema | None = None,
+    dashboard_valid: bool = True,
+) -> str:
     if unresolved_inputs:
+        return "needs_input_setup"
+    if dashboard is not None and dashboard.status != "configured":
+        return "needs_input_setup"
+    if not dashboard_valid:
         return "needs_input_setup"
     return "imported"
 
@@ -986,15 +1047,31 @@ def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustom
 
 def _normalize_dashboard(
     dashboard_json: dict[str, Any],
-    unresolved_inputs: list[UnresolvedRuntimeInput],
 ) -> DashboardSchema:
-    if "version" in dashboard_json and isinstance(dashboard_json.get("sections"), list):
-        return DashboardSchema.model_validate(dashboard_json)
+    # Archive dashboard.json may have various shapes. Normalize to M2 DashboardSchema.
+    # inputs/outputs are stripped here — they are populated on WorkflowPackage directly.
+    stripped = {k: v for k, v in dashboard_json.items() if k not in ("inputs", "outputs")}
 
-    title = "Input setup needed" if unresolved_inputs else "Imported workflow"
+    # Accept explicit status from the archive.
+    archive_status = stripped.get("status")
+    if archive_status not in ("configured", "not_configured", "invalid"):
+        archive_status = None
+
+    if "version" in stripped and isinstance(stripped.get("sections"), list):
+        try:
+            schema = DashboardSchema.model_validate(stripped)
+            if archive_status is None and not any(s.controls for s in schema.sections):
+                schema = schema.model_copy(update={"status": "not_configured"})
+            return schema
+        except Exception:
+            pass
+
+    # No valid sections — produce a stub.
+    explicit_status = archive_status if archive_status else "not_configured"
     return DashboardSchema(
         version=NOOFY_ARCHIVE_SCHEMA_VERSION,
-        sections=[DashboardSection(id="import_setup", title=title, controls=[])],
+        status=explicit_status,
+        sections=[],
     )
 
 

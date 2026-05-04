@@ -285,6 +285,59 @@ export function fetchWorkflows() {
   return getJson<WorkflowSummary[]>("/workflows");
 }
 
+// ─── Workflow package ────────────────────────────────────────────────────────
+
+export interface WorkflowInputDef {
+  id: string;
+  label: string;
+  control: string;
+  binding: { node_id: string; input_name: string };
+  default: unknown;
+  validation: Record<string, unknown>;
+}
+
+export interface WorkflowOutputDef {
+  id: string;
+  label: string;
+  node_id: string;
+  type: string;
+}
+
+export interface DashboardControlDef {
+  id: string;
+  type: string;
+  label: string;
+  input_id?: string;
+  output_id?: string;
+  description?: string;
+  group?: string;
+  layout?: { x: number; y: number; w: number; h: number };
+}
+
+export interface DashboardSectionDef {
+  id: string;
+  title: string;
+  controls: DashboardControlDef[];
+}
+
+export interface DashboardSchemaDef {
+  version: string;
+  status: string;
+  sections: DashboardSectionDef[];
+}
+
+export interface WorkflowPackageResponse {
+  metadata: { id: string; name: string; version: string; description: string };
+  inputs: WorkflowInputDef[];
+  outputs: WorkflowOutputDef[];
+  dashboard: DashboardSchemaDef;
+  import_metadata?: { status: string };
+}
+
+export function fetchWorkflowPackage(workflowId: string): Promise<WorkflowPackageResponse> {
+  return getJson<WorkflowPackageResponse>(`/workflows/${encodeURIComponent(workflowId)}/package`);
+}
+
 export function fetchTrustPolicy() {
   return getJson<TrustPolicyResponse>("/trust/policy");
 }
@@ -358,6 +411,123 @@ export function stopEngine() {
 
 export function isEngineJob(response: unknown): response is EngineJob {
   return Boolean(response && typeof response === "object" && "job_id" in response && "engine" in response);
+}
+
+// ─── Dashboard authoring ─────────────────────────────────────────────────────
+
+export interface BindableInputEntry {
+  input_name: string;
+  current_value: unknown;
+  kind: string;
+  suggested_widget_type: string;
+  widget_types: string[];
+}
+
+export interface BindableNode {
+  node_id: string;
+  node_type: string;
+  is_image_node: boolean;
+  is_lora_node: boolean;
+  inputs: BindableInputEntry[];
+}
+
+export interface BindableInputsResponse {
+  workflow_id: string;
+  enrichment: "heuristic" | "object_info";
+  nodes: BindableNode[];
+}
+
+export interface UnresolvedInput {
+  node_id: string;
+  node_type: string;
+  input_name: string;
+  current_value: unknown;
+  reason: string;
+}
+
+export interface UnresolvedInputsResponse {
+  workflow_id: string;
+  unresolved_inputs: UnresolvedInput[];
+}
+
+export interface DashboardSavePayload {
+  inputs: unknown[];
+  dashboard: unknown;
+}
+
+export interface DashboardValidationResponse {
+  workflow_id: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface DashboardSaveResponse {
+  workflow_id: string;
+  status: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "PUT",
+    headers: apiHeaders("application/json"),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Noofy backend returned ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export function fetchBindableInputs(workflowId: string): Promise<BindableInputsResponse> {
+  return getJson<BindableInputsResponse>(`/workflows/${encodeURIComponent(workflowId)}/bindable-inputs`);
+}
+
+export function fetchUnresolvedInputs(workflowId: string): Promise<UnresolvedInputsResponse> {
+  return getJson<UnresolvedInputsResponse>(`/workflows/${encodeURIComponent(workflowId)}/unresolved-inputs`);
+}
+
+export function validateDashboard(
+  workflowId: string,
+  payload: DashboardSavePayload
+): Promise<DashboardValidationResponse> {
+  return postJson<DashboardValidationResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/dashboard/validate`,
+    payload
+  );
+}
+
+export function saveDashboard(
+  workflowId: string,
+  payload: DashboardSavePayload
+): Promise<DashboardSaveResponse> {
+  return putJson<DashboardSaveResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/dashboard`,
+    payload
+  );
+}
+
+export function exportWorkflowUrl(workflowId: string): string {
+  return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export`;
+}
+
+export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/uploads/image`,
+    { method: "POST", headers, body: formData }
+  );
+  if (!response.ok) {
+    throw new Error(`Image upload failed: ${response.status}`);
+  }
+  return response.json() as Promise<{ filename: string }>;
 }
 
 // ─── Gallery ────────────────────────────────────────────────────────────────

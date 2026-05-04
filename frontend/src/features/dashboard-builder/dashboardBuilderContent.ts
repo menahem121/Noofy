@@ -502,6 +502,150 @@ export const MOCK_WORKFLOW: MockWorkflow = {
   ],
 };
 
+// ─── API ↔ Frontend conversion helpers ──────────────────────────────────────
+
+export interface BackendWorkflowInput {
+  id: string;
+  label: string;
+  control: string;
+  binding: { node_id: string; input_name: string };
+  default: unknown;
+  validation: Record<string, unknown>;
+}
+
+export interface BackendDashboardControl {
+  id: string;
+  type: string;
+  label: string;
+  input_id?: string;
+  output_id?: string;
+  description?: string;
+  group?: string;
+  layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
+}
+
+export interface BackendDashboardSection {
+  id: string;
+  title: string;
+  controls: BackendDashboardControl[];
+}
+
+export interface BackendDashboardPayload {
+  version: string;
+  status?: string;
+  sections: BackendDashboardSection[];
+}
+
+export interface BackendSavePayload {
+  inputs: BackendWorkflowInput[];
+  dashboard: BackendDashboardPayload;
+}
+
+/** Convert a backend BindableInputsResponse node list into a MockWorkflow. */
+export function workflowFromBindableInputs(
+  workflowId: string,
+  workflowName: string,
+  nodes: Array<{
+    node_id: string;
+    node_type: string;
+    is_image_node: boolean;
+    is_lora_node: boolean;
+    inputs: Array<{
+      input_name: string;
+      current_value: unknown;
+      kind: string;
+      suggested_widget_type: string;
+      widget_types: string[];
+    }>;
+  }>
+): MockWorkflow {
+  function nodeIconKind(nodeType: string, isImageNode: boolean, isLoraNode: boolean): NodeIconKind {
+    if (isImageNode) return "image-input";
+    if (isLoraNode) return "lora";
+    const t = nodeType.toLowerCase();
+    if (t.includes("clip") || t.includes("text")) return "text";
+    if (t.includes("ksampler") || t.includes("sampler")) return "sampler";
+    if (t.includes("save")) return "save";
+    if (t.includes("vae") || t.includes("decode")) return "tune";
+    if (t.includes("latent") || t.includes("image")) return "image";
+    return "tune";
+  }
+
+  function valueKindFromString(kind: string): WorkflowValueKind {
+    if (kind === "image_input") return "image_input";
+    if (kind === "image_output") return "image_output";
+    if (kind === "seed") return "seed";
+    if (kind === "lora") return "lora";
+    if (kind === "select") return "select";
+    if (kind === "boolean") return "boolean";
+    if (kind === "number") return "number";
+    return "string";
+  }
+
+  const builtNodes: WorkflowNode[] = nodes.map((node) => ({
+    id: node.node_id,
+    classType: node.node_type,
+    title: node.node_type,
+    iconKind: nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
+    values: node.inputs.map((inp) => ({
+      id: `node-${node.node_id}-${inp.input_name}`,
+      nodeId: node.node_id,
+      inputName: inp.input_name,
+      label: inp.input_name,
+      valueKind: valueKindFromString(inp.kind),
+      rawValue: inp.current_value,
+      technical: ["steps", "cfg", "denoise", "batch_size", "scheduler", "sampler_name", "filename_prefix"].includes(
+        inp.input_name
+      ),
+    })),
+  }));
+
+  return {
+    id: workflowId,
+    name: workflowName,
+    source: "imported_noofy_package",
+    nodes: builtNodes,
+  };
+}
+
+/** Convert frontend DashboardSchema into a backend save payload. */
+export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
+  const inputs: BackendWorkflowInput[] = schema.widgets
+    .filter((w) => w.widgetType !== "display_image" && w.widgetType !== ("result_image" as string))
+    .map((w) => ({
+      id: w.id,
+      label: w.title,
+      control: w.widgetType,
+      binding: { node_id: w.binding.nodeId, input_name: w.binding.inputName },
+      default: w.defaultValue,
+      validation: {
+        ...(w.min !== undefined && { min: w.min }),
+        ...(w.max !== undefined && { max: w.max }),
+        ...(w.step !== undefined && { step: w.step }),
+      },
+    }));
+
+  const controls: BackendDashboardControl[] = schema.widgets.map((w, i) => ({
+    id: w.id,
+    type: w.widgetType,
+    label: w.title,
+    input_id: w.widgetType !== "display_image" ? w.id : undefined,
+    output_id: w.widgetType === "display_image" ? "image" : undefined,
+    description: w.description,
+    group: w.group,
+    layout: w.layout
+      ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h }
+      : { x: 0, y: i * 2, w: 12, h: 2 },
+  }));
+
+  const dashboard: BackendDashboardPayload = {
+    version: "0.1.0",
+    sections: [{ id: "main", title: "Main", controls }],
+  };
+
+  return { inputs, dashboard };
+}
+
 export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
   const promptValue = workflow.nodes
     .flatMap((node) => node.values)

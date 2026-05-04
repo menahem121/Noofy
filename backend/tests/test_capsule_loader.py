@@ -73,8 +73,13 @@ def test_loader_reads_bundled_capsule_for_text_to_image_v0() -> None:
 
 
 def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
+    from app.workflows.loader import WorkflowPackageLoader
+
     packages_dir = Path("app/workflows/packages")
-    package = json.loads((packages_dir / "text_to_image_v0" / "package.json").read_text(encoding="utf-8"))
+    loader = WorkflowPackageLoader(packages_dir)
+    pkg = loader.get_package("text_to_image_v0")
+    # package is the in-memory model dump — same shape the importer uses for workflow_package_hash.
+    package = pkg.model_dump(mode="json", exclude_none=True)
     lock = CapsuleLockLoader(packages_dir).get_capsule_lock("text_to_image_v0")
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
     profile = catalog.profile_by_id(lock.runtime.runtime_profile_id)
@@ -125,8 +130,8 @@ def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
     )
     expected_capsule_fingerprint = capsule_fingerprint(
         workflow_package_hash=sha256_fingerprint(package),
-        graph_hash=sha256_fingerprint(package["comfyui_graph"]),
-        dashboard_schema_hash=sha256_fingerprint(package["dashboard"]),
+        graph_hash=sha256_fingerprint(pkg.comfyui_graph),
+        dashboard_schema_hash=sha256_fingerprint(pkg.dashboard),
         model_requirements=lock.models,
         custom_nodes=lock.custom_nodes,
         trust=lock.trust,

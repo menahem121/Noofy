@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
@@ -212,6 +212,84 @@ async def cancel_job(job_id: str):
 @router.get("/jobs/{job_id}/result")
 async def get_result(job_id: str):
     return await engine_service.get_result(job_id)
+
+
+@router.get("/workflows/{workflow_id}/bindable-inputs")
+async def get_bindable_inputs(workflow_id: str):
+    try:
+        return engine_service.get_bindable_inputs(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/unresolved-inputs")
+async def get_unresolved_inputs(workflow_id: str):
+    try:
+        return engine_service.get_unresolved_inputs(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/dashboard/validate")
+async def validate_dashboard(workflow_id: str, request: Request):
+    try:
+        body = await request.json()
+        return engine_service.validate_dashboard(
+            workflow_id,
+            inputs=body.get("inputs", []),
+            dashboard=body.get("dashboard", {}),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/workflows/{workflow_id}/dashboard")
+async def save_dashboard(workflow_id: str, request: Request):
+    try:
+        body = await request.json()
+        return engine_service.save_dashboard(
+            workflow_id,
+            inputs=body.get("inputs", []),
+            dashboard=body.get("dashboard", {}),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/export")
+async def export_workflow(workflow_id: str):
+    try:
+        archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=archive_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/workflows/{workflow_id}/uploads/image")
+async def upload_workflow_image(workflow_id: str, image: UploadFile = File(...)):
+    try:
+        data = await image.read()
+        result = await engine_service.upload_workflow_image(
+            workflow_id,
+            filename=image.filename or "upload.png",
+            data=data,
+            content_type=image.content_type or "image/png",
+        )
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/models")

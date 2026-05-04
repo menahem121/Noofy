@@ -1,0 +1,120 @@
+{
+  "version": "0.1.0",
+  "status": "configured",
+  "inputs": [
+    {
+      "id": "prompt",
+      "label": "Prompt",
+      "control": "textarea",
+      "binding": {
+        "node_id": "6",
+        "input_name": "text"
+      },
+      "default": "a cinematic photo of a mountain lake",
+      "validation": {
+        "required": true
+      }
+    },
+    {
+      "id": "seed",
+      "label": "Seed",
+      "control": "seed_widget",
+      "binding": {
+        "node_id": "3",
+        "input_name": "seed"
+      },
+      "default": 5,
+      "validation": {
+        "min": 0
+      }
+    },
+    {
+      "id": "width",
+      "label": "Width",
+      "control": "slider",
+      "binding": {
+        "node_id": "5",
+        "input_name": "width"
+      },
+      "default": 512,
+      "validation": {
+        "min": 256,
+        "max": 1024,
+        "step": 64
+      }
+    },
+    {
+      "id": "height",
+      "label": "Height",
+      "control": "slider",
+      "binding": {
+        "node_id": "5",
+        "input_name": "height"
+      },
+      "default": 512,
+      "validation": {
+        "min": 256,
+        "max": 1024,
+        "step": 64
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "label": "Generated Image",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "id": "generation",
+      "title": "Generation",
+      "controls": [
+        {
+          "id": "prompt",
+          "type": "textarea",
+          "label": "Prompt",
+          "input_id": "prompt",
+          "description": "Describe what you want to generate.",
+          "group": "simple",
+          "layout": { "x": 0, "y": 0, "w": 12, "h": 3 }
+        },
+        {
+          "id": "seed",
+          "type": "seed_widget",
+          "label": "Seed",
+          "input_id": "seed",
+          "description": "Random seed for reproducibility.",
+          "group": "simple",
+          "layout": { "x": 0, "y": 3, "w": 6, "h": 2 }
+        },
+        {
+          "id": "width",
+          "type": "slider",
+          "label": "Width",
+          "input_id": "width",
+          "group": "advanced",
+          "layout": { "x": 0, "y": 5, "w": 6, "h": 2 }
+        },
+        {
+          "id": "height",
+          "type": "slider",
+          "label": "Height",
+          "input_id": "height",
+          "group": "advanced",
+          "layout": { "x": 6, "y": 5, "w": 6, "h": 2 }
+        },
+        {
+          "id": "result",
+          "type": "result_image",
+          "label": "Result",
+          "output_id": "image",
+          "group": "simple",
+          "layout": { "x": 0, "y": 7, "w": 12, "h": 6 }
+        }
+      ]
+    }
+  ]
+}
