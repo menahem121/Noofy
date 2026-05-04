@@ -274,11 +274,18 @@ class RuntimeEnvironment:
 
     async def _run_command(self, command: list[str], cwd: Path | None) -> CommandResult:
         try:
+            # Use the noofy cache dir as TMPDIR so that large pip wheel downloads
+            # (e.g. PyTorch CUDA) don't exhaust the system /tmp tmpfs quota.
+            env = dict(os.environ)
+            pip_tmp = self.cache_dir / "pip-tmp"
+            pip_tmp.mkdir(parents=True, exist_ok=True)
+            env["TMPDIR"] = str(pip_tmp)
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
         except OSError as exc:
             return CommandResult(returncode=127, stderr=str(exc))

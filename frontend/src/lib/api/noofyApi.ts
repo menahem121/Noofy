@@ -398,15 +398,15 @@ export function cancelJob(jobId: string) {
 }
 
 export function bootstrapEngine() {
-  return postJson<unknown>("/engine/comfyui/bootstrap");
+  return postJson<Record<string, unknown>>("/engine/comfyui/bootstrap");
 }
 
 export function startEngine() {
-  return postJson<unknown>("/engine/comfyui/start");
+  return postJson<Record<string, unknown>>("/engine/comfyui/start");
 }
 
 export function stopEngine() {
-  return postJson<unknown>("/engine/comfyui/stop");
+  return postJson<Record<string, unknown>>("/engine/comfyui/stop");
 }
 
 export function isEngineJob(response: unknown): response is EngineJob {

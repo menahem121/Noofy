@@ -16,6 +16,7 @@ interface EngineSettingsState {
   runtime: RuntimeStatus | null;
   action: string | null;
   error: string | null;
+  actionResult: { label: string; status: string; ok: boolean } | null;
 }
 
 const initialState: EngineSettingsState = {
@@ -23,6 +24,22 @@ const initialState: EngineSettingsState = {
   runtime: null,
   action: null,
   error: null,
+  actionResult: null,
+};
+
+const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "already_running"]);
+const ACTION_RESULT_LABELS: Record<string, string> = {
+  prepared: "Engine environment prepared successfully.",
+  already_prepared: "Environment is already prepared.",
+  bootstrap_failed: "Preparation failed. Check the backend logs for details.",
+  requirements_missing: "ComfyUI requirements.txt is missing.",
+  python_missing: "Bootstrap Python executable not found.",
+  python_not_prepared: "Runtime Python is not prepared.",
+  dependency_check_failed: "Dependencies could not be verified after install.",
+  not_configured: "No managed runtime environment is configured.",
+  already_running: "Engine is already running.",
+  external_unreachable: "Engine is in external mode and not reachable. Start ComfyUI manually.",
+  stopped: "Engine stopped.",
 };
 
 export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
@@ -43,10 +60,16 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     }
   }
 
-  async function runAction(label: string, action: () => Promise<unknown>) {
-    setState((current) => ({ ...current, action: label, error: null }));
+  async function runAction(label: string, action: () => Promise<Record<string, unknown>>) {
+    setState((current) => ({ ...current, action: label, error: null, actionResult: null }));
     try {
-      await action();
+      const result = await action();
+      const status = typeof result.status === "string" ? result.status : "unknown";
+      const ok = ACTION_OK_STATUSES.has(status);
+      setState((current) => ({
+        ...current,
+        actionResult: { label, status, ok },
+      }));
       await refresh();
     } catch (error) {
       setState((current) => ({
@@ -86,6 +109,18 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
           <div>
             <strong>The app could not reach the backend</strong>
             <span>Start the Noofy backend and try again.</span>
+          </div>
+        </div>
+      ) : null}
+
+      {state.actionResult ? (
+        <div className={`notice ${state.actionResult.ok ? "notice--success" : "notice--error"}`} role="status">
+          {state.actionResult.ok
+            ? <CheckCircle2 size={18} aria-hidden="true" />
+            : <AlertCircle size={18} aria-hidden="true" />}
+          <div>
+            <strong>{state.actionResult.ok ? "Done" : "Action did not complete"}</strong>
+            <span>{ACTION_RESULT_LABELS[state.actionResult.status] ?? state.actionResult.status}</span>
           </div>
         </div>
       ) : null}
