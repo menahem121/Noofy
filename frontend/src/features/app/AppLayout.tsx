@@ -13,17 +13,10 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+import { openExternalUrl } from "../../lib/openExternalUrl";
+
 // Replace with your real Tipeee / donation URL when ready.
 const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
-
-async function openExternalUrl(url: string): Promise<void> {
-  if (window.__TAURI_INTERNALS__) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("open_external_url", { url });
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-}
 
 export type AppRouteId = "home" | "workflows" | "history" | "models" | "gallery" | "settings";
 export type StatusTone = "success" | "warning" | "error" | "info";

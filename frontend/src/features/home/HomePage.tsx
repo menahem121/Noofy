@@ -1,5 +1,9 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus, Users } from "lucide-react";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+
+// Replace with your real Reddit community URL when ready.
+const REDDIT_URL = "https://www.reddit.com/r/noofy";
 
 import {
   fetchRuntimeStatus,
@@ -319,19 +323,19 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
 
             <article className="action-card action-card--accent">
               <div className="action-card__icon action-card__icon--accent">
-                <PackagePlus size={26} aria-hidden="true" />
+                <Users size={26} aria-hidden="true" />
               </div>
               <div>
-                <h2>Create Workflow Interface</h2>
-                <p>Pick the widgets beginners should see and keep the complex parts hidden.</p>
+                <h2>Join the Reddit Community</h2>
+                <p>Share workflows, ask questions, and follow Noofy's progress with other local AI builders.</p>
               </div>
               <button
                 className="primary-button primary-button--compact"
                 type="button"
-                onClick={() => onConfigureDashboard?.()}
+                onClick={() => void openExternalUrl(REDDIT_URL)}
               >
-                <PackagePlus size={16} aria-hidden="true" />
-                Create Interface
+                <Users size={16} aria-hidden="true" />
+                Open Reddit
               </button>
             </article>
           </section>
