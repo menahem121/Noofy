@@ -32,6 +32,16 @@ fn noofy_runtime_config(config: tauri::State<'_, FrontendRuntimeConfig>) -> Fron
     config.inner().clone()
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|e| format!("invalid URL: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "https" && scheme != "http" {
+        return Err(format!("scheme '{scheme}' is not allowed"));
+    }
+    open::that(url).map_err(|e| format!("failed to open URL: {e}"))
+}
+
 fn main() {
     let backend_process: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let backend_for_setup = Arc::clone(&backend_process);
@@ -39,7 +49,7 @@ fn main() {
     let backend_for_exit = Arc::clone(&backend_process);
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![noofy_runtime_config])
+        .invoke_handler(tauri::generate_handler![noofy_runtime_config, open_external_url])
         .setup(move |app| {
             let runtime = start_backend()?;
             let init_script = runtime_config_script(&runtime.api_base_url, &runtime.api_token)?;

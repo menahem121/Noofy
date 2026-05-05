@@ -1,5 +1,6 @@
 import { createContext, useContext, ReactNode, useState } from "react";
 import {
+  Coffee,
   FolderClock,
   Images,
   Layers,
@@ -10,8 +11,19 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
 } from "lucide-react";
+
+// Replace with your real Tipeee / donation URL when ready.
+const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
+
+async function openExternalUrl(url: string): Promise<void> {
+  if (window.__TAURI_INTERNALS__) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("open_external_url", { url });
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
 
 export type AppRouteId = "home" | "workflows" | "history" | "models" | "gallery" | "settings";
 export type StatusTone = "success" | "warning" | "error" | "info";
@@ -36,7 +48,6 @@ const navItems = [
   { id: "history", label: "History", Icon: FolderClock },
   { id: "models", label: "Models", Icon: Layers },
   { id: "gallery", label: "Gallery", Icon: Images },
-  { id: "settings", label: "Settings", Icon: Settings },
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 
 interface SidebarContextValue {
@@ -139,15 +150,20 @@ export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayo
 
           <div className="engine-card">
             <div className="engine-card__header">
-              <span className={`engine-dot engine-dot--${status.tone}`} />
-              <span>Local engine</span>
+              <Coffee size={15} aria-hidden="true" />
+              <span>Buy Me a Coffee</span>
             </div>
-            <p>{status.description}</p>
-            <button className="secondary-button secondary-button--full" type="button" onClick={() => onNavigate("settings")}>
-              <SlidersHorizontal size={16} aria-hidden="true" />
-              Engine Settings
+            <p>Help me build Noofy (And maybe buy a computer that can run it lol)</p>
+            <button
+              className="secondary-button secondary-button--full"
+              type="button"
+              onClick={() => void openExternalUrl(SUPPORT_URL)}
+            >
+              Support Noofy
             </button>
           </div>
+
+          <p className="sidebar__version">Noofy v{__APP_VERSION__}</p>
         </div>
       </aside>
 

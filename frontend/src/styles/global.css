@@ -265,6 +265,7 @@ button:disabled {
 .sidebar {
   grid-column: 1;
   grid-row: 2;
+  height: 100%;
   overflow: hidden;
   background: var(--deep-bg);
   border-right: 1px solid rgba(139, 92, 246, 0.28);
@@ -376,6 +377,14 @@ button:disabled {
   margin: 0 0 14px;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sidebar__version {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+  letter-spacing: 0.02em;
 }
 
 .engine-dot {

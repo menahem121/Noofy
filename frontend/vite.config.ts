@@ -1,9 +1,12 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "fs";
 
 declare const process: {
   env: Record<string, string | undefined>;
 };
+
+const { version } = JSON.parse(readFileSync("./package.json", "utf-8")) as { version: string };
 
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
@@ -13,6 +16,7 @@ const devBackendPort = process.env.VITE_DEV_BACKEND_PORT ?? "8000";
 export default defineConfig({
   clearScreen: false,
   plugins: [react()],
+  define: { __APP_VERSION__: JSON.stringify(version) },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   server: {
     host: tauriDevHost || "127.0.0.1",
