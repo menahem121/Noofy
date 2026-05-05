@@ -68,7 +68,7 @@ class Settings:
 
     @property
     def comfyui_models_dir(self) -> Path:
-        """App-owned models directory (not ComfyUI-official-repo/models)."""
+        """App-owned models directory (not the vendored ComfyUI source tree)."""
         return self.paths.models_dir
 
     @property

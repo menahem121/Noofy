@@ -48,6 +48,13 @@ class RuntimeManager:
         health_check: HealthCheck | None = None,
         on_restart: OnRestartCallback | None = None,
         pid_dir: Path | None = None,
+        managed_base_directory: Path | None = None,
+        managed_output_directory: Path | None = None,
+        managed_input_directory: Path | None = None,
+        managed_temp_directory: Path | None = None,
+        managed_user_directory: Path | None = None,
+        managed_database_url: str | None = None,
+        python_cache_dir: Path | None = None,
     ) -> None:
         if mode not in {"external", "managed"}:
             raise ValueError(f"Unsupported ComfyUI runtime mode: {mode}")
@@ -68,6 +75,13 @@ class RuntimeManager:
         self._health_check = health_check or self._default_health_check
         self._on_restart = on_restart
         self._pid_dir = pid_dir
+        self._managed_base_directory = managed_base_directory
+        self._managed_output_directory = managed_output_directory
+        self._managed_input_directory = managed_input_directory
+        self._managed_temp_directory = managed_temp_directory
+        self._managed_user_directory = managed_user_directory
+        self._managed_database_url = managed_database_url
+        self._python_cache_dir = python_cache_dir
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -260,10 +274,15 @@ class RuntimeManager:
             self.managed_host,
             "--port",
             str(self.managed_port),
+            "--disable-auto-launch",
+            "--dont-print-server",
         ]
+        command.extend(self._managed_path_args())
+        process_env = self._managed_process_env()
         self._process = await self._process_factory(
             command,
             cwd=self.repo_dir,
+            env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -564,6 +583,28 @@ class RuntimeManager:
         if self.environment is not None:
             return self.environment.python_executable
         return self.python_executable
+
+    def _managed_path_args(self) -> list[str]:
+        args: list[str] = []
+        path_args = (
+            ("--base-directory", self._managed_base_directory),
+            ("--output-directory", self._managed_output_directory),
+            ("--input-directory", self._managed_input_directory),
+            ("--temp-directory", self._managed_temp_directory),
+            ("--user-directory", self._managed_user_directory),
+        )
+        for flag, path in path_args:
+            if path is not None:
+                args.extend([flag, str(path)])
+        if self._managed_database_url:
+            args.extend(["--database-url", self._managed_database_url])
+        return args
+
+    def _managed_process_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self._python_cache_dir is not None:
+            env["PYTHONPYCACHEPREFIX"] = str(self._python_cache_dir)
+        return env
 
     async def _create_process(self, command: list[str], **kwargs: Any) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(*command, **kwargs)

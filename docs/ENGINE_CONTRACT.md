@@ -66,7 +66,7 @@ Diagnostics are for both the desktop UI and future agents. Prefer structured eve
 - Retrieve generated files through `/view`.
 - Inspect models and node information through `/models` and `/object_info`.
 
-Model validation for `ComfyUIEngineAdapter` must query the running ComfyUI instance through its API. It must not depend on a local `ComfyUI-official-repo/models` path, because ComfyUI may be external in dev mode or app-managed in product mode.
+Model validation for `ComfyUIEngineAdapter` must query the running ComfyUI instance through its API. It must not depend on a local ComfyUI source `models` path, because ComfyUI may be external in dev mode or app-managed in product mode.
 
 ## Runtime Ownership
 

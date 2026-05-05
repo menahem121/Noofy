@@ -181,6 +181,58 @@ async def test_external_start_reports_already_running(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_managed_start_command_uses_hidden_runtime_data_paths(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "third_party" / "comfyui"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+
+    process_started = False
+    captured_command: list[str] = []
+    captured_env: dict[str, str] = {}
+
+    async def create_process(command, **kwargs):
+        nonlocal process_started, captured_command, captured_env
+        process_started = True
+        captured_command = list(command)
+        captured_env = dict(kwargs.get("env") or {})
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    data_dir = tmp_path / "data"
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        managed_base_directory=data_dir,
+        managed_output_directory=data_dir / "outputs",
+        managed_input_directory=data_dir / "input",
+        managed_temp_directory=data_dir,
+        managed_user_directory=data_dir / "user-state" / "comfyui",
+        managed_database_url=f"sqlite:///{(data_dir / 'user-state' / 'comfyui' / 'comfyui.db').as_posix()}",
+        python_cache_dir=data_dir / "cache" / "python",
+    )
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert "--disable-auto-launch" in captured_command
+    assert "--dont-print-server" in captured_command
+    assert _arg_value(captured_command, "--base-directory") == str(data_dir)
+    assert _arg_value(captured_command, "--output-directory") == str(data_dir / "outputs")
+    assert _arg_value(captured_command, "--input-directory") == str(data_dir / "input")
+    assert _arg_value(captured_command, "--temp-directory") == str(data_dir)
+    assert _arg_value(captured_command, "--user-directory") == str(data_dir / "user-state" / "comfyui")
+    assert _arg_value(captured_command, "--database-url").endswith("/data/user-state/comfyui/comfyui.db")
+    assert captured_env["PYTHONPYCACHEPREFIX"] == str(data_dir / "cache" / "python")
+    assert all(str(repo_dir) not in value for value in captured_command if value.startswith(str(data_dir)))
+
+
+@pytest.mark.anyio
 async def test_managed_stop_terminates_process(tmp_path: Path) -> None:
     async def unreachable(_: str) -> tuple[bool, str | None]:
         return False, "not reachable"
@@ -234,6 +286,8 @@ class Handler(BaseHTTPRequestHandler):
 parser = argparse.ArgumentParser()
 parser.add_argument("--listen", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
+parser.add_argument("--disable-auto-launch", action="store_true")
+parser.add_argument("--dont-print-server", action="store_true")
 args = parser.parse_args()
 HTTPServer((args.listen, args.port), Handler).serve_forever()
         """,
@@ -274,3 +328,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
     assert status.environment.prepared
     assert stop_result.status == "stopped"
     assert not stop_result.comfyui.managed_process_running
+
+
+def _arg_value(command: list[str], flag: str) -> str:
+    return command[command.index(flag) + 1]

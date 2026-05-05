@@ -26,6 +26,8 @@ The desktop app will start and manage the local Python backend, then communicate
 
 For product v1, ComfyUI should run as an app-managed hidden sidecar with its own isolated Python environment. Users should not need to manually launch ComfyUI or install its Python dependencies.
 
+Noofy keeps its app-owned ComfyUI source snapshot in `third_party/comfyui/`. That source is used for local managed development and as the input for future packaged runtime artifacts; it is not a user's external ComfyUI installation. Developers can still use external mode to point the backend at an already-running ComfyUI while iterating.
+
 ## Project Direction
 
 Version 1 will focus on a reliable cross-platform app for Linux, Windows, and macOS using a Python/ComfyUI backend. Linux CUDA workstations and servers are a first-class validation target for the ComfyUI backend.

@@ -190,12 +190,34 @@ def test_stage_assets_copies_file_and_rewrites_graph(tmp_path: Path) -> None:
     assert len(staged) == 1
     staged_path = staged[0]
     assert staged_path.exists()
+    assert staged_path.parent == tmp_path / "input" / "staging"
     assert staged_path.read_bytes() == b"fake-image-data"
     # Graph node value must reference the staging subfolder.
     assert new_graph["10"]["inputs"]["image"].startswith("staging/")
     assert asset_id in new_graph["10"]["inputs"]["image"]
     # Original graph must be unchanged (deep copy).
     assert graph["10"]["inputs"]["image"] == asset_id
+
+
+def test_stage_assets_uses_explicit_comfyui_input_dir(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.png"
+    (assets_dir / asset_id).write_bytes(b"fake-image-data")
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "external-models",
+        dashboard_assets_dir=assets_dir,
+        comfyui_input_dir=tmp_path / "noofy-input",
+    )
+
+    _new_graph, staged = adapter._stage_assets(
+        {"10": {"class_type": "LoadImage", "inputs": {"image": asset_id}}},
+        "job-99",
+    )
+
+    assert staged[0].parent == tmp_path / "noofy-input" / "staging"
 
 
 def test_stage_assets_skips_missing_asset(tmp_path: Path) -> None:

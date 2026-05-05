@@ -6,7 +6,7 @@ It exposes the desktop app API, owns the `EngineAdapter` contract, validates wor
 
 The first engine implementation is `ComfyUIEngineAdapter`, which talks to a local ComfyUI service through HTTP and WebSocket APIs.
 
-During development, that service may be an externally launched ComfyUI instance such as `http://127.0.0.1:8188`.
+During development, that service may be either Noofy's managed sidecar or an externally launched ComfyUI instance such as `http://127.0.0.1:8188`.
 
 For product v1, external ComfyUI is not a requirement. The desktop app must run ComfyUI as an app-managed sidecar in an isolated Python environment.
 
@@ -26,7 +26,25 @@ For the desktop shell handoff, the backend can also be started as a module. Port
 python -m app --port 0
 ```
 
-The backend is intentionally separate from `ComfyUI-official-repo/`. ComfyUI is treated as the first sidecar engine, not as the public API of this app.
+The backend is intentionally separate from the vendored ComfyUI source at `third_party/comfyui/`. ComfyUI is treated as the first sidecar engine, not as the public API of this app.
+
+## ComfyUI Runtime Modes
+
+External mode remains available for development when you already have a ComfyUI instance running:
+
+```bash
+COMFYUI_RUNTIME_MODE=external \
+COMFYUI_BASE_URL=http://127.0.0.1:8188 \
+python -m uvicorn app.main:app --reload
+```
+
+Managed mode uses Noofy's app-owned ComfyUI source snapshot at `third_party/comfyui/` by default:
+
+```bash
+COMFYUI_RUNTIME_MODE=managed python -m uvicorn app.main:app --reload
+```
+
+Before first managed startup on a machine, prepare the app-owned ComfyUI Python environment through `POST /api/engine/comfyui/bootstrap` or the equivalent UI action. Managed mode runs normal ComfyUI hidden/no-browser and writes models, inputs, outputs, temp files, ComfyUI user state, logs, and caches into Noofy app-data paths, not into `third_party/comfyui/`.
 
 ## Useful Endpoints
 
@@ -51,8 +69,9 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `COMFYUI_RUNTIME_MODE`: `external` for a manually launched development ComfyUI, or `managed` for backend-owned sidecar startup. Defaults to `external`.
 - `COMFYUI_BASE_URL`: external-mode URL, default `http://127.0.0.1:8188`
 - `COMFYUI_WS_URL`: optional external-mode WebSocket URL. Defaults from the active base URL when unset.
-- `NOOFY_RUNTIME_DIR`: app-owned runtime directory. Defaults to `.noofy-runtime` under the repo root.
-- `COMFYUI_PYTHON_EXECUTABLE`: optional runtime Python override. When unset, managed mode uses the app-owned virtual environment under `NOOFY_RUNTIME_DIR`.
+- `NOOFY_RUNTIME_DIR`: optional app-owned runtime directory override. By default, runtime data lives under the platform app-data directory.
+- `NOOFY_INPUT_DIR`: optional ComfyUI input/staging directory override. Defaults to `<data_dir>/input`.
+- `COMFYUI_PYTHON_EXECUTABLE`: optional runtime Python override. When unset, managed mode uses the app-owned virtual environment under the resolved `runtime_dir`.
 - `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE`: Python used to create the managed virtual environment. Defaults to `python3`.
 - `COMFYUI_TORCH_CUDA_INDEX_URL`: optional override for the PyTorch CUDA wheel index. When unset, the backend chooses from detected NVIDIA CUDA capability.
 - `COMFYUI_TORCH_CPU_INDEX_URL`: PyTorch CPU wheel index for CPU-only Linux/Windows installs. Defaults to `https://download.pytorch.org/whl/cpu`.
@@ -66,7 +85,9 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `NOOFY_BACKEND_PORT`: port used by `python -m app`, default `0` for a free port.
 - `NOOFY_BACKEND_LOG_LEVEL`: uvicorn log level used by `python -m app`, default `info`.
 
-External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. macOS Intel gets standard CPU-capable macOS wheels, Apple Silicon gets standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI repo, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
+External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. macOS Intel gets standard CPU-capable macOS wheels, Apple Silicon gets standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI source, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, and initial imports for `torch` and `aiohttp` before starting the sidecar.
+
+`COMFYUI_REPO_DIR` can override the app-owned source path for custom development or future packaged runtime artifacts. The default is `third_party/comfyui/`; it is not the user's external ComfyUI installation.
 
 Workflow model validation uses the active `EngineAdapter`. In ComfyUI dev mode, that means the backend asks the forwarded/running ComfyUI API which models are available instead of reading a hardcoded local models folder.
 

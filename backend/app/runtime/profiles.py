@@ -436,9 +436,9 @@ def assert_product_profile_source_allowed(
 ) -> None:
     """Reject source identities that cannot back a product runtime profile."""
     if source_origin_kind is RuntimeSourceOriginKind.DEVELOPMENT_REFERENCE_COPY:
-        raise ValueError("Product runtime profiles cannot be generated from ComfyUI-official-repo.")
-    if source_dir is not None and source_dir.name == "ComfyUI-official-repo":
-        raise ValueError("Product runtime profiles cannot be generated from ComfyUI-official-repo.")
+        raise ValueError("Product runtime profiles cannot be generated from a development ComfyUI source checkout.")
+    if source_dir is not None and source_dir.name == "comfyui" and source_dir.parent.name == "third_party":
+        raise ValueError("Product runtime profiles cannot be generated directly from third_party/comfyui.")
     if source_status is not RuntimeSourceStatus.CLEAN_REPRODUCIBLE:
         raise ValueError("Product runtime profiles require a clean reproducible source artifact.")
     if dirty_tree:

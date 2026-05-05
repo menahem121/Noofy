@@ -27,6 +27,7 @@ class ComfyUIEngineAdapter:
         job_store: JobStore | None = None,
         log_store: LogStore | None = None,
         dashboard_assets_dir: Path | None = None,
+        comfyui_input_dir: Path | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
@@ -34,6 +35,7 @@ class ComfyUIEngineAdapter:
         self.job_store = job_store or JobStore()
         self.log_store = log_store or LogStore()
         self.dashboard_assets_dir = dashboard_assets_dir
+        self.comfyui_input_dir = comfyui_input_dir or self.models_dir.parent / "input"
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
         self._terminal_log_job_ids: set[str] = set()
         self._staged_files: dict[str, list[Path]] = {}
@@ -537,8 +539,7 @@ class ComfyUIEngineAdapter:
         staged_graph: dict[str, Any] | None = None
         cloned_inputs_by_node: dict[str, dict[str, Any]] = {}
 
-        # ComfyUI input/ lives next to models/ in the same repo dir.
-        comfyui_input_dir = self.models_dir.parent / "input" / "staging"
+        comfyui_input_dir = self.comfyui_input_dir / "staging"
 
         for node_id, node_def in graph.items():
             if not isinstance(node_def, dict):

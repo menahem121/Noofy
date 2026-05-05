@@ -2178,6 +2178,13 @@ def create_default_engine_service() -> EngineService:
         log_store=log_store,
         environment=runtime_environment,
         pid_dir=paths.runtime_dir,
+        managed_base_directory=paths.data_dir,
+        managed_output_directory=paths.outputs_dir,
+        managed_input_directory=paths.input_dir,
+        managed_temp_directory=paths.data_dir,
+        managed_user_directory=paths.comfyui_user_dir,
+        managed_database_url=f"sqlite:///{paths.comfyui_database_file.as_posix()}",
+        python_cache_dir=paths.python_cache_dir,
     )
     runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
@@ -2186,6 +2193,7 @@ def create_default_engine_service() -> EngineService:
         runtime_manager.ws_url,
         log_store=log_store,
         dashboard_assets_dir=paths.dashboard_assets_dir,
+        comfyui_input_dir=paths.input_dir,
     )
     trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
     imported_package_store = ImportedWorkflowPackageStore(

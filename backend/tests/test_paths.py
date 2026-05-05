@@ -50,6 +50,7 @@ class TestNoofyDataDirOverride:
         assert paths.runtime_dir == Path("/tmp/noofy-test/runtime")
         assert paths.models_dir == Path("/tmp/noofy-test/models")
         assert paths.user_workflows_dir == Path("/tmp/noofy-test/workflows")
+        assert paths.input_dir == Path("/tmp/noofy-test/input")
         assert paths.outputs_dir == Path("/tmp/noofy-test/outputs")
         assert paths.logs_dir == Path("/tmp/noofy-test/logs")
         assert paths.cache_dir == Path("/tmp/noofy-test/cache")
@@ -67,6 +68,10 @@ class TestNoofyDataDirOverride:
         assert paths.model_blobs_dir == Path("/tmp/noofy-test/model-store/blobs/sha256")
         assert paths.model_refs_dir == Path("/tmp/noofy-test/model-store/refs")
         assert paths.model_materialized_dir == Path("/tmp/noofy-test/model-store/materialized")
+        assert paths.comfyui_custom_nodes_dir == Path("/tmp/noofy-test/custom_nodes")
+        assert paths.comfyui_user_dir == Path("/tmp/noofy-test/user-state/comfyui")
+        assert paths.comfyui_database_file == Path("/tmp/noofy-test/user-state/comfyui/comfyui.db")
+        assert paths.python_cache_dir == Path("/tmp/noofy-test/cache/python")
 
 
 class TestTargetedOverrides:
@@ -105,6 +110,12 @@ class TestTargetedOverrides:
 
         assert paths.comfyui_repo_dir == Path("/opt/comfyui")
 
+    def test_default_comfyui_repo_dir_uses_app_owned_vendor_source(self) -> None:
+        paths = resolve_paths(env={})
+
+        assert paths.comfyui_repo_dir.name == "comfyui"
+        assert paths.comfyui_repo_dir.parent.name == "third_party"
+
 
 class TestBundledWorkflowsDir:
     def test_bundled_workflows_always_in_source_tree(self) -> None:
@@ -125,6 +136,7 @@ class TestEnsureDirectories:
             runtime_dir=tmp_path / "data" / "runtime",
             models_dir=tmp_path / "data" / "models",
             user_workflows_dir=tmp_path / "data" / "workflows",
+            input_dir=tmp_path / "data" / "input",
             outputs_dir=tmp_path / "data" / "outputs",
             logs_dir=tmp_path / "data" / "logs",
             cache_dir=tmp_path / "data" / "cache",
@@ -138,10 +150,13 @@ class TestEnsureDirectories:
         assert paths.data_dir.is_dir()
         assert paths.runtime_dir.is_dir()
         assert paths.models_dir.is_dir()
+        assert paths.comfyui_custom_nodes_dir.is_dir()
         assert paths.user_workflows_dir.is_dir()
+        assert paths.input_dir.is_dir()
         assert paths.outputs_dir.is_dir()
         assert paths.logs_dir.is_dir()
         assert paths.cache_dir.is_dir()
+        assert paths.python_cache_dir.is_dir()
         assert paths.temp_dir.is_dir()
         assert paths.runtime_store_dir.is_dir()
         assert paths.dependency_envs_dir.is_dir()
@@ -156,6 +171,7 @@ class TestEnsureDirectories:
         assert paths.model_blobs_dir.is_dir()
         assert paths.model_refs_dir.is_dir()
         assert paths.model_materialized_dir.is_dir()
+        assert paths.comfyui_user_dir.is_dir()
         # bundled/repo are NOT created
         assert not paths.bundled_workflows_dir.exists()
         assert not paths.comfyui_repo_dir.exists()
@@ -168,6 +184,7 @@ class TestWritableStatus:
             runtime_dir=tmp_path / "runtime",
             models_dir=tmp_path / "models",
             user_workflows_dir=tmp_path / "workflows",
+            input_dir=tmp_path / "input",
             outputs_dir=tmp_path / "outputs",
             logs_dir=tmp_path / "logs",
             cache_dir=tmp_path / "cache",
@@ -189,7 +206,12 @@ class TestWritableStatus:
         assert "wheel_cache_dir" in status
         assert "model_store_dir" in status
         assert "models_dir" in status
+        assert "comfyui_custom_nodes_dir" in status
+        assert "input_dir" in status
+        assert "python_cache_dir" in status
         assert "comfyui_repo_dir" in status
+        assert "comfyui_user_dir" in status
+        assert "comfyui_database_file" in status
         # data_dir exists (it's tmp_path)
         assert status["data_dir"]["exists"] is True
         assert status["data_dir"]["writable"] is True

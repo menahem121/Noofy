@@ -94,7 +94,7 @@ A profile pins, at minimum:
 - Allowlisted launch-config surface (preview method, VRAM mode, attention backend, precision, enabled-nodes set, extra-paths mode, Noofy-controlled env vars)
 - Supported OS/architecture/backend matrix and install policy version
 
-Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation from `ComfyUI-official-repo/` (the local dev/reference checkout) is rejected for product use and only allowed for development-only profiles. Definitions live in [profile_catalog.json](../backend/app/runtime/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles.py).
+Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation directly from `third_party/comfyui/` is rejected for product use and only allowed as a development/package input. Definitions live in [profile_catalog.json](../backend/app/runtime/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles.py).
 
 ## Layered Fingerprints
 

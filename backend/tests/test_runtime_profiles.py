@@ -124,10 +124,21 @@ def test_catalog_rejects_duplicate_profile_and_variant_ids() -> None:
 
 
 def test_product_profile_generation_rejects_development_reference_source() -> None:
-    with pytest.raises(ValueError, match="ComfyUI-official-repo"):
+    with pytest.raises(ValueError, match="development ComfyUI source checkout"):
         assert_product_profile_source_allowed(
             source_origin_kind=RuntimeSourceOriginKind.DEVELOPMENT_REFERENCE_COPY,
             source_status=RuntimeSourceStatus.DEVELOPMENT_ONLY,
+        )
+
+
+def test_product_profile_generation_rejects_direct_vendored_source_path(tmp_path: Path) -> None:
+    source_dir = tmp_path / "third_party" / "comfyui"
+
+    with pytest.raises(ValueError, match="third_party/comfyui"):
+        assert_product_profile_source_allowed(
+            source_origin_kind=RuntimeSourceOriginKind.NOOFY_VENDORED_SNAPSHOT,
+            source_status=RuntimeSourceStatus.CLEAN_REPRODUCIBLE,
+            source_dir=source_dir,
         )
 
 
@@ -200,7 +211,7 @@ def test_source_manifest_excludes_local_runtime_and_test_only_paths(tmp_path: Pa
         source_dir,
         comfyui_core_version="0.3.0",
         source_origin_kind=RuntimeSourceOriginKind.DEVELOPMENT_REFERENCE_COPY,
-        source_reference="ComfyUI-official-repo",
+        source_reference="third_party/comfyui",
         source_status=RuntimeSourceStatus.DEVELOPMENT_ONLY,
     )
 
@@ -269,7 +280,7 @@ def test_materialize_core_engine_source_copies_manifest_entries_only(tmp_path: P
         runtime_store_dir,
         comfyui_core_version="0.3.0",
         source_origin_kind=RuntimeSourceOriginKind.DEVELOPMENT_REFERENCE_COPY,
-        source_reference="ComfyUI-official-repo",
+        source_reference="third_party/comfyui",
         source_status=RuntimeSourceStatus.DEVELOPMENT_ONLY,
     )
 

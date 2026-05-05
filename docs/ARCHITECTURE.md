@@ -101,9 +101,14 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `trust_dir` | `data_dir/trust` | Trust keyring and future trust metadata |
 | `trust_keys_file` | `data_dir/trust/trusted-keys.json` | Trust roots for imported package verification |
 | `bundled_workflows_dir` | `backend/app/workflows/packages` | Read-only starter workflows |
-| `comfyui_repo_dir` | `ComfyUI-official-repo` (project root) | Development/reference ComfyUI copy; not the product runtime source |
+| `comfyui_repo_dir` | `third_party/comfyui` (project root) | App-owned vendored ComfyUI source snapshot used by local managed mode and packaging input |
+| `input_dir` | `data_dir/input` | ComfyUI input/staging files |
+| `comfyui_custom_nodes_dir` | `data_dir/custom_nodes` | App-owned core custom-node location for the managed sidecar |
+| `comfyui_user_dir` | `data_dir/user-state/comfyui` | ComfyUI user/database state |
+| `comfyui_database_file` | `data_dir/user-state/comfyui/comfyui.db` | ComfyUI database for the managed sidecar |
+| `python_cache_dir` | `data_dir/cache/python` | Python bytecode cache for managed sidecar processes |
 
-`ComfyUI-official-repo/` is useful for local inspection and development-mode experiments, but product runtime profiles must use clean reproducible ComfyUI source artifacts materialized under the app runtime store, for example `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`. Local ignored folders in the reference copy, such as `models/`, `custom_nodes/`, `input/`, and `output/`, must not affect product runtime identity.
+`third_party/comfyui/` is the app-owned ComfyUI source snapshot. It is not the user's external ComfyUI installation, and Noofy should not maintain a second developer-only/reference checkout. Product runtime profiles should eventually launch from clean reproducible ComfyUI source artifacts materialized under the app runtime store, for example `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`, generated from the vendored source through the packaging pipeline. Local runtime folders such as `models/`, `custom_nodes/`, `input/`, `output/`, `temp/`, and `user/` must not live in or affect the source snapshot.
 
 ### Environment variable overrides
 
@@ -113,6 +118,7 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `NOOFY_RUNTIME_DIR` | Overrides only `runtime_dir` (backward-compatible) |
 | `NOOFY_MODELS_DIR` | Overrides only `models_dir` |
 | `NOOFY_WORKFLOWS_DIR` | Overrides only `user_workflows_dir` |
+| `NOOFY_INPUT_DIR` | Overrides only `input_dir` |
 | `NOOFY_OUTPUTS_DIR` | Overrides only `outputs_dir` |
 | `NOOFY_LOGS_DIR` | Overrides only `logs_dir` |
 | `NOOFY_CACHE_DIR` | Overrides only `cache_dir` |

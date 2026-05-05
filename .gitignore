@@ -10,6 +10,7 @@ backend/.venv/
 
 # Local backend/runtime state
 backend/.env
+ComfyUI-official-repo/
 
 # Frontend dependencies and build outputs
 frontend/node_modules/

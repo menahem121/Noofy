@@ -3,8 +3,11 @@
 BACKEND_PYTHON ?= .venv/bin/python
 ROOT_BACKEND_PYTHON ?= backend/.venv/bin/python
 PYTEST ?= $(ROOT_BACKEND_PYTHON) -m pytest
-COMFYUI_SOURCE_DIR ?= /home/ubuntu/ComfyUI
-COMFYUI_PYTHON ?= $(COMFYUI_SOURCE_DIR)/venv/bin/python
+NOOFY_DATA_DIR ?= $(CURDIR)/.noofy-runtime/data
+COMFYUI_SOURCE_DIR ?= $(CURDIR)/third_party/comfyui
+COMFYUI_PYTHON ?= $(NOOFY_DATA_DIR)/runtime/comfyui-venv/bin/python
+COMFYUI_MODEL_VIEW_DIR ?= $(NOOFY_DATA_DIR)/models
+COMFYUI_INPUT_DIR ?= $(NOOFY_DATA_DIR)/input
 PHASE5E_SMOKE_WORK_DIR ?= /tmp/noofy-phase5e-real-smoke
 PHASE5E_SMOKE_SUMMARY ?= $(PHASE5E_SMOKE_WORK_DIR)/summary.json
 
@@ -25,7 +28,7 @@ phase5e-real-smoke:
 		--python-executable $(COMFYUI_PYTHON) \
 		--test-workflows-dir ../test_workflows \
 		--work-dir $(PHASE5E_SMOKE_WORK_DIR) \
-		--model-view-dir $(COMFYUI_SOURCE_DIR)/models \
-		--input-dir $(COMFYUI_SOURCE_DIR)/input \
+		--model-view-dir $(COMFYUI_MODEL_VIEW_DIR) \
+		--input-dir $(COMFYUI_INPUT_DIR) \
 		--clean \
 		--json-output $(PHASE5E_SMOKE_SUMMARY)

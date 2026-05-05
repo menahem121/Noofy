@@ -51,13 +51,18 @@ def test_paths_endpoint_returns_all_directory_entries(monkeypatch) -> None:
         "model_refs_dir",
         "model_materialized_dir",
         "models_dir",
+        "comfyui_custom_nodes_dir",
         "user_workflows_dir",
+        "input_dir",
         "outputs_dir",
         "logs_dir",
         "cache_dir",
+        "python_cache_dir",
         "temp_dir",
         "bundled_workflows_dir",
         "comfyui_repo_dir",
+        "comfyui_user_dir",
+        "comfyui_database_file",
     }
     assert expected_keys.issubset(data.keys())
 

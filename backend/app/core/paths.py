@@ -7,7 +7,7 @@ Platform defaults:
 
 Override everything:  NOOFY_DATA_DIR
 Targeted overrides:   NOOFY_RUNTIME_DIR, NOOFY_MODELS_DIR, NOOFY_WORKFLOWS_DIR,
-                      NOOFY_OUTPUTS_DIR, NOOFY_LOGS_DIR, NOOFY_CACHE_DIR,
+                      NOOFY_INPUT_DIR, NOOFY_OUTPUTS_DIR, NOOFY_LOGS_DIR, NOOFY_CACHE_DIR,
                       NOOFY_TEMP_DIR, COMFYUI_REPO_DIR
 """
 
@@ -48,6 +48,7 @@ class NoofyPaths:
     runtime_dir: Path
     models_dir: Path
     user_workflows_dir: Path
+    input_dir: Path
     outputs_dir: Path
     logs_dir: Path
     cache_dir: Path
@@ -78,6 +79,22 @@ class NoofyPaths:
     @property
     def user_state_dir(self) -> Path:
         return self.data_dir / "user-state"
+
+    @property
+    def comfyui_custom_nodes_dir(self) -> Path:
+        return self.data_dir / "custom_nodes"
+
+    @property
+    def comfyui_user_dir(self) -> Path:
+        return self.user_state_dir / "comfyui"
+
+    @property
+    def comfyui_database_file(self) -> Path:
+        return self.comfyui_user_dir / "comfyui.db"
+
+    @property
+    def python_cache_dir(self) -> Path:
+        return self.cache_dir / "python"
 
     @property
     def dashboard_assets_dir(self) -> Path:
@@ -147,12 +164,16 @@ class NoofyPaths:
             self.model_materialized_dir,
             self.trust_dir,
             self.models_dir,
+            self.comfyui_custom_nodes_dir,
             self.user_workflows_dir,
+            self.input_dir,
             self.outputs_dir,
             self.logs_dir,
             self.cache_dir,
+            self.python_cache_dir,
             self.temp_dir,
             self.user_state_dir,
+            self.comfyui_user_dir,
             self.dashboard_assets_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
@@ -188,14 +209,19 @@ class NoofyPaths:
             ("trust_dir", self.trust_dir),
             ("trust_keys_file", self.trust_keys_file),
             ("models_dir", self.models_dir),
+            ("comfyui_custom_nodes_dir", self.comfyui_custom_nodes_dir),
             ("user_workflows_dir", self.user_workflows_dir),
+            ("input_dir", self.input_dir),
             ("outputs_dir", self.outputs_dir),
             ("logs_dir", self.logs_dir),
             ("cache_dir", self.cache_dir),
+            ("python_cache_dir", self.python_cache_dir),
             ("temp_dir", self.temp_dir),
             ("bundled_workflows_dir", self.bundled_workflows_dir),
             ("comfyui_repo_dir", self.comfyui_repo_dir),
             ("user_state_dir", self.user_state_dir),
+            ("comfyui_user_dir", self.comfyui_user_dir),
+            ("comfyui_database_file", self.comfyui_database_file),
             ("dashboard_assets_dir", self.dashboard_assets_dir),
         ]
 
@@ -222,6 +248,7 @@ def resolve_paths(
 
     models_dir = Path(env["NOOFY_MODELS_DIR"]) if env.get("NOOFY_MODELS_DIR") else base / "models"
     user_workflows_dir = Path(env["NOOFY_WORKFLOWS_DIR"]) if env.get("NOOFY_WORKFLOWS_DIR") else base / "workflows"
+    input_dir = Path(env["NOOFY_INPUT_DIR"]) if env.get("NOOFY_INPUT_DIR") else base / "input"
     outputs_dir = Path(env["NOOFY_OUTPUTS_DIR"]) if env.get("NOOFY_OUTPUTS_DIR") else base / "outputs"
     logs_dir = Path(env["NOOFY_LOGS_DIR"]) if env.get("NOOFY_LOGS_DIR") else base / "logs"
     cache_dir = Path(env["NOOFY_CACHE_DIR"]) if env.get("NOOFY_CACHE_DIR") else base / "cache"
@@ -230,7 +257,7 @@ def resolve_paths(
     bundled_workflows_dir = _BACKEND_APP_DIR / "workflows" / "packages"
 
     comfyui_repo_dir = (
-        Path(env["COMFYUI_REPO_DIR"]) if env.get("COMFYUI_REPO_DIR") else _PROJECT_ROOT / "ComfyUI-official-repo"
+        Path(env["COMFYUI_REPO_DIR"]) if env.get("COMFYUI_REPO_DIR") else _PROJECT_ROOT / "third_party" / "comfyui"
     )
 
     return NoofyPaths(
@@ -238,6 +265,7 @@ def resolve_paths(
         runtime_dir=runtime_dir,
         models_dir=models_dir,
         user_workflows_dir=user_workflows_dir,
+        input_dir=input_dir,
         outputs_dir=outputs_dir,
         logs_dir=logs_dir,
         cache_dir=cache_dir,

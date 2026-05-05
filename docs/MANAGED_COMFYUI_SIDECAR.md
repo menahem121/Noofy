@@ -31,9 +31,22 @@ The backend now has two layers:
 
 Managed startup checks the environment before spawning ComfyUI. If the repo, entrypoint, requirements file, Python executable, runtime directory, or required imports are missing, `/api/health` includes the environment failure and `/api/logs` records the state transition.
 
-`POST /api/engine/comfyui/bootstrap` currently creates the app-owned virtual environment, installs PyTorch for the detected machine, then installs `ComfyUI-official-repo/requirements.txt` in development-mode managed runtime flows. macOS Intel uses standard macOS PyTorch wheels without CUDA, Apple Silicon uses standard macOS wheels with MPS available when PyTorch supports it, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use `nvidia-smi` CUDA capability to choose a CUDA wheel index. Exact CUDA policy remains overrideable through `COMFYUI_TORCH_CUDA_INDEX_URL` as PyTorch support changes.
+`POST /api/engine/comfyui/bootstrap` currently creates the app-owned virtual environment, installs PyTorch for the detected machine, then installs `third_party/comfyui/requirements.txt` for managed runtime flows. macOS Intel uses standard macOS PyTorch wheels without CUDA, Apple Silicon uses standard macOS wheels with MPS available when PyTorch supports it, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use `nvidia-smi` CUDA capability to choose a CUDA wheel index. Exact CUDA policy remains overrideable through `COMFYUI_TORCH_CUDA_INDEX_URL` as PyTorch support changes.
 
-For product runtime profiles, `ComfyUI-official-repo/` is a development/reference copy only. Product managed sidecars must launch from a clean reproducible ComfyUI source artifact under the app runtime store, such as `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`, so local ignored folders like `models/`, `custom_nodes/`, `input/`, and `output/` cannot affect product runtime identity.
+`third_party/comfyui/` is Noofy's app-owned vendored ComfyUI source snapshot. It is not the user's external ComfyUI installation, and it is the only source checkout Noofy should maintain in the repo. Product managed sidecars should eventually launch from a clean reproducible ComfyUI source artifact under the app runtime store, such as `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`, produced by the packaging pipeline from the vendored source.
+
+Managed sidecar startup runs normal ComfyUI hidden/no-browser and points writable ComfyUI paths at Noofy app data:
+
+- `--disable-auto-launch`
+- `--dont-print-server`
+- `--base-directory <data_dir>`
+- `--input-directory <input_dir>`
+- `--output-directory <outputs_dir>`
+- `--temp-directory <data_dir>` (ComfyUI appends its `temp` child internally)
+- `--user-directory <user_state_dir>/comfyui`
+- `--database-url sqlite:///<user_state_dir>/comfyui/comfyui.db`
+
+This keeps models, input staging, outputs, temp files, custom nodes, ComfyUI user/database state, logs, cache, dashboard assets, and workflow state out of `third_party/comfyui/`.
 
 `GET /api/runtime` and `GET /api/engine/comfyui/status` return lightweight runtime status for UI polling without running workflow validation or model checks. FastAPI shutdown stops a managed ComfyUI process so the backend does not leave an owned sidecar running after app exit.
 
@@ -49,7 +62,7 @@ For product runtime profiles, `ComfyUI-official-repo/` is a development/referenc
 - ~~Stop ComfyUI when the app exits.~~ ✅ FastAPI lifespan shutdown calls `EngineService.shutdown()`.
 - Keep `COMFYUI_BASE_URL` support as development mode only.
 
-The first runtime foundation supports `external` and `managed` modes. `external` observes a manually launched development ComfyUI URL. `managed` selects a localhost port when one is not configured, starts `main.py`, polls `/system_stats` until ready or timed out, records startup failures in `/api/health` and `/api/logs`, and stops the process it started.
+The first runtime foundation supports `external` and `managed` modes. `external` observes a manually launched development ComfyUI URL. `managed` selects a localhost port when one is not configured, starts `main.py` from `third_party/comfyui` by default, polls `/system_stats` until ready or timed out, records startup failures in `/api/health` and `/api/logs`, and stops the process it started.
 
 ## Crash Detection and Restart
 
