@@ -341,16 +341,20 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
           </section>
 
           <section className="find-workflow-section" aria-labelledby="find-workflow-title">
-            <div className="section-heading">
-              <div>
+            <div className="find-workflow-card">
+              <div className="find-workflow-card__icon" aria-hidden="true">
+                <Search size={24} />
+              </div>
+              <div className="find-workflow-card__body">
                 <h2 id="find-workflow-title">Find a Workflow</h2>
+                <p>Search by name, tag, or category.</p>
+                <label className="search-field find-workflow-card__input">
+                  <Search size={16} aria-hidden="true" />
+                  <span className="sr-only">Search workflows</span>
+                  <input type="search" placeholder="Search workflows..." />
+                </label>
               </div>
             </div>
-            <label className="search-field search-field--home">
-              <Search size={17} aria-hidden="true" />
-              <span className="sr-only">Search workflows</span>
-              <input type="search" placeholder="Search workflows..." />
-            </label>
           </section>
 
           <section className="recent-section" aria-labelledby="recent-title">

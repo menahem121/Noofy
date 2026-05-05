@@ -178,12 +178,12 @@ button:disabled {
   border-radius: 12px;
   color: var(--text-muted);
   background: var(--surface-1);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .search-field:focus-within {
   border-color: rgba(139, 92, 246, 0.75);
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.20);
 }
 
 .search-field input {
@@ -773,12 +773,51 @@ button:disabled {
 }
 
 .find-workflow-section {
-  padding-bottom: 32px;
+  margin-bottom: 34px;
 }
 
-.search-field--home {
+.find-workflow-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 18px;
+  background: var(--surface-1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.find-workflow-card__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
+  color: var(--text-secondary);
+  background: var(--surface-3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.find-workflow-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.find-workflow-card__body h2 {
+  margin: 0;
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.find-workflow-card__body > p {
+  margin: 6px 0 16px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.find-workflow-card__input {
   width: 100%;
-  max-width: 560px;
 }
 
 .recent-section {
