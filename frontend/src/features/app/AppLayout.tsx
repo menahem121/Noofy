@@ -8,7 +8,6 @@ import {
   Loader2,
   Menu,
   PackageOpen,
-  Search,
   Settings,
   ShieldCheck,
 } from "lucide-react";
@@ -89,12 +88,6 @@ export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayo
             <span className="brand-name">Noofy</span>
           </button>
         </div>
-
-        <label className="search-field">
-          <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Search workflows</span>
-          <input type="search" placeholder="Search workflows..." />
-        </label>
 
         <div className="topbar__actions">
           <div className={`status-pill status-pill--${status.tone}`}>

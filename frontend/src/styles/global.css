@@ -772,6 +772,15 @@ button:disabled {
   margin: 0;
 }
 
+.find-workflow-section {
+  padding-bottom: 32px;
+}
+
+.search-field--home {
+  width: 100%;
+  max-width: 560px;
+}
+
 .recent-section {
   padding-bottom: 32px;
 }

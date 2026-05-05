@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus, Users } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus, Search, Users } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 
 // Replace with your real Reddit community URL when ready.
@@ -338,6 +338,19 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
                 Open Reddit
               </button>
             </article>
+          </section>
+
+          <section className="find-workflow-section" aria-labelledby="find-workflow-title">
+            <div className="section-heading">
+              <div>
+                <h2 id="find-workflow-title">Find a Workflow</h2>
+              </div>
+            </div>
+            <label className="search-field search-field--home">
+              <Search size={17} aria-hidden="true" />
+              <span className="sr-only">Search workflows</span>
+              <input type="search" placeholder="Search workflows..." />
+            </label>
           </section>
 
           <section className="recent-section" aria-labelledby="recent-title">
