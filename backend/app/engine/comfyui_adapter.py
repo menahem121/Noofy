@@ -88,6 +88,7 @@ class ComfyUIEngineAdapter:
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             self._stop_event_listener(job_id)
+            self._cleanup_staged_files(job_id)
             self.job_store.set_progress(JobProgress(job_id=job_id, status="failed", message=str(exc)))
             self.job_store.set_result(JobResult(job_id=job_id, status="failed", error=str(exc)))
             self.log_store.add(
@@ -136,6 +137,7 @@ class ComfyUIEngineAdapter:
         self.job_store.set_progress(progress)
         self.job_store.set_result(JobResult(job_id=job_id, status="canceled"))
         self._stop_event_listener(job_id)
+        self._cleanup_staged_files(job_id)
         self.log_store.add("info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id)
         self._terminal_log_job_ids.add(job_id)
         return progress

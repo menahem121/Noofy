@@ -566,6 +566,12 @@ export interface DashboardAssetUploadResponse {
   original_filename: string;
 }
 
+export interface DashboardAssetMetadata {
+  asset_id: string;
+  original_filename: string;
+  content_type: string;
+}
+
 export async function uploadDashboardAsset(
   workflowId: string,
   file: File,
@@ -593,6 +599,10 @@ export async function fetchAssetBlobUrl(assetId: string): Promise<string> {
   if (!response.ok) throw new Error(`Asset not found: ${response.status}`);
   const blob = await response.blob();
   return URL.createObjectURL(blob);
+}
+
+export function fetchAssetMetadata(assetId: string): Promise<DashboardAssetMetadata> {
+  return getJson<DashboardAssetMetadata>(`/assets/${encodeURIComponent(assetId)}/metadata`);
 }
 
 export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {

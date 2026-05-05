@@ -28,6 +28,9 @@ import {
   MOCK_WORKFLOW,
   WIDGET_TYPE_LABELS,
   buildInitialDashboard,
+  clearDashboardDraft,
+  loadDashboardDraft,
+  saveDashboardDraft,
   toBackendPayload,
   type DashboardSchema,
   type DashboardWidget,
@@ -99,7 +102,9 @@ export function DashboardBuilderLayoutPage({
     };
   }, [workflowId, workflowName]);
 
-  const [schema, setSchema] = useState<DashboardSchema>(() => initialSchema ?? buildInitialDashboard(workflow));
+  const [schema, setSchema] = useState<DashboardSchema>(
+    () => initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow),
+  );
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
   const activeDragWidgetIdRef = useRef<string | null>(null);
@@ -110,7 +115,7 @@ export function DashboardBuilderLayoutPage({
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setSchema(initialSchema ?? buildInitialDashboard(workflow));
+    setSchema(initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow));
     setSelectedWidgetId(null);
   }, [workflow, initialSchema]);
 
@@ -256,7 +261,7 @@ export function DashboardBuilderLayoutPage({
   }
 
   function handleSaveDraft() {
-    saveLayoutSchema({ ...schema, status: "draft" });
+    saveDashboardDraft(schema);
     setSaveError(null);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
@@ -270,11 +275,12 @@ export function DashboardBuilderLayoutPage({
     setSaveError(null);
     saveDashboard(targetId, payload)
       .then(() => {
+        clearDashboardDraft(targetId);
         setSavedFlash("saved");
         window.setTimeout(() => onSaveComplete(targetId), 300);
       })
       .catch((error) => {
-        window.localStorage.setItem(`noofy.builderDraft.${targetId}`, JSON.stringify(schema));
+        saveDashboardDraft({ ...schema, workflowId: targetId });
         setSavedFlash(null);
         setSaveError(
           error instanceof Error
@@ -718,9 +724,6 @@ function readDragPayload(event: DragEvent): { widgetId: string } | null {
   return null;
 }
 
-function saveLayoutSchema(schema: DashboardSchema & { status: "draft" | "configured" }) {
-  window.localStorage.setItem(`noofy.builderDraft.${schema.workflowId}`, JSON.stringify(schema));
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);

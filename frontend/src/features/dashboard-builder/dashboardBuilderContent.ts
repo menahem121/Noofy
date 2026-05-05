@@ -109,6 +109,40 @@ export interface DashboardSchema {
   layout: DashboardCanvasLayout;
 }
 
+export type DashboardDraftStatus = "draft" | "configured";
+
+export function dashboardDraftKey(workflowId: string) {
+  return `noofy.builderDraft.${workflowId}`;
+}
+
+export function saveDashboardDraft(schema: DashboardSchema, status: DashboardDraftStatus = "draft") {
+  window.localStorage.setItem(dashboardDraftKey(schema.workflowId), JSON.stringify({ ...schema, status }));
+}
+
+export function loadDashboardDraft(workflowId: string): DashboardSchema | null {
+  try {
+    const raw = window.localStorage.getItem(dashboardDraftKey(workflowId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DashboardSchema>;
+    if (
+      parsed.workflowId !== workflowId ||
+      typeof parsed.version !== "number" ||
+      typeof parsed.workflowName !== "string" ||
+      !Array.isArray(parsed.widgets) ||
+      !parsed.layout
+    ) {
+      return null;
+    }
+    return parsed as DashboardSchema;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDashboardDraft(workflowId: string) {
+  window.localStorage.removeItem(dashboardDraftKey(workflowId));
+}
+
 export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
   text: Type,
   sampler: Shuffle,
@@ -656,6 +690,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
 
   const dashboard: BackendDashboardPayload = {
     version: "0.1.0",
+    status: "configured",
     outputs,
     sections: [{ id: "main", title: "Main", controls }],
   };

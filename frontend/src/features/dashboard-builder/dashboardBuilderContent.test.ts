@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { toBackendPayload, workflowFromBindableInputs, type DashboardSchema } from "./dashboardBuilderContent";
+import {
+  dashboardDraftKey,
+  loadDashboardDraft,
+  saveDashboardDraft,
+  toBackendPayload,
+  workflowFromBindableInputs,
+  type DashboardSchema,
+} from "./dashboardBuilderContent";
 
 describe("toBackendPayload", () => {
   it("writes output records that match output widget bindings", () => {
@@ -40,6 +47,7 @@ describe("toBackendPayload", () => {
 
     const payload = toBackendPayload(schema);
 
+    expect(payload.dashboard.status).toBe("configured");
     expect(payload.dashboard.outputs).toEqual([
       { id: "image", label: "Result", node_id: "9", type: "image" },
     ]);
@@ -52,6 +60,38 @@ describe("toBackendPayload", () => {
       min_w: 6,
       min_h: 3,
     });
+  });
+});
+
+describe("saveDashboardDraft", () => {
+  it("persists a draft with the same key used by both builder steps", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+      widgets: [],
+    };
+
+    saveDashboardDraft(schema);
+
+    const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
+    expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
+  });
+
+  it("loads a previously saved draft for the same workflow", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+      widgets: [],
+    };
+
+    saveDashboardDraft(schema);
+
+    expect(loadDashboardDraft("wf-1")).toMatchObject({ workflowId: "wf-1", workflowName: "Workflow" });
+    expect(loadDashboardDraft("other-workflow")).toBeNull();
   });
 });
 

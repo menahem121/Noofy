@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes as api_routes
+from app.main import create_app
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 
 
@@ -68,6 +69,12 @@ def test_reject_non_image_bytes_with_image_mime(tmp_path: Path) -> None:
         svc.store(b"definitely not an image", "image/png", "fake.png")
 
 
+def test_reject_image_mime_that_does_not_match_bytes(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    with pytest.raises(AssetUploadError, match="does not match"):
+        svc.store(PNG_BYTES, "image/jpeg", "fake.jpg")
+
+
 def test_asset_path_blocks_traversal(tmp_path: Path) -> None:
     svc = DashboardAssetService(tmp_path / "assets")
     with pytest.raises(ValueError, match="Invalid asset_id"):
@@ -93,6 +100,16 @@ def test_creates_asset_dir(tmp_path: Path) -> None:
     assert asset_dir.exists()
 
 
+def test_metadata_returns_original_filename(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    result = svc.store(PNG_BYTES, "image/png", "portrait.png")
+    assert svc.metadata(result["asset_id"]) == {
+        "asset_id": result["asset_id"],
+        "original_filename": "portrait.png",
+        "content_type": "image/png",
+    }
+
+
 def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -> None:
     old_service = api_routes._asset_service
     api_routes._asset_service = DashboardAssetService(tmp_path / "assets")
@@ -110,3 +127,58 @@ def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -
     body = response.json()
     assert body["asset_id"].endswith(".png")
     assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
+def test_serve_dashboard_asset_route_returns_file_and_metadata(tmp_path: Path) -> None:
+    old_service = api_routes._asset_service
+    api_routes._asset_service = DashboardAssetService(tmp_path / "assets")
+    stored = api_routes._asset_service.store(PNG_BYTES, "image/png", "input.png")
+    app = FastAPI()
+    app.include_router(api_routes.router, prefix="/api")
+    try:
+        client = TestClient(app)
+        image_response = client.get(f"/api/assets/{stored['asset_id']}")
+        metadata_response = client.get(f"/api/assets/{stored['asset_id']}/metadata")
+    finally:
+        api_routes._asset_service = old_service
+
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"] == "image/png"
+    assert image_response.content == PNG_BYTES
+    assert metadata_response.status_code == 200
+    assert metadata_response.json()["original_filename"] == "input.png"
+
+
+def test_serve_dashboard_asset_route_rejects_bad_asset_id(tmp_path: Path) -> None:
+    old_service = api_routes._asset_service
+    api_routes._asset_service = DashboardAssetService(tmp_path / "assets")
+    app = FastAPI()
+    app.include_router(api_routes.router, prefix="/api")
+    try:
+        response = TestClient(app).get("/api/assets/not-an-image.exe")
+    finally:
+        api_routes._asset_service = old_service
+
+    assert response.status_code == 400
+
+
+def test_dashboard_asset_routes_require_bearer_token_when_auth_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    old_service = api_routes._asset_service
+    api_routes._asset_service = DashboardAssetService(tmp_path / "assets")
+    stored = api_routes._asset_service.store(PNG_BYTES, "image/png", "secure.png")
+    try:
+        with TestClient(create_app()) as client:
+            missing = client.get(f"/api/assets/{stored['asset_id']}")
+            allowed = client.get(
+                f"/api/assets/{stored['asset_id']}",
+                headers={"Authorization": "Bearer secret-token"},
+            )
+    finally:
+        api_routes._asset_service = old_service
+
+    assert missing.status_code == 401
+    assert allowed.status_code == 200

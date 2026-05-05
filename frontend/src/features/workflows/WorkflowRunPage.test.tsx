@@ -61,6 +61,84 @@ const workflowStatus = {
   can_cancel_job: false,
 };
 
+const configuredPackageData = {
+  metadata: {
+    id: "text_to_image_v0",
+    name: "Text to Image",
+    version: "0.1.0",
+    description: "",
+  },
+  inputs: [
+    {
+      id: "prompt",
+      label: "Prompt",
+      control: "textarea",
+      binding: { node_id: "6", input_name: "text" },
+      default: "a lake",
+      validation: {},
+    },
+  ],
+  outputs: [
+    { id: "image_a", label: "Image A", node_id: "9", type: "image" },
+    { id: "image_b", label: "Image B", node_id: "10", type: "image" },
+  ],
+  dashboard: {
+    version: "0.1.0",
+    status: "configured",
+    sections: [
+      {
+        id: "main",
+        title: "Main",
+        controls: [
+          {
+            id: "prompt",
+            type: "textarea",
+            label: "Prompt",
+            input_id: "prompt",
+            layout: { x: 0, y: 0, w: 6, h: 3 },
+          },
+          {
+            id: "result-a",
+            type: "display_image",
+            label: "Result A",
+            output_id: "image_a",
+            layout: { x: 6, y: 0, w: 6, h: 4 },
+          },
+          {
+            id: "result-b",
+            type: "display_image",
+            label: "Result B",
+            output_id: "image_b",
+            layout: { x: 0, y: 4, w: 6, h: 4 },
+          },
+        ],
+      },
+    ],
+  },
+};
+
+function mockConfiguredDashboardFetch(fetchMock: ReturnType<typeof vi.fn>) {
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+    if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+    if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+    if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+    if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+      return Promise.resolve(
+        jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }),
+      );
+    }
+    return Promise.reject(new Error(`Unexpected request: ${url}`));
+  });
+}
+
 function renderRunPage() {
   return render(<WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />);
 }
@@ -69,6 +147,7 @@ describe("WorkflowRunPage", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    window.localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", undefined);
   });
@@ -76,6 +155,7 @@ describe("WorkflowRunPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    window.localStorage.clear();
     delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
@@ -495,6 +575,55 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => {
       expect(eventSourceMock).toHaveBeenCalledWith("/api/jobs/job-4/events?token=runtime-secret");
     });
+  });
+
+  it("renders canvas widgets at their configured grid positions by default", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    await screen.findByRole("button", { name: /edit dashboard/i });
+    const promptCell = screen.getByRole("textbox").closest("article");
+    const resultCell = screen.getByText("Result A").closest("article");
+
+    expect(promptCell).toHaveStyle({ gridColumn: "1 / span 6", gridRow: "1 / span 3" });
+    expect(resultCell).toHaveStyle({ gridColumn: "7 / span 6", gridRow: "1 / span 4" });
+  });
+
+  it("renders the classic two-panel dashboard when classic mode is selected", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit dashboard/i })).not.toBeInTheDocument();
+  });
+
+  it("shows canvas toolbar controls and hides reset when there are no layout overrides", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    expect(await screen.findByRole("button", { name: /restore default values/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /edit dashboard/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reset layout/i })).not.toBeInTheDocument();
+  });
+
+  it("disables input controls while editing the canvas layout", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    await screen.findByRole("button", { name: /edit dashboard/i });
+    const promptInput = screen.getByRole("textbox");
+    expect(promptInput).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit dashboard/i }));
+
+    expect(screen.getByRole("button", { name: /edit variables/i })).toBeInTheDocument();
+    expect(promptInput).toBeDisabled();
   });
 
   it("renders each canvas output widget from its bound result node", async () => {

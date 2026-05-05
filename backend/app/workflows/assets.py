@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import imghdr
 import json
 import mimetypes
 import os
@@ -27,9 +26,11 @@ class DashboardAssetService:
         if content_type not in ALLOWED_MIME_TYPES:
             raise AssetUploadError(f"File type '{content_type}' is not allowed.")
 
-        detected = imghdr.what(None, h=data)
+        detected = _detect_image_content_type(data)
         if detected is None:
             raise AssetUploadError("File does not appear to be a valid image.")
+        if detected != content_type:
+            raise AssetUploadError(f"File content does not match '{content_type}'.")
 
         ext = _safe_ext(content_type)
         asset_id = f"{uuid.uuid4()}{ext}"
@@ -42,6 +43,28 @@ class DashboardAssetService:
         _atomic_write_json(meta_path, {"asset_id": asset_id, "original_filename": original_filename})
 
         return {"asset_id": asset_id, "original_filename": original_filename}
+
+    def metadata(self, asset_id: str) -> dict[str, str]:
+        safe = _validate_asset_id(asset_id)
+        meta_path = self._dir / f"{safe}.meta.json"
+        metadata: dict[str, str] = {
+            "asset_id": safe,
+            "original_filename": safe,
+            "content_type": self.content_type(safe),
+        }
+        if not meta_path.exists():
+            return metadata
+
+        try:
+            raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return metadata
+
+        if isinstance(raw, dict):
+            original_filename = raw.get("original_filename")
+            if isinstance(original_filename, str) and original_filename.strip():
+                metadata["original_filename"] = original_filename
+        return metadata
 
     def asset_path(self, asset_id: str) -> Path:
         safe = _validate_asset_id(asset_id)
@@ -61,6 +84,18 @@ def _safe_ext(content_type: str) -> str:
         "image/gif": ".gif",
     }
     return mapping.get(content_type, ".bin")
+
+
+def _detect_image_content_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9"):
+        return "image/jpeg"
+    return None
 
 
 def _validate_asset_id(asset_id: str) -> str:

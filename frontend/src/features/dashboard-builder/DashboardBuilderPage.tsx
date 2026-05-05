@@ -29,6 +29,8 @@ import {
   VALUE_KIND_ICONS,
   buildInitialDashboard,
   createDashboardWidgetForValue,
+  loadDashboardDraft,
+  saveDashboardDraft,
   widgetTypesForKind,
   workflowFromBindableInputs,
   type WidgetType,
@@ -109,7 +111,9 @@ export function DashboardBuilderPage({
 
   const appStatus = runtimeStatusCopy(runtimeState);
 
-  const [schema, setSchema] = useState<DashboardSchema>(() => initialSchema ?? buildInitialDashboard(workflow));
+  const [schema, setSchema] = useState<DashboardSchema>(
+    () => initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow),
+  );
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -119,7 +123,7 @@ export function DashboardBuilderPage({
 
   useEffect(() => {
     if (workflowLoading) return;
-    const nextSchema = initialSchema ?? buildInitialDashboard(workflow);
+    const nextSchema = initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow);
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
     if (firstWidget) {
@@ -222,6 +226,7 @@ export function DashboardBuilderPage({
   }
 
   function handleSaveDraft() {
+    saveDashboardDraft(schema);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   fetchAssetBlobUrl,
+  fetchAssetMetadata,
   type DashboardControlDef,
   type WorkflowInputDef,
 } from "../../lib/api/noofyApi";
@@ -209,6 +210,7 @@ function AssetImageInput({
   onImageUpload: (file: File) => Promise<void>;
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [originalFilename, setOriginalFilename] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const assetId = typeof value === "string" ? value : null;
 
@@ -219,13 +221,11 @@ function AssetImageInput({
     });
 
     if (variant !== "canvas" || !assetId) {
-      setMissing(false);
-      return;
+      return undefined;
     }
 
     let canceled = false;
     let objectUrl: string | null = null;
-    setMissing(false);
     fetchAssetBlobUrl(assetId)
       .then((url) => {
         if (canceled) {
@@ -245,10 +245,37 @@ function AssetImageInput({
     };
   }, [assetId, variant]);
 
+  useEffect(() => {
+    if (!assetId) {
+      setOriginalFilename(null);
+      setMissing(false);
+      return;
+    }
+
+    let canceled = false;
+    setMissing(false);
+    fetchAssetMetadata(assetId)
+      .then((metadata) => {
+        if (!canceled) setOriginalFilename(metadata.original_filename);
+      })
+      .catch(() => {
+        if (!canceled) {
+          setOriginalFilename(null);
+          setMissing(true);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [assetId]);
+
   if (variant === "classic") {
     return (
       <>
-        {assetId ? <small className="field-group__hint">Loaded: {assetId}</small> : null}
+        {assetId ? (
+          <small className="field-group__hint">Loaded: {originalFilename ?? assetId}</small>
+        ) : null}
         <input
           type="file"
           accept="image/*"
@@ -270,6 +297,9 @@ function AssetImageInput({
         <span className="canvas-widget-image-input__missing">Image not found — please re-upload</span>
       ) : assetId ? (
         <span className="canvas-widget-image-input__hint">Loaded</span>
+      ) : null}
+      {assetId && !missing ? (
+        <span className="canvas-widget-image-input__filename">{originalFilename ?? assetId}</span>
       ) : null}
       <input
         type="file"

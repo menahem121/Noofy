@@ -22,7 +22,8 @@
       "Bash(pkill -f 'uvicorn app.main:app')",
       "Bash(pkill -f 'ComfyUI/main.py')",
       "mcp__stitch__get_screen",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(npx vitest *)"
     ]
   }
 }

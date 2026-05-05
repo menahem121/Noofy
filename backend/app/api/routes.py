@@ -343,6 +343,17 @@ async def upload_dashboard_asset(workflow_id: str, image: UploadFile = File(...)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/assets/{asset_id}/metadata")
+async def get_dashboard_asset_metadata(asset_id: str):
+    try:
+        path = _asset_service.asset_path(asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return _asset_service.metadata(asset_id)
+
+
 @router.get("/assets/{asset_id}")
 async def serve_dashboard_asset(asset_id: str):
     try:

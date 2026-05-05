@@ -16,26 +16,27 @@ Finish the remaining work needed to close the MILESTONE_2_DASHBOARD_CANVAS.md pl
 - [x] Keep canvas-specific shell/layout separate, but reuse input behavior where practical.
 
 ### Assets
-- [ ] Show uploaded asset original filename in image widgets.
-- [ ] Replace deprecated `imghdr` validation with non-deprecated image verification.
-- [ ] Add asset serve/auth tests.
-- [ ] Confirm staged ComfyUI files are cleaned up for completed, failed, and canceled jobs.
+- [x] Show uploaded asset original filename in image widgets.
+- [x] Replace deprecated `imghdr` validation with non-deprecated image verification.
+- [x] Add asset serve/auth tests.
+- [x] Confirm staged ComfyUI files are cleaned up for completed, failed, and canceled jobs.
 
 ### Builder Drafts
-- [ ] Make draft persistence consistent across both builder steps.
-- [ ] Ensure failed backend saves never navigate to the run page.
+- [x] Make draft persistence consistent across both builder steps.
+- [x] Ensure failed backend saves never navigate to the run page.
+- [x] Fix "Save failed. Draft kept." error shown after clicking Save Dashboard in the Dashboard Builder — Layout step (backend save call is failing; investigate endpoint, payload, and error response).
 
 ### Tests
-- [ ] Add `WorkflowRunPage` tests for canvas grid positions.
-- [ ] Add canvas output widget rendering test.
-- [ ] Add classic mode branch test.
-- [ ] Add toolbar button visibility tests.
-- [ ] Add edit-mode disables-inputs test.
-- [ ] Add `EngineSettingsPage` preference toggle test.
+- [x] Add `WorkflowRunPage` tests for canvas grid positions.
+- [x] Add canvas output widget rendering test.
+- [x] Add classic mode branch test.
+- [x] Add toolbar button visibility tests.
+- [x] Add edit-mode disables-inputs test.
+- [x] Add `EngineSettingsPage` preference toggle test.
 
 ### Progress Notes
-- Done: core canvas mode, classic mode, settings preference, user values, layout overrides, asset upload/store/staging, main save/regression fixes, output-node discovery, imported workflow output-widget creation, output widget save payload hardening, full per-node canvas output display, and shared classic/canvas input-control rendering.
-- Still pending: multi-output limitation notice, asset metadata/validation polish, builder draft consistency, missing acceptance tests.
+- Done: core canvas mode, classic mode, settings preference, user values, layout overrides, asset upload/store/staging, main save/regression fixes, output-node discovery, imported workflow output-widget creation, output widget save payload hardening, full per-node canvas output display, shared classic/canvas input-control rendering, asset metadata display, non-deprecated image verification, builder draft persistence, save-failure handling, and acceptance tests.
+- Still pending: none.
 - Newly discovered issues: none yet after the latest fixes.
 
 ## Implementation Order

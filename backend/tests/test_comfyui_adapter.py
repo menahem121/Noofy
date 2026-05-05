@@ -5,6 +5,7 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
+from app.engine.models import JobProgress
 
 
 def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
@@ -244,6 +245,50 @@ def test_cleanup_staged_files_removes_files(tmp_path: Path) -> None:
 
     assert not staged_file.exists()
     assert "job-99" not in adapter._staged_files
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "canceled"])
+def test_terminal_progress_cleans_staged_files_for_terminal_statuses(tmp_path: Path, status: str) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", models_dir)
+
+    staged_file = tmp_path / f"{status}.png"
+    staged_file.write_bytes(b"data")
+    adapter._staged_files["job-terminal"] = [staged_file]
+
+    adapter._log_terminal_progress_once(JobProgress(job_id="job-terminal", status=status))
+
+    assert not staged_file.exists()
+    assert "job-terminal" not in adapter._staged_files
+
+
+@pytest.mark.anyio
+async def test_cancel_job_cleans_staged_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/interrupt"
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", models_dir)
+    staged_file = tmp_path / "canceled.png"
+    staged_file.write_bytes(b"data")
+    adapter._staged_files["job-cancel"] = [staged_file]
+
+    await adapter.cancel_job("job-cancel")
+
+    assert not staged_file.exists()
+    assert "job-cancel" not in adapter._staged_files
 
 
 @pytest.mark.anyio
