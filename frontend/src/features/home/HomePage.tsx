@@ -340,32 +340,6 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
             </article>
           </section>
 
-          <section className="section-heading" aria-labelledby="built-in-workflows-title">
-            <div>
-              <h2 id="built-in-workflows-title">Built-in Workflows</h2>
-              <p>
-                {installedCount > 0
-                  ? `${installedCount} workflow${installedCount === 1 ? "" : "s"} loaded locally.`
-                  : "Starter workflows will appear here as packages are added."}
-              </p>
-            </div>
-            <button className="ghost-button" type="button">
-              View all
-              <ArrowRight size={16} aria-hidden="true" />
-            </button>
-          </section>
-
-          <section className="workflow-grid" aria-label="Built-in workflows">
-            {workflowCards.map((workflow) => (
-              <WorkflowCardView
-                key={workflow.id}
-                workflow={workflow}
-                onOpenWorkflow={onOpenWorkflow}
-                onConfigureDashboard={onConfigureDashboard}
-              />
-            ))}
-          </section>
-
           <section className="recent-section" aria-labelledby="recent-title">
             <div className="section-heading section-heading--tight">
               <div>
@@ -403,6 +377,32 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
                 </article>
               ))}
             </div>
+          </section>
+
+          <section className="section-heading" aria-labelledby="built-in-workflows-title">
+            <div>
+              <h2 id="built-in-workflows-title">Built-in Workflows</h2>
+              <p>
+                {installedCount > 0
+                  ? `${installedCount} workflow${installedCount === 1 ? "" : "s"} loaded locally.`
+                  : "Starter workflows will appear here as packages are added."}
+              </p>
+            </div>
+            <button className="ghost-button" type="button">
+              View all
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
+          </section>
+
+          <section className="workflow-grid" aria-label="Built-in workflows">
+            {workflowCards.map((workflow) => (
+              <WorkflowCardView
+                key={workflow.id}
+                workflow={workflow}
+                onOpenWorkflow={onOpenWorkflow}
+                onConfigureDashboard={onConfigureDashboard}
+              />
+            ))}
           </section>
     </AppLayout>
   );
