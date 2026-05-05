@@ -157,6 +157,7 @@ class ComfyUIRuntimeStatus(BaseModel):
     uptime_seconds: float | None = None
     last_crash_at: str | None = None
     version: ComfyUIVersionMetadata | None = None
+    managed_vram_mode: str = "normal"
 
 
 class ProcessActionResult(BaseModel):

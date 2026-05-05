@@ -108,6 +108,29 @@ export interface RuntimeStatus {
   uptime_seconds: number | null;
   last_crash_at: string | null;
   version?: ComfyUIRuntimeVersion | null;
+  managed_vram_mode?: ComfyUIVramMode | string;
+}
+
+export type ComfyUIVramMode = "normal" | "gpu_only" | "highvram" | "lowvram" | "novram" | "cpu";
+
+export interface ComfyUILaunchOption {
+  value: ComfyUIVramMode;
+  label: string;
+  description: string;
+}
+
+export interface ComfyUILaunchSettings {
+  vram_mode: ComfyUIVramMode;
+  options: ComfyUILaunchOption[];
+  applies_to_managed_runtime: boolean;
+  disabled_reason: string | null;
+}
+
+export interface ComfyUILaunchSettingsUpdateResult {
+  status: string;
+  settings: ComfyUILaunchSettings;
+  restart_status: string | null;
+  error: string | null;
 }
 
 export interface ComfyUIVersionRecord {
@@ -364,6 +387,10 @@ export function fetchComfyUIVersions() {
   return getJson<ComfyUIVersionsResponse>("/engine/comfyui/versions");
 }
 
+export function fetchComfyUILaunchSettings() {
+  return getJson<ComfyUILaunchSettings>("/engine/comfyui/launch-settings");
+}
+
 export function fetchHealth() {
   return getJson<BackendHealthReport>("/health");
 }
@@ -507,6 +534,10 @@ export function rebuildComfyUI(version = "current") {
 
 export function fetchComfyUIUpdateStatus() {
   return getJson<ComfyUIUpdateStatus>("/engine/comfyui/update/status");
+}
+
+export function updateComfyUILaunchSettings(vramMode: ComfyUIVramMode) {
+  return putJson<ComfyUILaunchSettingsUpdateResult>("/engine/comfyui/launch-settings", { vram_mode: vramMode });
 }
 
 export function isEngineJob(response: unknown): response is EngineJob {

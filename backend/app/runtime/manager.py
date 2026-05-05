@@ -20,6 +20,7 @@ from app.engine.models import (
     RuntimeMode,
 )
 from app.runtime.environment import RuntimeEnvironment
+from app.runtime.launch_settings import comfyui_vram_args
 
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
 ProcessFactory = Callable[..., Awaitable[Any]]
@@ -62,6 +63,7 @@ class RuntimeManager:
         managed_database_url: str | None = None,
         python_cache_dir: Path | None = None,
         version_metadata: ComfyUIVersionMetadata | None = None,
+        managed_vram_mode: str = "normal",
     ) -> None:
         if mode not in {"external", "managed"}:
             raise ValueError(f"Unsupported ComfyUI runtime mode: {mode}")
@@ -90,6 +92,8 @@ class RuntimeManager:
         self._managed_database_url = managed_database_url
         self._python_cache_dir = python_cache_dir
         self._version_metadata = version_metadata
+        self.managed_vram_mode = managed_vram_mode
+        comfyui_vram_args(self.managed_vram_mode)
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -140,6 +144,7 @@ class RuntimeManager:
             uptime_seconds=uptime,
             last_crash_at=self._last_crash_at.isoformat() if self._last_crash_at else None,
             version=self._version_metadata,
+            managed_vram_mode=self.managed_vram_mode,
         )
 
     def reconfigure_managed_runtime(
@@ -158,6 +163,10 @@ class RuntimeManager:
         self.python_executable = python_executable
         self.environment = environment
         self._version_metadata = version_metadata
+
+    def set_managed_vram_mode(self, mode: str) -> None:
+        comfyui_vram_args(mode)
+        self.managed_vram_mode = mode
 
     async def start(self) -> ProcessActionResult:
         current = await self.status()
@@ -306,6 +315,7 @@ class RuntimeManager:
             "--disable-auto-launch",
             "--dont-print-server",
         ]
+        command.extend(self._managed_vram_args())
         command.extend(self._managed_path_args())
         process_env = self._managed_process_env()
         self._process = await self._process_factory(
@@ -628,6 +638,9 @@ class RuntimeManager:
         if self._managed_database_url:
             args.extend(["--database-url", self._managed_database_url])
         return args
+
+    def _managed_vram_args(self) -> list[str]:
+        return comfyui_vram_args(self.managed_vram_mode)
 
     def _managed_process_env(self) -> dict[str, str]:
         env = dict(os.environ)

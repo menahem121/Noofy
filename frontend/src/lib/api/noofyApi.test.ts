@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createJobEventsUrl,
+  fetchComfyUILaunchSettings,
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
   fetchRuntimeStatus,
@@ -10,6 +11,7 @@ import {
   importWorkflowPackage,
   rebuildComfyUI,
   updateComfyUI,
+  updateComfyUILaunchSettings,
 } from "./noofyApi";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -100,35 +102,48 @@ describe("noofyApi", () => {
     );
   });
 
-  it("uses backend endpoints for ComfyUI version updates", async () => {
+  it("uses backend endpoints for ComfyUI version updates and launch settings", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ status: "running" })));
 
     await fetchComfyUIVersions();
+    await fetchComfyUILaunchSettings();
     await updateComfyUI("v0.20.1");
     await rebuildComfyUI("v0.20.1");
     await fetchComfyUIUpdateStatus();
+    await updateComfyUILaunchSettings("lowvram");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/engine/comfyui/versions", {
       headers: { Accept: "application/json" },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/engine/comfyui/update", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version: "v0.20.1" }),
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/engine/comfyui/rebuild", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version: "v0.20.1" }),
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/engine/comfyui/update/status", {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/engine/comfyui/launch-settings", {
       headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/engine/comfyui/update", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: "v0.20.1" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/engine/comfyui/rebuild", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: "v0.20.1" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/engine/comfyui/update/status", {
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/engine/comfyui/launch-settings", {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ vram_mode: "lowvram" }),
     });
   });
 

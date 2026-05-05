@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, create_default_engine_service
 from app.runtime.comfyui_updates import ComfyUIRebuildRequest, ComfyUIUpdateRequest
+from app.runtime.launch_settings import ComfyUILaunchSettings
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
@@ -61,6 +62,16 @@ async def runtime_status():
 @router.get("/engine/comfyui/status")
 async def comfyui_status():
     return await engine_service.runtime_status()
+
+
+@router.get("/engine/comfyui/launch-settings")
+async def comfyui_launch_settings():
+    return engine_service.comfyui_launch_settings()
+
+
+@router.put("/engine/comfyui/launch-settings")
+async def update_comfyui_launch_settings(request: ComfyUILaunchSettings):
+    return await engine_service.update_comfyui_launch_settings(request)
 
 
 @router.post("/engine/comfyui/start")

@@ -5,13 +5,17 @@ import {
   bootstrapEngine,
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
+  fetchComfyUILaunchSettings,
   fetchRuntimeStatus,
   rebuildComfyUI,
   startEngine,
   stopEngine,
   updateComfyUI,
+  updateComfyUILaunchSettings,
+  type ComfyUILaunchSettings,
   type ComfyUIUpdateStatus,
   type ComfyUIVersionsResponse,
+  type ComfyUIVramMode,
   type RuntimeStatus,
 } from "../../lib/api/noofyApi";
 import { useAppPreferences } from "../../lib/useAppPreferences";
@@ -22,7 +26,9 @@ interface EngineSettingsState {
   loading: boolean;
   runtime: RuntimeStatus | null;
   versions: ComfyUIVersionsResponse | null;
+  launchSettings: ComfyUILaunchSettings | null;
   selectedVersion: string;
+  selectedVramMode: ComfyUIVramMode;
   updateStatus: ComfyUIUpdateStatus | null;
   action: string | null;
   error: string | null;
@@ -33,7 +39,9 @@ const initialState: EngineSettingsState = {
   loading: true,
   runtime: null,
   versions: null,
+  launchSettings: null,
   selectedVersion: "latest",
+  selectedVramMode: "normal",
   updateStatus: null,
   action: null,
   error: null,
@@ -60,6 +68,10 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   completed: "ComfyUI was updated and validated successfully.",
   blocked: "ComfyUI updates are not available in this runtime mode.",
   failed: "ComfyUI update failed. The existing engine was left unchanged.",
+  updated: "ComfyUI launch setting was saved.",
+  unchanged: "ComfyUI launch setting is already selected.",
+  updated_restarted: "ComfyUI launch setting was saved and the managed engine restarted.",
+  updated_restart_failed: "ComfyUI launch setting was saved, but the managed engine could not restart.",
 };
 
 function actionResultMessage(result: { label: string; status: string }) {
@@ -78,8 +90,19 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [runtime, versions] = await Promise.all([fetchRuntimeStatus(), fetchComfyUIVersions()]);
-      setState((current) => ({ ...current, loading: false, runtime, versions }));
+      const [runtime, versions, launchSettings] = await Promise.all([
+        fetchRuntimeStatus(),
+        fetchComfyUIVersions(),
+        fetchComfyUILaunchSettings(),
+      ]);
+      setState((current) => ({
+        ...current,
+        loading: false,
+        runtime,
+        versions,
+        launchSettings,
+        selectedVramMode: launchSettings.vram_mode,
+      }));
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -132,6 +155,36 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
   async function runComfyUIUpdate() {
     await runComfyUIJob("update", state.selectedVersion, updateComfyUI);
+  }
+
+  async function runVramModeChange(vramMode: ComfyUIVramMode) {
+    setState((current) => ({
+      ...current,
+      action: "vram",
+      selectedVramMode: vramMode,
+      error: null,
+      actionResult: null,
+    }));
+    try {
+      const result = await updateComfyUILaunchSettings(vramMode);
+      const ok = result.status !== "blocked" && result.status !== "updated_restart_failed";
+      setState((current) => ({
+        ...current,
+        launchSettings: result.settings,
+        selectedVramMode: result.settings.vram_mode,
+        actionResult: { label: "vram", status: result.status, ok },
+        error: null,
+      }));
+      await refresh();
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        action: null,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
   }
 
   async function runComfyUIRebuild() {
@@ -191,6 +244,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   const engineJobBusy = updateBusy || rebuildBusy;
   const currentRepairStatus = versions?.current?.repair_status;
   const currentIncompatibleReason = versions?.current?.incompatible_reason;
+  const launchSettings = state.launchSettings;
+  const vramBusy = state.action === "vram";
 
   return (
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
@@ -290,6 +345,57 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         <article className="settings-panel">
           <div className="panel-heading">
             <div>
+              <h2>VRAM Mode</h2>
+              <p>Choose the memory mode Noofy uses when it launches managed ComfyUI.</p>
+            </div>
+          </div>
+
+          <div className="settings-option-group">
+            <label className="settings-option settings-option--select">
+              <div>
+                <strong>Managed launch mode</strong>
+                <span>
+                  Normal VRAM uses ComfyUI defaults and passes no VRAM launch flag.
+                </span>
+              </div>
+              <select
+                value={state.selectedVramMode}
+                disabled={!launchSettings?.applies_to_managed_runtime || vramBusy || state.action !== null}
+                onChange={(event) => void runVramModeChange(event.target.value as ComfyUIVramMode)}
+              >
+                {launchSettings?.options.map((option) => (
+                  <option value={option.value} key={option.value}>
+                    {option.label}
+                  </option>
+                )) ?? <option value="normal">Normal VRAM</option>}
+              </select>
+            </label>
+          </div>
+
+          {launchSettings && !launchSettings.applies_to_managed_runtime ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Managed launch setting unavailable</strong>
+                <span>{launchSettings.disabled_reason ?? "Switch to managed ComfyUI mode to use this setting."}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {vramBusy ? (
+            <div className="notice notice--success" role="status">
+              <Loader2 className="spin" size={18} aria-hidden="true" />
+              <div>
+                <strong>Applying VRAM mode</strong>
+                <span>Noofy is updating the managed ComfyUI launch configuration.</span>
+              </div>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="settings-panel">
+          <div className="panel-heading">
+            <div>
               <h2>ComfyUI Version</h2>
               <p>Install upstream ComfyUI releases into Noofy’s managed sidecar.</p>
             </div>
@@ -372,10 +478,10 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               <AlertCircle size={18} aria-hidden="true" />
               <div>
                 <strong>Automatic repair paused</strong>
-                <span>
-                  Noofy reached the retry limit for this ComfyUI version.
-                  {versions.current?.repair_blocked_until ? ` Retry after ${versions.current.repair_blocked_until}.` : ""}
-                </span>
+                  <span>
+                    Noofy reached the retry limit for this ComfyUI version.
+                  {versions?.current?.repair_blocked_until ? ` Retry after ${versions.current.repair_blocked_until}.` : ""}
+                  </span>
               </div>
             </div>
           ) : null}

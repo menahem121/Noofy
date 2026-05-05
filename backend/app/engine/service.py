@@ -51,6 +51,13 @@ from app.runtime.isolation import (
     SmokeTestStatus,
     TrustLevel,
 )
+from app.runtime.launch_settings import (
+    ComfyUILaunchSettings,
+    ComfyUILaunchSettingsResponse,
+    ComfyUILaunchSettingsStore,
+    ComfyUILaunchSettingsUpdateResult,
+    comfyui_launch_response,
+)
 from app.runtime.manager import RuntimeManager
 from app.runtime.memory_governor import (
     LocalMemoryLearningStore,
@@ -128,6 +135,7 @@ class EngineService:
         memory_observer: MachineMemoryObserver | None = None,
         memory_learning_store: LocalMemoryLearningStore | None = None,
         comfyui_update_service: ComfyUIUpdateService | None = None,
+        comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -141,6 +149,7 @@ class EngineService:
         self.memory_observer = memory_observer
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
+        self.comfyui_launch_settings_store = comfyui_launch_settings_store
         self.dashboard_authoring: DashboardAuthoringService | None = None
         self.workflow_exporter: WorkflowExporter | None = None
         self._job_workflows: dict[str, str] = {}
@@ -1123,6 +1132,44 @@ class EngineService:
     async def runtime_status(self):
         return await self.runtime_manager.status()
 
+    def comfyui_launch_settings(self) -> ComfyUILaunchSettingsResponse:
+        launch_settings = self._read_comfyui_launch_settings()
+        return comfyui_launch_response(launch_settings, mode=self.runtime_manager.mode)
+
+    async def update_comfyui_launch_settings(
+        self,
+        request: ComfyUILaunchSettings,
+    ) -> ComfyUILaunchSettingsUpdateResult:
+        current = self._read_comfyui_launch_settings()
+        response = comfyui_launch_response(request, mode=self.runtime_manager.mode)
+
+        if self.runtime_manager.mode != "managed":
+            return ComfyUILaunchSettingsUpdateResult(
+                status="blocked",
+                settings=response,
+                error=response.disabled_reason,
+            )
+
+        changed = current.vram_mode != request.vram_mode
+        self._write_comfyui_launch_settings(request)
+        self.runtime_manager.set_managed_vram_mode(request.vram_mode)
+
+        if not changed:
+            return ComfyUILaunchSettingsUpdateResult(status="unchanged", settings=response)
+
+        if not self.runtime_manager.is_managed_process_running():
+            return ComfyUILaunchSettingsUpdateResult(status="updated", settings=response)
+
+        await self.runtime_manager.stop()
+        start_result = await self.start_comfyui()
+        restart_ok = start_result.status in {"started", "already_running", "repair_completed_started"}
+        return ComfyUILaunchSettingsUpdateResult(
+            status="updated_restarted" if restart_ok else "updated_restart_failed",
+            settings=response,
+            restart_status=start_result.status,
+            error=None if restart_ok else start_result.comfyui.error,
+        )
+
     async def start_comfyui(self):
         result = await self.runtime_manager.start()
         if (
@@ -1178,6 +1225,15 @@ class EngineService:
                 "error": "ComfyUI updater is not configured.",
             }
         return self.comfyui_update_service.update_status()
+
+    def _read_comfyui_launch_settings(self) -> ComfyUILaunchSettings:
+        if self.comfyui_launch_settings_store is None:
+            return ComfyUILaunchSettings()
+        return self.comfyui_launch_settings_store.read()
+
+    def _write_comfyui_launch_settings(self, launch_settings: ComfyUILaunchSettings) -> None:
+        if self.comfyui_launch_settings_store is not None:
+            self.comfyui_launch_settings_store.write(launch_settings)
 
     async def shutdown(self) -> None:
         if self.runner_process_coordinator is not None:
@@ -2216,6 +2272,8 @@ def create_default_engine_service() -> EngineService:
         mode=settings.comfyui_runtime_mode,
         developer_override=developer_runtime_override,
     )
+    launch_settings_store = ComfyUILaunchSettingsStore(paths.runtime_store_dir / "settings" / "comfyui-launch.json")
+    launch_settings = launch_settings_store.read()
     runtime_environment = RuntimeEnvironment(
         repo_dir=active_runtime.repo_dir,
         runtime_dir=settings.runtime_dir,
@@ -2251,6 +2309,7 @@ def create_default_engine_service() -> EngineService:
         managed_database_url=f"sqlite:///{paths.comfyui_database_file.as_posix()}",
         python_cache_dir=paths.python_cache_dir,
         version_metadata=active_runtime.version_metadata,
+        managed_vram_mode=launch_settings.vram_mode,
     )
     runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
@@ -2454,6 +2513,7 @@ def create_default_engine_service() -> EngineService:
         runner_process_coordinator=runner_process_coordinator,
         imported_package_store=imported_package_store,
         comfyui_update_service=comfyui_update_service,
+        comfyui_launch_settings_store=launch_settings_store,
     )
     service.dashboard_authoring = DashboardAuthoringService(
         workflow_store_dir=paths.workflow_packages_store_dir,

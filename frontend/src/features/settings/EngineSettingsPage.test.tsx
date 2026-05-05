@@ -81,6 +81,44 @@ const versions = {
   release_fetch_error: null,
 };
 
+const launchSettings = {
+  vram_mode: "normal",
+  applies_to_managed_runtime: true,
+  disabled_reason: null,
+  options: [
+    {
+      value: "normal",
+      label: "Normal VRAM",
+      description: "Use ComfyUI defaults.",
+    },
+    {
+      value: "gpu_only",
+      label: "GPU only",
+      description: "Pass --gpu-only.",
+    },
+    {
+      value: "highvram",
+      label: "High VRAM",
+      description: "Pass --highvram.",
+    },
+    {
+      value: "lowvram",
+      label: "Low VRAM",
+      description: "Pass --lowvram.",
+    },
+    {
+      value: "novram",
+      label: "No VRAM",
+      description: "Pass --novram.",
+    },
+    {
+      value: "cpu",
+      label: "CPU only",
+      description: "Pass --cpu.",
+    },
+  ],
+};
+
 describe("EngineSettingsPage", () => {
   const fetchMock = vi.fn();
 
@@ -91,6 +129,7 @@ describe("EngineSettingsPage", () => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   });
@@ -128,6 +167,7 @@ describe("EngineSettingsPage", () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/engine/comfyui/versions")) {
         return Promise.resolve(jsonResponse({
           ...versions,
@@ -171,11 +211,49 @@ describe("EngineSettingsPage", () => {
     expect(screen.getByRole("option", { name: /v0.19.0.*incompatible/i })).toBeInTheDocument();
   });
 
+  it("shows Normal VRAM by default and applies a managed VRAM launch mode", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse({
+        ...readyRuntime,
+        managed_vram_mode: "lowvram",
+      }));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings") && init?.method === "PUT") {
+        expect(init.body).toBe(JSON.stringify({ vram_mode: "lowvram" }));
+        return Promise.resolve(jsonResponse({
+          status: "updated_restarted",
+          settings: {
+            ...launchSettings,
+            vram_mode: "lowvram",
+          },
+          restart_status: "started",
+          error: null,
+        }));
+      }
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    const select = await screen.findByRole("combobox", { name: /managed launch mode/i });
+    expect(select).toHaveValue("normal");
+
+    fireEvent.change(select, { target: { value: "lowvram" } });
+
+    expect(await screen.findByText(/managed engine restarted/i)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/engine/comfyui/launch-settings", expect.objectContaining({
+      method: "PUT",
+    }));
+  });
+
   it("shows fallback copy when start triggers repair and falls back", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/engine/comfyui/start") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({ status: "repair_failed_fallback_active" }));
       }
@@ -195,6 +273,7 @@ describe("EngineSettingsPage", () => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/engine/comfyui/update/status")) {
         return Promise.resolve(jsonResponse({
           operation: "repair",
@@ -230,6 +309,7 @@ describe("EngineSettingsPage", () => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/engine/comfyui/rebuild") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({
           operation: "rebuild",

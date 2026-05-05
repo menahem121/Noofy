@@ -233,6 +233,93 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(tmp_path: Pa
 
 
 @pytest.mark.anyio
+async def test_managed_start_command_omits_vram_flag_for_normal_mode(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    captured_command: list[str] = []
+    process_started = False
+
+    async def create_process(command, **kwargs):
+        nonlocal captured_command, process_started
+        process_started = True
+        captured_command = list(command)
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        managed_vram_mode="normal",
+    )
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert result.comfyui.managed_vram_mode == "normal"
+    assert "--gpu-only" not in captured_command
+    assert "--highvram" not in captured_command
+    assert "--lowvram" not in captured_command
+    assert "--novram" not in captured_command
+    assert "--cpu" not in captured_command
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("mode", "flag"),
+    [
+        ("gpu_only", "--gpu-only"),
+        ("highvram", "--highvram"),
+        ("lowvram", "--lowvram"),
+        ("novram", "--novram"),
+        ("cpu", "--cpu"),
+    ],
+)
+async def test_managed_start_command_includes_selected_vram_flag(
+    tmp_path: Path,
+    mode: str,
+    flag: str,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    captured_command: list[str] = []
+    process_started = False
+
+    async def create_process(command, **kwargs):
+        nonlocal captured_command, process_started
+        process_started = True
+        captured_command = list(command)
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        managed_vram_mode=mode,
+    )
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert result.comfyui.managed_vram_mode == mode
+    assert captured_command.count(flag) == 1
+    assert sum(1 for item in captured_command if item in {"--gpu-only", "--highvram", "--lowvram", "--novram", "--cpu"}) == 1
+
+
+@pytest.mark.anyio
 async def test_managed_stop_terminates_process(tmp_path: Path) -> None:
     async def unreachable(_: str) -> tuple[bool, str | None]:
         return False, "not reachable"

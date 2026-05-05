@@ -53,6 +53,8 @@ Managed sidecar startup runs normal ComfyUI hidden/no-browser and points writabl
 - `--user-directory <user_state_dir>/comfyui`
 - `--database-url sqlite:///<user_state_dir>/comfyui/comfyui.db`
 
+The settings screen also lets users choose a managed ComfyUI VRAM launch mode. `Normal VRAM` is the default and passes no VRAM flag, preserving ComfyUI's default behavior. Other options map to ComfyUI's existing launch flags: `--gpu-only`, `--highvram`, `--lowvram`, `--novram`, or `--cpu`. The setting is stored in Noofy runtime storage and applies only to managed mode; when changed while the managed sidecar is running, Noofy stops and restarts that sidecar through the backend.
+
 This keeps models, input staging, outputs, temp files, custom nodes, ComfyUI user/database state, logs, cache, dashboard assets, and workflow state out of `third_party/comfyui/`.
 
 `GET /api/runtime` and `GET /api/engine/comfyui/status` return lightweight runtime status for UI polling without running workflow validation or model checks. FastAPI shutdown stops a managed ComfyUI process so the backend does not leave an owned sidecar running after app exit.
