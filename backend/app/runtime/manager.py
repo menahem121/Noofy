@@ -12,7 +12,13 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from app.engine.diagnostics import LogStore
-from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult, RuntimeBootstrapResult, RuntimeMode
+from app.engine.models import (
+    ComfyUIRuntimeStatus,
+    ComfyUIVersionMetadata,
+    ProcessActionResult,
+    RuntimeBootstrapResult,
+    RuntimeMode,
+)
 from app.runtime.environment import RuntimeEnvironment
 
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
@@ -55,6 +61,7 @@ class RuntimeManager:
         managed_user_directory: Path | None = None,
         managed_database_url: str | None = None,
         python_cache_dir: Path | None = None,
+        version_metadata: ComfyUIVersionMetadata | None = None,
     ) -> None:
         if mode not in {"external", "managed"}:
             raise ValueError(f"Unsupported ComfyUI runtime mode: {mode}")
@@ -82,6 +89,7 @@ class RuntimeManager:
         self._managed_user_directory = managed_user_directory
         self._managed_database_url = managed_database_url
         self._python_cache_dir = python_cache_dir
+        self._version_metadata = version_metadata
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -131,7 +139,25 @@ class RuntimeManager:
             max_restart_attempts=self.max_restart_attempts,
             uptime_seconds=uptime,
             last_crash_at=self._last_crash_at.isoformat() if self._last_crash_at else None,
+            version=self._version_metadata,
         )
+
+    def reconfigure_managed_runtime(
+        self,
+        *,
+        repo_dir: Path,
+        python_executable: str,
+        environment: RuntimeEnvironment,
+        version_metadata: ComfyUIVersionMetadata | None,
+    ) -> None:
+        if self.mode != "managed":
+            raise RuntimeError("Only managed ComfyUI runtimes can be reconfigured.")
+        if self._is_managed_process_running():
+            raise RuntimeError("Cannot reconfigure ComfyUI while the managed process is running.")
+        self.repo_dir = repo_dir
+        self.python_executable = python_executable
+        self.environment = environment
+        self._version_metadata = version_metadata
 
     async def start(self) -> ProcessActionResult:
         current = await self.status()
@@ -256,6 +282,9 @@ class RuntimeManager:
                 environment=status.environment,
             )
         return await self.environment.bootstrap()
+
+    def is_managed_process_running(self) -> bool:
+        return self._is_managed_process_running()
 
     # ------------------------------------------------------------------
     # Process lifecycle

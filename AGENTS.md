@@ -25,6 +25,7 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.
 - [docs/MILESTONE_2_DASHBOARD_CANVAS.md](docs/MILESTONE_2_DASHBOARD_CANVAS.md): second milestone — production canvas dashboard, user value/layout persistence, asset store, classic mode setting.
 - [docs/MANAGED_COMFYUI_SIDECAR.md](docs/MANAGED_COMFYUI_SIDECAR.md): v1 requirement for app-managed ComfyUI startup, isolation, logs, health, and shutdown.
+- [docs/COMFYUI_UPDATES.md](docs/COMFYUI_UPDATES.md): user-managed upstream ComfyUI update flow, local validation, activation, and rollback safety.
 - [docs/FEEDBACK_TESTING_MONITORING.md](docs/FEEDBACK_TESTING_MONITORING.md): diagnostics, automated tests, progress feedback, logs, and monitoring direction.
 
 ## Working Guidance

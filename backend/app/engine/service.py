@@ -25,6 +25,12 @@ from app.engine.models import (
     WorkflowValidationResult,
 )
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
+from app.runtime.comfyui_updates import (
+    ComfyUIRebuildRequest,
+    ComfyUIUpdateRequest,
+    ComfyUIUpdateService,
+    resolve_active_runtime_selection,
+)
 from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
 from app.runtime.dependency_lock import core_dependency_lock_from_capsule
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
@@ -121,6 +127,7 @@ class EngineService:
         imported_package_store: ImportedWorkflowPackageStore | None = None,
         memory_observer: MachineMemoryObserver | None = None,
         memory_learning_store: LocalMemoryLearningStore | None = None,
+        comfyui_update_service: ComfyUIUpdateService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -133,6 +140,7 @@ class EngineService:
         self.imported_package_store = imported_package_store
         self.memory_observer = memory_observer
         self.memory_learning_store = memory_learning_store
+        self.comfyui_update_service = comfyui_update_service
         self.dashboard_authoring: DashboardAuthoringService | None = None
         self.workflow_exporter: WorkflowExporter | None = None
         self._job_workflows: dict[str, str] = {}
@@ -1117,6 +1125,14 @@ class EngineService:
 
     async def start_comfyui(self):
         result = await self.runtime_manager.start()
+        if (
+            self.comfyui_update_service is not None
+            and result.status in {"environment_not_ready", "repo_missing", "startup_failed"}
+        ):
+            result = await self.comfyui_update_service.repair_after_start_failure(
+                result,
+                repair_reason=result.comfyui.error or result.status,
+            )
         self._reconfigure_core_runner_endpoint()
         return result
 
@@ -1125,6 +1141,43 @@ class EngineService:
 
     async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
         return await self.runtime_manager.bootstrap_environment()
+
+    async def comfyui_versions(self):
+        if self.comfyui_update_service is None:
+            return {
+                "updates_allowed": False,
+                "disabled_reason": "ComfyUI updater is not configured.",
+                "options": [],
+            }
+        return await self.comfyui_update_service.versions()
+
+    async def update_comfyui(self, request: ComfyUIUpdateRequest):
+        if self.comfyui_update_service is None:
+            return {
+                "status": "blocked",
+                "phase": "blocked",
+                "error": "ComfyUI updater is not configured.",
+            }
+        return await self.comfyui_update_service.start_update(request)
+
+    async def rebuild_comfyui(self, request: ComfyUIRebuildRequest):
+        if self.comfyui_update_service is None:
+            return {
+                "operation": "rebuild",
+                "status": "blocked",
+                "phase": "blocked",
+                "error": "ComfyUI updater is not configured.",
+            }
+        return await self.comfyui_update_service.start_rebuild(request)
+
+    def comfyui_update_status(self):
+        if self.comfyui_update_service is None:
+            return {
+                "status": "idle",
+                "phase": "idle",
+                "error": "ComfyUI updater is not configured.",
+            }
+        return self.comfyui_update_service.update_status()
 
     async def shutdown(self) -> None:
         if self.runner_process_coordinator is not None:
@@ -2152,22 +2205,34 @@ def create_default_engine_service() -> EngineService:
         imported_packages_dir=paths.workflow_packages_store_dir,
     )
     validator = WorkflowPackageValidator()
+    developer_runtime_override = (
+        settings.comfyui_repo_dir_override_active
+        or settings.comfyui_python_executable_override_active
+    )
+    active_runtime = resolve_active_runtime_selection(
+        paths,
+        fallback_repo_dir=settings.comfyui_repo_dir,
+        fallback_python_executable=settings.comfyui_python_executable,
+        mode=settings.comfyui_runtime_mode,
+        developer_override=developer_runtime_override,
+    )
     runtime_environment = RuntimeEnvironment(
-        repo_dir=settings.comfyui_repo_dir,
+        repo_dir=active_runtime.repo_dir,
         runtime_dir=settings.runtime_dir,
         bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
-        python_executable_override=settings.comfyui_python_executable,
+        python_executable_override=active_runtime.python_executable,
         torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
         torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
         log_store=log_store,
         logs_dir=paths.logs_dir,
         cache_dir=paths.cache_dir,
+        venv_dir_override=active_runtime.venv_dir,
     )
     runtime_manager = RuntimeManager(
         mode=settings.comfyui_runtime_mode,
         external_base_url=settings.comfyui_base_url,
         external_ws_url=settings.comfyui_ws_url,
-        repo_dir=settings.comfyui_repo_dir,
+        repo_dir=active_runtime.repo_dir,
         python_executable=runtime_environment.python_executable,
         managed_host=settings.comfyui_managed_host,
         managed_port=settings.comfyui_managed_port,
@@ -2185,6 +2250,7 @@ def create_default_engine_service() -> EngineService:
         managed_user_directory=paths.comfyui_user_dir,
         managed_database_url=f"sqlite:///{paths.comfyui_database_file.as_posix()}",
         python_cache_dir=paths.python_cache_dir,
+        version_metadata=active_runtime.version_metadata,
     )
     runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
@@ -2297,7 +2363,7 @@ def create_default_engine_service() -> EngineService:
         workspace_preparer=RuntimeWorkspacePreparer(
             dependency_env_store=DependencyEnvManifestStore(paths.dependency_envs_dir),
             runner_workspace_store=RunnerWorkspaceManifestStore(paths.runner_workspaces_dir),
-            comfyui_source_dir=settings.comfyui_repo_dir,
+            comfyui_source_dir=active_runtime.repo_dir,
             model_view_dir=paths.model_materialized_dir,
             runtime_profile_catalog=load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH),
             dependency_env_installer=UvDependencyEnvironmentInstaller(
@@ -2345,6 +2411,27 @@ def create_default_engine_service() -> EngineService:
         )
 
     runtime_manager._on_restart = _reconfigure_adapter
+    comfyui_update_service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=runtime_manager,
+        mode=settings.comfyui_runtime_mode,
+        developer_override=developer_runtime_override,
+        bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
+        torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
+        torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
+        bundled_repo_dir=settings.comfyui_repo_dir,
+        bundled_python_executable=RuntimeEnvironment(
+            repo_dir=settings.comfyui_repo_dir,
+            runtime_dir=settings.runtime_dir,
+            bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
+            torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
+            torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
+            log_store=log_store,
+            logs_dir=paths.logs_dir,
+            cache_dir=paths.cache_dir,
+        ).python_executable,
+        log_store=log_store,
+    )
 
     log_store.add(
         "info",
@@ -2366,6 +2453,7 @@ def create_default_engine_service() -> EngineService:
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
         imported_package_store=imported_package_store,
+        comfyui_update_service=comfyui_update_service,
     )
     service.dashboard_authoring = DashboardAuthoringService(
         workflow_store_dir=paths.workflow_packages_store_dir,

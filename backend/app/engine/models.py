@@ -135,6 +135,13 @@ class RuntimeBootstrapResult(BaseModel):
     environment: RuntimeEnvironmentStatus | None = None
 
 
+class ComfyUIVersionMetadata(BaseModel):
+    active_tag: str | None = None
+    source_hash: str | None = None
+    source_kind: str = "external"
+    local_validation_status: str | None = None
+
+
 class ComfyUIRuntimeStatus(BaseModel):
     mode: RuntimeMode = "external"
     reachable: bool
@@ -149,6 +156,7 @@ class ComfyUIRuntimeStatus(BaseModel):
     max_restart_attempts: int = 0
     uptime_seconds: float | None = None
     last_crash_at: str | None = None
+    version: ComfyUIVersionMetadata | None = None
 
 
 class ProcessActionResult(BaseModel):

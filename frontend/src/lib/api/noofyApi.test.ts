@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createJobEventsUrl,
+  fetchComfyUIUpdateStatus,
+  fetchComfyUIVersions,
   fetchRuntimeStatus,
   fetchTrustPolicy,
   fetchWorkflows,
   importWorkflowPackage,
+  rebuildComfyUI,
+  updateComfyUI,
 } from "./noofyApi";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -94,6 +98,38 @@ describe("noofyApi", () => {
     expect(createJobEventsUrl("job 1")).toBe(
       "http://127.0.0.1:9123/api/jobs/job%201/events?token=runtime%20secret",
     );
+  });
+
+  it("uses backend endpoints for ComfyUI version updates", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ status: "running" })));
+
+    await fetchComfyUIVersions();
+    await updateComfyUI("v0.20.1");
+    await rebuildComfyUI("v0.20.1");
+    await fetchComfyUIUpdateStatus();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/engine/comfyui/versions", {
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/engine/comfyui/update", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: "v0.20.1" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/engine/comfyui/rebuild", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version: "v0.20.1" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/engine/comfyui/update/status", {
+      headers: { Accept: "application/json" },
+    });
   });
 
   it("uploads workflow packages through the Noofy backend API", async () => {

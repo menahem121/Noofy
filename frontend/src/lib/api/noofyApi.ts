@@ -86,6 +86,13 @@ export interface RuntimeEnvironmentStatus {
   error?: string | null;
 }
 
+export interface ComfyUIRuntimeVersion {
+  active_tag: string | null;
+  source_hash: string | null;
+  source_kind: string;
+  local_validation_status: string | null;
+}
+
 export interface RuntimeStatus {
   mode: "external" | "managed";
   reachable: boolean;
@@ -100,6 +107,82 @@ export interface RuntimeStatus {
   max_restart_attempts: number;
   uptime_seconds: number | null;
   last_crash_at: string | null;
+  version?: ComfyUIRuntimeVersion | null;
+}
+
+export interface ComfyUIVersionRecord {
+  tag: string;
+  available_upstream: boolean;
+  installed: boolean;
+  active: boolean;
+  locally_verified: boolean;
+  failed_validation: boolean;
+  failed_reason: string | null;
+  source_hash: string | null;
+  commit_sha: string | null;
+  source_path: string | null;
+  env_path: string | null;
+  archive_url: string | null;
+  installed_at: string | null;
+  activated_at: string | null;
+  validated_at: string | null;
+  repair_status?: string | null;
+  repair_attempt_count?: number;
+  last_repair_attempt_at?: string | null;
+  last_repair_error?: string | null;
+  repair_blocked_until?: string | null;
+  incompatible?: boolean;
+  incompatible_reason?: string | null;
+  last_successfully_started_at?: string | null;
+}
+
+export interface ComfyUIVersionOption {
+  tag: string;
+  label: string;
+  status: string;
+  available_upstream: boolean;
+  installed: boolean;
+  active: boolean;
+  locally_verified: boolean;
+  failed_validation: boolean;
+  failed_reason: string | null;
+  source_hash: string | null;
+  commit_sha: string | null;
+  published_at: string | null;
+  repair_status?: string | null;
+  repair_attempt_count?: number;
+  last_repair_attempt_at?: string | null;
+  last_repair_error?: string | null;
+  repair_blocked_until?: string | null;
+  incompatible?: boolean;
+  incompatible_reason?: string | null;
+}
+
+export interface ComfyUIVersionsResponse {
+  updates_allowed: boolean;
+  disabled_reason: string | null;
+  latest_tag: string | null;
+  current: ComfyUIVersionRecord | null;
+  options: ComfyUIVersionOption[];
+  release_fetch_error: string | null;
+}
+
+export interface ComfyUIUpdateStatus {
+  job_id: string | null;
+  operation?: "update" | "repair" | string;
+  phase: string;
+  selected_version: string | null;
+  resolved_tag: string | null;
+  progress_label: string | null;
+  status: string;
+  error: string | null;
+  installed_path: string | null;
+  activated_version: string | null;
+  repair_reason?: string | null;
+  repair_attempt_count?: number | null;
+  repair_blocked_until?: string | null;
+  fallback_version?: string | null;
+  incompatible_version?: string | null;
 }
 
 export interface WorkflowHealthSummary {
@@ -277,6 +360,10 @@ export function fetchRuntimeStatus() {
   return getJson<RuntimeStatus>("/runtime");
 }
 
+export function fetchComfyUIVersions() {
+  return getJson<ComfyUIVersionsResponse>("/engine/comfyui/versions");
+}
+
 export function fetchHealth() {
   return getJson<BackendHealthReport>("/health");
 }
@@ -408,6 +495,18 @@ export function startEngine() {
 
 export function stopEngine() {
   return postJson<Record<string, unknown>>("/engine/comfyui/stop");
+}
+
+export function updateComfyUI(version: string) {
+  return postJson<ComfyUIUpdateStatus>("/engine/comfyui/update", { version });
+}
+
+export function rebuildComfyUI(version = "current") {
+  return postJson<ComfyUIUpdateStatus>("/engine/comfyui/rebuild", { version });
+}
+
+export function fetchComfyUIUpdateStatus() {
+  return getJson<ComfyUIUpdateStatus>("/engine/comfyui/update/status");
 }
 
 export function isEngineJob(response: unknown): response is EngineJob {

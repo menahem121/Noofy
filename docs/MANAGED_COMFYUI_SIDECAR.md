@@ -35,6 +35,13 @@ Managed startup checks the environment before spawning ComfyUI. If the repo, ent
 
 `third_party/comfyui/` is Noofy's app-owned vendored ComfyUI source snapshot. It is not the user's external ComfyUI installation, and it is the only source checkout Noofy should maintain in the repo. Product managed sidecars should eventually launch from a clean reproducible ComfyUI source artifact under the app runtime store, such as `runtime-store/core-engines/comfyui-core-<version>-<source-hash>/`, produced by the packaging pipeline from the vendored source.
 
+Users may also install newer stable upstream ComfyUI releases from Noofy's
+settings screen. Those self-updated sources are stored under
+`runtime-store/core-engines/`, with per-version environments under
+`runtime-store/core-envs/`. A downloaded version is activated only after local
+startup/API/workflow/WebSocket/path-isolation smoke checks pass. The updater never
+mutates `third_party/comfyui/`; see [COMFYUI_UPDATES.md](COMFYUI_UPDATES.md).
+
 Managed sidecar startup runs normal ComfyUI hidden/no-browser and points writable ComfyUI paths at Noofy app data:
 
 - `--disable-auto-launch`

@@ -47,6 +47,8 @@ class Settings:
     comfyui_max_restart_attempts: int = int(os.environ.get("COMFYUI_MAX_RESTART_ATTEMPTS", "3"))
     comfyui_restart_backoff_base: float = float(os.environ.get("COMFYUI_RESTART_BACKOFF_BASE", "2.0"))
     noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
+    comfyui_repo_dir_override_active: bool = bool(os.environ.get("COMFYUI_REPO_DIR"))
+    comfyui_python_executable_override_active: bool = bool(os.environ.get("COMFYUI_PYTHON_EXECUTABLE"))
 
     # Resolved app-owned directory contract.
     paths: NoofyPaths = field(default_factory=resolve_paths)

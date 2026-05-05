@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, create_default_engine_service
+from app.runtime.comfyui_updates import ComfyUIRebuildRequest, ComfyUIUpdateRequest
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
@@ -75,6 +76,26 @@ async def bootstrap_comfyui_runtime():
 @router.post("/engine/comfyui/stop")
 async def stop_comfyui():
     return await engine_service.stop_comfyui()
+
+
+@router.get("/engine/comfyui/versions")
+async def comfyui_versions():
+    return await engine_service.comfyui_versions()
+
+
+@router.post("/engine/comfyui/update")
+async def update_comfyui(request: ComfyUIUpdateRequest):
+    return await engine_service.update_comfyui(request)
+
+
+@router.post("/engine/comfyui/rebuild")
+async def rebuild_comfyui(request: ComfyUIRebuildRequest):
+    return await engine_service.rebuild_comfyui(request)
+
+
+@router.get("/engine/comfyui/update/status")
+async def comfyui_update_status():
+    return engine_service.comfyui_update_status()
 
 
 @router.get("/runners")

@@ -41,6 +41,8 @@ def test_paths_endpoint_returns_all_directory_entries(monkeypatch) -> None:
         "runtime_store_dir",
         "dependency_envs_dir",
         "runner_workspaces_dir",
+        "core_engines_dir",
+        "core_envs_dir",
         "install_transactions_dir",
         "workflow_store_dir",
         "workflow_packages_store_dir",

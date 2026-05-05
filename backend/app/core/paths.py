@@ -73,6 +73,14 @@ class NoofyPaths:
         return self.runtime_store_dir / "runner-workspaces"
 
     @property
+    def core_engines_dir(self) -> Path:
+        return self.runtime_store_dir / "core-engines"
+
+    @property
+    def core_envs_dir(self) -> Path:
+        return self.runtime_store_dir / "core-envs"
+
+    @property
     def install_transactions_dir(self) -> Path:
         return self.runtime_store_dir / "transactions"
 
@@ -153,6 +161,8 @@ class NoofyPaths:
             self.dependency_envs_dir,
             self.dependency_locks_dir,
             self.runner_workspaces_dir,
+            self.core_engines_dir,
+            self.core_envs_dir,
             self.install_transactions_dir,
             self.workflow_store_dir,
             self.workflow_packages_store_dir,
@@ -197,6 +207,8 @@ class NoofyPaths:
             ("dependency_envs_dir", self.dependency_envs_dir),
             ("dependency_locks_dir", self.dependency_locks_dir),
             ("runner_workspaces_dir", self.runner_workspaces_dir),
+            ("core_engines_dir", self.core_engines_dir),
+            ("core_envs_dir", self.core_envs_dir),
             ("install_transactions_dir", self.install_transactions_dir),
             ("workflow_store_dir", self.workflow_store_dir),
             ("workflow_packages_store_dir", self.workflow_packages_store_dir),

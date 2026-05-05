@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, Play, RotateCcw, Square, Wrench } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, Loader2, Play, RotateCcw, Square, Wrench } from "lucide-react";
 
 import {
   bootstrapEngine,
+  fetchComfyUIUpdateStatus,
+  fetchComfyUIVersions,
   fetchRuntimeStatus,
+  rebuildComfyUI,
   startEngine,
   stopEngine,
+  updateComfyUI,
+  type ComfyUIUpdateStatus,
+  type ComfyUIVersionsResponse,
   type RuntimeStatus,
 } from "../../lib/api/noofyApi";
 import { useAppPreferences } from "../../lib/useAppPreferences";
@@ -15,6 +21,9 @@ import { runtimeStatusCopy } from "../app/status";
 interface EngineSettingsState {
   loading: boolean;
   runtime: RuntimeStatus | null;
+  versions: ComfyUIVersionsResponse | null;
+  selectedVersion: string;
+  updateStatus: ComfyUIUpdateStatus | null;
   action: string | null;
   error: string | null;
   actionResult: { label: string; status: string; ok: boolean } | null;
@@ -23,12 +32,15 @@ interface EngineSettingsState {
 const initialState: EngineSettingsState = {
   loading: true,
   runtime: null,
+  versions: null,
+  selectedVersion: "latest",
+  updateStatus: null,
   action: null,
   error: null,
   actionResult: null,
 };
 
-const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "already_running"]);
+const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "already_running", "completed", "repair_completed_started"]);
 const ACTION_RESULT_LABELS: Record<string, string> = {
   prepared: "Engine environment prepared successfully.",
   already_prepared: "Environment is already prepared.",
@@ -39,9 +51,25 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   dependency_check_failed: "Dependencies could not be verified after install.",
   not_configured: "No managed runtime environment is configured.",
   already_running: "Engine is already running.",
+  repair_completed_started: "The managed ComfyUI environment was repaired and started.",
+  repair_failed_fallback_active: "Repair failed, so Noofy started a previous working engine.",
+  repair_failed_no_fallback: "Repair failed and no fallback engine could be started.",
+  repair_blocked: "Automatic repair is temporarily blocked for this ComfyUI version.",
   external_unreachable: "Engine is in external mode and not reachable. Start ComfyUI manually.",
   stopped: "Engine stopped.",
+  completed: "ComfyUI was updated and validated successfully.",
+  blocked: "ComfyUI updates are not available in this runtime mode.",
+  failed: "ComfyUI update failed. The existing engine was left unchanged.",
 };
+
+function actionResultMessage(result: { label: string; status: string }) {
+  if (result.label === "rebuild") {
+    if (result.status === "completed") return "ComfyUI environment was rebuilt and validated successfully.";
+    if (result.status === "failed") return "ComfyUI environment rebuild failed. The existing engine was left unchanged.";
+    if (result.status === "blocked") return "ComfyUI environment rebuild is not available in this runtime mode.";
+  }
+  return ACTION_RESULT_LABELS[result.status] ?? result.status;
+}
 
 export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
   const [state, setState] = useState<EngineSettingsState>(initialState);
@@ -50,8 +78,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const runtime = await fetchRuntimeStatus();
-      setState((current) => ({ ...current, loading: false, runtime }));
+      const [runtime, versions] = await Promise.all([fetchRuntimeStatus(), fetchComfyUIVersions()]);
+      setState((current) => ({ ...current, loading: false, runtime, versions }));
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -64,6 +92,22 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
   async function runAction(label: string, action: () => Promise<Record<string, unknown>>) {
     setState((current) => ({ ...current, action: label, error: null, actionResult: null }));
+    let polling = label === "start";
+    const pollRepairStatus = polling
+      ? (async () => {
+          while (polling) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            try {
+              const updateStatus = await fetchComfyUIUpdateStatus();
+              if (updateStatus.operation === "repair") {
+                setState((current) => ({ ...current, updateStatus }));
+              }
+            } catch {
+              // The start action result remains the source of truth.
+            }
+          }
+        })()
+      : null;
     try {
       const result = await action();
       const status = typeof result.status === "string" ? result.status : "unknown";
@@ -71,6 +115,48 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       setState((current) => ({
         ...current,
         actionResult: { label, status, ok },
+      }));
+      await refresh();
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        action: null,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      polling = false;
+      await pollRepairStatus;
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
+  async function runComfyUIUpdate() {
+    await runComfyUIJob("update", state.selectedVersion, updateComfyUI);
+  }
+
+  async function runComfyUIRebuild() {
+    const selected = state.selectedVersion === "latest" ? "current" : state.selectedVersion;
+    await runComfyUIJob("rebuild", selected, rebuildComfyUI);
+  }
+
+  async function runComfyUIJob(
+    actionName: "update" | "rebuild",
+    selected: string,
+    starter: (version: string) => Promise<ComfyUIUpdateStatus>,
+  ) {
+    setState((current) => ({ ...current, action: actionName, error: null, actionResult: null, updateStatus: null }));
+    try {
+      let updateStatus = await starter(selected);
+      setState((current) => ({ ...current, updateStatus }));
+      while (updateStatus.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        updateStatus = await fetchComfyUIUpdateStatus();
+        setState((current) => ({ ...current, updateStatus }));
+      }
+      const ok = updateStatus.status === "completed";
+      setState((current) => ({
+        ...current,
+        actionResult: { label: actionName, status: updateStatus.status, ok },
       }));
       await refresh();
     } catch (error) {
@@ -90,6 +176,21 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
   const status = runtimeStatusCopy(state);
   const environment = state.runtime?.environment;
+  const versions = state.versions;
+  const currentVersion =
+    versions?.current?.tag ??
+    state.runtime?.version?.active_tag ??
+    (state.runtime?.version?.source_kind === "bundled" ? "Bundled ComfyUI" : "Unavailable");
+  const sourceStatus = state.runtime?.version?.source_kind ?? "unknown";
+  const updateBusy =
+    state.action === "update" ||
+    (state.updateStatus?.operation !== "rebuild" && state.updateStatus?.status === "running");
+  const rebuildBusy =
+    state.action === "rebuild" ||
+    (state.updateStatus?.operation === "rebuild" && state.updateStatus.status === "running");
+  const engineJobBusy = updateBusy || rebuildBusy;
+  const currentRepairStatus = versions?.current?.repair_status;
+  const currentIncompatibleReason = versions?.current?.incompatible_reason;
 
   return (
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
@@ -122,7 +223,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
             : <AlertCircle size={18} aria-hidden="true" />}
           <div>
             <strong>{state.actionResult.ok ? "Done" : "Action did not complete"}</strong>
-            <span>{ACTION_RESULT_LABELS[state.actionResult.status] ?? state.actionResult.status}</span>
+            <span>{actionResultMessage(state.actionResult)}</span>
           </div>
         </div>
       ) : null}
@@ -182,6 +283,131 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
             >
               <Square size={16} aria-hidden="true" />
               Stop
+            </button>
+          </div>
+        </article>
+
+        <article className="settings-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>ComfyUI Version</h2>
+              <p>Install upstream ComfyUI releases into Noofy’s managed sidecar.</p>
+            </div>
+          </div>
+
+          <dl className="detail-list">
+            <div>
+              <dt>Current</dt>
+              <dd>{currentVersion}</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>{sourceStatus}</dd>
+            </div>
+          </dl>
+
+          {versions?.release_fetch_error ? (
+            <div className="notice notice--error" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Could not load upstream releases</strong>
+                <span>{versions.release_fetch_error}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {versions && !versions.updates_allowed ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Updates unavailable</strong>
+                <span>{versions.disabled_reason ?? "ComfyUI updates are not available right now."}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="settings-option-group">
+            <label className="settings-option settings-option--select">
+              <div>
+                <strong>Version</strong>
+                <span>Upstream releases are validated locally before activation.</span>
+              </div>
+              <select
+                value={state.selectedVersion}
+                disabled={!versions?.updates_allowed || engineJobBusy}
+                onChange={(event) => setState((current) => ({ ...current, selectedVersion: event.target.value }))}
+              >
+                <option value="latest">Latest version{versions?.latest_tag ? ` (${versions.latest_tag})` : ""}</option>
+                {versions?.options.map((option) => (
+                  <option value={option.tag} key={option.tag}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {state.updateStatus?.progress_label ? (
+            <div className={`notice ${state.updateStatus.status === "failed" ? "notice--error" : "notice--success"}`} role="status">
+              {state.updateStatus.status === "running"
+                ? <Loader2 className="spin" size={18} aria-hidden="true" />
+                : state.updateStatus.status === "failed"
+                  ? <AlertCircle size={18} aria-hidden="true" />
+                  : <CheckCircle2 size={18} aria-hidden="true" />}
+              <div>
+                <strong>{state.updateStatus.operation === "repair" ? `repair: ${state.updateStatus.phase}` : state.updateStatus.phase}</strong>
+                <span>{state.updateStatus.error ?? state.updateStatus.progress_label}</span>
+                {state.updateStatus.fallback_version ? (
+                  <span>Fallback active: {state.updateStatus.fallback_version}</span>
+                ) : null}
+                {state.updateStatus.incompatible_version ? (
+                  <span>{state.updateStatus.incompatible_version} failed Noofy validation.</span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {currentRepairStatus === "repair_blocked" ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Automatic repair paused</strong>
+                <span>
+                  Noofy reached the retry limit for this ComfyUI version.
+                  {versions.current?.repair_blocked_until ? ` Retry after ${versions.current.repair_blocked_until}.` : ""}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
+          {versions?.current?.incompatible ? (
+            <div className="notice notice--error" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>ComfyUI version failed validation</strong>
+                <span>{currentIncompatibleReason ?? "This version changed behavior Noofy depends on."}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="button-row">
+            <button
+              className="primary-button primary-button--compact"
+              type="button"
+              disabled={!versions?.updates_allowed || state.action !== null}
+              onClick={() => void runComfyUIUpdate()}
+            >
+              {updateBusy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+              Update ComfyUI
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!versions?.updates_allowed || state.action !== null || !versions.current}
+              onClick={() => void runComfyUIRebuild()}
+            >
+              {rebuildBusy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Wrench size={16} aria-hidden="true" />}
+              Rebuild Environment
             </button>
           </div>
         </article>

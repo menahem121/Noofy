@@ -28,6 +28,10 @@ For product v1, ComfyUI should run as an app-managed hidden sidecar with its own
 
 Noofy keeps its app-owned ComfyUI source snapshot in `third_party/comfyui/`. That source is used for local managed development and as the input for future packaged runtime artifacts; it is not a user's external ComfyUI installation. Developers can still use external mode to point the backend at an already-running ComfyUI while iterating.
 
+Managed builds can also install stable upstream ComfyUI releases from the
+settings screen. These user-managed updates are stored in Noofy runtime storage,
+validated locally before activation, and never modify `third_party/comfyui/`.
+
 ## Project Direction
 
 Version 1 will focus on a reliable cross-platform app for Linux, Windows, and macOS using a Python/ComfyUI backend. Linux CUDA workstations and servers are a first-class validation target for the ComfyUI backend.

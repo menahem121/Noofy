@@ -41,11 +41,13 @@ class RuntimeEnvironment:
         command_runner: CommandRunner | None = None,
         logs_dir: Path | None = None,
         cache_dir: Path | None = None,
+        venv_dir_override: Path | None = None,
     ) -> None:
         self.repo_dir = repo_dir
         self.runtime_dir = runtime_dir
         self._logs_dir = logs_dir
         self._cache_dir = cache_dir
+        self._venv_dir_override = venv_dir_override
         self.bootstrap_python_executable = bootstrap_python_executable
         self.python_executable_override = python_executable_override
         self.required_imports = required_imports
@@ -65,6 +67,8 @@ class RuntimeEnvironment:
 
     @property
     def venv_dir(self) -> Path:
+        if self._venv_dir_override is not None:
+            return self._venv_dir_override
         return self.runtime_dir / "comfyui-venv"
 
     @property

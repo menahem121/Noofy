@@ -59,6 +59,8 @@ class TestNoofyDataDirOverride:
         assert paths.dependency_envs_dir == Path("/tmp/noofy-test/runtime-store/envs")
         assert paths.dependency_locks_dir == Path("/tmp/noofy-test/runtime-store/dependency-locks")
         assert paths.runner_workspaces_dir == Path("/tmp/noofy-test/runtime-store/runner-workspaces")
+        assert paths.core_engines_dir == Path("/tmp/noofy-test/runtime-store/core-engines")
+        assert paths.core_envs_dir == Path("/tmp/noofy-test/runtime-store/core-envs")
         assert paths.install_transactions_dir == Path("/tmp/noofy-test/runtime-store/transactions")
         assert paths.workflow_store_dir == Path("/tmp/noofy-test/workflow-store")
         assert paths.workflow_packages_store_dir == Path("/tmp/noofy-test/workflow-store/packages")
@@ -162,6 +164,8 @@ class TestEnsureDirectories:
         assert paths.dependency_envs_dir.is_dir()
         assert paths.dependency_locks_dir.is_dir()
         assert paths.runner_workspaces_dir.is_dir()
+        assert paths.core_engines_dir.is_dir()
+        assert paths.core_envs_dir.is_dir()
         assert paths.install_transactions_dir.is_dir()
         assert paths.workflow_store_dir.is_dir()
         assert paths.workflow_packages_store_dir.is_dir()
@@ -200,6 +204,8 @@ class TestWritableStatus:
         assert "dependency_envs_dir" in status
         assert "dependency_locks_dir" in status
         assert "runner_workspaces_dir" in status
+        assert "core_engines_dir" in status
+        assert "core_envs_dir" in status
         assert "install_transactions_dir" in status
         assert "workflow_store_dir" in status
         assert "custom_node_cache_dir" in status
