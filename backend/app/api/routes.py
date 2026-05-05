@@ -1,13 +1,17 @@
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, create_default_engine_service
+from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
+from app.workflows.user_state import UserStateService
 
 router = APIRouter()
 engine_service: EngineService = create_default_engine_service()
+_user_state_service = UserStateService(settings.paths.user_state_dir)
+_asset_service = DashboardAssetService(settings.paths.dashboard_assets_dir)
 
 
 @router.get("/paths")
@@ -295,3 +299,56 @@ async def upload_workflow_image(workflow_id: str, image: UploadFile = File(...))
 @router.get("/models")
 async def list_available_models():
     return await engine_service.list_available_models()
+
+
+# ─── User state ──────────────────────────────────────────────────────────────
+
+@router.get("/workflows/{workflow_id}/user-state")
+async def get_user_state(workflow_id: str):
+    return _user_state_service.get(workflow_id)
+
+
+@router.put("/workflows/{workflow_id}/user-state")
+async def save_user_state(workflow_id: str, request: Request):
+    from app.workflows.user_state import WorkflowUserState
+    body = await request.json()
+    body["workflow_id"] = workflow_id
+    try:
+        state = WorkflowUserState.model_validate(body)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _user_state_service.save(state)
+
+
+@router.delete("/workflows/{workflow_id}/user-state/values")
+async def clear_user_state_values(workflow_id: str):
+    return _user_state_service.clear_values(workflow_id)
+
+
+@router.delete("/workflows/{workflow_id}/user-state/layout")
+async def clear_user_state_layout(workflow_id: str):
+    return _user_state_service.clear_layout(workflow_id)
+
+
+# ─── Dashboard assets ────────────────────────────────────────────────────────
+
+@router.post("/workflows/{workflow_id}/assets/image")
+async def upload_dashboard_asset(workflow_id: str, image: UploadFile = File(...)):
+    data = await image.read()
+    content_type = image.content_type or "application/octet-stream"
+    original_filename = image.filename or "upload"
+    try:
+        return _asset_service.store(data, content_type, original_filename)
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/assets/{asset_id}")
+async def serve_dashboard_asset(asset_id: str):
+    try:
+        path = _asset_service.asset_path(asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return FileResponse(path, media_type=_asset_service.content_type(asset_id))

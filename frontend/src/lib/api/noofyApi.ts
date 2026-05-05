@@ -311,7 +311,8 @@ export interface DashboardControlDef {
   output_id?: string;
   description?: string;
   group?: string;
-  layout?: { x: number; y: number; w: number; h: number };
+  show_download?: boolean;
+  layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
 export interface DashboardSectionDef {
@@ -512,6 +513,86 @@ export function saveDashboard(
 
 export function exportWorkflowUrl(workflowId: string): string {
   return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export`;
+}
+
+// ─── User state ──────────────────────────────────────────────────────────────
+
+export interface UserStateLayoutOverride {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface WorkflowUserState {
+  schema_version: string;
+  workflow_id: string;
+  dashboard_version: string;
+  values: Record<string, unknown>;
+  layout_overrides: Record<string, UserStateLayoutOverride>;
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "DELETE",
+    headers: apiHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Noofy backend returned ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export function fetchUserState(workflowId: string): Promise<WorkflowUserState> {
+  return getJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state`);
+}
+
+export function saveUserState(workflowId: string, state: WorkflowUserState): Promise<WorkflowUserState> {
+  return putJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state`, state);
+}
+
+export function deleteUserStateValues(workflowId: string): Promise<WorkflowUserState> {
+  return deleteJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state/values`);
+}
+
+export function deleteUserStateLayout(workflowId: string): Promise<WorkflowUserState> {
+  return deleteJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state/layout`);
+}
+
+// ─── Dashboard assets ────────────────────────────────────────────────────────
+
+export interface DashboardAssetUploadResponse {
+  asset_id: string;
+  original_filename: string;
+}
+
+export async function uploadDashboardAsset(
+  workflowId: string,
+  file: File,
+): Promise<DashboardAssetUploadResponse> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/image`,
+    { method: "POST", headers, body: formData },
+  );
+  if (!response.ok) {
+    throw new Error(`Asset upload failed: ${response.status}`);
+  }
+  return response.json() as Promise<DashboardAssetUploadResponse>;
+}
+
+export async function fetchAssetBlobUrl(assetId: string): Promise<string> {
+  const token = getApiToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${getApiBaseUrl()}/assets/${encodeURIComponent(assetId)}`, { headers });
+  if (!response.ok) throw new Error(`Asset not found: ${response.status}`);
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
 }
 
 export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {

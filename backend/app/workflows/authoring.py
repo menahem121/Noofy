@@ -23,7 +23,7 @@ from app.workflows.package import (
 from app.workflows.validator import WorkflowPackageValidator
 
 
-class DashboardAuthoringError(Exception):
+class DashboardAuthoringError(ValueError):
     pass
 
 
@@ -193,6 +193,7 @@ def _parse_dashboard_payload(
     dashboard_raw: dict[str, Any],
 ) -> tuple[list[WorkflowInput], list[WorkflowOutput], DashboardSchema]:
     from pydantic import ValidationError
+    dashboard_payload = dict(dashboard_raw)
 
     inputs: list[WorkflowInput] = []
     for item in inputs_raw:
@@ -201,7 +202,7 @@ def _parse_dashboard_payload(
         except ValidationError as exc:
             raise DashboardAuthoringError(f"Invalid input record: {exc}") from exc
 
-    outputs_raw: list[dict[str, Any]] = dashboard_raw.pop("outputs", []) or []
+    outputs_raw: list[dict[str, Any]] = dashboard_payload.pop("outputs", []) or []
     outputs: list[WorkflowOutput] = []
     for item in outputs_raw:
         try:
@@ -210,7 +211,7 @@ def _parse_dashboard_payload(
             raise DashboardAuthoringError(f"Invalid output record: {exc}") from exc
 
     try:
-        schema = DashboardSchema.model_validate(dashboard_raw)
+        schema = DashboardSchema.model_validate(dashboard_payload)
     except ValidationError as exc:
         raise DashboardAuthoringError(f"Invalid dashboard schema: {exc}") from exc
 
@@ -229,6 +230,7 @@ _SCALAR_INPUT_KINDS: dict[type, str] = {
 }
 
 _IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask"})
+_IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 
@@ -244,6 +246,17 @@ def _classify_graph_inputs(graph: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         scalar_inputs: list[dict[str, Any]] = []
+        if node_type in _IMAGE_OUTPUT_NODE_TYPES:
+            scalar_inputs.append(
+                {
+                    "input_name": "output_image",
+                    "current_value": None,
+                    "kind": "image_output",
+                    "suggested_widget_type": "display_image",
+                    "widget_types": ["display_image"],
+                }
+            )
+
         for input_name, value in raw_inputs.items():
             # Skip link references (arrays like ["3", 0]).
             if isinstance(value, list):

@@ -294,6 +294,26 @@ def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     assert text_inputs, "text input should be classified"
 
 
+def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    output_nodes = [n for n in result["nodes"] if n["node_type"] == "SaveImage"]
+    assert output_nodes, "SaveImage should appear as an output-capable dashboard node"
+    output_values = [inp for inp in output_nodes[0]["inputs"] if inp["kind"] == "image_output"]
+    assert output_values == [
+        {
+            "input_name": "output_image",
+            "current_value": None,
+            "kind": "image_output",
+            "suggested_widget_type": "display_image",
+            "widget_types": ["display_image"],
+        }
+    ]
+
+
 def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
     """Bundled workflows are read-only — save must raise DashboardAuthoringError."""
     loader = WorkflowPackageLoader(Path("app/workflows/packages"))

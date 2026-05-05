@@ -161,6 +161,91 @@ def test_ws_url_for_client_uses_configured_ws_url(tmp_path: Path) -> None:
     assert adapter._ws_url_for_client("abc 123") == "ws://remote.test:9000/ws?clientId=abc+123"
 
 
+def test_stage_assets_copies_file_and_rewrites_graph(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    # Create a fake asset file with a valid UUID-based name.
+    asset_id = "12345678-1234-1234-1234-123456789abc.png"
+    (assets_dir / asset_id).write_bytes(b"fake-image-data")
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        models_dir,
+        dashboard_assets_dir=assets_dir,
+    )
+
+    graph = {
+        "10": {
+            "class_type": "LoadImage",
+            "inputs": {"image": asset_id, "upload": "image"},
+        }
+    }
+
+    new_graph, staged = adapter._stage_assets(graph, "job-99")
+
+    assert len(staged) == 1
+    staged_path = staged[0]
+    assert staged_path.exists()
+    assert staged_path.read_bytes() == b"fake-image-data"
+    # Graph node value must reference the staging subfolder.
+    assert new_graph["10"]["inputs"]["image"].startswith("staging/")
+    assert asset_id in new_graph["10"]["inputs"]["image"]
+    # Original graph must be unchanged (deep copy).
+    assert graph["10"]["inputs"]["image"] == asset_id
+
+
+def test_stage_assets_skips_missing_asset(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        models_dir,
+        dashboard_assets_dir=assets_dir,
+    )
+    graph = {"10": {"class_type": "LoadImage", "inputs": {"image": "missing-00000000-0000-0000-0000-000000000000.png"}}}
+    new_graph, staged = adapter._stage_assets(graph, "job-1")
+    assert staged == []
+    assert new_graph["10"]["inputs"]["image"] == "missing-00000000-0000-0000-0000-000000000000.png"
+
+
+def test_stage_assets_ignores_non_asset_values(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        models_dir,
+        dashboard_assets_dir=assets_dir,
+    )
+    graph = {"5": {"class_type": "KSampler", "inputs": {"seed": 42, "model": "v1-5.safetensors"}}}
+    new_graph, staged = adapter._stage_assets(graph, "job-1")
+    assert staged == []
+    assert new_graph["5"]["inputs"]["seed"] == 42
+
+
+def test_cleanup_staged_files_removes_files(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", models_dir)
+
+    staged_file = tmp_path / "staged.png"
+    staged_file.write_bytes(b"data")
+    adapter._staged_files["job-99"] = [staged_file]
+
+    adapter._cleanup_staged_files("job-99")
+
+    assert not staged_file.exists()
+    assert "job-99" not in adapter._staged_files
+
+
 @pytest.mark.anyio
 async def test_list_available_models_uses_comfyui_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:

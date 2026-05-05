@@ -521,6 +521,7 @@ export interface BackendDashboardControl {
   output_id?: string;
   description?: string;
   group?: string;
+  show_download?: boolean;
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
@@ -533,6 +534,7 @@ export interface BackendDashboardSection {
 export interface BackendDashboardPayload {
   version: string;
   status?: string;
+  outputs?: Array<{ id: string; label: string; node_id: string; type: string }>;
   sections: BackendDashboardSection[];
 }
 
@@ -610,8 +612,9 @@ export function workflowFromBindableInputs(
 
 /** Convert frontend DashboardSchema into a backend save payload. */
 export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
+  const isOutputWidget = (widgetType: string) => widgetType === "display_image" || widgetType === "result_image";
   const inputs: BackendWorkflowInput[] = schema.widgets
-    .filter((w) => w.widgetType !== "display_image" && w.widgetType !== ("result_image" as string))
+    .filter((w) => !isOutputWidget(w.widgetType))
     .map((w) => ({
       id: w.id,
       label: w.title,
@@ -625,21 +628,35 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       },
     }));
 
+  const outputWidgets = schema.widgets.filter((w) => isOutputWidget(w.widgetType));
+  const outputIdForWidget = (widgetId: string) => {
+    const index = outputWidgets.findIndex((widget) => widget.id === widgetId);
+    return index <= 0 ? "image" : `image_${index + 1}`;
+  };
+  const outputs = outputWidgets.map((w) => ({
+    id: outputIdForWidget(w.id),
+    label: w.title,
+    node_id: w.binding.nodeId,
+    type: "image",
+  }));
+
   const controls: BackendDashboardControl[] = schema.widgets.map((w, i) => ({
     id: w.id,
     type: w.widgetType,
     label: w.title,
-    input_id: w.widgetType !== "display_image" ? w.id : undefined,
-    output_id: w.widgetType === "display_image" ? "image" : undefined,
+    input_id: !isOutputWidget(w.widgetType) ? w.id : undefined,
+    output_id: isOutputWidget(w.widgetType) ? outputIdForWidget(w.id) : undefined,
     description: w.description,
     group: w.group,
+    show_download: Boolean(w.showDownload),
     layout: w.layout
-      ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h }
+      ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
       : { x: 0, y: i * 2, w: 12, h: 2 },
   }));
 
   const dashboard: BackendDashboardPayload = {
     version: "0.1.0",
+    outputs,
     sections: [{ id: "main", title: "Main", controls }],
   };
 

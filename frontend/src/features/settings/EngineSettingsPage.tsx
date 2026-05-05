@@ -8,6 +8,7 @@ import {
   stopEngine,
   type RuntimeStatus,
 } from "../../lib/api/noofyApi";
+import { useAppPreferences } from "../../lib/useAppPreferences";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 
@@ -44,6 +45,7 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
 
 export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
   const [state, setState] = useState<EngineSettingsState>(initialState);
+  const { viewMode, setViewMode } = useAppPreferences();
 
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -206,6 +208,44 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               Local AI engine is reachable.
             </li>
           </ul>
+        </article>
+
+        <article className="settings-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Dashboard View</h2>
+              <p>Choose how workflow dashboards are presented when you run a workflow.</p>
+            </div>
+          </div>
+
+          <div className="settings-option-group">
+            <label className="settings-option">
+              <input
+                type="radio"
+                name="dashboard-view-mode"
+                value="canvas"
+                checked={viewMode === "canvas"}
+                onChange={() => setViewMode("canvas")}
+              />
+              <div>
+                <strong>Canvas</strong>
+                <span>Interactive grid layout — drag to reposition widgets.</span>
+              </div>
+            </label>
+            <label className="settings-option">
+              <input
+                type="radio"
+                name="dashboard-view-mode"
+                value="classic"
+                checked={viewMode === "classic"}
+                onChange={() => setViewMode("classic")}
+              />
+              <div>
+                <strong>Classic</strong>
+                <span>Simple two-panel inputs and preview layout.</span>
+              </div>
+            </label>
+          </div>
         </article>
       </section>
     </AppLayout>

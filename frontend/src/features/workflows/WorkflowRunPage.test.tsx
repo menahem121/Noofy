@@ -496,4 +496,152 @@ describe("WorkflowRunPage", () => {
       expect(eventSourceMock).toHaveBeenCalledWith("/api/jobs/job-4/events?token=runtime-secret");
     });
   });
+
+  it("renders each canvas output widget from its bound result node", async () => {
+    const packageData = {
+      metadata: {
+        id: "text_to_image_v0",
+        name: "Text to Image",
+        version: "0.1.0",
+        description: "",
+      },
+      inputs: [
+        {
+          id: "prompt",
+          label: "Prompt",
+          control: "textarea",
+          binding: { node_id: "6", input_name: "text" },
+          default: "a lake",
+          validation: {},
+        },
+      ],
+      outputs: [
+        { id: "image_a", label: "Image A", node_id: "9", type: "image" },
+        { id: "image_b", label: "Image B", node_id: "10", type: "image" },
+      ],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "prompt",
+                type: "textarea",
+                label: "Prompt",
+                input_id: "prompt",
+                layout: { x: 0, y: 0, w: 6, h: 3 },
+              },
+              {
+                id: "result-a",
+                type: "display_image",
+                label: "Result A",
+                output_id: "image_a",
+                layout: { x: 6, y: 0, w: 6, h: 4 },
+              },
+              {
+                id: "result-b",
+                type: "display_image",
+                label: "Result B",
+                output_id: "image_b",
+                layout: { x: 0, y: 4, w: 6, h: 4 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        expect(init?.method).toBe("POST");
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-canvas",
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/jobs/job-canvas/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-canvas",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/jobs/job-canvas/result")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-canvas",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    { view_url: "/api/view?filename=node-9-a.png" },
+                    { view_url: "/api/view?filename=node-9-b.png" },
+                  ],
+                },
+              },
+              {
+                node_id: "10",
+                output: { images: [{ view_url: "/api/view?filename=node-10.png" }] },
+              },
+            ],
+            error: null,
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("Result A")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByAltText("Generated workflow output 1")).toHaveAttribute(
+      "src",
+      "/api/view?filename=node-9-a.png",
+    );
+    expect(screen.getByAltText("Generated workflow output 2")).toHaveAttribute(
+      "src",
+      "/api/view?filename=node-9-b.png",
+    );
+    expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/view?filename=node-10.png",
+    );
+  });
 });

@@ -115,6 +115,7 @@ class DashboardControl(BaseModel):
     output_id: str | None = None
     description: str = ""
     group: Literal["simple", "advanced"] = "simple"
+    show_download: bool = False
     layout: ControlLayout | None = None
     visible_if: dict[str, Any] | None = None
     enabled_if: dict[str, Any] | None = None

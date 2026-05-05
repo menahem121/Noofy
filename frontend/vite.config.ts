@@ -8,6 +8,7 @@ declare const process: {
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 const tauriDebug = process.env.TAURI_ENV_DEBUG;
+const devBackendPort = process.env.VITE_DEV_BACKEND_PORT ?? "8000";
 
 export default defineConfig({
   clearScreen: false,
@@ -19,7 +20,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: `http://127.0.0.1:${devBackendPort}`,
         changeOrigin: true,
       },
     },
@@ -30,7 +31,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: `http://127.0.0.1:${devBackendPort}`,
         changeOrigin: true,
       },
     },

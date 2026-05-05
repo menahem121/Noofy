@@ -58,6 +58,7 @@ fn main() {
                 .inner_size(1180.0, 780.0)
                 .min_inner_size(940.0, 640.0)
                 .initialization_script(init_script)
+                .disable_drag_drop_handler()
                 .build()?;
 
             Ok(())

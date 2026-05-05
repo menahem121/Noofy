@@ -2185,6 +2185,7 @@ def create_default_engine_service() -> EngineService:
         settings.comfyui_models_dir,
         runtime_manager.ws_url,
         log_store=log_store,
+        dashboard_assets_dir=paths.dashboard_assets_dir,
     )
     trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
     imported_package_store = ImportedWorkflowPackageStore(

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -14,6 +15,8 @@ from app.engine.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.workflows.package import WorkflowPackage
 
+_ASSET_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif)$', re.IGNORECASE)
+
 
 class ComfyUIEngineAdapter:
     def __init__(
@@ -23,14 +26,17 @@ class ComfyUIEngineAdapter:
         ws_url: str | None = None,
         job_store: JobStore | None = None,
         log_store: LogStore | None = None,
+        dashboard_assets_dir: Path | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
         self.models_dir = models_dir
         self.job_store = job_store or JobStore()
         self.log_store = log_store or LogStore()
+        self.dashboard_assets_dir = dashboard_assets_dir
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
         self._terminal_log_job_ids: set[str] = set()
+        self._staged_files: dict[str, list[Path]] = {}
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
@@ -40,7 +46,7 @@ class ComfyUIEngineAdapter:
         self,
         workflow_package: WorkflowPackage,
         graph: dict[str, Any],
-        inputs: dict[str, Any],
+        _inputs: dict[str, Any],
         options: dict[str, Any],
     ) -> EngineJob:
         job_id = str(uuid4())
@@ -55,6 +61,9 @@ class ComfyUIEngineAdapter:
             workflow_id=workflow_package.metadata.id,
             details={"client_id": client_id},
         )
+
+        if self.dashboard_assets_dir is not None:
+            graph, self._staged_files[job_id] = self._stage_assets(graph, job_id)
 
         if options.get("listen_for_events", True):
             await self._start_event_listener(
@@ -419,6 +428,7 @@ class ComfyUIEngineAdapter:
         if progress.job_id in self._terminal_log_job_ids:
             return
         self._terminal_log_job_ids.add(progress.job_id)
+        self._cleanup_staged_files(progress.job_id)
 
         if progress.status == "completed":
             self.log_store.add("info", "ComfyUI execution completed", "comfyui.adapter", job_id=progress.job_id)
@@ -432,6 +442,13 @@ class ComfyUIEngineAdapter:
             )
         elif progress.status == "canceled":
             self.log_store.add("warning", "ComfyUI execution interrupted", "comfyui.adapter", job_id=progress.job_id)
+
+    def _cleanup_staged_files(self, job_id: str) -> None:
+        for path in self._staged_files.pop(job_id, []):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _progress_from_history(self, job_id: str, history_entry: dict[str, Any]) -> JobProgress:
         status = history_entry.get("status", {})
@@ -499,6 +516,74 @@ class ComfyUIEngineAdapter:
         parsed = urlparse(base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
         return urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+    def _stage_assets(
+        self,
+        graph: dict[str, Any],
+        job_id: str,
+    ) -> tuple[dict[str, Any], list[Path]]:
+        """Copy dashboard asset files into ComfyUI's input/staging/ dir.
+
+        For each input whose value looks like an asset_id (UUID + image ext),
+        the asset file is copied to ComfyUI input/staging/ and the graph node
+        value is replaced with the staged filename so ComfyUI can load it.
+        """
+        if self.dashboard_assets_dir is None:
+            return graph, []
+
+        staged: list[Path] = []
+        staged_graph: dict[str, Any] | None = None
+        cloned_inputs_by_node: dict[str, dict[str, Any]] = {}
+
+        # ComfyUI input/ lives next to models/ in the same repo dir.
+        comfyui_input_dir = self.models_dir.parent / "input" / "staging"
+
+        for node_id, node_def in graph.items():
+            if not isinstance(node_def, dict):
+                continue
+            node_inputs = node_def.get("inputs", {})
+            if not isinstance(node_inputs, dict):
+                continue
+            for input_name, value in list(node_inputs.items()):
+                if not isinstance(value, str) or not _ASSET_ID_RE.match(value):
+                    continue
+                asset_path = self.dashboard_assets_dir / value
+                if not asset_path.exists():
+                    self.log_store.add(
+                        "warning",
+                        "Dashboard asset not found; skipping staging",
+                        "comfyui.adapter",
+                        job_id=job_id,
+                        details={"asset_id": value, "node_id": node_id},
+                    )
+                    continue
+                comfyui_input_dir.mkdir(parents=True, exist_ok=True)
+                staged_name = f"{job_id}_{value}"
+                staged_path = comfyui_input_dir / staged_name
+                import shutil as _shutil
+                _shutil.copy2(asset_path, staged_path)
+                staged.append(staged_path)
+                if staged_graph is None:
+                    staged_graph = dict(graph)
+                if node_id not in cloned_inputs_by_node:
+                    node_copy = dict(node_def)
+                    node_inputs = dict(node_inputs)
+                    node_copy["inputs"] = node_inputs
+                    staged_graph[node_id] = node_copy
+                    cloned_inputs_by_node[node_id] = node_inputs
+                else:
+                    node_inputs = cloned_inputs_by_node[node_id]
+                # ComfyUI expects filename relative to its input/ root
+                node_inputs[input_name] = f"staging/{staged_name}"
+                self.log_store.add(
+                    "debug",
+                    "Staged dashboard asset for ComfyUI",
+                    "comfyui.adapter",
+                    job_id=job_id,
+                    details={"asset_id": value, "staged": staged_name, "node_id": node_id},
+                )
+
+        return staged_graph or graph, staged
 
     def _optional_int(self, value: Any) -> int | None:
         try:

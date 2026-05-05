@@ -180,11 +180,11 @@ describe("HomePage", () => {
 
     render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
 
-    fireEvent.click(await screen.findByLabelText("Allow community workflow preparation"));
+    // Wait for the page to load, then pick a file directly (community preparation is auto-allowed).
+    await screen.findByText("Choose File");
     const file = new File(["archive"], "eraser.noofy");
-    fireEvent.change(screen.getByLabelText("Choose File"), {
-      target: { files: [file] },
-    });
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

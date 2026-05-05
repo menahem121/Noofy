@@ -76,6 +76,14 @@ class NoofyPaths:
         return self.runtime_store_dir / "transactions"
 
     @property
+    def user_state_dir(self) -> Path:
+        return self.data_dir / "user-state"
+
+    @property
+    def dashboard_assets_dir(self) -> Path:
+        return self.data_dir / "dashboard-assets"
+
+    @property
     def workflow_store_dir(self) -> Path:
         return self.data_dir / "workflow-store"
 
@@ -144,6 +152,8 @@ class NoofyPaths:
             self.logs_dir,
             self.cache_dir,
             self.temp_dir,
+            self.user_state_dir,
+            self.dashboard_assets_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -185,6 +195,8 @@ class NoofyPaths:
             ("temp_dir", self.temp_dir),
             ("bundled_workflows_dir", self.bundled_workflows_dir),
             ("comfyui_repo_dir", self.comfyui_repo_dir),
+            ("user_state_dir", self.user_state_dir),
+            ("dashboard_assets_dir", self.dashboard_assets_dir),
         ]
 
 

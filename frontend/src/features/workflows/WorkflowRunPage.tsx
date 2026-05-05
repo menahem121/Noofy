@@ -23,7 +23,7 @@ import {
   fetchWorkflowStatus,
   isEngineJob,
   runWorkflow,
-  uploadWorkflowImage,
+  uploadDashboardAsset,
   validateWorkflow,
   type DashboardControlDef,
   type EngineJob,
@@ -37,8 +37,13 @@ import {
   type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
+import type { GridItemLayout } from "../../lib/gridLayout";
+import { useAppPreferences } from "../../lib/useAppPreferences";
+import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
+import { CanvasDashboardView } from "./CanvasDashboardView";
+import { DashboardInputControl } from "./DashboardInputControl";
 
 interface WorkflowRunPageProps {
   workflowId: string;
@@ -75,10 +80,11 @@ const watchableJobStatuses = new Set(["queued", "running"]);
 
 export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
-  const [inputValues, setInputValues] = useState<Record<string, unknown>>({});
+  const [isEditingLayout, setIsEditingLayout] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
 
+  const { viewMode } = useAppPreferences();
   const isRunning = state.progress?.status === "queued" || state.progress?.status === "running";
   const isWaitingForMemory = state.job?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
@@ -104,15 +110,56 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     return map;
   }, [state.packageData]);
 
-  // Seed input values from package defaults when package loads.
-  useEffect(() => {
-    if (!state.packageData) return;
+  // Collect creator defaults from package data.
+  const packageDefaults = useMemo<Record<string, unknown>>(() => {
     const defaults: Record<string, unknown> = {};
-    for (const input of state.packageData.inputs) {
+    for (const input of state.packageData?.inputs ?? []) {
       defaults[input.id] = input.default;
     }
-    setInputValues(defaults);
+    return defaults;
   }, [state.packageData]);
+
+  const dashboardVersion = state.packageData?.dashboard?.version ?? "";
+  const allControls = useMemo(
+    () => state.packageData?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
+    [state.packageData],
+  );
+  const dashboardControlIds = useMemo(() => allControls.map((control) => control.id), [allControls]);
+
+  const {
+    values: inputValues,
+    setValue: setInputValue,
+    restoreDefaults,
+    layoutOverrides,
+    setLayoutOverride,
+    resetLayout,
+    hasLayoutOverrides,
+  } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardControlIds);
+
+  // Build output-images-by-node-id map for canvas output widgets.
+  const outputImagesByNodeId = useMemo<Map<string, string[]>>(() => {
+    const map = new Map<string, string[]>();
+    if (!state.result) return map;
+    for (const output of state.result.outputs) {
+      const outputPayload = output.output;
+      if (!outputPayload || typeof outputPayload !== "object") continue;
+      const nodeIdKey = Object.keys(output).find((k) => k !== "output");
+      const nodeId = typeof output.node_id === "string" ? output.node_id : nodeIdKey;
+      if (!nodeId) continue;
+      const images = (outputPayload as Record<string, unknown>).images;
+      if (!Array.isArray(images)) continue;
+      const imageUrls: string[] = [];
+      for (const image of images) {
+        if (image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
+          imageUrls.push(image.view_url);
+        }
+      }
+      if (imageUrls.length > 0) {
+        map.set(nodeId, [...(map.get(nodeId) ?? []), ...imageUrls]);
+      }
+    }
+    return map;
+  }, [state.result]);
 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -197,8 +244,8 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
 
   async function handleImageUpload(inputId: string, file: File) {
     try {
-      const { filename } = await uploadWorkflowImage(workflowId, file);
-      setInputValues((current) => ({ ...current, [inputId]: filename }));
+      const { asset_id } = await uploadDashboardAsset(workflowId, file);
+      setInputValue(inputId, asset_id);
     } catch {
       // ignore — user will see the input is still empty
     }
@@ -299,11 +346,6 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
         ? 100
         : 0;
 
-  // Separate simple and advanced controls.
-  const allControls = state.packageData?.dashboard?.sections.flatMap((s) => s.controls) ?? [];
-  const simpleControls = allControls.filter((c) => !c.group || c.group === "simple");
-  const advancedControls = allControls.filter((c) => c.group === "advanced");
-  const resultControls = allControls.filter((c) => c.type === "result_image" || c.type === "display_image");
   const inputControls = allControls.filter(
     (c) => c.type !== "result_image" && c.type !== "display_image" && c.input_id,
   );
@@ -312,46 +354,48 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     state.packageData?.dashboard?.status === "configured" && allControls.length > 0,
   );
 
-  return (
-    <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate}>
-      <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
-        <div>
-          <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
-            <ArrowLeft size={16} aria-hidden="true" />
-            Back to Home
-          </button>
-          <div className="detail-eyebrow-row">
-            <p className="eyebrow">{workflowSummary?.publisher_id ?? "Starter"} workflow</p>
-            {trust ? (
-              <span className={`trust-badge trust-badge--${trust.badge_tone}`} title={trust.summary}>
-                {trust.label}
-              </span>
-            ) : null}
-          </div>
-          <h1 id="workflow-title">{workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow"}</h1>
-          <p>
-            {workflowSummary?.description
-              ? workflowSummary.description.replace(/^Milestone \d+\s*/i, "")
-              : "Describe the image you want, then let Noofy run the local workflow in the background."}
-          </p>
+  const pageHeader = (
+    <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
+      <div>
+        <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          Back to Home
+        </button>
+        <div className="detail-eyebrow-row">
+          <p className="eyebrow">{workflowSummary?.publisher_id ?? "Starter"} workflow</p>
+          {trust ? (
+            <span className={`trust-badge trust-badge--${trust.badge_tone}`} title={trust.summary}>
+              {trust.label}
+            </span>
+          ) : null}
         </div>
-        <div className="button-row">
-          <a
-            className="secondary-button"
-            href={exportWorkflowUrl(workflowId)}
-            download
-            aria-label="Share / Save as .noofy"
-          >
-            <Share2 size={15} aria-hidden="true" />
-            Share
-          </a>
-          <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
-            <RotateCcw size={16} aria-hidden="true" />
-            Check Again
-          </button>
-        </div>
-      </section>
+        <h1 id="workflow-title">{workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow"}</h1>
+        <p>
+          {workflowSummary?.description
+            ? workflowSummary.description.replace(/^Milestone \d+\s*/i, "")
+            : "Describe the image you want, then let Noofy run the local workflow in the background."}
+        </p>
+      </div>
+      <div className="button-row">
+        <a
+          className="secondary-button"
+          href={exportWorkflowUrl(workflowId)}
+          download
+          aria-label="Share / Save as .noofy"
+        >
+          <Share2 size={15} aria-hidden="true" />
+          Share
+        </a>
+        <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
+          <RotateCcw size={16} aria-hidden="true" />
+          Check Again
+        </button>
+      </div>
+    </section>
+  );
 
+  const notices = (
+    <>
       {state.error ? (
         <div className="notice notice--error" role="status">
           <AlertCircle size={18} aria-hidden="true" />
@@ -361,7 +405,6 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
           </div>
         </div>
       ) : null}
-
       {state.runtime && !state.runtime.reachable ? (
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
@@ -371,7 +414,6 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
           </div>
         </div>
       ) : null}
-
       {missingModels.length > 0 ? (
         <div className="notice notice--warning" role="status">
           <Download size={18} aria-hidden="true" />
@@ -381,6 +423,56 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
           </div>
         </div>
       ) : null}
+      {memoryStatus ? (
+        <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
+          <AlertCircle size={16} aria-hidden="true" />
+          <div>
+            <strong>{memoryStatusTitle(memoryStatus.state)}</strong>
+            <span>{memoryStatus.message}</span>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (hasDashboard && viewMode === "canvas") {
+    return (
+      <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate}>
+        {pageHeader}
+        {notices}
+        <CanvasDashboardView
+          controls={allControls}
+          inputIndex={inputIndex}
+          outputIndex={outputIndex}
+          outputImagesByNodeId={outputImagesByNodeId}
+          inputValues={inputValues}
+          layoutOverrides={layoutOverrides}
+          isEditingLayout={isEditingLayout}
+          hasLayoutOverrides={hasLayoutOverrides}
+          runState={{
+            isRunning,
+            canRun,
+            canCancel,
+            progress: state.progress,
+            progressPercent,
+          }}
+          onChange={(inputId, value) => setInputValue(inputId, value)}
+          onImageUpload={handleImageUpload}
+          onRun={() => void handleRun()}
+          onCancel={() => void handleCancel()}
+          onRestoreDefaults={() => void restoreDefaults()}
+          onToggleEditLayout={() => setIsEditingLayout((v) => !v)}
+          onResetLayout={() => void resetLayout()}
+          onLayoutOverride={(controlId: string, layout: GridItemLayout) => void setLayoutOverride(controlId, layout)}
+        />
+      </AppLayout>
+    );
+  }
+
+  return (
+    <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate}>
+      {pageHeader}
+      {notices}
 
       <section className="run-workspace">
         <form className="run-panel" onSubmit={(event) => event.preventDefault()}>
@@ -400,15 +492,14 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
               controls={inputControls}
               inputIndex={inputIndex}
               inputValues={inputValues}
-              workflowId={workflowId}
-              onChange={(id, value) => setInputValues((current) => ({ ...current, [id]: value }))}
+              onChange={(id, value) => setInputValue(id, value)}
               onImageUpload={handleImageUpload}
             />
           ) : (
             <FallbackInputs
               inputValues={inputValues}
               inputs={state.packageData?.inputs ?? []}
-              onChange={(id, value) => setInputValues((current) => ({ ...current, [id]: value }))}
+              onChange={(id, value) => setInputValue(id, value)}
             />
           )}
 
@@ -468,16 +559,6 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
               </div>
             </div>
           ) : null}
-
-          {memoryStatus ? (
-            <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
-              <AlertCircle size={16} aria-hidden="true" />
-              <div>
-                <strong>{memoryStatusTitle(memoryStatus.state)}</strong>
-                <span>{memoryStatus.message}</span>
-              </div>
-            </div>
-          ) : null}
         </aside>
       </section>
     </AppLayout>
@@ -490,14 +571,12 @@ function DashboardInputControls({
   controls,
   inputIndex,
   inputValues,
-  workflowId,
   onChange,
   onImageUpload,
 }: {
   controls: DashboardControlDef[];
   inputIndex: Map<string, WorkflowInputDef>;
   inputValues: Record<string, unknown>;
-  workflowId: string;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
 }) {
@@ -508,16 +587,13 @@ function DashboardInputControls({
         const input = inputIndex.get(control.input_id);
         if (!input) return null;
         const value = inputValues[input.id];
-        const validation = input.validation ?? {};
 
         return (
-          <ControlWidget
+          <DashboardInputControl
             key={control.id}
             control={control}
             input={input}
             value={value}
-            validation={validation}
-            workflowId={workflowId}
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
           />
@@ -525,163 +601,6 @@ function DashboardInputControls({
       })}
     </>
   );
-}
-
-function ControlWidget({
-  control,
-  input,
-  value,
-  validation,
-  workflowId,
-  onChange,
-  onImageUpload,
-}: {
-  control: DashboardControlDef;
-  input: WorkflowInputDef;
-  value: unknown;
-  validation: Record<string, unknown>;
-  workflowId: string;
-  onChange: (value: unknown) => void;
-  onImageUpload: (file: File) => Promise<void>;
-}) {
-  const label = control.label || input.label;
-  const description = control.description;
-
-  switch (control.type) {
-    case "textarea":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <textarea
-            value={typeof value === "string" ? value : ""}
-            rows={5}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </label>
-      );
-
-    case "string_field":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <input
-            type="text"
-            value={typeof value === "string" ? value : ""}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </label>
-      );
-
-    case "int_field":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <input
-            type="number"
-            value={typeof value === "number" ? value : 0}
-            min={typeof validation.min === "number" ? validation.min : undefined}
-            max={typeof validation.max === "number" ? validation.max : undefined}
-            step={typeof validation.step === "number" ? validation.step : 1}
-            onChange={(e) => onChange(Number(e.target.value))}
-          />
-        </label>
-      );
-
-    case "seed_widget":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <input
-            type="number"
-            min={0}
-            value={typeof value === "number" ? value : 0}
-            onChange={(e) => onChange(Number(e.target.value))}
-          />
-        </label>
-      );
-
-    case "slider":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <input
-            type="range"
-            min={typeof validation.min === "number" ? validation.min : 0}
-            max={typeof validation.max === "number" ? validation.max : 100}
-            step={typeof validation.step === "number" ? validation.step : 1}
-            value={typeof value === "number" ? value : 0}
-            onChange={(e) => onChange(Number(e.target.value))}
-          />
-          <small>{typeof value === "number" ? value : 0}{typeof validation.unit === "string" ? validation.unit : "px"}</small>
-        </label>
-      );
-
-    case "toggle":
-      return (
-        <label className="field-group field-group--inline">
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-        </label>
-      );
-
-    case "load_image":
-    case "load_image_mask":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          {value ? <small className="field-group__hint">Loaded: {String(value)}</small> : null}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void onImageUpload(file);
-            }}
-          />
-        </label>
-      );
-
-    case "select":
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          {description ? <small>{description}</small> : null}
-          <select
-            value={typeof value === "string" || typeof value === "number" ? String(value) : ""}
-            onChange={(e) => onChange(e.target.value)}
-          >
-            {Array.isArray(validation.options)
-              ? (validation.options as string[]).map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))
-              : null}
-          </select>
-        </label>
-      );
-
-    default:
-      return (
-        <label className="field-group">
-          <span>{label}</span>
-          <input
-            type="text"
-            value={typeof value === "string" ? value : String(value ?? "")}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </label>
-      );
-  }
 }
 
 // ─── Fallback inputs (no configured dashboard) ──────────────────────────────

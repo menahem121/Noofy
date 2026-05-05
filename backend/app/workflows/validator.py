@@ -51,11 +51,11 @@ class WorkflowPackageValidator:
                     else:
                         input_ids_referenced.add(control.input_id)
 
-                # result_image control must reference a known output.
-                if control.type == "result_image":
+                # Output image controls must reference a known output.
+                if control.type in {"display_image", "result_image"}:
                     if not control.output_id:
                         errors.append(
-                            f"Dashboard control '{control.id}' is type 'result_image' but has no output_id."
+                            f"Dashboard control '{control.id}' is type '{control.type}' but has no output_id."
                         )
                     elif control.output_id not in output_ids:
                         errors.append(

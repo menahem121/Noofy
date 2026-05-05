@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 
 import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
+import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { defaultLayoutForWidgetType, WIDGET_SIZE_PRESETS, type WidgetSizePreset } from "../../lib/widgetSizes";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import {
@@ -100,8 +102,11 @@ export function DashboardBuilderLayoutPage({
   const [schema, setSchema] = useState<DashboardSchema>(() => initialSchema ?? buildInitialDashboard(workflow));
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
+  const activeDragWidgetIdRef = useRef<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [savedFlash, setSavedFlash] = useState<"draft" | "saved" | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -120,6 +125,7 @@ export function DashboardBuilderLayoutPage({
   );
 
   function handleDragStart(event: DragEvent, widgetId: string) {
+    activeDragWidgetIdRef.current = widgetId;
     setActiveDragWidgetId(widgetId);
     setDragPreview(null);
     event.dataTransfer.effectAllowed = "move";
@@ -130,7 +136,7 @@ export function DashboardBuilderLayoutPage({
   function handleCanvasDragOver(event: DragEvent) {
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    const widgetId = activeDragWidgetId ?? readDragPayload(event)?.widgetId;
+    const widgetId = activeDragWidgetIdRef.current ?? readDragPayload(event)?.widgetId;
     if (!widgetId) return;
 
     const widget = schema.widgets.find((candidate) => candidate.id === widgetId);
@@ -162,7 +168,8 @@ export function DashboardBuilderLayoutPage({
 
   function handleCanvasDrop(event: DragEvent) {
     event.preventDefault();
-    const widgetId = dragPreview?.widgetId ?? activeDragWidgetId ?? readDragPayload(event)?.widgetId;
+    const payload = readDragPayload(event);
+    const widgetId = payload?.widgetId ?? activeDragWidgetIdRef.current;
     if (!widgetId) {
       clearDragState();
       return;
@@ -174,7 +181,7 @@ export function DashboardBuilderLayoutPage({
       return;
     }
 
-    const desiredLayout = dragPreview?.layout ?? layoutFromPointer(event, widget);
+    const desiredLayout = layoutFromPointer(event, widget);
     if (!desiredLayout) {
       clearDragState();
       return;
@@ -195,6 +202,7 @@ export function DashboardBuilderLayoutPage({
   }
 
   function clearDragState() {
+    activeDragWidgetIdRef.current = null;
     setActiveDragWidgetId(null);
     setDragPreview(null);
   }
@@ -222,7 +230,7 @@ export function DashboardBuilderLayoutPage({
     if (!canvas) return null;
 
     const rect = canvas.getBoundingClientRect();
-    const baseLayout = widget.layout ?? defaultLayoutForWidget(widget);
+    const baseLayout = widget.layout ?? defaultLayoutForWidgetType(widget.widgetType);
     const fitted = fitLayout(baseLayout, schema.layout.gridColumns);
     const columnWidth = rect.width / schema.layout.gridColumns;
     const rawX = Math.floor((event.clientX - rect.left - (fitted.w * columnWidth) / 2) / columnWidth);
@@ -249,24 +257,33 @@ export function DashboardBuilderLayoutPage({
 
   function handleSaveDraft() {
     saveLayoutSchema({ ...schema, status: "draft" });
+    setSaveError(null);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
   function handleSaveDashboard() {
-    if (!allWidgetsPlaced) return;
+    if (!allWidgetsPlaced || isSavingDashboard) return;
     const targetId = workflowId ?? schema.workflowId;
     const payload = toBackendPayload(schema);
+    setIsSavingDashboard(true);
+    setSaveError(null);
     saveDashboard(targetId, payload)
       .then(() => {
         setSavedFlash("saved");
         window.setTimeout(() => onSaveComplete(targetId), 300);
       })
-      .catch(() => {
-        // Fall back to local storage so the user doesn't lose work.
-        window.localStorage.setItem(`noofy.dashboardLayout.${targetId}`, JSON.stringify(schema));
-        setSavedFlash("saved");
-        window.setTimeout(() => onSaveComplete(targetId), 300);
+      .catch((error) => {
+        window.localStorage.setItem(`noofy.builderDraft.${targetId}`, JSON.stringify(schema));
+        setSavedFlash(null);
+        setSaveError(
+          error instanceof Error
+            ? error.message
+            : "Dashboard could not be saved. A local draft was kept.",
+        );
+      })
+      .finally(() => {
+        setIsSavingDashboard(false);
       });
   }
 
@@ -291,6 +308,11 @@ export function DashboardBuilderLayoutPage({
                 <span />
                 <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft saved"}</span>
               </div>
+            ) : saveError ? (
+              <div className="status-pill status-pill--error" role="status" title={saveError}>
+                <span />
+                <span>Save failed. Draft kept.</span>
+              </div>
             ) : (
               <p className={`builder-layout-save-helper ${allWidgetsPlaced ? "builder-layout-save-helper--ready" : ""}`}>
                 {helperCopy}
@@ -300,9 +322,14 @@ export function DashboardBuilderLayoutPage({
               <Save size={15} aria-hidden="true" />
               Save as draft
             </button>
-            <button className="primary-button primary-button--compact" type="button" disabled={!allWidgetsPlaced} onClick={handleSaveDashboard}>
+            <button
+              className="primary-button primary-button--compact"
+              type="button"
+              disabled={!allWidgetsPlaced || isSavingDashboard}
+              onClick={handleSaveDashboard}
+            >
               <CheckCircle2 size={16} aria-hidden="true" />
-              Save Dashboard
+              {isSavingDashboard ? "Saving..." : "Save Dashboard"}
             </button>
           </div>
         </header>
@@ -378,6 +405,14 @@ export function DashboardBuilderLayoutPage({
                     onRemove={() => removeWidget(widget.id)}
                     onDragStart={handleDragStart}
                     onDragEnd={handleDragEnd}
+                    onPresetChange={(newLayout) =>
+                      setSchema((current) => ({
+                        ...current,
+                        widgets: current.widgets.map((w) =>
+                          w.id === widget.id ? { ...w, layout: newLayout } : w,
+                        ),
+                      }))
+                    }
                   />
                 ) : null,
               )}
@@ -441,6 +476,7 @@ function PlacedDashboardWidget({
   onRemove,
   onDragStart,
   onDragEnd,
+  onPresetChange,
   preview = false,
 }: {
   widget: DashboardWidget;
@@ -453,6 +489,7 @@ function PlacedDashboardWidget({
   onRemove: () => void;
   onDragStart: (event: DragEvent, widgetId: string) => void;
   onDragEnd: () => void;
+  onPresetChange?: (layout: DashboardWidgetLayout) => void;
   preview?: boolean;
 }) {
   const Icon = WIDGET_ICONS[widget.widgetType];
@@ -497,6 +534,13 @@ function PlacedDashboardWidget({
       </header>
 
       <WidgetSurfacePreview widget={widget} />
+
+      {selected && !preview && onPresetChange ? (
+        <div onClick={(e) => e.stopPropagation()}>
+          <p style={{ margin: "6px 0 4px", fontSize: 11, color: "var(--text-muted)", fontWeight: 650 }}>Size</p>
+          <SizePresetPicker current={layout} onChange={onPresetChange} />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -623,6 +667,37 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   return null;
 }
 
+// ─── Size preset UI ───────────────────────────────────────────────────────────
+
+const ALL_PRESETS: WidgetSizePreset[] = ["compact", "standard", "wide", "media", "media-large"];
+
+function SizePresetPicker({
+  current,
+  onChange,
+}: {
+  current: DashboardWidgetLayout;
+  onChange: (layout: DashboardWidgetLayout) => void;
+}) {
+  return (
+    <div className="size-preset-picker">
+      {ALL_PRESETS.map((preset) => {
+        const def = WIDGET_SIZE_PRESETS[preset];
+        const isActive = current.w === def.w && current.h === def.h;
+        return (
+          <button
+            key={preset}
+            type="button"
+            className={`size-preset-btn ${isActive ? "size-preset-btn--active" : ""}`}
+            onClick={() => onChange({ ...current, w: def.w, h: def.h, minW: def.w, minH: def.h })}
+          >
+            {def.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function readDragPayload(event: DragEvent): { widgetId: string } | null {
   const raw = event.dataTransfer.getData(DRAG_MIME_TYPE);
   const fallback = event.dataTransfer.getData("text/plain");
@@ -643,60 +718,10 @@ function readDragPayload(event: DragEvent): { widgetId: string } | null {
   return null;
 }
 
-function defaultLayoutForWidget(widget: DashboardWidget): DashboardWidgetLayout {
-  if (widget.widgetType === "textarea") return { x: 0, y: 0, w: 5, h: 3, minW: 3, minH: 2 };
-  if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") return { x: 0, y: 0, w: 4, h: 3, minW: 3, minH: 2 };
-  if (widget.widgetType === "display_image") return { x: 0, y: 0, w: 5, h: 5, minW: 4, minH: 4 };
-  if (widget.widgetType === "slider") return { x: 0, y: 0, w: 4, h: 2, minW: 3, minH: 2 };
-  return { x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 };
-}
-
-function fitLayout(layout: DashboardWidgetLayout, columns: number): DashboardWidgetLayout {
-  const w = clamp(layout.w, layout.minW ?? 2, columns);
-  return {
-    ...layout,
-    w,
-    h: Math.max(layout.h, layout.minH ?? 2),
-    x: clamp(layout.x, 0, columns - w),
-    y: Math.max(0, layout.y),
-  };
-}
-
-function findAvailableLayout(
-  widgetId: string,
-  desired: DashboardWidgetLayout,
-  widgets: DashboardWidget[],
-  columns: number,
-): DashboardWidgetLayout {
-  const fitted = fitLayout(desired, columns);
-  if (!hasLayoutCollision(widgetId, fitted, widgets)) return fitted;
-
-  for (let y = fitted.y; y < fitted.y + 40; y += 1) {
-    for (let x = 0; x <= columns - fitted.w; x += 1) {
-      const candidate = { ...fitted, x, y };
-      if (!hasLayoutCollision(widgetId, candidate, widgets)) return candidate;
-    }
-  }
-
-  const maxY = widgets.reduce((max, widget) => (widget.layout ? Math.max(max, widget.layout.y + widget.layout.h) : max), 0);
-  return { ...fitted, x: 0, y: maxY + 1 };
-}
-
-function hasLayoutCollision(widgetId: string, layout: DashboardWidgetLayout, widgets: DashboardWidget[]) {
-  return widgets.some((widget) => {
-    if (widget.id === widgetId || !widget.layout) return false;
-    return layoutsOverlap(layout, widget.layout);
-  });
-}
-
-function layoutsOverlap(a: DashboardWidgetLayout, b: DashboardWidgetLayout) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function saveLayoutSchema(schema: DashboardSchema & { status: "draft" | "configured" }) {
+  window.localStorage.setItem(`noofy.builderDraft.${schema.workflowId}`, JSON.stringify(schema));
 }
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function saveLayoutSchema(schema: DashboardSchema & { status: "draft" | "configured" }) {
-  window.localStorage.setItem(`noofy.dashboardLayout.${schema.workflowId}`, JSON.stringify(schema));
 }
