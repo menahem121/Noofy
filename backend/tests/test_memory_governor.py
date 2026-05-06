@@ -6,11 +6,13 @@ from pydantic import ValidationError
 from app.engine.diagnostics import LogStore
 from app.runtime.memory_governor import (
     FallbackMemoryObserver,
+    GpuProcessMemoryUsage,
     LocalMemoryEvidenceSummary,
     LocalMemoryLearningStore,
     LocalMemoryObservation,
     MachineMemorySnapshot,
     MemoryAdmissionRequest,
+    MemoryAttributionQuality,
     MemoryBackend,
     MemoryDecisionAction,
     MemoryGovernorDecision,
@@ -18,10 +20,16 @@ from app.runtime.memory_governor import (
     MemoryPressureLevel,
     MemoryReleaseStatus,
     MemoryRiskLevel,
+    MemorySampleWindow,
+    MemorySignalQuality,
+    NvmlError,
+    NvmlMemoryObserver,
     NvidiaSmiMemoryObserver,
+    ProcessTreeMemoryObserver,
     RunnerMemorySnapshot,
     SystemMemoryObserver,
     UnavailableMemoryObserver,
+    WindowsGpuMemoryObserver,
     WorkflowMemoryEstimate,
     WorkflowMemoryEstimateRequest,
     build_workflow_memory_estimate,
@@ -57,10 +65,31 @@ def test_machine_memory_snapshot_validates_bounds_and_forbids_extra_fields() -> 
         total_ram_mb=64_000,
         free_ram_mb=50_000,
         memory_pressure=MemoryPressureLevel.LOW,
+        signal_quality=MemorySignalQuality.BACKEND_API,
+        signal_sources=["nvml", "system_ram"],
+        pressure_reasons=["vram_free_ratio_medium"],
+        runner_id="runner-a",
+        job_id="job-a",
+        workflow_id="workflow-a",
+        runner_root_pid=100,
+        runner_child_pids=[101, 102],
+        sample_window=MemorySampleWindow.EXECUTION,
+        attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+        attribution_sources=["process_tree_rss"],
+        attribution_reasons=["runner_process_tree_rss"],
+        process_tree_ram_mb=2048,
     )
 
     assert snapshot.backend is MemoryBackend.CUDA
     assert snapshot.free_vram_mb == 18_000
+    assert snapshot.signal_quality is MemorySignalQuality.BACKEND_API
+    assert snapshot.signal_sources == ["nvml", "system_ram"]
+    assert snapshot.pressure_reasons == ["vram_free_ratio_medium"]
+    assert snapshot.runner_root_pid == 100
+    assert snapshot.runner_child_pids == [101, 102]
+    assert snapshot.sample_window is MemorySampleWindow.EXECUTION
+    assert snapshot.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
+    assert snapshot.process_tree_ram_mb == 2048
 
     with pytest.raises(ValidationError):
         MachineMemorySnapshot(total_vram_mb=8_000, free_vram_mb=9_000)
@@ -180,6 +209,9 @@ def test_memory_governor_decision_serializes_and_records_diagnostics() -> None:
             backend=MemoryBackend.CUDA,
             total_vram_mb=24_000,
             free_vram_mb=8_000,
+            signal_quality=MemorySignalQuality.BACKEND_API,
+            signal_sources=["nvml"],
+            pressure_reasons=["vram_free_ratio_medium"],
         ),
     )
 
@@ -188,6 +220,8 @@ def test_memory_governor_decision_serializes_and_records_diagnostics() -> None:
     assert dumped["action"] == "evict_then_start"
     assert dumped["workflow_estimate"]["memory_class"] == "gpu_heavy"
     assert dumped["machine_snapshot"]["backend"] == "cuda"
+    assert dumped["signal_quality"] == "unknown"
+    assert dumped["machine_snapshot"]["signal_sources"] == ["nvml"]
 
     store = LogStore()
     event = record_memory_governor_decision(store, decision)
@@ -206,6 +240,95 @@ def test_memory_governor_decision_serializes_and_records_diagnostics() -> None:
         )
 
 
+def test_nvml_memory_observer_parses_cuda_snapshot_without_hardware() -> None:
+    class FakeNvmlApi:
+        def read_memory(self) -> tuple[str | None, int | None, int | None]:
+            return "NVIDIA RTX", 24_576, 20_480
+
+        def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+            return []
+
+    snapshot = NvmlMemoryObserver(api=FakeNvmlApi()).snapshot()
+
+    assert snapshot.available is True
+    assert snapshot.backend is MemoryBackend.CUDA
+    assert snapshot.device_name == "NVIDIA RTX"
+    assert snapshot.total_vram_mb == 24_576
+    assert snapshot.free_vram_mb == 20_480
+    assert snapshot.signal_quality is MemorySignalQuality.BACKEND_API
+    assert "nvml" in snapshot.signal_sources
+    assert snapshot.error is None
+
+
+def test_nvml_memory_observer_maps_process_gpu_memory_to_runner_pids() -> None:
+    class FakeNvmlApi:
+        def read_memory(self) -> tuple[str | None, int | None, int | None]:
+            return "NVIDIA RTX", 24_576, 20_480
+
+        def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+            return [
+                GpuProcessMemoryUsage(pid=100, used_vram_mb=1200),
+                GpuProcessMemoryUsage(pid=101, used_vram_mb=700),
+                GpuProcessMemoryUsage(pid=999, used_vram_mb=4096),
+            ]
+
+    sample = NvmlMemoryObserver(api=FakeNvmlApi()).sample_process_vram({100, 101, 102})
+
+    assert sample.available is True
+    assert sample.process_tree_vram_mb == 1900
+    assert sample.matched_pids == [100, 101]
+    assert sample.attribution_quality is MemoryAttributionQuality.PROCESS_EXACT
+    assert sample.attribution_sources == ["nvml_process"]
+
+
+def test_nvml_memory_observer_reports_weak_gpu_attribution_when_pids_do_not_match() -> None:
+    class FakeNvmlApi:
+        def read_memory(self) -> tuple[str | None, int | None, int | None]:
+            return "NVIDIA RTX", 24_576, 20_480
+
+        def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+            return [GpuProcessMemoryUsage(pid=999, used_vram_mb=4096)]
+
+    sample = NvmlMemoryObserver(api=FakeNvmlApi()).sample_process_vram({100, 101})
+
+    assert sample.available is False
+    assert sample.process_tree_vram_mb is None
+    assert sample.attribution_quality is MemoryAttributionQuality.UNAVAILABLE
+    assert "nvml_process_memory_no_matching_pid" in sample.attribution_reasons
+
+
+def test_nvml_memory_observer_returns_unavailable_when_library_is_missing() -> None:
+    class MissingNvmlApi:
+        def read_memory(self) -> tuple[str | None, int | None, int | None]:
+            raise FileNotFoundError("missing")
+
+        def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+            raise FileNotFoundError("missing")
+
+    snapshot = NvmlMemoryObserver(api=MissingNvmlApi()).snapshot()
+
+    assert snapshot.available is False
+    assert snapshot.backend is MemoryBackend.CUDA
+    assert snapshot.signal_quality is MemorySignalQuality.UNAVAILABLE
+    assert snapshot.signal_sources == ["nvml"]
+    assert snapshot.error == "nvml_not_found"
+
+
+def test_nvml_memory_observer_returns_unavailable_on_nvml_errors() -> None:
+    class ErrorNvmlApi:
+        def read_memory(self) -> tuple[str | None, int | None, int | None]:
+            raise NvmlError("init_failed:1")
+
+        def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+            raise NvmlError("process_failed:1")
+
+    snapshot = NvmlMemoryObserver(api=ErrorNvmlApi()).snapshot()
+
+    assert snapshot.available is False
+    assert snapshot.signal_quality is MemorySignalQuality.UNAVAILABLE
+    assert snapshot.error == "nvml_error:init_failed:1"
+
+
 def test_nvidia_smi_memory_observer_parses_cuda_snapshot() -> None:
     def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
         assert command[0] == "nvidia-smi"
@@ -219,6 +342,8 @@ def test_nvidia_smi_memory_observer_parses_cuda_snapshot() -> None:
     assert snapshot.total_vram_mb == 23028
     assert snapshot.free_vram_mb == 17120
     assert snapshot.memory_pressure is MemoryPressureLevel.LOW
+    assert snapshot.signal_quality is MemorySignalQuality.BACKEND_API
+    assert "nvidia_smi" in snapshot.signal_sources
     assert snapshot.error is None
 
 
@@ -231,6 +356,8 @@ def test_nvidia_smi_memory_observer_returns_unavailable_snapshot_for_failures() 
     assert snapshot.available is False
     assert snapshot.backend is MemoryBackend.CUDA
     assert snapshot.total_vram_mb is None
+    assert snapshot.signal_quality is MemorySignalQuality.UNAVAILABLE
+    assert snapshot.signal_sources == ["nvidia_smi"]
     assert snapshot.error == "driver unavailable"
 
 
@@ -244,7 +371,78 @@ def test_nvidia_smi_memory_observer_allows_partial_data() -> None:
     assert snapshot.device_name == "NVIDIA A10G"
     assert snapshot.total_vram_mb == 23028
     assert snapshot.free_vram_mb is None
-    assert snapshot.memory_pressure is MemoryPressureLevel.UNKNOWN
+    assert snapshot.signal_quality is MemorySignalQuality.BACKEND_API
+
+
+def test_windows_gpu_memory_observer_parses_directml_snapshot() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        assert command[0] == "powershell"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"device_name":"AMD Radeon","total_vram_bytes":8589934592,"dedicated_used_bytes":2147483648}',
+            stderr="",
+        )
+
+    snapshot = WindowsGpuMemoryObserver(command_runner=runner).snapshot()
+
+    assert snapshot.available is True
+    assert snapshot.backend is MemoryBackend.DIRECTML
+    assert snapshot.device_name == "AMD Radeon"
+    assert snapshot.total_vram_mb == 8192
+    assert snapshot.free_vram_mb == 6144
+    assert snapshot.memory_pressure is MemoryPressureLevel.LOW
+    assert snapshot.signal_quality is MemorySignalQuality.SYSTEM_SAMPLE
+    assert "windows_gpu_counters" in snapshot.signal_sources
+    assert "win32_video_controller" in snapshot.signal_sources
+
+
+def test_windows_gpu_memory_observer_falls_back_to_ram_when_counters_fail() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="counter unavailable")
+
+    snapshot = WindowsGpuMemoryObserver(command_runner=runner).snapshot()
+
+    assert snapshot.backend is MemoryBackend.DIRECTML
+    assert snapshot.signal_quality in {MemorySignalQuality.SYSTEM_SAMPLE, MemorySignalQuality.UNAVAILABLE}
+    assert snapshot.error == "counter unavailable"
+
+
+def test_process_tree_memory_observer_sums_root_and_children() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        assert command[:2] == ["ps", "-axo"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="""
+100 1 204800
+101 100 102400
+102 101 51200
+999 1 409600
+""",
+            stderr="",
+        )
+
+    sample = ProcessTreeMemoryObserver(command_runner=runner, platform_name="Linux").sample(100)
+
+    assert sample.available is True
+    assert sample.root_pid == 100
+    assert sample.child_pids == [101, 102]
+    assert sample.process_tree_ram_mb == 350
+    assert sample.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
+    assert sample.attribution_sources == ["process_tree_rss"]
+
+
+def test_process_tree_memory_observer_handles_missing_process() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="999 1 409600\n", stderr="")
+
+    sample = ProcessTreeMemoryObserver(command_runner=runner, platform_name="Linux").sample(100)
+
+    assert sample.available is False
+    assert sample.root_pid == 100
+    assert sample.process_tree_ram_mb is None
+    assert sample.error == "runner_process_not_found"
 
 
 def test_system_and_unavailable_memory_observers_return_structured_snapshots() -> None:
@@ -253,9 +451,44 @@ def test_system_and_unavailable_memory_observers_return_structured_snapshots() -
 
     assert system_snapshot.backend is MemoryBackend.CPU
     assert system_snapshot.observed_at is not None
+    assert system_snapshot.signal_quality in {
+        MemorySignalQuality.SYSTEM_SAMPLE,
+        MemorySignalQuality.UNAVAILABLE,
+    }
     assert unavailable_snapshot.available is False
     assert unavailable_snapshot.backend is MemoryBackend.MPS
+    assert unavailable_snapshot.signal_quality is MemorySignalQuality.UNAVAILABLE
     assert unavailable_snapshot.error == "not implemented yet"
+
+
+def test_system_memory_observer_uses_linux_psi_when_available() -> None:
+    psi_text = """
+some avg10=12.50 avg60=3.00 avg300=0.20 total=1234
+full avg10=0.00 avg60=0.00 avg300=0.00 total=42
+"""
+
+    snapshot = SystemMemoryObserver(linux_psi_reader=lambda: psi_text).snapshot()
+
+    assert snapshot.memory_pressure is MemoryPressureLevel.HIGH
+    assert "linux_psi" in snapshot.signal_sources
+    assert "linux_psi_some_high" in snapshot.pressure_reasons
+
+
+def test_system_memory_observer_ignores_unavailable_linux_psi() -> None:
+    snapshot = SystemMemoryObserver(linux_psi_reader=lambda: None).snapshot()
+
+    assert "linux_psi" not in snapshot.signal_sources
+    assert snapshot.signal_quality in {
+        MemorySignalQuality.SYSTEM_SAMPLE,
+        MemorySignalQuality.UNAVAILABLE,
+    }
+
+
+def test_system_memory_observer_reports_invalid_linux_psi_without_failing() -> None:
+    snapshot = SystemMemoryObserver(linux_psi_reader=lambda: "not psi data").snapshot()
+
+    assert "linux_psi" in snapshot.signal_sources
+    assert "linux_psi_parse_failed" in snapshot.pressure_reasons
 
 
 def test_fallback_memory_observer_uses_ram_snapshot_when_cuda_is_unavailable() -> None:
@@ -290,6 +523,32 @@ def test_memory_pressure_from_free_ratio() -> None:
     assert memory_pressure_from_free_ratio(24_000, 4_000) is MemoryPressureLevel.MEDIUM
     assert memory_pressure_from_free_ratio(24_000, 2_000) is MemoryPressureLevel.HIGH
     assert memory_pressure_from_free_ratio(None, 2_000) is MemoryPressureLevel.UNKNOWN
+
+
+def test_memory_decision_carries_snapshot_signal_metadata() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-a",
+                RunnerMemoryClass.GPU_LIGHT,
+                1200,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+            ),
+            machine_snapshot=MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=9_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+                signal_quality=MemorySignalQuality.BACKEND_API,
+                signal_sources=["nvml", "system_ram"],
+                pressure_reasons=[],
+            ),
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.signal_quality is MemorySignalQuality.BACKEND_API
+    assert decision.signal_sources == ["nvml", "system_ram"]
 
 
 def test_wait_for_memory_release_succeeds_after_bounded_polling() -> None:
@@ -562,9 +821,18 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
                 workflow_id="workflow-a",
                 backend=MemoryBackend.CUDA,
                 input_profile_fingerprint="settings-a",
+                runner_id="runner-a",
+                job_id="job-a",
+                runner_root_pid=100,
+                runner_child_pids=[101],
+                sample_window=MemorySampleWindow.EXECUTION,
                 outcome=MemoryObservationOutcome.SUCCESS,
                 peak_vram_mb=7000,
                 peak_ram_mb=3000,
+                process_tree_peak_ram_mb=2600,
+                attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+                attribution_sources=["process_tree_rss"],
+                attribution_reasons=["runner_process_tree_rss"],
                 observed_at="2026-05-03T10:00:00+00:00",
             ),
             LocalMemoryObservation(
@@ -573,6 +841,10 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
                 input_profile_fingerprint="settings-a",
                 outcome=MemoryObservationOutcome.MEMORY_ERROR,
                 peak_vram_mb=9200,
+                system_peak_delta_vram_mb=9200,
+                attribution_quality=MemoryAttributionQuality.SYSTEM_DELTA,
+                attribution_sources=["system_memory_delta"],
+                attribution_reasons=["system_vram_delta_active_job_window"],
                 retry_required=True,
                 eviction_required=True,
                 observed_at="2026-05-03T11:00:00+00:00",
@@ -584,6 +856,10 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
     assert summary.memory_error_runs == 1
     assert summary.observed_peak_vram_mb == 9200
     assert summary.observed_peak_ram_mb == 3000
+    assert summary.process_tree_observed_peak_ram_mb == 2600
+    assert summary.system_observed_peak_delta_vram_mb == 9200
+    assert summary.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
+    assert summary.attribution_sources == ["process_tree_rss", "system_memory_delta"]
     assert summary.evictions_required == 1
     assert summary.retries_required == 1
     assert summary.last_success_at == "2026-05-03T10:00:00+00:00"
@@ -602,9 +878,16 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
             machine_profile_id="machine-a",
             backend=MemoryBackend.CUDA,
             input_profile_fingerprint="settings-a",
+            runner_id="runner-a",
+            job_id="job-a",
+            runner_root_pid=100,
+            runner_child_pids=[101],
             outcome=MemoryObservationOutcome.SUCCESS,
             peak_vram_mb=6800,
             peak_ram_mb=2800,
+            process_tree_peak_ram_mb=2400,
+            attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+            attribution_sources=["process_tree_rss"],
             observed_at="2026-05-03T10:00:00+00:00",
         )
     )
@@ -636,6 +919,9 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
     assert loaded is not None
     assert loaded.successful_runs == 2
     assert loaded.observed_peak_vram_mb == 7100
+    assert loaded.process_tree_observed_peak_ram_mb == 2400
+    assert loaded.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
+    assert loaded.attribution_sources == ["process_tree_rss"]
     assert len(store.list_summaries()) == 1
     assert store.summary_for(workflow_id="workflow-a", backend=MemoryBackend.MPS) is None
 
@@ -739,7 +1025,7 @@ def test_repeated_memory_failure_avoids_same_optimistic_admission() -> None:
     assert estimate.recent_memory_error is True
     assert estimate.confidence is RunnerMemoryEstimateConfidence.LOW
     assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
-    assert decision.reason_code == "gpu_estimate_uncertain"
+    assert decision.reason_code == "recent_memory_error_requires_cleanup_before_retry"
 
 
 def test_memory_admission_allows_large_gpu_high_confidence_heavy_pair() -> None:

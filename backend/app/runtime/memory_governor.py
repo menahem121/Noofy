@@ -1,9 +1,8 @@
-"""Memory Governor schemas and decision records.
+"""Memory Governor observers, schemas, and decision records.
 
-Phase 5f keeps the first Memory Governor layer intentionally pure: typed
-snapshots, estimates, local evidence summaries, and serializable decisions.
-The active runner supervisor can use these records before the full observer and
-policy engine exist, and diagnostics can already persist the decisions.
+The Memory Governor keeps observation, estimate, local learning, and admission
+decisions separate so platform-specific memory signals can improve decisions
+without turning fallback margins into the main policy engine.
 """
 
 from __future__ import annotations
@@ -46,6 +45,39 @@ class MemoryPressureLevel(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    UNKNOWN = "unknown"
+
+
+class MemorySignalQuality(StrEnum):
+    BACKEND_API = "backend_api"
+    BACKEND_BUDGET = "backend_budget"
+    ALLOCATOR = "allocator"
+    PROCESS_SAMPLE = "process_sample"
+    SYSTEM_PRESSURE = "system_pressure"
+    SYSTEM_SAMPLE = "system_sample"
+    HEURISTIC = "heuristic"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class MemoryAttributionQuality(StrEnum):
+    PROCESS_EXACT = "process_exact"
+    PROCESS_TREE = "process_tree"
+    BACKEND_ALLOCATOR = "backend_allocator"
+    ACTIVE_WINDOW_DELTA = "active_window_delta"
+    SYSTEM_DELTA = "system_delta"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class MemorySampleWindow(StrEnum):
+    STARTUP = "startup"
+    MODEL_LOAD = "model_load"
+    BEFORE_SUBMIT = "before_submit"
+    EXECUTION = "execution"
+    AFTER_COMPLETION = "after_completion"
+    CLEANUP = "cleanup"
+    RELEASE = "release"
     UNKNOWN = "unknown"
 
 
@@ -95,6 +127,20 @@ class MachineMemorySnapshot(BaseModel):
     total_ram_mb: int | None = Field(default=None, ge=0)
     free_ram_mb: int | None = Field(default=None, ge=0)
     memory_pressure: MemoryPressureLevel = MemoryPressureLevel.UNKNOWN
+    signal_quality: MemorySignalQuality = MemorySignalQuality.UNKNOWN
+    signal_sources: list[str] = Field(default_factory=list)
+    pressure_reasons: list[str] = Field(default_factory=list)
+    runner_id: str | None = None
+    job_id: str | None = None
+    workflow_id: str | None = None
+    runner_root_pid: int | None = Field(default=None, ge=0)
+    runner_child_pids: list[int] = Field(default_factory=list)
+    sample_window: MemorySampleWindow = MemorySampleWindow.UNKNOWN
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNKNOWN
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
+    process_tree_ram_mb: int | None = Field(default=None, ge=0)
+    process_tree_vram_mb: int | None = Field(default=None, ge=0)
     observed_at: str | None = None
     error: str | None = None
 
@@ -172,6 +218,13 @@ class LocalMemoryEvidenceSummary(BaseModel):
     retries_required: int = Field(default=0, ge=0)
     observed_peak_vram_mb: int | None = Field(default=None, ge=0)
     observed_peak_ram_mb: int | None = Field(default=None, ge=0)
+    process_tree_observed_peak_vram_mb: int | None = Field(default=None, ge=0)
+    process_tree_observed_peak_ram_mb: int | None = Field(default=None, ge=0)
+    system_observed_peak_delta_vram_mb: int | None = Field(default=None, ge=0)
+    system_observed_peak_delta_ram_mb: int | None = Field(default=None, ge=0)
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNKNOWN
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
     last_success_at: str | None = None
     last_memory_error_at: str | None = None
 
@@ -199,10 +252,22 @@ class LocalMemoryObservation(BaseModel):
     machine_profile_id: str | None = None
     backend: MemoryBackend = MemoryBackend.UNKNOWN
     input_profile_fingerprint: str | None = None
+    runner_id: str | None = None
+    job_id: str | None = None
+    runner_root_pid: int | None = Field(default=None, ge=0)
+    runner_child_pids: list[int] = Field(default_factory=list)
+    sample_window: MemorySampleWindow = MemorySampleWindow.UNKNOWN
     outcome: MemoryObservationOutcome = MemoryObservationOutcome.UNKNOWN
     memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN
     peak_vram_mb: int | None = Field(default=None, ge=0)
     peak_ram_mb: int | None = Field(default=None, ge=0)
+    process_tree_peak_vram_mb: int | None = Field(default=None, ge=0)
+    process_tree_peak_ram_mb: int | None = Field(default=None, ge=0)
+    system_peak_delta_vram_mb: int | None = Field(default=None, ge=0)
+    system_peak_delta_ram_mb: int | None = Field(default=None, ge=0)
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNKNOWN
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
     duration_ms: int | None = Field(default=None, ge=0)
     eviction_required: bool = False
     retry_required: bool = False
@@ -287,6 +352,9 @@ class MemoryGovernorDecision(BaseModel):
     required_ram_margin_mb: int | None = Field(default=None, ge=0)
     predicted_free_vram_after_mb: int | None = Field(default=None, ge=0)
     predicted_free_ram_after_mb: int | None = Field(default=None, ge=0)
+    signal_quality: MemorySignalQuality = MemorySignalQuality.UNKNOWN
+    signal_sources: list[str] = Field(default_factory=list)
+    pressure_reasons: list[str] = Field(default_factory=list)
     can_retry_after_cleanup: bool = False
     user_message: str | None = None
     developer_details: dict[str, Any] = Field(default_factory=dict)
@@ -344,6 +412,51 @@ class MachineMemoryObserver(Protocol):
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
+class NvmlError(RuntimeError):
+    """Raised when NVML is present but cannot provide usable memory data."""
+
+
+class NvmlMemoryApi(Protocol):
+    def read_memory(self) -> tuple[str | None, int | None, int | None]:
+        """Return device name, total VRAM MB, and free VRAM MB for the primary GPU."""
+
+    def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+        """Return best-effort per-process GPU memory for the primary GPU."""
+
+
+class GpuProcessMemoryUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pid: int = Field(ge=0)
+    used_vram_mb: int = Field(ge=0)
+
+
+class GpuProcessMemorySample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = False
+    requested_pids: list[int] = Field(default_factory=list)
+    matched_pids: list[int] = Field(default_factory=list)
+    process_tree_vram_mb: int | None = Field(default=None, ge=0)
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNAVAILABLE
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ProcessTreeMemorySample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = False
+    root_pid: int | None = Field(default=None, ge=0)
+    child_pids: list[int] = Field(default_factory=list)
+    process_tree_ram_mb: int | None = Field(default=None, ge=0)
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNAVAILABLE
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
 class UnavailableMemoryObserver:
     def __init__(
         self,
@@ -359,6 +472,8 @@ class UnavailableMemoryObserver:
             available=False,
             backend=self.backend,
             memory_pressure=MemoryPressureLevel.UNKNOWN,
+            signal_quality=MemorySignalQuality.UNAVAILABLE,
+            signal_sources=["unavailable_memory_observer"],
             observed_at=_now_iso(),
             error=self.error,
         )
@@ -367,19 +482,150 @@ class UnavailableMemoryObserver:
 class SystemMemoryObserver:
     """Best-effort RAM observer used for CPU, MPS, DirectML, and fallback paths."""
 
-    def __init__(self, *, backend: MemoryBackend = MemoryBackend.CPU) -> None:
+    def __init__(
+        self,
+        *,
+        backend: MemoryBackend = MemoryBackend.CPU,
+        linux_psi_reader: Callable[[], str | None] | None = None,
+    ) -> None:
         self.backend = backend
+        self._linux_psi_reader = linux_psi_reader
 
     def snapshot(self) -> MachineMemorySnapshot:
-        total_ram_mb, free_ram_mb = _system_ram_mb()
+        total_ram_mb, free_ram_mb, pressure, sources, reasons = _system_ram_signals(
+            linux_psi_reader=self._linux_psi_reader,
+        )
+        has_ram = total_ram_mb is not None or free_ram_mb is not None
         return MachineMemorySnapshot(
-            available=total_ram_mb is not None or free_ram_mb is not None,
+            available=has_ram or "linux_psi" in sources,
             backend=self.backend,
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
-            memory_pressure=memory_pressure_from_free_ratio(total_ram_mb, free_ram_mb),
+            memory_pressure=pressure,
+            signal_quality=_system_signal_quality(has_ram=has_ram, has_psi="linux_psi" in sources),
+            signal_sources=sources,
+            pressure_reasons=reasons,
             observed_at=_now_iso(),
-            error=None if total_ram_mb is not None or free_ram_mb is not None else "system_ram_unavailable",
+            error=None if has_ram else "system_ram_unavailable",
+        )
+
+
+class ProcessTreeMemoryObserver:
+    """Best-effort RSS observer for a runner root process and its children."""
+
+    def __init__(
+        self,
+        *,
+        command_runner: CommandRunner | None = None,
+        platform_name: str | None = None,
+        timeout_seconds: float = 2,
+    ) -> None:
+        self._command_runner = command_runner or self._run_command
+        self._platform_name = platform_name or platform.system()
+        self._timeout_seconds = timeout_seconds
+
+    def sample(self, root_pid: int | None) -> ProcessTreeMemorySample:
+        if root_pid is None:
+            return _unavailable_process_tree_sample(None, "runner_pid_unavailable")
+        try:
+            if self._platform_name == "Windows":
+                result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_PROCESS_TREE_SCRIPT])
+                rows = _parse_windows_process_rows(result.stdout) if result.returncode == 0 else None
+            else:
+                result = self._command_runner(["ps", "-axo", "pid=,ppid=,rss="])
+                rows = _parse_posix_process_rows(result.stdout) if result.returncode == 0 else None
+        except FileNotFoundError:
+            return _unavailable_process_tree_sample(root_pid, "process_observer_command_not_found")
+        except subprocess.TimeoutExpired:
+            return _unavailable_process_tree_sample(root_pid, "process_observer_timeout")
+        except OSError as exc:
+            return _unavailable_process_tree_sample(root_pid, f"process_observer_error:{exc}")
+        if rows is None:
+            error = (result.stderr or result.stdout or "process_observer_failed").strip()
+            return _unavailable_process_tree_sample(root_pid, error)
+        return _process_tree_sample_from_rows(root_pid, rows)
+
+    def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=self._timeout_seconds,
+        )
+
+
+class NvmlMemoryObserver:
+    """Direct NVIDIA GPU observer backed by NVML when the host provides it."""
+
+    def __init__(self, *, api: NvmlMemoryApi | None = None) -> None:
+        self._api = api or _CtypesNvmlApi()
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        try:
+            device_name, total_vram_mb, free_vram_mb = self._api.read_memory()
+        except FileNotFoundError:
+            return _unavailable_cuda_snapshot("nvml_not_found", source="nvml")
+        except NvmlError as exc:
+            return _unavailable_cuda_snapshot(f"nvml_error:{exc}", source="nvml")
+        except OSError as exc:
+            return _unavailable_cuda_snapshot(f"nvml_error:{exc}", source="nvml")
+        except Exception as exc:
+            return _unavailable_cuda_snapshot(f"nvml_error:{exc}", source="nvml")
+
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
+        vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
+        available = total_vram_mb is not None or free_vram_mb is not None
+        return MachineMemorySnapshot(
+            available=available,
+            backend=MemoryBackend.CUDA,
+            device_name=device_name,
+            total_vram_mb=total_vram_mb,
+            free_vram_mb=free_vram_mb,
+            total_ram_mb=total_ram_mb,
+            free_ram_mb=free_ram_mb,
+            memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
+            signal_quality=MemorySignalQuality.BACKEND_API if available else MemorySignalQuality.UNAVAILABLE,
+            signal_sources=(["nvml"] if available else []) + ram_sources,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
+            observed_at=_now_iso(),
+            error=None if available else "nvml_memory_unavailable",
+        )
+
+    def sample_process_vram(self, pids: Iterable[int]) -> GpuProcessMemorySample:
+        requested = sorted({pid for pid in pids if pid >= 0})
+        if not requested:
+            return GpuProcessMemorySample(
+                requested_pids=[],
+                attribution_sources=["nvml"],
+                error="no_process_pids",
+            )
+        try:
+            usages = self._api.read_process_memory()
+        except FileNotFoundError:
+            return _unavailable_gpu_process_sample(requested, "nvml_not_found")
+        except NvmlError as exc:
+            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+        except OSError as exc:
+            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+        except Exception as exc:
+            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+        matched = [usage for usage in usages if usage.pid in requested]
+        if not matched:
+            return GpuProcessMemorySample(
+                requested_pids=requested,
+                attribution_sources=["nvml_process"],
+                attribution_reasons=["nvml_process_memory_no_matching_pid"],
+                error="nvml_process_memory_no_matching_pid",
+            )
+        return GpuProcessMemorySample(
+            available=True,
+            requested_pids=requested,
+            matched_pids=sorted({usage.pid for usage in matched}),
+            process_tree_vram_mb=sum(usage.used_vram_mb for usage in matched),
+            attribution_quality=MemoryAttributionQuality.PROCESS_EXACT,
+            attribution_sources=["nvml_process"],
+            attribution_reasons=["nvml_process_memory_matched_runner_pid"],
         )
 
 
@@ -408,29 +654,99 @@ class NvidiaSmiMemoryObserver:
         try:
             result = self._command_runner(command)
         except FileNotFoundError:
-            return _unavailable_cuda_snapshot("nvidia_smi_not_found")
+            return _unavailable_cuda_snapshot("nvidia_smi_not_found", source="nvidia_smi")
         except subprocess.TimeoutExpired:
-            return _unavailable_cuda_snapshot("nvidia_smi_timeout")
+            return _unavailable_cuda_snapshot("nvidia_smi_timeout", source="nvidia_smi")
         except OSError as exc:
-            return _unavailable_cuda_snapshot(f"nvidia_smi_error:{exc}")
+            return _unavailable_cuda_snapshot(f"nvidia_smi_error:{exc}", source="nvidia_smi")
 
         if result.returncode != 0:
             error = (result.stderr or result.stdout or "nvidia_smi_failed").strip()
-            return _unavailable_cuda_snapshot(error)
+            return _unavailable_cuda_snapshot(error, source="nvidia_smi")
 
         device_name, total_vram_mb, free_vram_mb = _parse_nvidia_smi_memory_row(result.stdout)
-        total_ram_mb, free_ram_mb = _system_ram_mb()
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
+        vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
+        available = total_vram_mb is not None or free_vram_mb is not None
         return MachineMemorySnapshot(
-            available=total_vram_mb is not None or free_vram_mb is not None,
+            available=available,
             backend=MemoryBackend.CUDA,
             device_name=device_name,
             total_vram_mb=total_vram_mb,
             free_vram_mb=free_vram_mb,
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
-            memory_pressure=memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb),
+            memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
+            signal_quality=MemorySignalQuality.BACKEND_API if available else MemorySignalQuality.UNAVAILABLE,
+            signal_sources=(["nvidia_smi"] if available else []) + ram_sources,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
             observed_at=_now_iso(),
-            error=None if total_vram_mb is not None or free_vram_mb is not None else "nvidia_smi_parse_failed",
+            error=None if available else "nvidia_smi_parse_failed",
+        )
+
+    def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=self._timeout_seconds,
+        )
+
+
+class WindowsGpuMemoryObserver:
+    """Best-effort Windows GPU memory observer for DirectML-class fallback.
+
+    Windows does not expose one portable DirectML memory API for every vendor.
+    This observer uses PowerShell performance counters and Win32 video
+    controller metadata when available, and returns structured unavailable or
+    partial snapshots when those signals are missing.
+    """
+
+    def __init__(
+        self,
+        *,
+        command_runner: CommandRunner | None = None,
+        timeout_seconds: float = 3,
+    ) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._command_runner = command_runner or self._run_command
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        try:
+            result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_GPU_MEMORY_SCRIPT])
+        except FileNotFoundError:
+            return _unavailable_directml_snapshot("powershell_not_found")
+        except subprocess.TimeoutExpired:
+            return _unavailable_directml_snapshot("windows_gpu_observer_timeout")
+        except OSError as exc:
+            return _unavailable_directml_snapshot(f"windows_gpu_observer_error:{exc}")
+
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "windows_gpu_observer_failed").strip()
+            return _unavailable_directml_snapshot(error)
+
+        device_name, total_vram_mb, free_vram_mb, error = _parse_windows_gpu_memory_json(result.stdout)
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
+        available = any(value is not None for value in (total_vram_mb, free_vram_mb, total_ram_mb, free_ram_mb))
+        vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
+        gpu_sources = []
+        if device_name is not None or total_vram_mb is not None or free_vram_mb is not None:
+            gpu_sources.extend(["windows_gpu_counters", "win32_video_controller"])
+        return MachineMemorySnapshot(
+            available=available,
+            backend=MemoryBackend.DIRECTML,
+            device_name=device_name,
+            total_vram_mb=total_vram_mb,
+            free_vram_mb=free_vram_mb,
+            total_ram_mb=total_ram_mb,
+            free_ram_mb=free_ram_mb,
+            memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
+            signal_quality=MemorySignalQuality.SYSTEM_SAMPLE if available else MemorySignalQuality.UNAVAILABLE,
+            signal_sources=gpu_sources + ram_sources,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
+            observed_at=_now_iso(),
+            error=error,
         )
 
     def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -459,6 +775,26 @@ class FallbackMemoryObserver:
             return fallback_snapshot
         return primary_snapshot
 
+    def sample_process_vram(self, pids: Iterable[int]) -> GpuProcessMemorySample:
+        primary_sampler = getattr(self.primary, "sample_process_vram", None)
+        if primary_sampler is not None:
+            primary_sample = primary_sampler(pids)
+            if primary_sample.available:
+                return primary_sample
+        fallback_sampler = getattr(self.fallback, "sample_process_vram", None)
+        if fallback_sampler is not None:
+            fallback_sample = fallback_sampler(pids)
+            if fallback_sample.available:
+                return fallback_sample
+            return fallback_sample
+        if primary_sampler is not None:
+            return primary_sample
+        return GpuProcessMemorySample(
+            requested_pids=sorted({pid for pid in pids if pid >= 0}),
+            attribution_sources=["gpu_process_attribution_unavailable"],
+            error="gpu_process_attribution_unavailable",
+        )
+
 
 def default_memory_observer() -> MachineMemoryObserver:
     """Return the product default best-effort memory observer for this host."""
@@ -466,9 +802,23 @@ def default_memory_observer() -> MachineMemoryObserver:
         machine = platform.machine().lower()
         backend = MemoryBackend.MPS if machine in {"arm64", "aarch64"} else MemoryBackend.CPU
         return SystemMemoryObserver(backend=backend)
+    if platform.system() == "Windows":
+        return FallbackMemoryObserver(
+            NvmlMemoryObserver(),
+            FallbackMemoryObserver(
+                NvidiaSmiMemoryObserver(),
+                FallbackMemoryObserver(
+                    WindowsGpuMemoryObserver(),
+                    SystemMemoryObserver(backend=MemoryBackend.DIRECTML),
+                ),
+            ),
+        )
     return FallbackMemoryObserver(
-        NvidiaSmiMemoryObserver(),
-        SystemMemoryObserver(backend=MemoryBackend.CPU),
+        NvmlMemoryObserver(),
+        FallbackMemoryObserver(
+            NvidiaSmiMemoryObserver(),
+            SystemMemoryObserver(backend=MemoryBackend.CPU),
+        ),
     )
 
 
@@ -561,6 +911,56 @@ def memory_pressure_from_free_ratio(total_mb: int | None, free_mb: int | None) -
     if ratio <= 0.25:
         return MemoryPressureLevel.MEDIUM
     return MemoryPressureLevel.LOW
+
+
+def _system_ram_signals(
+    *,
+    linux_psi_reader: Callable[[], str | None] | None = None,
+) -> tuple[int | None, int | None, MemoryPressureLevel, list[str], list[str]]:
+    total_ram_mb, free_ram_mb = _system_ram_mb()
+    ram_pressure = memory_pressure_from_free_ratio(total_ram_mb, free_ram_mb)
+    sources = ["system_ram"] if total_ram_mb is not None or free_ram_mb is not None else []
+    reasons = _free_ratio_pressure_reasons("ram", ram_pressure)
+    psi_text = _read_linux_memory_psi(linux_psi_reader)
+    if psi_text is not None:
+        psi_pressure, psi_reasons = _parse_linux_psi_memory_pressure(psi_text)
+        sources.append("linux_psi")
+        reasons.extend(psi_reasons)
+        ram_pressure = _max_pressure_level(ram_pressure, psi_pressure)
+    return total_ram_mb, free_ram_mb, ram_pressure, sources, reasons
+
+
+def _system_signal_quality(*, has_ram: bool, has_psi: bool) -> MemorySignalQuality:
+    if has_ram:
+        return MemorySignalQuality.SYSTEM_SAMPLE
+    if has_psi:
+        return MemorySignalQuality.SYSTEM_PRESSURE
+    return MemorySignalQuality.UNAVAILABLE
+
+
+def _max_pressure_level(*levels: MemoryPressureLevel) -> MemoryPressureLevel:
+    present = [level for level in levels if level is not MemoryPressureLevel.UNKNOWN]
+    if not present:
+        return MemoryPressureLevel.UNKNOWN
+    return max(present, key=_pressure_rank)
+
+
+def _pressure_rank(level: MemoryPressureLevel) -> int:
+    if level is MemoryPressureLevel.HIGH:
+        return 3
+    if level is MemoryPressureLevel.MEDIUM:
+        return 2
+    if level is MemoryPressureLevel.LOW:
+        return 1
+    return 0
+
+
+def _free_ratio_pressure_reasons(scope: str, level: MemoryPressureLevel) -> list[str]:
+    if level is MemoryPressureLevel.HIGH:
+        return [f"{scope}_free_ratio_high"]
+    if level is MemoryPressureLevel.MEDIUM:
+        return [f"{scope}_free_ratio_medium"]
+    return []
 
 
 def conservative_memory_class(memory_class: RunnerMemoryClass) -> RunnerMemoryClass:
@@ -721,6 +1121,31 @@ def summarize_local_memory_observations(
         retries_required=sum(1 for observation in observations if observation.retry_required),
         observed_peak_vram_mb=_max_optional(observation.peak_vram_mb for observation in observations),
         observed_peak_ram_mb=_max_optional(observation.peak_ram_mb for observation in observations),
+        process_tree_observed_peak_vram_mb=_max_optional(
+            observation.process_tree_peak_vram_mb for observation in observations
+        ),
+        process_tree_observed_peak_ram_mb=_max_optional(
+            observation.process_tree_peak_ram_mb for observation in observations
+        ),
+        system_observed_peak_delta_vram_mb=_max_optional(
+            observation.system_peak_delta_vram_mb for observation in observations
+        ),
+        system_observed_peak_delta_ram_mb=_max_optional(
+            observation.system_peak_delta_ram_mb for observation in observations
+        ),
+        attribution_quality=_best_attribution_quality(
+            observation.attribution_quality for observation in observations
+        ),
+        attribution_sources=_unique_preserving_order(
+            source
+            for observation in observations
+            for source in observation.attribution_sources
+        ),
+        attribution_reasons=_unique_preserving_order(
+            reason
+            for observation in observations
+            for reason in observation.attribution_reasons
+        ),
         last_success_at=_latest_observed_at(successful_observations),
         last_memory_error_at=_latest_observed_at(memory_error_observations),
     )
@@ -729,10 +1154,10 @@ def summarize_local_memory_observations(
 def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDecision:
     """Decide whether the requested workflow can start with current residents.
 
-    This is the v1 MG4 policy core. It is intentionally deterministic and
-    conservative: uncertain GPU estimates deny co-residence, active jobs are
-    queued instead of killed, and idle runners are evicted before surfacing a
-    memory block when that could plausibly make room.
+    This v1 policy is deterministic, pressure-aware, and intentionally reluctant
+    to block: active jobs are queued, idle runners are evicted when useful, and
+    weak evidence becomes a cautious start unless stronger evidence or repeated
+    cleanup failure justifies refusal.
     """
     estimate = request.workflow_estimate
     machine = request.machine_snapshot
@@ -794,7 +1219,7 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
         )
 
     if _gpu_estimate_is_uncertain(estimate):
-        return _memory_shortfall_decision(
+        return _uncertain_gpu_decision(
             estimate,
             machine,
             runners,
@@ -1020,6 +1445,14 @@ def memory_user_status_for_decision(
     queue_id: str | None = None,
 ) -> MemoryUserStatus:
     if decision.action is MemoryDecisionAction.START_CO_RESIDENT:
+        if decision.risk_level is MemoryRiskLevel.HIGH:
+            return MemoryUserStatus(
+                state="memory_warning",
+                message=decision.user_message or "Noofy will try this workflow and watch memory closely.",
+                risk_level=decision.risk_level,
+                queue_id=queue_id,
+                can_retry_after_cleanup=decision.can_retry_after_cleanup,
+            )
         return MemoryUserStatus(
             state="ready_warm_co_resident",
             message="This workflow can stay ready while another workflow is warm.",
@@ -1195,6 +1628,9 @@ def _decision(
         required_ram_margin_mb=required_ram_margin_mb,
         predicted_free_vram_after_mb=predicted_free_vram_after_mb,
         predicted_free_ram_after_mb=predicted_free_ram_after_mb,
+        signal_quality=machine.signal_quality,
+        signal_sources=machine.signal_sources,
+        pressure_reasons=machine.pressure_reasons,
         can_retry_after_cleanup=can_retry_after_cleanup,
         user_message=user_message,
         developer_details=developer_details or {},
@@ -1263,6 +1699,86 @@ def _memory_shortfall_decision(
         required_ram_margin_mb,
         predicted_free_vram_after_mb,
         predicted_free_ram_after_mb,
+    )
+
+
+def _uncertain_gpu_decision(
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+    runners: list[RunnerMemorySnapshot],
+    idle_runners: list[RunnerMemorySnapshot],
+    active_runners: list[RunnerMemorySnapshot],
+    required_vram_margin_mb: int | None,
+    required_ram_margin_mb: int | None,
+    predicted_free_vram_after_mb: int | None,
+    predicted_free_ram_after_mb: int | None,
+    *,
+    reason_code: str,
+) -> MemoryGovernorDecision:
+    if active_runners:
+        active_runner = sorted(active_runners, key=lambda runner: runner.runner_id)[0]
+        return _decision(
+            MemoryDecisionAction.QUEUE_PENDING_MEMORY,
+            MemoryRiskLevel.HIGH,
+            reason_code,
+            "This workflow is waiting until the current GPU work finishes.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            queued_behind_runner_id=active_runner.runner_id,
+            can_retry_after_cleanup=True,
+        )
+
+    candidates = eviction_candidates(idle_runners)
+    if candidates:
+        return _decision(
+            MemoryDecisionAction.EVICT_THEN_START,
+            MemoryRiskLevel.HIGH,
+            reason_code,
+            "Noofy is freeing memory before starting this workflow.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            evict_runner_ids=[runner.runner_id for runner in candidates],
+            can_retry_after_cleanup=True,
+        )
+
+    if estimate.recent_memory_error:
+        return _decision(
+            MemoryDecisionAction.BLOCKED_BY_MEMORY,
+            MemoryRiskLevel.HIGH,
+            "recent_memory_error_requires_cleanup_before_retry",
+            "This workflow needed more memory before, and there is no extra memory cleanup Noofy can do right now.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+        )
+
+    return _decision(
+        MemoryDecisionAction.START_CO_RESIDENT,
+        MemoryRiskLevel.HIGH,
+        f"{reason_code}_cautious_start",
+        "Noofy will try this workflow and watch memory closely.",
+        estimate,
+        machine,
+        runners,
+        required_vram_margin_mb,
+        required_ram_margin_mb,
+        predicted_free_vram_after_mb,
+        predicted_free_ram_after_mb,
+        developer_details={"uncertain_estimate_allowed_to_run": True},
     )
 
 
@@ -1424,6 +1940,40 @@ def _max_optional(values: Iterable[int | None]) -> int | None:
     return max(present) if present else None
 
 
+def _best_attribution_quality(values: Iterable[MemoryAttributionQuality]) -> MemoryAttributionQuality:
+    present = list(values)
+    if not present:
+        return MemoryAttributionQuality.UNKNOWN
+    return max(present, key=_attribution_quality_rank)
+
+
+def _attribution_quality_rank(quality: MemoryAttributionQuality) -> int:
+    if quality is MemoryAttributionQuality.PROCESS_EXACT:
+        return 6
+    if quality is MemoryAttributionQuality.BACKEND_ALLOCATOR:
+        return 5
+    if quality is MemoryAttributionQuality.PROCESS_TREE:
+        return 4
+    if quality is MemoryAttributionQuality.ACTIVE_WINDOW_DELTA:
+        return 3
+    if quality is MemoryAttributionQuality.SYSTEM_DELTA:
+        return 2
+    if quality is MemoryAttributionQuality.UNAVAILABLE:
+        return 1
+    return 0
+
+
+def _unique_preserving_order(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
 def _latest_observed_at(observations: list[LocalMemoryObservation]) -> str | None:
     values = [observation.observed_at for observation in observations if observation.observed_at]
     return max(values) if values else None
@@ -1458,6 +2008,276 @@ def _safe_learning_key(key: str) -> str:
     )
 
 
+class _CtypesNvmlApi:
+    def __init__(self, *, library_path: str | None = None) -> None:
+        self._library_path = library_path
+
+    def read_memory(self) -> tuple[str | None, int | None, int | None]:
+        import ctypes
+        import ctypes.util
+
+        library_path = self._library_path or ctypes.util.find_library("nvidia-ml")
+        if library_path is None:
+            library_path = "nvml.dll" if os.name == "nt" else "libnvidia-ml.so.1"
+        try:
+            library = ctypes.CDLL(library_path)
+        except OSError as exc:
+            raise FileNotFoundError("NVML library not found") from exc
+
+        class NvmlMemoryInfo(ctypes.Structure):
+            _fields_ = [
+                ("total", ctypes.c_ulonglong),
+                ("free", ctypes.c_ulonglong),
+                ("used", ctypes.c_ulonglong),
+            ]
+
+        try:
+            library.nvmlInit_v2.restype = ctypes.c_int
+            library.nvmlShutdown.restype = ctypes.c_int
+            library.nvmlDeviceGetCount_v2.argtypes = [ctypes.POINTER(ctypes.c_uint)]
+            library.nvmlDeviceGetCount_v2.restype = ctypes.c_int
+            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+            library.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_int
+            library.nvmlDeviceGetMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(NvmlMemoryInfo)]
+            library.nvmlDeviceGetMemoryInfo.restype = ctypes.c_int
+            library.nvmlDeviceGetName.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+            library.nvmlDeviceGetName.restype = ctypes.c_int
+        except AttributeError as exc:
+            raise NvmlError("missing_symbol") from exc
+
+        initialized = False
+        try:
+            _check_nvml(library.nvmlInit_v2(), "init")
+            initialized = True
+            count = ctypes.c_uint()
+            _check_nvml(library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count")
+            if count.value <= 0:
+                raise NvmlError("no_devices")
+            handle = ctypes.c_void_p()
+            _check_nvml(library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)), "device_handle")
+            memory = NvmlMemoryInfo()
+            _check_nvml(library.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(memory)), "memory_info")
+            name_buffer = ctypes.create_string_buffer(96)
+            name_result = library.nvmlDeviceGetName(handle, name_buffer, len(name_buffer))
+            device_name = name_buffer.value.decode("utf-8", errors="replace") if name_result == 0 else None
+            return (
+                device_name,
+                max(0, int(memory.total / (1024 * 1024))),
+                max(0, int(memory.free / (1024 * 1024))),
+            )
+        finally:
+            if initialized:
+                library.nvmlShutdown()
+
+    def read_process_memory(self) -> list[GpuProcessMemoryUsage]:
+        import ctypes
+        import ctypes.util
+
+        library_path = self._library_path or ctypes.util.find_library("nvidia-ml")
+        if library_path is None:
+            library_path = "nvml.dll" if os.name == "nt" else "libnvidia-ml.so.1"
+        try:
+            library = ctypes.CDLL(library_path)
+        except OSError as exc:
+            raise FileNotFoundError("NVML library not found") from exc
+
+        class NvmlProcessInfoV3(ctypes.Structure):
+            _fields_ = [
+                ("pid", ctypes.c_uint),
+                ("usedGpuMemory", ctypes.c_ulonglong),
+                ("gpuInstanceId", ctypes.c_uint),
+                ("computeInstanceId", ctypes.c_uint),
+            ]
+
+        try:
+            library.nvmlInit_v2.restype = ctypes.c_int
+            library.nvmlShutdown.restype = ctypes.c_int
+            library.nvmlDeviceGetCount_v2.argtypes = [ctypes.POINTER(ctypes.c_uint)]
+            library.nvmlDeviceGetCount_v2.restype = ctypes.c_int
+            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+            library.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_int
+            library.nvmlDeviceGetComputeRunningProcesses_v3.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint),
+                ctypes.POINTER(NvmlProcessInfoV3),
+            ]
+            library.nvmlDeviceGetComputeRunningProcesses_v3.restype = ctypes.c_int
+        except AttributeError as exc:
+            raise NvmlError("process_memory_missing_symbol") from exc
+
+        initialized = False
+        try:
+            _check_nvml(library.nvmlInit_v2(), "init")
+            initialized = True
+            count = ctypes.c_uint()
+            _check_nvml(library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count")
+            if count.value <= 0:
+                raise NvmlError("no_devices")
+            handle = ctypes.c_void_p()
+            _check_nvml(library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)), "device_handle")
+            process_count = ctypes.c_uint(0)
+            first_result = library.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(process_count), None)
+            if first_result not in {0, 7}:  # 7 is NVML_ERROR_INSUFFICIENT_SIZE.
+                _check_nvml(first_result, "process_memory_count")
+            if process_count.value <= 0:
+                return []
+            infos = (NvmlProcessInfoV3 * process_count.value)()
+            _check_nvml(
+                library.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(process_count), infos),
+                "process_memory",
+            )
+            return [
+                GpuProcessMemoryUsage(
+                    pid=int(info.pid),
+                    used_vram_mb=max(0, int(info.usedGpuMemory / (1024 * 1024))),
+                )
+                for info in list(infos)[: process_count.value]
+                if info.usedGpuMemory > 0
+            ]
+        finally:
+            if initialized:
+                library.nvmlShutdown()
+
+
+def _check_nvml(return_code: int, operation: str) -> None:
+    if return_code != 0:
+        raise NvmlError(f"{operation}_failed:{return_code}")
+
+
+def _read_linux_memory_psi(reader: Callable[[], str | None] | None = None) -> str | None:
+    if reader is not None:
+        try:
+            return reader()
+        except OSError:
+            return None
+    if platform.system() != "Linux":
+        return None
+    try:
+        return Path("/proc/pressure/memory").read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _parse_linux_psi_memory_pressure(text: str) -> tuple[MemoryPressureLevel, list[str]]:
+    metrics: dict[str, dict[str, float]] = {}
+    for raw_line in text.splitlines():
+        parts = raw_line.strip().split()
+        if not parts:
+            continue
+        scope = parts[0]
+        if scope not in {"some", "full"}:
+            continue
+        values: dict[str, float] = {}
+        for item in parts[1:]:
+            key, separator, value = item.partition("=")
+            if separator != "=":
+                continue
+            try:
+                values[key] = float(value)
+            except ValueError:
+                continue
+        metrics[scope] = values
+
+    if not metrics:
+        return MemoryPressureLevel.UNKNOWN, ["linux_psi_parse_failed"]
+
+    full_avg10 = metrics.get("full", {}).get("avg10", 0.0)
+    full_avg60 = metrics.get("full", {}).get("avg60", 0.0)
+    some_avg10 = metrics.get("some", {}).get("avg10", 0.0)
+    some_avg60 = metrics.get("some", {}).get("avg60", 0.0)
+
+    if full_avg10 >= 1.0 or full_avg60 >= 0.5:
+        return MemoryPressureLevel.HIGH, ["linux_psi_full_high"]
+    if some_avg10 >= 10.0 or some_avg60 >= 5.0:
+        return MemoryPressureLevel.HIGH, ["linux_psi_some_high"]
+    if full_avg10 >= 0.1 or full_avg60 >= 0.05:
+        return MemoryPressureLevel.MEDIUM, ["linux_psi_full_medium"]
+    if some_avg10 >= 2.0 or some_avg60 >= 1.0:
+        return MemoryPressureLevel.MEDIUM, ["linux_psi_some_medium"]
+    return MemoryPressureLevel.LOW, []
+
+
+def _parse_posix_process_rows(output: str) -> dict[int, tuple[int, int]]:
+    rows: dict[int, tuple[int, int]] = {}
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 3:
+            continue
+        pid = _coerce_int(parts[0])
+        ppid = _coerce_int(parts[1])
+        rss_kb = _coerce_int(parts[2])
+        if pid is None or ppid is None or rss_kb is None:
+            continue
+        rows[pid] = (ppid, rss_kb)
+    return rows
+
+
+def _parse_windows_process_rows(output: str) -> dict[int, tuple[int, int]]:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return {}
+    rows: dict[int, tuple[int, int]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        pid = _coerce_int(item.get("ProcessId"))
+        ppid = _coerce_int(item.get("ParentProcessId"))
+        working_set_bytes = _coerce_int(item.get("WorkingSetSize"))
+        if pid is None or ppid is None or working_set_bytes is None:
+            continue
+        rows[pid] = (ppid, max(0, int(working_set_bytes / 1024)))
+    return rows
+
+
+def _process_tree_sample_from_rows(root_pid: int, rows: dict[int, tuple[int, int]]) -> ProcessTreeMemorySample:
+    if root_pid not in rows:
+        return _unavailable_process_tree_sample(root_pid, "runner_process_not_found")
+    children_by_parent: dict[int, list[int]] = {}
+    for pid, (ppid, _rss_kb) in rows.items():
+        children_by_parent.setdefault(ppid, []).append(pid)
+    selected: list[int] = []
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in selected:
+            continue
+        selected.append(pid)
+        stack.extend(children_by_parent.get(pid, []))
+    rss_kb = sum(rows[pid][1] for pid in selected if pid in rows)
+    return ProcessTreeMemorySample(
+        available=True,
+        root_pid=root_pid,
+        child_pids=sorted(pid for pid in selected if pid != root_pid),
+        process_tree_ram_mb=max(1, int(rss_kb / 1024)) if rss_kb > 0 else 0,
+        attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+        attribution_sources=["process_tree_rss"],
+        attribution_reasons=["runner_process_tree_rss"],
+    )
+
+
+def _unavailable_process_tree_sample(root_pid: int | None, error: str) -> ProcessTreeMemorySample:
+    return ProcessTreeMemorySample(
+        root_pid=root_pid,
+        attribution_sources=["process_tree_rss"],
+        attribution_reasons=[error],
+        error=error,
+    )
+
+
+def _unavailable_gpu_process_sample(requested_pids: list[int], error: str) -> GpuProcessMemorySample:
+    return GpuProcessMemorySample(
+        requested_pids=requested_pids,
+        attribution_sources=["nvml_process"],
+        attribution_reasons=[error],
+        error=error,
+    )
+
+
 def _parse_nvidia_smi_memory_row(output: str) -> tuple[str | None, int | None, int | None]:
     line = next((candidate.strip() for candidate in output.splitlines() if candidate.strip()), "")
     if not line:
@@ -1469,6 +2289,45 @@ def _parse_nvidia_smi_memory_row(output: str) -> tuple[str | None, int | None, i
     return device_name, total_vram_mb, free_vram_mb
 
 
+def _parse_windows_gpu_memory_json(output: str) -> tuple[str | None, int | None, int | None, str | None]:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None, None, None, "windows_gpu_observer_parse_failed"
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+    if not isinstance(payload, dict):
+        return None, None, None, "windows_gpu_observer_payload_invalid"
+
+    device_name = payload.get("device_name") if isinstance(payload.get("device_name"), str) else None
+    total_vram_mb = _coerce_memory_mb(payload.get("total_vram_mb"), payload.get("total_vram_bytes"))
+    dedicated_used_mb = _coerce_memory_mb(payload.get("dedicated_used_mb"), payload.get("dedicated_used_bytes"))
+    free_vram_mb = None
+    if total_vram_mb is not None and dedicated_used_mb is not None:
+        free_vram_mb = max(0, total_vram_mb - dedicated_used_mb)
+    error = None if total_vram_mb is not None or free_vram_mb is not None else "windows_gpu_observer_partial_data"
+    return device_name, total_vram_mb, free_vram_mb, error
+
+
+def _coerce_memory_mb(mb_value: Any, bytes_value: Any = None) -> int | None:
+    parsed_mb = _coerce_int(mb_value)
+    if parsed_mb is not None:
+        return parsed_mb
+    parsed_bytes = _coerce_int(bytes_value)
+    if parsed_bytes is None:
+        return None
+    return max(0, int(parsed_bytes / (1024 * 1024)))
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_int(value: str) -> int | None:
     try:
         return int(value)
@@ -1476,19 +2335,67 @@ def _parse_int(value: str) -> int | None:
         return None
 
 
-def _unavailable_cuda_snapshot(error: str) -> MachineMemorySnapshot:
+def _unavailable_cuda_snapshot(error: str, *, source: str) -> MachineMemorySnapshot:
     return MachineMemorySnapshot(
         available=False,
         backend=MemoryBackend.CUDA,
         memory_pressure=MemoryPressureLevel.UNKNOWN,
+        signal_quality=MemorySignalQuality.UNAVAILABLE,
+        signal_sources=[source],
         observed_at=_now_iso(),
         error=error,
     )
 
 
+def _unavailable_directml_snapshot(error: str) -> MachineMemorySnapshot:
+    total_ram_mb, free_ram_mb, pressure, sources, reasons = _system_ram_signals()
+    available = total_ram_mb is not None or free_ram_mb is not None
+    return MachineMemorySnapshot(
+        available=available,
+        backend=MemoryBackend.DIRECTML,
+        total_ram_mb=total_ram_mb,
+        free_ram_mb=free_ram_mb,
+        memory_pressure=pressure,
+        signal_quality=MemorySignalQuality.SYSTEM_SAMPLE if available else MemorySignalQuality.UNAVAILABLE,
+        signal_sources=sources or ["windows_gpu_counters"],
+        pressure_reasons=reasons,
+        observed_at=_now_iso(),
+        error=error,
+    )
+
+
+_WINDOWS_GPU_MEMORY_SCRIPT = r"""
+$controller = Get-CimInstance Win32_VideoController | Select-Object -First 1 Name, AdapterRAM
+$dedicated = $null
+$shared = $null
+try {
+  $samples = (Get-Counter '\GPU Adapter Memory(*)\Dedicated Usage','\GPU Adapter Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples
+  $dedicated = ($samples | Where-Object { $_.Path -like '*dedicated usage' } | Measure-Object -Property CookedValue -Sum).Sum
+  $shared = ($samples | Where-Object { $_.Path -like '*shared usage' } | Measure-Object -Property CookedValue -Sum).Sum
+} catch {}
+[PSCustomObject]@{
+  device_name = $controller.Name
+  total_vram_bytes = $controller.AdapterRAM
+  dedicated_used_bytes = $dedicated
+  shared_used_bytes = $shared
+} | ConvertTo-Json -Compress
+"""
+
+
+_WINDOWS_PROCESS_TREE_SCRIPT = r"""
+Get-CimInstance Win32_Process |
+  Select-Object ProcessId, ParentProcessId, WorkingSetSize |
+  ConvertTo-Json -Compress
+"""
+
+
 def _system_ram_mb() -> tuple[int | None, int | None]:
     if os.name == "nt":
         return _windows_system_ram_mb()
+    if platform.system() == "Darwin":
+        darwin = _darwin_system_ram_mb()
+        if darwin != (None, None):
+            return darwin
     if os.name != "posix":
         return None, None
     try:
@@ -1500,6 +2407,60 @@ def _system_ram_mb() -> tuple[int | None, int | None]:
     total_ram_mb = int(page_size * total_pages / (1024 * 1024))
     free_ram_mb = int(page_size * available_pages / (1024 * 1024))
     return total_ram_mb, free_ram_mb
+
+
+def _darwin_system_ram_mb() -> tuple[int | None, int | None]:
+    try:
+        total_result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1,
+        )
+        vm_result = subprocess.run(
+            ["vm_stat"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None, None
+    if total_result.returncode != 0 or vm_result.returncode != 0:
+        return None, None
+    total_bytes = _coerce_int(total_result.stdout.strip())
+    if total_bytes is None:
+        return None, None
+    free_bytes = _parse_darwin_available_memory_bytes(vm_result.stdout)
+    total_ram_mb = int(total_bytes / (1024 * 1024))
+    free_ram_mb = int(free_bytes / (1024 * 1024)) if free_bytes is not None else None
+    return total_ram_mb, free_ram_mb
+
+
+def _parse_darwin_available_memory_bytes(vm_stat_output: str) -> int | None:
+    page_size = None
+    page_counts: dict[str, int] = {}
+    for raw_line in vm_stat_output.splitlines():
+        line = raw_line.strip()
+        if "page size of" in line:
+            tokens = [token for token in line.replace(")", "").split() if token.isdigit()]
+            page_size = _coerce_int(tokens[-1]) if tokens else None
+            continue
+        label, separator, value = line.partition(":")
+        if separator != ":":
+            continue
+        count = _coerce_int(value.strip().strip("."))
+        if count is not None:
+            page_counts[label.lower()] = count
+    if page_size is None:
+        return None
+    available_pages = (
+        page_counts.get("pages free", 0)
+        + page_counts.get("pages inactive", 0)
+        + page_counts.get("pages speculative", 0)
+    )
+    return page_size * available_pages
 
 
 def _windows_system_ram_mb() -> tuple[int | None, int | None]:

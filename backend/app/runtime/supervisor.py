@@ -340,6 +340,27 @@ class RunnerSupervisor:
             self._descriptors[runner_id] = new_descriptor
         return new_descriptor
 
+    def fill_runner_memory_observation(
+        self,
+        runner_id: str,
+        *,
+        observed_execution_peak_vram_mb: int | None = None,
+        observed_execution_peak_ram_mb: int | None = None,
+    ) -> RunnerDescriptor:
+        """Fill missing best-effort memory observations without replacing stronger data."""
+        descriptor = self.get_runner(runner_id)
+        updates: dict[str, int] = {}
+        if descriptor.observed_execution_peak_vram_mb is None and observed_execution_peak_vram_mb is not None:
+            updates["observed_execution_peak_vram_mb"] = observed_execution_peak_vram_mb
+        if descriptor.observed_execution_peak_ram_mb is None and observed_execution_peak_ram_mb is not None:
+            updates["observed_execution_peak_ram_mb"] = observed_execution_peak_ram_mb
+        if not updates:
+            return descriptor
+        updated = descriptor.model_copy(update=updates)
+        with self._lock:
+            self._descriptors[runner_id] = updated
+        return updated
+
     def bind_workflow_runner(self, workflow_id: str, runner_id: str) -> RunnerDescriptor:
         descriptor = self.get_runner(runner_id)
         with self._lock:

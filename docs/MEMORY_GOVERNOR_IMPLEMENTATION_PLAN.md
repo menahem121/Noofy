@@ -27,6 +27,16 @@ It decides whether Noofy should:
 - warn the user that the machine is near its limit
 - refuse execution only as a last resort
 
+Snapshots and decisions carry `signal_quality`, `signal_sources`, and
+`pressure_reasons` so diagnostics can distinguish backend APIs, OS pressure
+signals, system samples, process samples, heuristics, and unavailable fallback
+data.
+
+Job memory samples and local observations also carry attribution metadata:
+`runner_id`, `job_id`, `workflow_id`, runner process IDs, sample window,
+`attribution_quality`, `attribution_sources`, and `attribution_reasons`. This
+keeps strong per-runner evidence separate from weaker system-wide deltas.
+
 The Memory Governor should not become an overly defensive blocker. If evidence
 is uncertain, Noofy should prefer reversible preparation steps such as evicting
 idle runners, freeing memory, queueing behind active work, or showing a clear
@@ -43,19 +53,23 @@ and workflow decisions.
 The Memory Governor is implemented in `backend/app/runtime/memory_governor.py`
 and integrated by `backend/app/engine/service.py`.
 
-Before starting an isolated workflow runner, Noofy:
+Before submitting a workflow run through the engine service, Noofy:
 
 1. Builds a workflow memory estimate from local evidence, creator observations,
    declared requirements, installed model size, or heuristics.
 2. Reads a machine memory snapshot.
-3. Compares the requested runner with resident isolated runners.
+3. Compares the requested runner with relevant resident runners.
 4. Chooses one of: start co-resident, evict idle runners then start, queue behind
    active work, or refuse execution when the available evidence is too strong to
    justify a run attempt.
 5. Records a structured diagnostic and memory metric.
 
-For submitted isolated workflow runs, Noofy also gates execution when another
-isolated runner is active or when memory evidence requires cleanup first.
+The same admission path now covers isolated runners and the core/default runner.
+Idle isolated runners can be evicted before a run; idle core runners are not
+treated as eviction candidates. Active core work is still considered for
+queueing decisions, because the point is to make a good RAM/VRAM decision before
+any workflow starts.
+
 Input/options are hashed into an input-profile fingerprint, so local learning is
 scoped to similar run settings instead of being blindly reused across materially
 different runs.
@@ -64,21 +78,21 @@ After a workflow result, Noofy records a local observation for completed,
 failed, canceled, and memory-error outcomes. Memory errors lower future
 confidence. Repeated successful observations raise confidence only for the same
 workflow, runner compatibility key, machine profile, backend, and input profile.
+Local observations preserve whether the peak came from process-tree RSS, NVML
+per-process GPU memory, an active-job-window system delta, or weak/unavailable
+attribution.
 
 If a submitted job fails with a likely memory error, Noofy may stop idle
 isolated runners, wait for bounded memory release, and retry the same workflow
 once. It does not retry non-memory failures or repeat memory retries forever.
 
-## Core Runner Direction
+## Core Runner Policy
 
-Current v1 coverage is strongest for isolated workflow runners. The desired
-architecture is broader: the core/default/trusted runner should also be covered
-by the same memory-governance strategy, or routed through an equivalent
-admission path before workflow execution.
+Core/default/trusted runner admission is Memory-Governor-aware. This is not to
+protect Noofy from the core runner. It is to make the correct RAM/VRAM and
+runner-residency decision before running any workflow.
 
-The reason is not to protect Noofy from the core runner. The reason is to make
-the correct RAM/VRAM and runner-residency decision before running any workflow.
-Core-runner admission should follow the same product policy:
+Core-runner admission follows the same product policy:
 
 - prefer reuse when it is likely to be fast and safe
 - prefer cleanup or idle-runner eviction when memory is uncertain
@@ -87,39 +101,74 @@ Core-runner admission should follow the same product policy:
 - avoid refusing execution unless there is strong evidence the run cannot
   proceed or cleanup/retry has already failed
 
-Noofy should not claim full app-wide memory governance until core-runner run
-admission is implemented or explicitly scoped through an equivalent path.
+The core runner is not evicted as idle cleanup. Runtime Isolation, not the Memory
+Governor, owns dependency-conflict boundaries.
 
 ## Platform Policy
 
-CUDA uses `nvidia-smi` for VRAM when available, with system RAM included in the
-snapshot when possible.
+CUDA/NVIDIA first uses direct NVML observation when available, then falls back to
+`nvidia-smi`. System RAM is included when the host exposes it. These paths report
+backend signal quality and source metadata. When NVML per-process memory is
+available, Noofy maps GPU memory PIDs back to the active runner root/child
+process tree and records that as stronger attribution than global GPU deltas.
 
 macOS Apple Silicon uses RAM as the unified CPU/GPU pressure pool. MPS admission
-does not require dedicated VRAM fields.
+does not require dedicated VRAM fields. PyTorch MPS allocator telemetry is still
+the desired Noofy-side runner signal for stronger MPS-specific peaks.
 
 CPU fallback uses RAM pressure. GPU-style estimates can be used as a RAM
 pressure proxy when no dedicated RAM estimate exists. Capsules whose runtime
 backend is explicitly `cpu` are classified as `cpu_only`.
 
-DirectML remains incomplete. The current RAM fallback is acceptable as a
-conservative fallback, but it should not be the final Windows GPU strategy.
-Future work should investigate Windows-compatible GPU memory observation for
-DirectML, AMD, Intel, and NVIDIA paths, while preserving graceful fallback when
-reliable data is unavailable.
+Linux RAM observation is augmented with PSI memory pressure when
+`/proc/pressure/memory` is available. PSI is a system stall/thrashing signal, not
+workflow-specific VRAM attribution.
+
+Windows first tries NVML and `nvidia-smi` for NVIDIA, then a best-effort
+DirectML-class observer using PowerShell GPU Adapter Memory counters and Win32
+video controller metadata, then RAM fallback. This is intentionally marked as a
+system sample because global counters are not exact per-runner attribution. A
+clean DXGI video-memory-budget implementation likely needs a small Noofy-owned
+Windows helper process/library or runner-side wrapper that can query budget/usage
+from the relevant adapter/process context without modifying ComfyUI. Querying
+DXGI only from the trusted backend process is not enough if the runner owns the
+actual DirectML allocations.
+
+## Attribution Model
+
+Noofy currently treats attribution in descending strength:
+
+- `process_exact`: backend per-process GPU memory, currently NVML process memory
+  matched to the runner root or child PID
+- `process_tree`: runner root plus child-process RSS
+- `backend_allocator`: reserved for future runner-side PyTorch CUDA/MPS allocator
+  hooks
+- `active_window_delta` / `system_delta`: whole-machine RAM/VRAM movement while a
+  job is active
+- `unavailable`: attribution could not be observed
+
+Process-tree RAM is best-effort. It includes the runner root PID and child PIDs
+when process inspection succeeds, and it fails closed into unavailable
+attribution when the process has exited, permissions block inspection, or the
+platform command is unavailable.
+
+System-wide GPU/RAM deltas are useful diagnostics, but they must not be treated
+as exact workflow usage. Other applications, allocator caches, delayed release,
+and parallel runner activity can affect them.
 
 ## Measurement Direction
 
-Current runner descriptors and snapshots are useful but not enough for the
-accuracy Noofy should eventually have. Noofy should improve peak RAM/VRAM
-observation from Noofy's side without modifying vendored ComfyUI source.
+Current runner descriptors, snapshots, signal metadata, and local observations
+are the v1 evidence model. Noofy samples machine memory around submitted jobs
+and uses the best observed incremental memory pressure to fill missing runner
+peak observations. That makes later decisions less theoretical without
+pretending the measurement is exact per-process attribution.
 
 Do not modify or fork code under `third_party/comfyui`.
 
-Future measurement work should investigate and implement the best available
-Noofy-side approach using:
+Noofy-side observation should continue to use:
 
-- process observation
+- process observation and per-runner attribution where available
 - backend-specific APIs
 - adapter-level hooks
 - wrapper logic around runner launch and job execution
@@ -128,7 +177,7 @@ Noofy-side approach using:
 - supported ComfyUI APIs or events
 - external system metrics
 
-The target measurement windows are:
+The target measurement windows remain:
 
 - runner startup
 - model loading
@@ -142,18 +191,21 @@ more grounded in local behavior, while staying honest about fragmentation,
 allocator caches, delayed release, other applications, and backend-specific
 visibility limits.
 
+PyTorch CUDA/MPS allocator attribution should be added through Noofy-owned
+runner wrappers or adapter-level hooks that execute beside the runner process.
+Do not patch vendored ComfyUI to collect allocator stats.
+
 ## Safety Margins
 
-Current safety margins are conservative constants. Before adding more custom
-margin logic, investigate whether the operating system, GPU backend, PyTorch,
-DirectML, CUDA, MPS, or available platform APIs expose useful pressure signals,
-allocation feedback, or memory-release signals.
+Fixed margins are fallback safety floors, not the main decision engine. Pressure
+signals from OS/backend APIs, PSI, allocator telemetry, and local observations
+should carry more weight when their signal quality is strong.
 
 Margins that are too large will handicap users by causing unnecessary unloading,
 queueing, or refusal. Margins that are too small will cause avoidable memory
-failures. Prefer real system/backend pressure signals where possible. If Noofy
-still needs its own margins, they should be justified, conservative, and
-preferably adaptive based on local observations rather than fixed forever.
+failures. Do not add an abstract adaptive-margin formula without evidence. If
+Noofy still needs its own margins, keep them small, justified, and secondary to
+real pressure/budget/backend signals and local empirical learning.
 
 ## Obsolete Plan Parts
 
@@ -169,16 +221,21 @@ longer useful as the source of truth. The source of truth is now:
 - runner/engine service tests covering queueing, eviction, retry, and API shape
 
 The old "complete for Phase 5f" status was too broad. The more accurate status
-is: complete enough for v1 isolated runner memory admission, with the limitations
-and follow-up directions above.
+is: complete enough for practical v1 workflow admission, with the explicit
+platform accuracy limits documented here.
 
 ## Test Coverage
 
 Current tests cover:
 
 - schema validation and decision serialization
-- CUDA observer success/failure/partial data
-- RAM fallback observer behavior
+- signal quality/source/reason metadata
+- attribution quality/source/reason metadata
+- process-tree RAM attribution and missing-process fallback
+- NVML per-process GPU memory mapping to runner PIDs
+- direct NVML and `nvidia-smi` success/failure/partial data
+- Linux PSI pressure parsing and unavailable fallback behavior
+- RAM and Windows GPU-counter fallback observer behavior
 - MPS and CPU RAM-pressure admission
 - local evidence precedence and persistence
 - input-profile-sensitive confidence lowering
@@ -197,13 +254,24 @@ Default repo command remains:
 make test
 ```
 
-## V1 Completion Gate
+## Current Completion
 
-Memory Governor v1 is complete enough for isolated workflow runners when:
+Memory Governor v1 is complete enough for practical local workflow admission
+when:
 
 - the default service wires an observer and local learning store
-- isolated runner starts use Memory Governor admission
-- isolated workflow runs can queue, clean up, warn, or refuse based on memory
+- snapshots and decisions carry signal quality/source/reason metadata
+- job samples and local observations carry attribution quality/source/reason
+  metadata
+- runner process-tree RAM attribution is captured when process inspection works
+- NVIDIA process GPU attribution is captured when NVML exposes matching process
+  memory
+- NVIDIA uses NVML first, with `nvidia-smi` fallback
+- Linux RAM pressure includes PSI when available
+- Windows reports current GPU-counter signals honestly and preserves DXGI helper
+  as the route to stronger DirectML budget data
+- isolated and core workflow runs use Memory Governor admission
+- workflow runs can queue, clean up, warn, or refuse based on memory
   decisions
 - local observations are persisted outside `.noofy` packages
 - memory errors make future decisions more conservative
@@ -211,7 +279,9 @@ Memory Governor v1 is complete enough for isolated workflow runners when:
 - API/UI payloads explain waiting, cleanup, retry, blocked, and warm states
 - tests remain hardware-independent by default
 
-That gate is currently met for isolated workflow runners. The next meaningful
-work is targeted hardening around core-runner admission, better Noofy-side peak
-memory observation, DirectML/Windows GPU observation, adaptive safety margins,
-and real hardware validation logs.
+That gate is mostly met in code, with important accuracy limits: Windows
+DirectML still needs real DXGI budget/usage integration for stronger GPU-budget
+signals, and PyTorch CUDA/MPS allocator peaks need runner-side Noofy hooks for
+allocator-level attribution. Remaining validation should happen on real NVIDIA
+CUDA, Windows DirectML/AMD/Intel/NVIDIA, Apple Silicon MPS, and Linux
+PSI-enabled machines.

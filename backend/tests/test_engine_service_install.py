@@ -959,7 +959,7 @@ async def test_start_workflow_runner_uses_memory_governor_to_keep_light_runner_w
 
 
 @pytest.mark.anyio
-async def test_start_workflow_runner_blocks_when_memory_governor_has_no_estimate_or_margin(
+async def test_start_workflow_runner_allows_uncertain_estimate_without_cleanup_candidates(
     tmp_path: Path,
 ) -> None:
     packages_dir = tmp_path / "packages"
@@ -989,12 +989,12 @@ async def test_start_workflow_runner_blocks_when_memory_governor_has_no_estimate
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == RunnerStatus.BLOCKED_BY_MEMORY.value
-    assert result["runner"] is None
-    assert result["memory_decision"]["action"] == "blocked_by_memory"
-    assert result["memory_decision"]["reason_code"] == "gpu_estimate_uncertain"
+    assert result["status"] == RunnerStatus.READY.value
+    assert result["runner"] is not None
+    assert result["memory_decision"]["action"] == "start_co_resident"
+    assert result["memory_decision"]["reason_code"] == "gpu_estimate_uncertain_cautious_start"
     assert coordinator is not None
-    assert coordinator.started_specs == []
+    assert len(coordinator.started_specs) == 1
 
 
 @pytest.mark.anyio

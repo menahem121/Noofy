@@ -8,10 +8,13 @@ from app.engine.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
 from app.runtime.memory_governor import (
+    GpuProcessMemorySample,
     LocalMemoryLearningStore,
     MachineMemorySnapshot,
+    MemoryAttributionQuality,
     MemoryBackend,
     MemoryPressureLevel,
+    ProcessTreeMemorySample,
 )
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
@@ -667,11 +670,62 @@ class StaticMemoryObserver:
         return self.snapshot_value
 
 
+class SequenceMemoryObserver:
+    def __init__(self, snapshots: list[MachineMemorySnapshot]) -> None:
+        self.snapshots = snapshots
+        self.index = 0
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        snapshot = self.snapshots[min(self.index, len(self.snapshots) - 1)]
+        self.index += 1
+        return snapshot
+
+
+class AttributingMemoryObserver(SequenceMemoryObserver):
+    def sample_process_vram(self, pids: set[int]) -> GpuProcessMemorySample:
+        matched = sorted(pid for pid in pids if pid in {4242, 4243})
+        if not matched:
+            return GpuProcessMemorySample(
+                requested_pids=sorted(pids),
+                attribution_sources=["nvml_process"],
+                error="nvml_process_memory_no_matching_pid",
+            )
+        return GpuProcessMemorySample(
+            available=True,
+            requested_pids=sorted(pids),
+            matched_pids=matched,
+            process_tree_vram_mb=1800,
+            attribution_quality=MemoryAttributionQuality.PROCESS_EXACT,
+            attribution_sources=["nvml_process"],
+            attribution_reasons=["nvml_process_memory_matched_runner_pid"],
+        )
+
+
+class FakeProcessTreeMemoryObserver:
+    def sample(self, root_pid: int | None) -> ProcessTreeMemorySample:
+        if root_pid != 4242:
+            return ProcessTreeMemorySample(
+                root_pid=root_pid,
+                attribution_sources=["process_tree_rss"],
+                error="runner_process_not_found",
+            )
+        return ProcessTreeMemorySample(
+            available=True,
+            root_pid=4242,
+            child_pids=[4243],
+            process_tree_ram_mb=2200,
+            attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+            attribution_sources=["process_tree_rss"],
+            attribution_reasons=["runner_process_tree_rss"],
+        )
+
+
 def _build_service(
     adapter: RecordingAdapter,
     *,
     memory_learning_store: LocalMemoryLearningStore | None = None,
-    memory_observer: StaticMemoryObserver | None = None,
+    memory_observer: StaticMemoryObserver | SequenceMemoryObserver | None = None,
+    process_tree_memory_observer: FakeProcessTreeMemoryObserver | None = None,
 ) -> tuple[EngineService, RunnerSupervisor]:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), adapter)
@@ -683,6 +737,7 @@ def _build_service(
         log_store=LogStore(),
         memory_learning_store=memory_learning_store,
         memory_observer=memory_observer,
+        process_tree_memory_observer=process_tree_memory_observer,
     )
     return service, supervisor
 
@@ -735,6 +790,40 @@ async def test_run_workflow_registers_job_against_acquired_runner() -> None:
     assert isinstance(job, EngineJob)
     assert supervisor.runner_for_job(job.job_id).runner_id == CORE_RUNNER_ID
     assert adapter.run_calls and adapter.run_calls[0][0] == job.job_id
+
+
+@pytest.mark.anyio
+async def test_core_runner_run_uses_memory_governor_cautious_admission() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=10_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert job.status == "queued"
+    assert job.memory_decision is not None
+    assert job.memory_decision["action"] == "start_co_resident"
+    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain_cautious_start"
+    assert job.memory_status is not None
+    assert job.memory_status["state"] == "memory_warning"
+    assert supervisor.runner_for_job(job.job_id).runner_id == CORE_RUNNER_ID
 
 
 @pytest.mark.anyio
@@ -808,6 +897,131 @@ async def test_get_result_records_successful_local_memory_observation(tmp_path: 
     assert summary.successful_runs == 1
     assert summary.memory_error_runs == 0
     assert summary.observed_peak_vram_mb == 2400
+
+
+@pytest.mark.anyio
+async def test_get_result_fills_missing_runner_peak_from_best_effort_sampling() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=7_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=60_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=7_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=60_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=4_500,
+                    total_ram_mb=64_000,
+                    free_ram_mb=57_500,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ),
+        adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await service.get_result(job.job_id)
+    runner = supervisor.get_runner("isolated-1")
+
+    assert runner.observed_execution_peak_vram_mb == 2500
+    assert runner.observed_execution_peak_ram_mb == 2500
+
+
+@pytest.mark.anyio
+async def test_get_result_prefers_process_tree_and_nvml_process_attribution(tmp_path: Path) -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    learning_store = LocalMemoryLearningStore(tmp_path / "memory-learning")
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=learning_store,
+        memory_observer=AttributingMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=7_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=60_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=4_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=55_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+        process_tree_memory_observer=FakeProcessTreeMemoryObserver(),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"pid": 4242}),
+        adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await service.get_result(job.job_id)
+    runner = supervisor.get_runner("isolated-1")
+    summary = learning_store.list_summaries()[0]
+    events = service.log_store.list_events().events
+    finish_event = next(event for event in events if event.message == "Finished best-effort job memory sampling")
+
+    assert runner.observed_execution_peak_vram_mb == 1800
+    assert runner.observed_execution_peak_ram_mb == 2200
+    assert summary.observed_peak_vram_mb == 1800
+    assert summary.observed_peak_ram_mb == 2200
+    assert summary.process_tree_observed_peak_vram_mb == 1800
+    assert summary.process_tree_observed_peak_ram_mb == 2200
+    assert summary.attribution_quality is MemoryAttributionQuality.PROCESS_EXACT
+    assert "nvml_process" in summary.attribution_sources
+    assert "process_tree_rss" in summary.attribution_sources
+    assert finish_event.details["runner_root_pid"] == 4242
+    assert finish_event.details["runner_child_pids"] == [4243]
+    assert finish_event.details["attribution_quality"] == "process_exact"
+
 
 @pytest.mark.anyio
 async def test_get_result_records_memory_error_observation(tmp_path: Path) -> None:
@@ -1075,7 +1289,7 @@ async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> Non
 
 
 @pytest.mark.anyio
-async def test_run_workflow_blocks_by_memory_without_submitting_to_adapter() -> None:
+async def test_run_workflow_allows_uncertain_memory_estimate_without_idle_cleanup() -> None:
     selected_adapter = RecordingAdapter(
         models=[
             ModelInfo(
@@ -1109,14 +1323,14 @@ async def test_run_workflow_blocks_by_memory_without_submitting_to_adapter() -> 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
 
     assert isinstance(job, EngineJob)
-    assert job.status == "blocked_by_memory"
+    assert job.status == "queued"
     assert job.memory_decision is not None
-    assert job.memory_decision["action"] == "blocked_by_memory"
-    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain"
+    assert job.memory_decision["action"] == "start_co_resident"
+    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain_cautious_start"
     assert job.memory_status is not None
-    assert job.memory_status["state"] == "blocked_by_memory"
-    assert selected_adapter.run_calls == []
-    assert supervisor.job_registry.snapshot() == {}
+    assert job.memory_status["state"] == "memory_warning"
+    assert selected_adapter.run_calls == [("job-1", {})]
+    assert supervisor.job_registry.snapshot() == {"job-1": "selected-runner"}
 
 
 @pytest.mark.anyio

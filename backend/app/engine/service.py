@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -61,15 +63,21 @@ from app.runtime.launch_settings import (
 )
 from app.runtime.manager import RuntimeManager
 from app.runtime.memory_governor import (
+    GpuProcessMemorySample,
     LocalMemoryLearningStore,
     LocalMemoryObservation,
     MachineMemoryObserver,
+    MachineMemorySnapshot,
     MemoryAdmissionRequest,
+    MemoryAttributionQuality,
     MemoryBackend,
     MemoryDecisionAction,
     MemoryGovernorDecision,
     MemoryObservationOutcome,
     MemoryReleaseStatus,
+    MemorySampleWindow,
+    ProcessTreeMemoryObserver,
+    ProcessTreeMemorySample,
     RunnerMemorySnapshot,
     WorkflowMemoryEstimateRequest,
     build_workflow_memory_estimate,
@@ -135,6 +143,7 @@ class EngineService:
         runner_process_coordinator: RunnerProcessCoordinator | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
         memory_observer: MachineMemoryObserver | None = None,
+        process_tree_memory_observer: ProcessTreeMemoryObserver | None = None,
         memory_learning_store: LocalMemoryLearningStore | None = None,
         comfyui_update_service: ComfyUIUpdateService | None = None,
         comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
@@ -149,6 +158,7 @@ class EngineService:
         self.runner_process_coordinator = runner_process_coordinator
         self.imported_package_store = imported_package_store
         self.memory_observer = memory_observer
+        self.process_tree_memory_observer = process_tree_memory_observer or ProcessTreeMemoryObserver()
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
         self.comfyui_launch_settings_store = comfyui_launch_settings_store
@@ -160,6 +170,10 @@ class EngineService:
         self._memory_retry_attempted_roots: set[str] = set()
         self._queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._memory_governor_metrics: dict[str, int] = {}
+        self._memory_sampling_tasks: dict[str, asyncio.Task[None]] = {}
+        self._memory_sampling_stop_events: dict[str, asyncio.Event] = {}
+        self._memory_sampling_snapshots: dict[str, list[MachineMemorySnapshot]] = {}
+        self._job_memory_attribution: dict[str, dict[str, Any]] = {}
 
     def list_workflows(self) -> list[dict[str, object]]:
         return [
@@ -968,7 +982,14 @@ class EngineService:
             )
         return validation
 
-    async def run_workflow(self, workflow_id: str, inputs: dict[str, Any], options: dict[str, Any]):
+    async def run_workflow(
+        self,
+        workflow_id: str,
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        *,
+        memory_retry_after_cleanup: bool = False,
+    ):
         package = self.workflow_loader.get_package(workflow_id)
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
@@ -990,9 +1011,11 @@ class EngineService:
 
         graph = self._apply_input_bindings(package, inputs)
         memory_decision = self._memory_governor_decision_for_workflow_run(
+            package=package,
             workflow_id=workflow_id,
             runner=runner,
             input_profile_fingerprint=_memory_input_profile_fingerprint(inputs, options),
+            memory_retry_after_cleanup=memory_retry_after_cleanup,
         )
         if memory_decision is not None:
             if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
@@ -1043,6 +1066,10 @@ class EngineService:
                     memory_decision=memory_decision.model_dump(mode="json"),
                     memory_status=self._memory_status_payload(memory_decision),
                 )
+            if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
+                cleanup_failed = await self._evict_idle_runners_for_workflow_run(memory_decision)
+                if cleanup_failed is not None:
+                    return cleanup_failed
 
         self.log_store.add(
             "info",
@@ -1051,11 +1078,25 @@ class EngineService:
             workflow_id=workflow_id,
             details={"runner_id": runner.runner_id, "input_keys": sorted(inputs.keys())},
         )
+        pre_submit_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
         job = await adapter.run_workflow(package, graph, inputs, options)
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
         self._job_workflows[job.job_id] = workflow_id
         self._job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
         self._memory_retry_roots.setdefault(job.job_id, job.job_id)
+        self._start_job_memory_sampling(
+            job_id=job.job_id,
+            workflow_id=workflow_id,
+            runner_id=runner.runner_id,
+            initial_snapshot=pre_submit_snapshot,
+        )
+        if memory_decision is not None:
+            job = job.model_copy(
+                update={
+                    "memory_decision": memory_decision.model_dump(mode="json"),
+                    "memory_status": self._memory_status_payload(memory_decision),
+                }
+            )
         self.log_store.add(
             "info",
             "Workflow run queued",
@@ -1078,6 +1119,7 @@ class EngineService:
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
         adapter = self._adapter_for_job(job_id)
         result = await adapter.get_result(job_id)
+        await self._finish_job_memory_sampling(result.job_id)
         self._record_local_memory_observation_for_result(result)
         retry_job = await self._maybe_retry_after_memory_cleanup(result)
         return retry_job or result
@@ -1469,11 +1511,13 @@ class EngineService:
     def _memory_governor_decision_for_workflow_run(
         self,
         *,
+        package: WorkflowPackage,
         workflow_id: str,
         runner: RunnerDescriptor,
         input_profile_fingerprint: str | None = None,
+        memory_retry_after_cleanup: bool = False,
     ) -> MemoryGovernorDecision | None:
-        if self.memory_observer is None or runner.kind is not RunnerKind.ISOLATED_COMFYUI:
+        if self.memory_observer is None:
             return None
         machine_snapshot = self.memory_observer.snapshot()
         local_evidence = (
@@ -1494,15 +1538,29 @@ class EngineService:
                 declared_memory_class=runner.memory_class,
                 input_profile_fingerprint=input_profile_fingerprint,
                 local_evidence=local_evidence,
+                creator_observed_peak_vram_mb=_observed_hardware_int(package, "observed_peak_vram_mb")
+                or _observed_hardware_int(package, "recommended_vram_mb"),
+                creator_observed_peak_ram_mb=_observed_hardware_int(package, "observed_peak_ram_mb")
+                or _observed_hardware_int(package, "recommended_ram_mb"),
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb,
+                required_model_size_mb=_required_model_size_mb_from_package(package),
             )
         )
         resident_runners = []
         for resident in self.runner_supervisor.list_runners():
-            if resident.kind is not RunnerKind.ISOLATED_COMFYUI:
-                continue
             if resident.runner_id == runner.runner_id and resident.current_job_id is None:
+                continue
+            if (
+                resident.kind is RunnerKind.CORE_COMFYUI
+                and resident.current_job_id is None
+                and resident.status
+                not in {
+                    RunnerStatus.RUNNING,
+                    RunnerStatus.LOADING_MODEL,
+                    RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
+                }
+            ):
                 continue
             resident_runners.append(RunnerMemorySnapshot.from_descriptor(resident))
         decision = decide_memory_admission(
@@ -1514,11 +1572,23 @@ class EngineService:
         )
         record_memory_governor_decision(self.log_store, decision)
         self._record_memory_governor_metric(f"workflow_run_decision_{decision.action.value}")
-        if decision.action in {
-            MemoryDecisionAction.START_CO_RESIDENT,
-            MemoryDecisionAction.REUSE_RUNNER,
-        }:
-            return None
+        if (
+            memory_retry_after_cleanup
+            and decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+            and decision.reason_code == "recent_memory_error_requires_cleanup_before_retry"
+        ):
+            decision = decision.model_copy(
+                update={
+                    "action": MemoryDecisionAction.START_CO_RESIDENT,
+                    "reason_code": "retry_after_cleanup_cautious_start",
+                    "user_message": "Noofy freed memory and is trying this workflow one more time.",
+                    "developer_details": {
+                        **decision.developer_details,
+                        "recent_memory_error_allowed_for_retry_after_cleanup": True,
+                    },
+                }
+            )
+            record_memory_governor_decision(self.log_store, decision)
         return decision
 
     def _wait_for_memory_release_after_cleanup(
@@ -1559,6 +1629,250 @@ class EngineService:
             },
         )
         return release_check
+
+    async def _evict_idle_runners_for_workflow_run(
+        self,
+        decision: MemoryGovernorDecision,
+    ) -> EngineJob | None:
+        if self.runner_process_coordinator is None:
+            return None
+        for evict_runner_id in decision.evict_runner_ids:
+            stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
+            self._record_memory_governor_metric("idle_runner_evicted_for_workflow_run")
+            self.log_store.add(
+                "info",
+                "Evicted idle runner before workflow run",
+                "memory_governor",
+                workflow_id=decision.workflow_id,
+                details={
+                    "evicted_runner_id": evict_runner_id,
+                    "stop_status": stopped.status.value,
+                    "memory_decision_id": decision.decision_id,
+                    "reason": decision.reason_code,
+                },
+            )
+        release_check = self._wait_for_memory_release_after_cleanup(decision)
+        if release_check is None or release_check.status is MemoryReleaseStatus.RELEASED:
+            return None
+        self._record_memory_governor_metric("workflow_run_memory_cleanup_failed")
+        return EngineJob(
+            job_id=f"blocked-memory-{decision.workflow_id}",
+            workflow_id=decision.workflow_id or "unknown",
+            engine="noofy",
+            status="blocked_by_memory",
+            message="Noofy freed memory, but the machine still does not have enough available memory.",
+            memory_decision=decision.model_dump(mode="json"),
+            memory_status={
+                **self._memory_status_payload(decision),
+                "state": "memory_cleanup_failed",
+                "message": "Noofy freed memory, but the machine still does not have enough available memory.",
+            },
+        )
+
+    def _start_job_memory_sampling(
+        self,
+        *,
+        job_id: str,
+        workflow_id: str,
+        runner_id: str,
+        initial_snapshot: MachineMemorySnapshot | None = None,
+    ) -> None:
+        if self.memory_observer is None or job_id in self._memory_sampling_tasks:
+            return
+        stop_event = asyncio.Event()
+        snapshots: list[MachineMemorySnapshot] = []
+        if initial_snapshot is not None:
+            snapshots.append(
+                self._attribute_memory_snapshot(
+                    initial_snapshot,
+                    job_id=job_id,
+                    workflow_id=workflow_id,
+                    runner_id=runner_id,
+                    sample_window=MemorySampleWindow.BEFORE_SUBMIT,
+                )
+            )
+        self._memory_sampling_stop_events[job_id] = stop_event
+        self._memory_sampling_snapshots[job_id] = snapshots
+
+        async def _sample() -> None:
+            while not stop_event.is_set():
+                snapshots.append(
+                    self._attribute_memory_snapshot(
+                        self.memory_observer.snapshot(),
+                        job_id=job_id,
+                        workflow_id=workflow_id,
+                        runner_id=runner_id,
+                        sample_window=MemorySampleWindow.EXECUTION,
+                    )
+                )
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=0.5)
+                except TimeoutError:
+                    continue
+            snapshots.append(
+                self._attribute_memory_snapshot(
+                    self.memory_observer.snapshot(),
+                    job_id=job_id,
+                    workflow_id=workflow_id,
+                    runner_id=runner_id,
+                    sample_window=MemorySampleWindow.AFTER_COMPLETION,
+                )
+            )
+
+        self._memory_sampling_tasks[job_id] = asyncio.create_task(_sample())
+        self.log_store.add(
+            "info",
+            "Started best-effort job memory sampling",
+            "memory_governor",
+            job_id=job_id,
+            workflow_id=workflow_id,
+            details={"runner_id": runner_id},
+        )
+
+    def _attribute_memory_snapshot(
+        self,
+        snapshot: MachineMemorySnapshot,
+        *,
+        job_id: str,
+        workflow_id: str,
+        runner_id: str,
+        sample_window: MemorySampleWindow,
+    ) -> MachineMemorySnapshot:
+        try:
+            runner = self.runner_supervisor.get_runner(runner_id)
+        except Exception:
+            runner = None
+        root_pid = runner.pid if runner is not None else None
+        process_sample = self.process_tree_memory_observer.sample(root_pid)
+        process_pids = {pid for pid in [process_sample.root_pid, *process_sample.child_pids] if pid is not None}
+        gpu_sample = _sample_gpu_process_memory(self.memory_observer, process_pids)
+        attribution_quality = _best_service_attribution_quality(
+            [
+                process_sample.attribution_quality,
+                gpu_sample.attribution_quality,
+            ]
+        )
+        attribution_sources = _unique_service_values(
+            [
+                *process_sample.attribution_sources,
+                *gpu_sample.attribution_sources,
+            ]
+        )
+        attribution_reasons = _unique_service_values(
+            [
+                *process_sample.attribution_reasons,
+                *gpu_sample.attribution_reasons,
+            ]
+        )
+        return snapshot.model_copy(
+            update={
+                "runner_id": runner_id,
+                "job_id": job_id,
+                "workflow_id": workflow_id,
+                "runner_root_pid": root_pid,
+                "runner_child_pids": process_sample.child_pids,
+                "sample_window": sample_window,
+                "attribution_quality": attribution_quality,
+                "attribution_sources": attribution_sources,
+                "attribution_reasons": attribution_reasons,
+                "process_tree_ram_mb": process_sample.process_tree_ram_mb,
+                "process_tree_vram_mb": gpu_sample.process_tree_vram_mb,
+            }
+        )
+
+    async def _finish_job_memory_sampling(self, job_id: str) -> None:
+        stop_event = self._memory_sampling_stop_events.pop(job_id, None)
+        task = self._memory_sampling_tasks.pop(job_id, None)
+        if stop_event is not None:
+            stop_event.set()
+        if task is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(task, timeout=1)
+        snapshots = self._memory_sampling_snapshots.pop(job_id, [])
+        if not snapshots:
+            return
+        system_peak_vram_mb, system_peak_ram_mb = _peak_used_memory_delta_from_snapshots(snapshots)
+        process_peak_ram_mb = _peak_optional(snapshot.process_tree_ram_mb for snapshot in snapshots)
+        process_peak_vram_mb = _peak_optional(snapshot.process_tree_vram_mb for snapshot in snapshots)
+        peak_vram_mb = process_peak_vram_mb if process_peak_vram_mb is not None else system_peak_vram_mb
+        peak_ram_mb = process_peak_ram_mb if process_peak_ram_mb is not None else system_peak_ram_mb
+        attribution_quality = _best_service_attribution_quality(
+            snapshot.attribution_quality for snapshot in snapshots
+        )
+        if attribution_quality is MemoryAttributionQuality.UNKNOWN:
+            attribution_quality = (
+                MemoryAttributionQuality.SYSTEM_DELTA
+                if system_peak_vram_mb is not None or system_peak_ram_mb is not None
+                else MemoryAttributionQuality.UNAVAILABLE
+            )
+        attribution_sources = _unique_service_values(
+            source
+            for snapshot in snapshots
+            for source in snapshot.attribution_sources
+        )
+        attribution_reasons = _unique_service_values(
+            reason
+            for snapshot in snapshots
+            for reason in snapshot.attribution_reasons
+        )
+        if process_peak_vram_mb is None and system_peak_vram_mb is not None:
+            attribution_sources.append("system_memory_delta")
+            attribution_reasons.append("system_vram_delta_active_job_window")
+        if process_peak_ram_mb is None and system_peak_ram_mb is not None:
+            attribution_sources.append("system_memory_delta")
+            attribution_reasons.append("system_ram_delta_active_job_window")
+        attribution_sources = _unique_service_values(attribution_sources)
+        attribution_reasons = _unique_service_values(attribution_reasons)
+        try:
+            runner = self.runner_supervisor.runner_for_job(job_id)
+        except JobRunnerNotFoundError:
+            runner = None
+        runner_root_pid = runner.pid if runner is not None else None
+        runner_child_pids = _unique_int_values(
+            pid
+            for snapshot in snapshots
+            for pid in snapshot.runner_child_pids
+        )
+        self._job_memory_attribution[job_id] = {
+            "runner_root_pid": runner_root_pid,
+            "runner_child_pids": runner_child_pids,
+            "sample_window": MemorySampleWindow.EXECUTION,
+            "process_tree_peak_vram_mb": process_peak_vram_mb,
+            "process_tree_peak_ram_mb": process_peak_ram_mb,
+            "system_peak_delta_vram_mb": system_peak_vram_mb,
+            "system_peak_delta_ram_mb": system_peak_ram_mb,
+            "attribution_quality": attribution_quality,
+            "attribution_sources": attribution_sources,
+            "attribution_reasons": attribution_reasons,
+        }
+        if runner is not None:
+            self.runner_supervisor.fill_runner_memory_observation(
+                runner.runner_id,
+                observed_execution_peak_vram_mb=peak_vram_mb,
+                observed_execution_peak_ram_mb=peak_ram_mb,
+            )
+        self.log_store.add(
+            "info",
+            "Finished best-effort job memory sampling",
+            "memory_governor",
+            job_id=job_id,
+            workflow_id=self._job_workflows.get(job_id),
+            details={
+                "sample_count": len(snapshots),
+                "process_tree_peak_vram_mb": process_peak_vram_mb,
+                "process_tree_peak_ram_mb": process_peak_ram_mb,
+                "selected_peak_vram_mb": peak_vram_mb,
+                "selected_peak_ram_mb": peak_ram_mb,
+                "system_peak_delta_vram_mb": system_peak_vram_mb,
+                "system_peak_delta_ram_mb": system_peak_ram_mb,
+                "runner_id": runner.runner_id if runner is not None else None,
+                "runner_root_pid": runner_root_pid,
+                "runner_child_pids": runner_child_pids,
+                "attribution_quality": attribution_quality.value,
+                "attribution_sources": attribution_sources,
+                "attribution_reasons": attribution_reasons,
+            },
+        )
 
     async def _maybe_retry_after_memory_cleanup(self, result: JobResult) -> EngineJob | None:
         if result.status != "failed" or not likely_memory_error(result.error):
@@ -1623,7 +1937,12 @@ class EngineService:
         self._memory_retry_attempted_roots.add(root_job_id)
         self._record_memory_governor_metric("memory_retry_attempted")
         retry_workflow_id, inputs, options = run_request
-        retry_result = await self.run_workflow(retry_workflow_id, dict(inputs), dict(options))
+        retry_result = await self.run_workflow(
+            retry_workflow_id,
+            dict(inputs),
+            dict(options),
+            memory_retry_after_cleanup=True,
+        )
         if not isinstance(retry_result, EngineJob):
             return None
         self._memory_retry_roots[retry_result.job_id] = root_job_id
@@ -1702,6 +2021,7 @@ class EngineService:
             runner = self.runner_supervisor.runner_for_job(result.job_id)
         except JobRunnerNotFoundError:
             runner = None
+        attribution = self._job_memory_attribution.get(result.job_id, {})
         machine_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
         if result.status == "completed":
             outcome = MemoryObservationOutcome.SUCCESS
@@ -1720,6 +2040,11 @@ class EngineService:
                 input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2])
                 if run_request is not None
                 else None,
+                runner_id=runner.runner_id if runner is not None else None,
+                job_id=result.job_id,
+                runner_root_pid=attribution.get("runner_root_pid"),
+                runner_child_pids=attribution.get("runner_child_pids", []),
+                sample_window=attribution.get("sample_window", MemorySampleWindow.UNKNOWN),
                 outcome=outcome,
                 memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
                 peak_vram_mb=(
@@ -1732,6 +2057,13 @@ class EngineService:
                     if runner is not None and runner.observed_execution_peak_ram_mb is not None
                     else None
                 ),
+                process_tree_peak_vram_mb=attribution.get("process_tree_peak_vram_mb"),
+                process_tree_peak_ram_mb=attribution.get("process_tree_peak_ram_mb"),
+                system_peak_delta_vram_mb=attribution.get("system_peak_delta_vram_mb"),
+                system_peak_delta_ram_mb=attribution.get("system_peak_delta_ram_mb"),
+                attribution_quality=attribution.get("attribution_quality", MemoryAttributionQuality.UNKNOWN),
+                attribution_sources=attribution.get("attribution_sources", []),
+                attribution_reasons=attribution.get("attribution_reasons", []),
                 retry_required=outcome is MemoryObservationOutcome.MEMORY_ERROR,
             )
         )
@@ -1747,9 +2079,12 @@ class EngineService:
                 "memory_error_runs": summary.memory_error_runs,
                 "observed_peak_vram_mb": summary.observed_peak_vram_mb,
                 "observed_peak_ram_mb": summary.observed_peak_ram_mb,
+                "attribution_quality": summary.attribution_quality.value,
+                "attribution_sources": summary.attribution_sources,
             },
         )
         self._record_memory_governor_metric(f"local_observation_{outcome.value}")
+        self._job_memory_attribution.pop(result.job_id, None)
 
     def memory_governor_metrics(self) -> dict[str, int]:
         return dict(self._memory_governor_metrics)
@@ -2056,6 +2391,106 @@ def _installed_model_size_mb(install_state: InstallState) -> int | None:
     if total_size_bytes <= 0:
         return None
     return max(1, total_size_bytes // (1024 * 1024))
+
+
+def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None:
+    total_size_bytes = sum(model.size_bytes or 0 for model in package.required_models)
+    if total_size_bytes <= 0:
+        return None
+    return max(1, total_size_bytes // (1024 * 1024))
+
+
+def _observed_hardware_int(package: WorkflowPackage, key: str) -> int | None:
+    value = package.observed_hardware.get(key)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _peak_used_memory_delta_from_snapshots(snapshots: list[MachineMemorySnapshot]) -> tuple[int | None, int | None]:
+    return (
+        _peak_used_delta_mb((snapshot.total_vram_mb, snapshot.free_vram_mb) for snapshot in snapshots),
+        _peak_used_delta_mb((snapshot.total_ram_mb, snapshot.free_ram_mb) for snapshot in snapshots),
+    )
+
+
+def _peak_optional(values: Iterable[int | None]) -> int | None:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None
+
+
+def _peak_used_delta_mb(values: Iterable[tuple[int | None, int | None]]) -> int | None:
+    used_values = [
+        total_mb - free_mb
+        for total_mb, free_mb in values
+        if total_mb is not None and free_mb is not None and total_mb >= free_mb
+    ]
+    if not used_values:
+        return None
+    delta_mb = max(used_values) - used_values[0]
+    return delta_mb if delta_mb > 0 else None
+
+
+def _sample_gpu_process_memory(
+    observer: MachineMemoryObserver | None,
+    pids: set[int],
+) -> GpuProcessMemorySample:
+    if observer is None:
+        return GpuProcessMemorySample(
+            requested_pids=sorted(pids),
+            attribution_sources=["gpu_process_attribution_unavailable"],
+            error="memory_observer_unavailable",
+        )
+    sampler = getattr(observer, "sample_process_vram", None)
+    if sampler is None:
+        return GpuProcessMemorySample(
+            requested_pids=sorted(pids),
+            attribution_sources=["gpu_process_attribution_unavailable"],
+            error="gpu_process_attribution_unavailable",
+        )
+    return sampler(pids)
+
+
+def _best_service_attribution_quality(values: Iterable[MemoryAttributionQuality]) -> MemoryAttributionQuality:
+    present = list(values)
+    if not present:
+        return MemoryAttributionQuality.UNKNOWN
+    return max(present, key=_service_attribution_quality_rank)
+
+
+def _service_attribution_quality_rank(quality: MemoryAttributionQuality) -> int:
+    if quality is MemoryAttributionQuality.PROCESS_EXACT:
+        return 6
+    if quality is MemoryAttributionQuality.BACKEND_ALLOCATOR:
+        return 5
+    if quality is MemoryAttributionQuality.PROCESS_TREE:
+        return 4
+    if quality is MemoryAttributionQuality.ACTIVE_WINDOW_DELTA:
+        return 3
+    if quality is MemoryAttributionQuality.SYSTEM_DELTA:
+        return 2
+    if quality is MemoryAttributionQuality.UNAVAILABLE:
+        return 1
+    return 0
+
+
+def _unique_service_values(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _unique_int_values(values: Iterable[int]) -> list[int]:
+    return sorted(set(values))
 
 
 def _required_free_after_cleanup(estimated_peak_mb: int | None, margin_mb: int | None) -> int | None:
