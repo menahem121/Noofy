@@ -8,6 +8,7 @@ without turning fallback margins into the main policy engine.
 from __future__ import annotations
 
 import os
+import contextlib
 import json
 import platform
 import subprocess
@@ -72,12 +73,17 @@ class MemoryAttributionQuality(StrEnum):
 
 class MemorySampleWindow(StrEnum):
     STARTUP = "startup"
+    RUNNER_STARTUP = "runner_startup"
     MODEL_LOAD = "model_load"
+    MODEL_LOADING = "model_loading"
     BEFORE_SUBMIT = "before_submit"
     EXECUTION = "execution"
+    WORKFLOW_EXECUTION = "workflow_execution"
+    RETRY_AFTER_CLEANUP = "retry_after_cleanup"
     AFTER_COMPLETION = "after_completion"
     CLEANUP = "cleanup"
     RELEASE = "release"
+    MEMORY_RELEASE = "memory_release"
     UNKNOWN = "unknown"
 
 
@@ -141,6 +147,9 @@ class MachineMemorySnapshot(BaseModel):
     attribution_reasons: list[str] = Field(default_factory=list)
     process_tree_ram_mb: int | None = Field(default=None, ge=0)
     process_tree_vram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_current_vram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_peak_vram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_details: dict[str, Any] = Field(default_factory=dict)
     observed_at: str | None = None
     error: str | None = None
 
@@ -222,6 +231,7 @@ class LocalMemoryEvidenceSummary(BaseModel):
     process_tree_observed_peak_ram_mb: int | None = Field(default=None, ge=0)
     system_observed_peak_delta_vram_mb: int | None = Field(default=None, ge=0)
     system_observed_peak_delta_ram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_observed_peak_vram_mb: int | None = Field(default=None, ge=0)
     attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNKNOWN
     attribution_sources: list[str] = Field(default_factory=list)
     attribution_reasons: list[str] = Field(default_factory=list)
@@ -265,6 +275,8 @@ class LocalMemoryObservation(BaseModel):
     process_tree_peak_ram_mb: int | None = Field(default=None, ge=0)
     system_peak_delta_vram_mb: int | None = Field(default=None, ge=0)
     system_peak_delta_ram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_peak_vram_mb: int | None = Field(default=None, ge=0)
+    backend_allocator_details: dict[str, Any] = Field(default_factory=dict)
     attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNKNOWN
     attribution_sources: list[str] = Field(default_factory=list)
     attribution_reasons: list[str] = Field(default_factory=list)
@@ -454,6 +466,26 @@ class ProcessTreeMemorySample(BaseModel):
     attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNAVAILABLE
     attribution_sources: list[str] = Field(default_factory=list)
     attribution_reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class BackendAllocatorMemorySample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = False
+    runner_id: str | None = None
+    job_id: str | None = None
+    pid: int | None = Field(default=None, ge=0)
+    sample_window: MemorySampleWindow = MemorySampleWindow.UNKNOWN
+    backend: MemoryBackend = MemoryBackend.UNKNOWN
+    current_vram_mb: int | None = Field(default=None, ge=0)
+    peak_vram_mb: int | None = Field(default=None, ge=0)
+    budget_vram_mb: int | None = Field(default=None, ge=0)
+    signal_quality: MemorySignalQuality = MemorySignalQuality.UNAVAILABLE
+    attribution_quality: MemoryAttributionQuality = MemoryAttributionQuality.UNAVAILABLE
+    attribution_sources: list[str] = Field(default_factory=list)
+    attribution_reasons: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
 
 
@@ -749,6 +781,48 @@ class WindowsGpuMemoryObserver:
             error=error,
         )
 
+    def sample_process_vram(self, pids: Iterable[int]) -> GpuProcessMemorySample:
+        requested = sorted({pid for pid in pids if pid >= 0})
+        if not requested:
+            return GpuProcessMemorySample(
+                requested_pids=[],
+                attribution_sources=["windows_gpu_process_counters"],
+                error="no_process_pids",
+            )
+        try:
+            result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_GPU_PROCESS_MEMORY_SCRIPT])
+        except FileNotFoundError:
+            return _unavailable_gpu_process_sample(requested, "powershell_not_found")
+        except subprocess.TimeoutExpired:
+            return _unavailable_gpu_process_sample(requested, "windows_gpu_process_observer_timeout")
+        except OSError as exc:
+            return _unavailable_gpu_process_sample(requested, f"windows_gpu_process_observer_error:{exc}")
+
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "windows_gpu_process_observer_failed").strip()
+            return _unavailable_gpu_process_sample(requested, error)
+
+        usages, error = _parse_windows_gpu_process_memory_json(result.stdout)
+        if error is not None:
+            return _unavailable_gpu_process_sample(requested, error)
+        matched = [usage for usage in usages if usage.pid in requested]
+        if not matched:
+            return GpuProcessMemorySample(
+                requested_pids=requested,
+                attribution_sources=["windows_gpu_process_counters"],
+                attribution_reasons=["windows_gpu_process_memory_no_matching_pid"],
+                error="windows_gpu_process_memory_no_matching_pid",
+            )
+        return GpuProcessMemorySample(
+            available=True,
+            requested_pids=requested,
+            matched_pids=sorted({usage.pid for usage in matched}),
+            process_tree_vram_mb=sum(usage.used_vram_mb for usage in matched),
+            attribution_quality=MemoryAttributionQuality.PROCESS_EXACT,
+            attribution_sources=["windows_gpu_process_counters"],
+            attribution_reasons=["windows_gpu_process_memory_matched_runner_pid"],
+        )
+
     def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             command,
@@ -793,6 +867,61 @@ class FallbackMemoryObserver:
             requested_pids=sorted({pid for pid in pids if pid >= 0}),
             attribution_sources=["gpu_process_attribution_unavailable"],
             error="gpu_process_attribution_unavailable",
+        )
+
+
+class RunnerMemoryTelemetryReader:
+    """Reads Noofy-owned runner-side allocator telemetry JSONL files."""
+
+    def sample(
+        self,
+        telemetry_path: str | Path | None,
+        *,
+        runner_id: str | None = None,
+        job_id: str | None = None,
+        sample_window: MemorySampleWindow = MemorySampleWindow.UNKNOWN,
+        observed_after: str | None = None,
+    ) -> BackendAllocatorMemorySample:
+        if telemetry_path is None:
+            return BackendAllocatorMemorySample(error="runner_memory_telemetry_path_unavailable")
+        path = Path(telemetry_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return BackendAllocatorMemorySample(error="runner_memory_telemetry_file_missing")
+        except OSError as exc:
+            return BackendAllocatorMemorySample(error=f"runner_memory_telemetry_read_error:{exc}")
+        payloads: list[dict[str, Any]] = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            if runner_id is not None and parsed.get("runner_id") not in {None, runner_id}:
+                continue
+            if job_id is not None and parsed.get("job_id") not in {None, job_id}:
+                continue
+            if observed_after is not None:
+                observed_at = parsed.get("observed_at")
+                if isinstance(observed_at, str) and observed_at <= observed_after:
+                    continue
+            payloads.append(parsed)
+        if not payloads:
+            return BackendAllocatorMemorySample(
+                runner_id=runner_id,
+                job_id=job_id,
+                sample_window=sample_window,
+                error="runner_memory_telemetry_empty",
+            )
+        return _backend_allocator_sample_from_payloads(
+            payloads,
+            runner_id=runner_id,
+            job_id=job_id,
+            fallback_sample_window=sample_window,
         )
 
 
@@ -1132,6 +1261,9 @@ def summarize_local_memory_observations(
         ),
         system_observed_peak_delta_ram_mb=_max_optional(
             observation.system_peak_delta_ram_mb for observation in observations
+        ),
+        backend_allocator_observed_peak_vram_mb=_max_optional(
+            observation.backend_allocator_peak_vram_mb for observation in observations
         ),
         attribution_quality=_best_attribution_quality(
             observation.attribution_quality for observation in observations
@@ -2309,6 +2441,153 @@ def _parse_windows_gpu_memory_json(output: str) -> tuple[str | None, int | None,
     return device_name, total_vram_mb, free_vram_mb, error
 
 
+def _parse_windows_gpu_process_memory_json(output: str) -> tuple[list[GpuProcessMemoryUsage], str | None]:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return [], "windows_gpu_process_observer_parse_failed"
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return [], "windows_gpu_process_observer_payload_invalid"
+    by_pid: dict[int, int] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        pid = _coerce_int(item.get("pid"))
+        if pid is None:
+            continue
+        dedicated_mb = _coerce_memory_mb(item.get("dedicated_used_mb"), item.get("dedicated_used_bytes")) or 0
+        shared_mb = _coerce_memory_mb(item.get("shared_used_mb"), item.get("shared_used_bytes")) or 0
+        used_mb = dedicated_mb + shared_mb
+        if used_mb <= 0:
+            continue
+        by_pid[pid] = by_pid.get(pid, 0) + used_mb
+    return [
+        GpuProcessMemoryUsage(pid=pid, used_vram_mb=used_mb)
+        for pid, used_mb in sorted(by_pid.items())
+    ], None
+
+
+def _backend_allocator_sample_from_payloads(
+    payloads: list[dict[str, Any]],
+    *,
+    runner_id: str | None,
+    job_id: str | None,
+    fallback_sample_window: MemorySampleWindow,
+) -> BackendAllocatorMemorySample:
+    latest = payloads[-1]
+    sources: list[str] = []
+    reasons: list[str] = []
+    details: dict[str, Any] = {}
+    current_candidates: list[int] = []
+    peak_candidates: list[int] = []
+    budget_candidates: list[int] = []
+    backend = _memory_backend_from_value(latest.get("backend"))
+    has_allocator_signal = False
+    has_budget_signal = False
+
+    for payload in payloads:
+        payload_sources = payload.get("signal_sources")
+        if isinstance(payload_sources, list):
+            sources.extend(str(source) for source in payload_sources if source)
+        payload_reasons = payload.get("attribution_reasons")
+        if isinstance(payload_reasons, list):
+            reasons.extend(str(reason) for reason in payload_reasons if reason)
+        cuda = payload.get("cuda") if isinstance(payload.get("cuda"), dict) else {}
+        if cuda:
+            has_allocator_signal = True
+            sources.append("pytorch_cuda_allocator")
+            reasons.append("runner_side_cuda_allocator_stats")
+            _append_memory_candidate(current_candidates, cuda.get("reserved_current_mb"), cuda.get("reserved_current_bytes"))
+            _append_memory_candidate(current_candidates, cuda.get("allocated_current_mb"), cuda.get("allocated_current_bytes"))
+            _append_memory_candidate(peak_candidates, cuda.get("reserved_peak_mb"), cuda.get("reserved_peak_bytes"))
+            _append_memory_candidate(peak_candidates, cuda.get("allocated_peak_mb"), cuda.get("allocated_peak_bytes"))
+            details["cuda"] = _merge_dict(details.get("cuda"), cuda)
+        mps = payload.get("mps") if isinstance(payload.get("mps"), dict) else {}
+        if mps:
+            has_allocator_signal = True
+            sources.append("pytorch_mps_allocator")
+            reasons.append("runner_side_mps_allocator_stats")
+            _append_memory_candidate(current_candidates, mps.get("current_allocated_mb"), mps.get("current_allocated_bytes"))
+            _append_memory_candidate(current_candidates, mps.get("driver_allocated_mb"), mps.get("driver_allocated_bytes"))
+            _append_memory_candidate(peak_candidates, mps.get("driver_allocated_mb"), mps.get("driver_allocated_bytes"))
+            _append_memory_candidate(budget_candidates, mps.get("recommended_max_mb"), mps.get("recommended_max_bytes"))
+            details["mps"] = _merge_dict(details.get("mps"), mps)
+        dxgi = payload.get("dxgi") if isinstance(payload.get("dxgi"), dict) else {}
+        if dxgi:
+            has_budget_signal = True
+            sources.append("dxgi_query_video_memory_info")
+            reasons.append("runner_side_dxgi_video_memory_info")
+            _append_memory_candidate(current_candidates, dxgi.get("current_usage_mb"), dxgi.get("current_usage_bytes"))
+            _append_memory_candidate(peak_candidates, dxgi.get("current_usage_mb"), dxgi.get("current_usage_bytes"))
+            _append_memory_candidate(budget_candidates, dxgi.get("budget_mb"), dxgi.get("budget_bytes"))
+            details["dxgi"] = _merge_dict(details.get("dxgi"), dxgi)
+
+    current_vram_mb = max(current_candidates) if current_candidates else None
+    peak_vram_mb = max(peak_candidates or current_candidates) if peak_candidates or current_candidates else None
+    budget_vram_mb = max(budget_candidates) if budget_candidates else None
+    sample_window = _memory_sample_window_from_value(latest.get("sample_window")) or fallback_sample_window
+    available = peak_vram_mb is not None or current_vram_mb is not None or budget_vram_mb is not None
+    return BackendAllocatorMemorySample(
+        available=available,
+        runner_id=runner_id or _string_or_none(latest.get("runner_id")),
+        job_id=job_id or _string_or_none(latest.get("job_id")),
+        pid=_coerce_int(latest.get("pid")),
+        sample_window=sample_window,
+        backend=backend,
+        current_vram_mb=current_vram_mb,
+        peak_vram_mb=peak_vram_mb,
+        budget_vram_mb=budget_vram_mb,
+        signal_quality=MemorySignalQuality.ALLOCATOR
+        if has_allocator_signal
+        else MemorySignalQuality.BACKEND_BUDGET
+        if has_budget_signal
+        else MemorySignalQuality.UNAVAILABLE,
+        attribution_quality=MemoryAttributionQuality.BACKEND_ALLOCATOR
+        if available
+        else MemoryAttributionQuality.UNAVAILABLE,
+        attribution_sources=_unique_preserving_order(sources),
+        attribution_reasons=_unique_preserving_order(reasons),
+        details=details,
+        error=None if available else "runner_backend_allocator_telemetry_unavailable",
+    )
+
+
+def _append_memory_candidate(candidates: list[int], mb_value: Any, bytes_value: Any = None) -> None:
+    value = _coerce_memory_mb(mb_value, bytes_value)
+    if value is not None:
+        candidates.append(value)
+
+
+def _memory_backend_from_value(value: Any) -> MemoryBackend:
+    if isinstance(value, MemoryBackend):
+        return value
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return MemoryBackend(value)
+    return MemoryBackend.UNKNOWN
+
+
+def _memory_sample_window_from_value(value: Any) -> MemorySampleWindow | None:
+    if isinstance(value, MemorySampleWindow):
+        return value
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return MemorySampleWindow(value)
+    return None
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _merge_dict(previous: Any, current: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(previous) if isinstance(previous, dict) else {}
+    merged.update(current)
+    return merged
+
+
 def _coerce_memory_mb(mb_value: Any, bytes_value: Any = None) -> int | None:
     parsed_mb = _coerce_int(mb_value)
     if parsed_mb is not None:
@@ -2379,6 +2658,30 @@ try {
   dedicated_used_bytes = $dedicated
   shared_used_bytes = $shared
 } | ConvertTo-Json -Compress
+"""
+
+
+_WINDOWS_GPU_PROCESS_MEMORY_SCRIPT = r"""
+$rows = @()
+try {
+  $samples = (Get-Counter '\GPU Process Memory(*)\Dedicated Usage','\GPU Process Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples
+  foreach ($sample in $samples) {
+    $path = [string]$sample.Path
+    $pid = $null
+    if ($path -match 'pid_([0-9]+)') {
+      $pid = [int]$Matches[1]
+    }
+    if ($null -eq $pid) {
+      continue
+    }
+    $rows += [PSCustomObject]@{
+      pid = $pid
+      dedicated_used_bytes = if ($path -like '*dedicated usage') { [int64]$sample.CookedValue } else { 0 }
+      shared_used_bytes = if ($path -like '*shared usage') { [int64]$sample.CookedValue } else { 0 }
+    }
+  }
+} catch {}
+$rows | ConvertTo-Json -Compress
 """
 
 

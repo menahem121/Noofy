@@ -51,6 +51,7 @@ class RunnerLaunchSpec(BaseModel):
     entrypoint: str = "main.py"
     extra_args: list[str] = Field(default_factory=list)
     env: dict[str, str] | None = None
+    memory_telemetry_path: Path | None = None
 
 
 class RunnerProcessStatus(BaseModel):
@@ -119,17 +120,15 @@ class RunnerProcessSupervisor:
         port = spec.port or select_free_port(spec.host)
         base_url = f"http://{spec.host}:{port}"
         ws_url = _default_ws_url(base_url)
-        command = tuple(
-            [
-                spec.python_executable,
-                spec.entrypoint,
-                "--listen",
-                spec.host,
-                "--port",
-                str(port),
-                *spec.extra_args,
-            ]
-        )
+        target_command = [
+            spec.entrypoint,
+            "--listen",
+            spec.host,
+            "--port",
+            str(port),
+            *spec.extra_args,
+        ]
+        command = tuple(_memory_probe_command(spec, target_command))
         process_env = dict(os.environ)
         if spec.env is not None:
             process_env.update(spec.env)
@@ -148,6 +147,7 @@ class RunnerProcessSupervisor:
             runtime_profile_id=spec.runtime_profile_id,
             runtime_profile_variant_id=spec.runtime_profile_variant_id,
             memory_class=spec.memory_class,
+            memory_telemetry_path=str(spec.memory_telemetry_path) if spec.memory_telemetry_path is not None else None,
         )
 
         try:
@@ -492,6 +492,23 @@ def _process_tree_start_kwargs() -> dict[str, object]:
     if os.name == "nt":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
+
+
+def _memory_probe_command(spec: RunnerLaunchSpec, target_command: list[str]) -> list[str]:
+    if spec.memory_telemetry_path is None:
+        return [spec.python_executable, *target_command]
+    return [
+        spec.python_executable,
+        str(Path(__file__).with_name("runner_memory_probe.py")),
+        "--runner-id",
+        spec.runner_id,
+        "--telemetry-file",
+        str(spec.memory_telemetry_path),
+        "--sample-window",
+        "runner_startup",
+        "--",
+        *target_command,
+    ]
 
 
 def _safe_runner_id(runner_id: str) -> str:

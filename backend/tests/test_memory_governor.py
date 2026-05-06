@@ -1,4 +1,5 @@
 import subprocess
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -6,6 +7,7 @@ from pydantic import ValidationError
 from app.engine.diagnostics import LogStore
 from app.runtime.memory_governor import (
     FallbackMemoryObserver,
+    BackendAllocatorMemorySample,
     GpuProcessMemoryUsage,
     LocalMemoryEvidenceSummary,
     LocalMemoryLearningStore,
@@ -26,6 +28,7 @@ from app.runtime.memory_governor import (
     NvmlMemoryObserver,
     NvidiaSmiMemoryObserver,
     ProcessTreeMemoryObserver,
+    RunnerMemoryTelemetryReader,
     RunnerMemorySnapshot,
     SystemMemoryObserver,
     UnavailableMemoryObserver,
@@ -408,6 +411,48 @@ def test_windows_gpu_memory_observer_falls_back_to_ram_when_counters_fail() -> N
     assert snapshot.error == "counter unavailable"
 
 
+def test_windows_gpu_memory_observer_maps_process_counters_to_runner_pids() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        assert command[0] == "powershell"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                [
+                    {"pid": 4242, "dedicated_used_bytes": 1048576000, "shared_used_bytes": 0},
+                    {"pid": 4243, "dedicated_used_bytes": 0, "shared_used_bytes": 524288000},
+                    {"pid": 9999, "dedicated_used_bytes": 999999999, "shared_used_bytes": 0},
+                ]
+            ),
+            stderr="",
+        )
+
+    sample = WindowsGpuMemoryObserver(command_runner=runner).sample_process_vram({4242, 4243})
+
+    assert sample.available is True
+    assert sample.matched_pids == [4242, 4243]
+    assert sample.process_tree_vram_mb == 1500
+    assert sample.attribution_quality is MemoryAttributionQuality.PROCESS_EXACT
+    assert sample.attribution_sources == ["windows_gpu_process_counters"]
+
+
+def test_windows_gpu_memory_observer_reports_weak_when_process_counters_do_not_match() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps([{"pid": 9999, "dedicated_used_bytes": 1048576000}]),
+            stderr="",
+        )
+
+    sample = WindowsGpuMemoryObserver(command_runner=runner).sample_process_vram({4242})
+
+    assert sample.available is False
+    assert sample.process_tree_vram_mb is None
+    assert sample.attribution_quality is MemoryAttributionQuality.UNAVAILABLE
+    assert "windows_gpu_process_memory_no_matching_pid" in sample.attribution_reasons
+
+
 def test_process_tree_memory_observer_sums_root_and_children() -> None:
     def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
         assert command[:2] == ["ps", "-axo"]
@@ -443,6 +488,77 @@ def test_process_tree_memory_observer_handles_missing_process() -> None:
     assert sample.root_pid == 100
     assert sample.process_tree_ram_mb is None
     assert sample.error == "runner_process_not_found"
+
+
+def test_runner_memory_telemetry_reader_preserves_allocator_and_dxgi_quality(tmp_path) -> None:
+    path = tmp_path / "runner-memory.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runner_id": "runner-a",
+                        "pid": 4242,
+                        "sample_window": "workflow_execution",
+                        "observed_at": "2026-05-06T10:00:00+00:00",
+                        "backend": "cuda",
+                        "cuda": {
+                            "allocated_current_bytes": 1073741824,
+                            "reserved_current_bytes": 2147483648,
+                            "allocated_peak_bytes": 3221225472,
+                            "reserved_peak_bytes": 4294967296,
+                            "oom_count": 0,
+                            "alloc_retry_count": 1,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runner_id": "runner-a",
+                        "pid": 4242,
+                        "sample_window": "workflow_execution",
+                        "observed_at": "2026-05-06T10:00:01+00:00",
+                        "backend": "directml",
+                        "dxgi": {
+                            "current_usage_bytes": 5368709120,
+                            "budget_bytes": 8589934592,
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    sample = RunnerMemoryTelemetryReader().sample(path, runner_id="runner-a")
+
+    assert sample.available is True
+    assert sample.pid == 4242
+    assert sample.sample_window is MemorySampleWindow.WORKFLOW_EXECUTION
+    assert sample.current_vram_mb == 5120
+    assert sample.peak_vram_mb == 5120
+    assert sample.budget_vram_mb == 8192
+    assert sample.signal_quality is MemorySignalQuality.ALLOCATOR
+    assert sample.attribution_quality is MemoryAttributionQuality.BACKEND_ALLOCATOR
+    assert "pytorch_cuda_allocator" in sample.attribution_sources
+    assert "dxgi_query_video_memory_info" in sample.attribution_sources
+    assert sample.details["cuda"]["alloc_retry_count"] == 1
+
+    filtered = RunnerMemoryTelemetryReader().sample(
+        path,
+        runner_id="runner-a",
+        observed_after="2026-05-06T10:00:00+00:00",
+    )
+    assert filtered.current_vram_mb == 5120
+    assert filtered.details.get("cuda") is None
+
+
+def test_runner_memory_telemetry_reader_is_gracefully_unavailable(tmp_path) -> None:
+    sample = RunnerMemoryTelemetryReader().sample(tmp_path / "missing.jsonl", runner_id="runner-a")
+
+    assert sample.available is False
+    assert sample.attribution_quality is MemoryAttributionQuality.UNAVAILABLE
+    assert sample.error == "runner_memory_telemetry_file_missing"
 
 
 def test_system_and_unavailable_memory_observers_return_structured_snapshots() -> None:
@@ -830,6 +946,8 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
                 peak_vram_mb=7000,
                 peak_ram_mb=3000,
                 process_tree_peak_ram_mb=2600,
+                backend_allocator_peak_vram_mb=6400,
+                backend_allocator_details={"cuda": {"reserved_peak_bytes": 6710886400}},
                 attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
                 attribution_sources=["process_tree_rss"],
                 attribution_reasons=["runner_process_tree_rss"],
@@ -858,6 +976,7 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
     assert summary.observed_peak_ram_mb == 3000
     assert summary.process_tree_observed_peak_ram_mb == 2600
     assert summary.system_observed_peak_delta_vram_mb == 9200
+    assert summary.backend_allocator_observed_peak_vram_mb == 6400
     assert summary.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
     assert summary.attribution_sources == ["process_tree_rss", "system_memory_delta"]
     assert summary.evictions_required == 1
@@ -886,6 +1005,7 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
             peak_vram_mb=6800,
             peak_ram_mb=2800,
             process_tree_peak_ram_mb=2400,
+            backend_allocator_peak_vram_mb=6600,
             attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
             attribution_sources=["process_tree_rss"],
             observed_at="2026-05-03T10:00:00+00:00",
@@ -920,6 +1040,7 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
     assert loaded.successful_runs == 2
     assert loaded.observed_peak_vram_mb == 7100
     assert loaded.process_tree_observed_peak_ram_mb == 2400
+    assert loaded.backend_allocator_observed_peak_vram_mb == 6600
     assert loaded.attribution_quality is MemoryAttributionQuality.PROCESS_TREE
     assert loaded.attribution_sources == ["process_tree_rss"]
     assert len(store.list_summaries()) == 1

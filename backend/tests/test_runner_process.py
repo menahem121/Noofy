@@ -150,6 +150,7 @@ async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> Non
             "runtime_profile_id": "noofy-comfyui-v1-default",
             "runtime_profile_variant_id": "linux-x64-cuda130",
             "memory_class": RunnerMemoryClass.GPU_HEAVY,
+            "memory_telemetry_path": tmp_path / ".noofy" / "memory" / "runner-1.jsonl",
         }
     )
 
@@ -162,6 +163,37 @@ async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> Non
     assert handle.descriptor.runtime_profile_id == "noofy-comfyui-v1-default"
     assert handle.descriptor.runtime_profile_variant_id == "linux-x64-cuda130"
     assert handle.descriptor.memory_class is RunnerMemoryClass.GPU_HEAVY
+    assert handle.descriptor.memory_telemetry_path == str(tmp_path / ".noofy" / "memory" / "runner-1.jsonl")
+
+
+@pytest.mark.anyio
+async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is_set(tmp_path: Path) -> None:
+    created: list[tuple[list[str], dict]] = []
+
+    async def process_factory(command: list[str], **kwargs):
+        created.append((command, kwargs))
+        return FakeProcess(pid=1234)
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+    )
+    telemetry_path = tmp_path / ".noofy" / "memory" / "runner-1.jsonl"
+
+    await supervisor.start(_launch_spec(tmp_path).model_copy(update={"memory_telemetry_path": telemetry_path}))
+
+    command = created[0][0]
+    assert command[0] == "/opt/noofy/python"
+    assert command[1].endswith("runner_memory_probe.py")
+    assert "--telemetry-file" in command
+    assert str(telemetry_path) in command
+    assert "--" in command
+    assert command[-5:] == ["main.py", "--listen", "127.0.0.1", "--port", "8188"]
 
 
 @pytest.mark.anyio

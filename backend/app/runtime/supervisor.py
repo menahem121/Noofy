@@ -133,6 +133,7 @@ class RunnerDescriptor(BaseModel):
     recent_memory_error_at: str | None = None
     recent_memory_error_count: int = Field(default=0, ge=0)
     pid: int | None = None
+    memory_telemetry_path: str | None = None
     current_job_id: str | None = None
     last_used_at: str | None = None
     open_workflow_lease_count: int = 0

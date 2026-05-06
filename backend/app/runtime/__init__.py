@@ -162,6 +162,7 @@ from app.runtime.supervisor import (
     RunnerSupervisor,
 )
 from app.runtime.memory_governor import (
+    BackendAllocatorMemorySample,
     MachineMemoryObserver,
     CommandRunner,
     FallbackMemoryObserver,
@@ -186,6 +187,7 @@ from app.runtime.memory_governor import (
     NvidiaSmiMemoryObserver,
     ProcessTreeMemoryObserver,
     ProcessTreeMemorySample,
+    RunnerMemoryTelemetryReader,
     RunnerMemorySnapshot,
     GpuProcessMemorySample,
     GpuProcessMemoryUsage,
@@ -282,6 +284,7 @@ __all__ = [
     "QueuedRunnerStart",
     "QueuedRunnerStartKind",
     "QueuedRunnerStartStatus",
+    "BackendAllocatorMemorySample",
     "FallbackMemoryObserver",
     "LocalMemoryEvidenceSummary",
     "LocalMemoryLearningStore",
@@ -311,6 +314,7 @@ __all__ = [
     "NvidiaSmiMemoryObserver",
     "ProcessTreeMemoryObserver",
     "ProcessTreeMemorySample",
+    "RunnerMemoryTelemetryReader",
     "GpuProcessMemorySample",
     "GpuProcessMemoryUsage",
     "PreparedRuntimeWorkspace",

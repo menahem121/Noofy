@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Iterable
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,7 @@ from app.runtime.launch_settings import (
 from app.runtime.manager import RuntimeManager
 from app.runtime.memory_governor import (
     GpuProcessMemorySample,
+    BackendAllocatorMemorySample,
     LocalMemoryLearningStore,
     LocalMemoryObservation,
     MachineMemoryObserver,
@@ -78,6 +80,7 @@ from app.runtime.memory_governor import (
     MemorySampleWindow,
     ProcessTreeMemoryObserver,
     ProcessTreeMemorySample,
+    RunnerMemoryTelemetryReader,
     RunnerMemorySnapshot,
     WorkflowMemoryEstimateRequest,
     build_workflow_memory_estimate,
@@ -144,6 +147,7 @@ class EngineService:
         imported_package_store: ImportedWorkflowPackageStore | None = None,
         memory_observer: MachineMemoryObserver | None = None,
         process_tree_memory_observer: ProcessTreeMemoryObserver | None = None,
+        runner_memory_telemetry_reader: RunnerMemoryTelemetryReader | None = None,
         memory_learning_store: LocalMemoryLearningStore | None = None,
         comfyui_update_service: ComfyUIUpdateService | None = None,
         comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
@@ -159,6 +163,7 @@ class EngineService:
         self.imported_package_store = imported_package_store
         self.memory_observer = memory_observer
         self.process_tree_memory_observer = process_tree_memory_observer or ProcessTreeMemoryObserver()
+        self.runner_memory_telemetry_reader = runner_memory_telemetry_reader or RunnerMemoryTelemetryReader()
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
         self.comfyui_launch_settings_store = comfyui_launch_settings_store
@@ -1078,6 +1083,7 @@ class EngineService:
             workflow_id=workflow_id,
             details={"runner_id": runner.runner_id, "input_keys": sorted(inputs.keys())},
         )
+        memory_sampling_started_at = datetime.now(UTC).isoformat()
         pre_submit_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
         job = await adapter.run_workflow(package, graph, inputs, options)
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
@@ -1089,6 +1095,8 @@ class EngineService:
             workflow_id=workflow_id,
             runner_id=runner.runner_id,
             initial_snapshot=pre_submit_snapshot,
+            retry_after_cleanup=memory_retry_after_cleanup,
+            telemetry_observed_after=memory_sampling_started_at,
         )
         if memory_decision is not None:
             job = job.model_copy(
@@ -1676,6 +1684,8 @@ class EngineService:
         workflow_id: str,
         runner_id: str,
         initial_snapshot: MachineMemorySnapshot | None = None,
+        retry_after_cleanup: bool = False,
+        telemetry_observed_after: str | None = None,
     ) -> None:
         if self.memory_observer is None or job_id in self._memory_sampling_tasks:
             return
@@ -1689,10 +1699,16 @@ class EngineService:
                     workflow_id=workflow_id,
                     runner_id=runner_id,
                     sample_window=MemorySampleWindow.BEFORE_SUBMIT,
+                    telemetry_observed_after=telemetry_observed_after,
                 )
             )
         self._memory_sampling_stop_events[job_id] = stop_event
         self._memory_sampling_snapshots[job_id] = snapshots
+        execution_window = (
+            MemorySampleWindow.RETRY_AFTER_CLEANUP
+            if retry_after_cleanup
+            else MemorySampleWindow.WORKFLOW_EXECUTION
+        )
 
         async def _sample() -> None:
             while not stop_event.is_set():
@@ -1702,7 +1718,8 @@ class EngineService:
                         job_id=job_id,
                         workflow_id=workflow_id,
                         runner_id=runner_id,
-                        sample_window=MemorySampleWindow.EXECUTION,
+                        sample_window=execution_window,
+                        telemetry_observed_after=telemetry_observed_after,
                     )
                 )
                 try:
@@ -1716,6 +1733,7 @@ class EngineService:
                     workflow_id=workflow_id,
                     runner_id=runner_id,
                     sample_window=MemorySampleWindow.AFTER_COMPLETION,
+                    telemetry_observed_after=telemetry_observed_after,
                 )
             )
 
@@ -1737,6 +1755,7 @@ class EngineService:
         workflow_id: str,
         runner_id: str,
         sample_window: MemorySampleWindow,
+        telemetry_observed_after: str | None = None,
     ) -> MachineMemorySnapshot:
         try:
             runner = self.runner_supervisor.get_runner(runner_id)
@@ -1746,22 +1765,32 @@ class EngineService:
         process_sample = self.process_tree_memory_observer.sample(root_pid)
         process_pids = {pid for pid in [process_sample.root_pid, *process_sample.child_pids] if pid is not None}
         gpu_sample = _sample_gpu_process_memory(self.memory_observer, process_pids)
+        allocator_sample = self.runner_memory_telemetry_reader.sample(
+            runner.memory_telemetry_path if runner is not None else None,
+            runner_id=runner_id,
+            job_id=job_id,
+            sample_window=sample_window,
+            observed_after=telemetry_observed_after,
+        )
         attribution_quality = _best_service_attribution_quality(
             [
                 process_sample.attribution_quality,
                 gpu_sample.attribution_quality,
+                allocator_sample.attribution_quality,
             ]
         )
         attribution_sources = _unique_service_values(
             [
                 *process_sample.attribution_sources,
                 *gpu_sample.attribution_sources,
+                *allocator_sample.attribution_sources,
             ]
         )
         attribution_reasons = _unique_service_values(
             [
                 *process_sample.attribution_reasons,
                 *gpu_sample.attribution_reasons,
+                *allocator_sample.attribution_reasons,
             ]
         )
         return snapshot.model_copy(
@@ -1777,6 +1806,9 @@ class EngineService:
                 "attribution_reasons": attribution_reasons,
                 "process_tree_ram_mb": process_sample.process_tree_ram_mb,
                 "process_tree_vram_mb": gpu_sample.process_tree_vram_mb,
+                "backend_allocator_current_vram_mb": allocator_sample.current_vram_mb,
+                "backend_allocator_peak_vram_mb": allocator_sample.peak_vram_mb,
+                "backend_allocator_details": allocator_sample.details,
             }
         )
 
@@ -1794,7 +1826,17 @@ class EngineService:
         system_peak_vram_mb, system_peak_ram_mb = _peak_used_memory_delta_from_snapshots(snapshots)
         process_peak_ram_mb = _peak_optional(snapshot.process_tree_ram_mb for snapshot in snapshots)
         process_peak_vram_mb = _peak_optional(snapshot.process_tree_vram_mb for snapshot in snapshots)
-        peak_vram_mb = process_peak_vram_mb if process_peak_vram_mb is not None else system_peak_vram_mb
+        allocator_peak_vram_mb = _peak_optional(
+            snapshot.backend_allocator_peak_vram_mb or snapshot.backend_allocator_current_vram_mb
+            for snapshot in snapshots
+        )
+        peak_vram_mb = (
+            process_peak_vram_mb
+            if process_peak_vram_mb is not None
+            else allocator_peak_vram_mb
+            if allocator_peak_vram_mb is not None
+            else system_peak_vram_mb
+        )
         peak_ram_mb = process_peak_ram_mb if process_peak_ram_mb is not None else system_peak_ram_mb
         attribution_quality = _best_service_attribution_quality(
             snapshot.attribution_quality for snapshot in snapshots
@@ -1818,6 +1860,9 @@ class EngineService:
         if process_peak_vram_mb is None and system_peak_vram_mb is not None:
             attribution_sources.append("system_memory_delta")
             attribution_reasons.append("system_vram_delta_active_job_window")
+        if allocator_peak_vram_mb is not None:
+            attribution_sources.append("runner_backend_allocator")
+            attribution_reasons.append("runner_backend_allocator_peak")
         if process_peak_ram_mb is None and system_peak_ram_mb is not None:
             attribution_sources.append("system_memory_delta")
             attribution_reasons.append("system_ram_delta_active_job_window")
@@ -1836,11 +1881,19 @@ class EngineService:
         self._job_memory_attribution[job_id] = {
             "runner_root_pid": runner_root_pid,
             "runner_child_pids": runner_child_pids,
-            "sample_window": MemorySampleWindow.EXECUTION,
+            "sample_window": _sample_window_for_selected_peak(
+                snapshots,
+                selected_vram_mb=peak_vram_mb,
+                selected_ram_mb=peak_ram_mb,
+            ),
             "process_tree_peak_vram_mb": process_peak_vram_mb,
             "process_tree_peak_ram_mb": process_peak_ram_mb,
             "system_peak_delta_vram_mb": system_peak_vram_mb,
             "system_peak_delta_ram_mb": system_peak_ram_mb,
+            "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
+            "backend_allocator_details": _merge_service_dicts(
+                snapshot.backend_allocator_details for snapshot in snapshots
+            ),
             "attribution_quality": attribution_quality,
             "attribution_sources": attribution_sources,
             "attribution_reasons": attribution_reasons,
@@ -1865,6 +1918,8 @@ class EngineService:
                 "selected_peak_ram_mb": peak_ram_mb,
                 "system_peak_delta_vram_mb": system_peak_vram_mb,
                 "system_peak_delta_ram_mb": system_peak_ram_mb,
+                "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
+                "sample_window": self._job_memory_attribution[job_id]["sample_window"].value,
                 "runner_id": runner.runner_id if runner is not None else None,
                 "runner_root_pid": runner_root_pid,
                 "runner_child_pids": runner_child_pids,
@@ -2061,6 +2116,8 @@ class EngineService:
                 process_tree_peak_ram_mb=attribution.get("process_tree_peak_ram_mb"),
                 system_peak_delta_vram_mb=attribution.get("system_peak_delta_vram_mb"),
                 system_peak_delta_ram_mb=attribution.get("system_peak_delta_ram_mb"),
+                backend_allocator_peak_vram_mb=attribution.get("backend_allocator_peak_vram_mb"),
+                backend_allocator_details=attribution.get("backend_allocator_details", {}),
                 attribution_quality=attribution.get("attribution_quality", MemoryAttributionQuality.UNKNOWN),
                 attribution_sources=attribution.get("attribution_sources", []),
                 attribution_reasons=attribution.get("attribution_reasons", []),
@@ -2152,6 +2209,7 @@ def _workflow_runner_launch_spec(
     runner_id = EngineService._runner_id_for_capsule(capsule_lock)
     if runner_id_suffix:
         runner_id = f"{runner_id}-{runner_id_suffix}"
+    telemetry_path = runner_workspace_path / ".noofy" / "memory" / f"{runner_id}.jsonl"
     extra_args = [
         "--base-directory",
         str(runner_workspace_path),
@@ -2178,6 +2236,7 @@ def _workflow_runner_launch_spec(
         memory_class=_memory_class_for_runtime_backend(capsule_lock.runtime.gpu_backend),
         host=runtime_manager.managed_host,
         extra_args=extra_args,
+        memory_telemetry_path=telemetry_path,
         env={
             "NOOFY_CAPSULE_FINGERPRINT": capsule_lock.runtime.capsule_fingerprint,
             "NOOFY_DEPENDENCY_ENV_PATH": str(dependency_env_path),
@@ -2433,6 +2492,42 @@ def _peak_used_delta_mb(values: Iterable[tuple[int | None, int | None]]) -> int 
         return None
     delta_mb = max(used_values) - used_values[0]
     return delta_mb if delta_mb > 0 else None
+
+
+def _sample_window_for_selected_peak(
+    snapshots: list[MachineMemorySnapshot],
+    *,
+    selected_vram_mb: int | None,
+    selected_ram_mb: int | None,
+) -> MemorySampleWindow:
+    if selected_vram_mb is not None:
+        for snapshot in snapshots:
+            if snapshot.process_tree_vram_mb == selected_vram_mb:
+                return snapshot.sample_window
+        for snapshot in snapshots:
+            if snapshot.backend_allocator_peak_vram_mb == selected_vram_mb:
+                return snapshot.sample_window
+        for snapshot in snapshots:
+            if snapshot.backend_allocator_current_vram_mb == selected_vram_mb:
+                return snapshot.sample_window
+    if selected_ram_mb is not None:
+        for snapshot in snapshots:
+            if snapshot.process_tree_ram_mb == selected_ram_mb:
+                return snapshot.sample_window
+    return MemorySampleWindow.UNKNOWN
+
+
+def _merge_service_dicts(values: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, item in value.items():
+            if isinstance(item, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **item}
+            else:
+                merged[key] = item
+    return merged
 
 
 def _sample_gpu_process_memory(

@@ -8,12 +8,14 @@ from app.engine.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
 from app.runtime.memory_governor import (
+    BackendAllocatorMemorySample,
     GpuProcessMemorySample,
     LocalMemoryLearningStore,
     MachineMemorySnapshot,
     MemoryAttributionQuality,
     MemoryBackend,
     MemoryPressureLevel,
+    MemorySampleWindow,
     ProcessTreeMemorySample,
 )
 from app.runtime.supervisor import (
@@ -720,12 +722,41 @@ class FakeProcessTreeMemoryObserver:
         )
 
 
+class FakeRunnerMemoryTelemetryReader:
+    def sample(
+        self,
+        telemetry_path,
+        *,
+        runner_id=None,
+        job_id=None,
+        sample_window=MemorySampleWindow.UNKNOWN,
+        observed_after=None,
+    ):
+        del telemetry_path
+        del observed_after
+        return BackendAllocatorMemorySample(
+            available=True,
+            runner_id=runner_id,
+            job_id=job_id,
+            pid=4242,
+            sample_window=sample_window,
+            backend=MemoryBackend.CUDA,
+            current_vram_mb=2300,
+            peak_vram_mb=3600,
+            attribution_quality=MemoryAttributionQuality.BACKEND_ALLOCATOR,
+            attribution_sources=["pytorch_cuda_allocator"],
+            attribution_reasons=["runner_side_cuda_allocator_stats"],
+            details={"cuda": {"reserved_peak_bytes": 3774873600}},
+        )
+
+
 def _build_service(
     adapter: RecordingAdapter,
     *,
     memory_learning_store: LocalMemoryLearningStore | None = None,
     memory_observer: StaticMemoryObserver | SequenceMemoryObserver | None = None,
     process_tree_memory_observer: FakeProcessTreeMemoryObserver | None = None,
+    runner_memory_telemetry_reader: FakeRunnerMemoryTelemetryReader | None = None,
 ) -> tuple[EngineService, RunnerSupervisor]:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), adapter)
@@ -738,6 +769,7 @@ def _build_service(
         memory_learning_store=memory_learning_store,
         memory_observer=memory_observer,
         process_tree_memory_observer=process_tree_memory_observer,
+        runner_memory_telemetry_reader=runner_memory_telemetry_reader,
     )
     return service, supervisor
 
@@ -1021,6 +1053,66 @@ async def test_get_result_prefers_process_tree_and_nvml_process_attribution(tmp_
     assert finish_event.details["runner_root_pid"] == 4242
     assert finish_event.details["runner_child_pids"] == [4243]
     assert finish_event.details["attribution_quality"] == "process_exact"
+
+
+@pytest.mark.anyio
+async def test_get_result_records_backend_allocator_telemetry_and_peak_window(tmp_path: Path) -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    learning_store = LocalMemoryLearningStore(tmp_path / "memory-learning")
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=learning_store,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=8_000,
+                    total_ram_mb=64_000,
+                    free_ram_mb=60_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=7_500,
+                    total_ram_mb=64_000,
+                    free_ram_mb=59_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+        runner_memory_telemetry_reader=FakeRunnerMemoryTelemetryReader(),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"pid": 4242, "memory_telemetry_path": str(tmp_path / "telemetry.jsonl")}),
+        adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await service.get_result(job.job_id)
+    runner = supervisor.get_runner("isolated-1")
+    summary = learning_store.list_summaries()[0]
+    events = service.log_store.list_events().events
+    finish_event = next(event for event in events if event.message == "Finished best-effort job memory sampling")
+
+    assert runner.observed_execution_peak_vram_mb == 3600
+    assert summary.backend_allocator_observed_peak_vram_mb == 3600
+    assert summary.attribution_quality is MemoryAttributionQuality.BACKEND_ALLOCATOR
+    assert "pytorch_cuda_allocator" in summary.attribution_sources
+    assert finish_event.details["backend_allocator_peak_vram_mb"] == 3600
+    assert finish_event.details["sample_window"] == MemorySampleWindow.BEFORE_SUBMIT.value
 
 
 @pytest.mark.anyio

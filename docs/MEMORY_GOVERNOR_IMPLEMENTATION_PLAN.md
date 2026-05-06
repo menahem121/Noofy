@@ -78,9 +78,9 @@ After a workflow result, Noofy records a local observation for completed,
 failed, canceled, and memory-error outcomes. Memory errors lower future
 confidence. Repeated successful observations raise confidence only for the same
 workflow, runner compatibility key, machine profile, backend, and input profile.
-Local observations preserve whether the peak came from process-tree RSS, NVML
-per-process GPU memory, an active-job-window system delta, or weak/unavailable
-attribution.
+Local observations preserve whether the peak came from process-tree RSS,
+per-process GPU memory, runner-side backend allocator telemetry, an
+active-job-window system delta, or weak/unavailable attribution.
 
 If a submitted job fails with a likely memory error, Noofy may stop idle
 isolated runners, wait for bounded memory release, and retry the same workflow
@@ -113,8 +113,9 @@ available, Noofy maps GPU memory PIDs back to the active runner root/child
 process tree and records that as stronger attribution than global GPU deltas.
 
 macOS Apple Silicon uses RAM as the unified CPU/GPU pressure pool. MPS admission
-does not require dedicated VRAM fields. PyTorch MPS allocator telemetry is still
-the desired Noofy-side runner signal for stronger MPS-specific peaks.
+does not require dedicated VRAM fields. The Noofy-owned runner memory probe can
+record PyTorch MPS allocator/driver/recommended memory telemetry when those APIs
+are available in the runner process.
 
 CPU fallback uses RAM pressure. GPU-style estimates can be used as a RAM
 pressure proxy when no dedicated RAM estimate exists. Capsules whose runtime
@@ -124,25 +125,32 @@ Linux RAM observation is augmented with PSI memory pressure when
 `/proc/pressure/memory` is available. PSI is a system stall/thrashing signal, not
 workflow-specific VRAM attribution.
 
-Windows first tries NVML and `nvidia-smi` for NVIDIA, then a best-effort
-DirectML-class observer using PowerShell GPU Adapter Memory counters and Win32
-video controller metadata, then RAM fallback. This is intentionally marked as a
-system sample because global counters are not exact per-runner attribution. A
-clean DXGI video-memory-budget implementation likely needs a small Noofy-owned
-Windows helper process/library or runner-side wrapper that can query budget/usage
-from the relevant adapter/process context without modifying ComfyUI. Querying
-DXGI only from the trusted backend process is not enough if the runner owns the
-actual DirectML allocations.
+Windows first tries NVML and `nvidia-smi` for NVIDIA, then a DirectML-class
+observer using Windows GPU Adapter Memory counters and Win32 video controller
+metadata, then RAM fallback. Global adapter counters are still marked as
+`system_sample`. For stronger runner attribution, the Windows observer also reads
+GPU Process Memory counters and maps matching PIDs back to the active runner
+process tree. That process-counter path is stronger than a system delta, but it
+is still OS-reported process usage, not an exact workflow graph allocation.
+
+The Noofy-owned runner memory probe is also the route for runner-process-context
+DXGI budget/current-usage telemetry. Querying DXGI only from the trusted backend
+process is not enough if the runner owns the DirectML allocations. The probe
+keeps the DXGI telemetry contract in runner-side code without modifying ComfyUI;
+real Windows hardware validation must confirm whether the current best-effort
+ctypes path is sufficient or whether Noofy should replace it with a tiny native
+helper library.
 
 ## Attribution Model
 
 Noofy currently treats attribution in descending strength:
 
 - `process_exact`: backend per-process GPU memory, currently NVML process memory
-  matched to the runner root or child PID
+  and Windows GPU Process Memory counters matched to the runner root or child PID
 - `process_tree`: runner root plus child-process RSS
-- `backend_allocator`: reserved for future runner-side PyTorch CUDA/MPS allocator
-  hooks
+- `backend_allocator`: Noofy-owned runner-side telemetry from PyTorch CUDA/MPS
+  allocator APIs, and runner-process-context DXGI budget/current-usage data when
+  available
 - `active_window_delta` / `system_delta`: whole-machine RAM/VRAM movement while a
   job is active
 - `unavailable`: attribution could not be observed
@@ -156,13 +164,15 @@ System-wide GPU/RAM deltas are useful diagnostics, but they must not be treated
 as exact workflow usage. Other applications, allocator caches, delayed release,
 and parallel runner activity can affect them.
 
-## Measurement Direction
+## Measurement Behavior
 
 Current runner descriptors, snapshots, signal metadata, and local observations
-are the v1 evidence model. Noofy samples machine memory around submitted jobs
-and uses the best observed incremental memory pressure to fill missing runner
-peak observations. That makes later decisions less theoretical without
-pretending the measurement is exact per-process attribution.
+are the v1 evidence model. Noofy samples machine memory around submitted jobs,
+samples runner process-tree RSS, maps backend process GPU counters where
+available, reads runner-side allocator telemetry JSONL when present, and uses the
+best observed memory pressure to fill missing runner peak observations. That
+makes later decisions less theoretical without pretending weak measurements are
+exact per-workflow attribution.
 
 Do not modify or fork code under `third_party/comfyui`.
 
@@ -177,13 +187,18 @@ Noofy-side observation should continue to use:
 - supported ComfyUI APIs or events
 - external system metrics
 
-The target measurement windows remain:
+The implemented measurement windows are:
 
-- runner startup
-- model loading
-- workflow execution
-- retry after cleanup
-- memory release after runner stop
+- `runner_startup`: emitted by the Noofy-owned runner memory probe while the
+  runner starts
+- `before_submit`: sampled immediately around workflow submission
+- `workflow_execution`: sampled while a normal workflow job is active
+- `retry_after_cleanup`: sampled while a memory-cleanup retry is active
+- `after_completion`: sampled immediately after the job result is observed
+- `cleanup` / `memory_release`: represented in the schema for cleanup/release
+  diagnostics; release polling still records ordinary machine snapshots today
+- `model_loading` / `unknown`: reserved for when reliable engine-side model-load
+  boundaries are available
 
 These observations are best-effort evidence, not guaranteed exact true peaks on
 every backend and platform. The goal is to make decisions less theoretical and
@@ -191,9 +206,12 @@ more grounded in local behavior, while staying honest about fragmentation,
 allocator caches, delayed release, other applications, and backend-specific
 visibility limits.
 
-PyTorch CUDA/MPS allocator attribution should be added through Noofy-owned
-runner wrappers or adapter-level hooks that execute beside the runner process.
-Do not patch vendored ComfyUI to collect allocator stats.
+PyTorch CUDA/MPS allocator attribution is collected through the Noofy-owned
+runner memory probe when the runner process has PyTorch and the relevant backend
+APIs available. The probe samples CUDA allocated/reserved current and peak bytes,
+CUDA OOM/retry counters when exposed, and MPS current/driver/recommended memory
+values when exposed. It runs as wrapper logic around the ComfyUI entrypoint and
+does not patch vendored ComfyUI.
 
 ## Safety Margins
 
@@ -233,6 +251,9 @@ Current tests cover:
 - attribution quality/source/reason metadata
 - process-tree RAM attribution and missing-process fallback
 - NVML per-process GPU memory mapping to runner PIDs
+- Windows per-process GPU counter mapping to runner PIDs
+- runner-side PyTorch CUDA/MPS allocator telemetry payload parsing
+- runner launch wrapping through the Noofy memory probe
 - direct NVML and `nvidia-smi` success/failure/partial data
 - Linux PSI pressure parsing and unavailable fallback behavior
 - RAM and Windows GPU-counter fallback observer behavior
@@ -268,8 +289,14 @@ when:
   memory
 - NVIDIA uses NVML first, with `nvidia-smi` fallback
 - Linux RAM pressure includes PSI when available
-- Windows reports current GPU-counter signals honestly and preserves DXGI helper
-  as the route to stronger DirectML budget data
+- Windows reports global GPU-counter signals honestly, maps GPU Process Memory
+  counters to runner PIDs when present, and uses the runner memory probe as the
+  DXGI process-context telemetry route
+- PyTorch CUDA/MPS allocator telemetry is read from Noofy-owned runner probe
+  JSONL files when present
+- job observations record `before_submit`, `workflow_execution`,
+  `retry_after_cleanup`, and `after_completion` windows, with startup telemetry
+  available from the runner probe
 - isolated and core workflow runs use Memory Governor admission
 - workflow runs can queue, clean up, warn, or refuse based on memory
   decisions
@@ -279,9 +306,10 @@ when:
 - API/UI payloads explain waiting, cleanup, retry, blocked, and warm states
 - tests remain hardware-independent by default
 
-That gate is mostly met in code, with important accuracy limits: Windows
-DirectML still needs real DXGI budget/usage integration for stronger GPU-budget
-signals, and PyTorch CUDA/MPS allocator peaks need runner-side Noofy hooks for
-allocator-level attribution. Remaining validation should happen on real NVIDIA
-CUDA, Windows DirectML/AMD/Intel/NVIDIA, Apple Silicon MPS, and Linux
+That gate is met in hardware-independent code and tests, with important accuracy
+limits. Windows DirectML still needs real-hardware validation to decide whether
+the current runner-side DXGI ctypes path is sufficient or should become a tiny
+native Noofy helper. CUDA/MPS allocator telemetry depends on which PyTorch APIs
+exist in the runner environment. Remaining validation should happen on real
+NVIDIA CUDA, Windows DirectML/AMD/Intel/NVIDIA, Apple Silicon MPS, and Linux
 PSI-enabled machines.
