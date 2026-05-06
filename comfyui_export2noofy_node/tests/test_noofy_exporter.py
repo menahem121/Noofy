@@ -45,6 +45,34 @@ def test_prepare_graph_for_export_preserves_load_image_inputs_without_mutating_o
     assert prompt["2"]["inputs"]["batch_size"] == 4
 
 
+def test_redact_local_image_inputs_for_package_removes_creator_image_references() -> None:
+    graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "creator-portrait.png", "upload": "image"},
+        },
+        "2": {
+            "class_type": "LoadImageMask",
+            "inputs": {"image": "private-mask.png", "channel": "alpha"},
+        },
+        "3": {
+            "class_type": "PreviewImage",
+            "inputs": {"images": ["1", 0]},
+        },
+    }
+
+    package_graph, adjustments = exporter.redact_local_image_inputs_for_package(graph)
+
+    assert package_graph["1"]["inputs"]["image"] == exporter.REDACTED_IMAGE_INPUT_VALUE
+    assert package_graph["1"]["inputs"]["upload"] == "image"
+    assert package_graph["2"]["inputs"]["image"] == exporter.REDACTED_IMAGE_INPUT_VALUE
+    assert package_graph["2"]["inputs"]["channel"] == "alpha"
+    assert package_graph["3"]["inputs"]["images"] == ["1", 0]
+    assert adjustments == {"image_inputs_redacted": 2}
+    assert graph["1"]["inputs"]["image"] == "creator-portrait.png"
+    assert graph["2"]["inputs"]["image"] == "private-mask.png"
+
+
 def test_build_export_filename_uses_only_package_id() -> None:
     assert exporter.build_export_filename("eraserv4.5") == "eraserv4.5.noofy"
 
@@ -247,3 +275,66 @@ def test_custom_node_manifest_and_zip_exclude_runtime_artifacts(tmp_path: Path) 
     assert "custom_nodes/my_node_pack/requirements.txt" in names
     assert "custom_nodes/my_node_pack/install.py" in names
     assert "custom_nodes/my_node_pack/large.safetensors" not in names
+
+
+def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None:
+    test_graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "creator-family-photo.png", "upload": "image"},
+        }
+    }
+    package_graph, privacy_adjustments = exporter.redact_local_image_inputs_for_package(test_graph)
+    runtime = exporter.RuntimeMetadata(
+        comfyui_version="1.2.3",
+        python_version="3.12.0",
+        platform_name="darwin",
+        gpu_backend="mps",
+        gpu_name="mps",
+    )
+    hardware = exporter.MemoryObservation(
+        observed_peak_vram_mb=None,
+        observed_peak_ram_mb=2048,
+        gpu_name="mps",
+        backend="mps",
+    )
+    documents = exporter.build_package_documents(
+        graph=package_graph,
+        workflow_name="Private Image Workflow",
+        runtime=runtime,
+        custom_nodes=[],
+        models=[],
+        hardware=hardware,
+        started_at="2026-04-30T00:00:00Z",
+        finished_at="2026-04-30T00:01:00Z",
+        duration_seconds=60,
+        graph_adjustments={
+            "image_inputs_preserved": 1,
+            "batch_size_inputs": 0,
+            **privacy_adjustments,
+        },
+        warnings=[],
+    )
+
+    target = tmp_path / "workflow.noofy"
+    exporter.write_noofy_package(
+        target_path=target,
+        graph=package_graph,
+        documents=documents,
+        custom_nodes=[],
+        thumbnail_bytes=b"placeholder-thumbnail",
+    )
+
+    with zipfile.ZipFile(target) as package:
+        graph = package.read("comfyui_graph.json").decode("utf-8")
+        report = package.read("export-report.json").decode("utf-8")
+        package_blob = b"".join(
+            name.encode("utf-8") + b"\n" + package.read(name)
+            for name in package.namelist()
+        )
+
+    assert "creator-family-photo.png" not in graph
+    assert exporter.REDACTED_IMAGE_INPUT_VALUE in graph
+    assert "creator-family-photo.png" not in report
+    assert b"creator-family-photo.png" not in package_blob
+    assert '"image_inputs_redacted": 1' in report

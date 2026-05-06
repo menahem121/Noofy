@@ -20,6 +20,8 @@ SCHEMA_VERSION = "0.1.0"
 TRUST_LEVEL = "public_unverified"
 TEST_INPUT_MODE = "workflow_current_load_image_inputs"
 TEST_BATCH_SIZE = 1
+LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
+REDACTED_IMAGE_INPUT_VALUE = "__noofy_runtime_image_input_required__"
 MODEL_VERIFICATION_HASH_AND_SIZE = "sha256_size"
 MODEL_VERIFICATION_FILENAME_AND_SIZE = "filename_size"
 MODEL_VERIFICATION_FILENAME_ONLY = "filename_only"
@@ -278,7 +280,7 @@ def prepare_graph_for_export(
         if not isinstance(inputs, dict):
             continue
 
-        if class_type in {"LoadImage", "LoadImageMask"} and isinstance(inputs.get("image"), str):
+        if class_type in LOCAL_IMAGE_NODE_TYPES and isinstance(inputs.get("image"), str):
             adjustments["image_inputs_preserved"] += 1
 
         if "batch_size" in inputs and isinstance(inputs["batch_size"], int):
@@ -286,6 +288,28 @@ def prepare_graph_for_export(
             adjustments["batch_size_inputs"] += 1
 
     return graph, adjustments
+
+
+def redact_local_image_inputs_for_package(
+    graph: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    package_graph = copy.deepcopy(graph)
+    adjustments = {"image_inputs_redacted": 0}
+
+    for node in package_graph.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs")
+        if class_type not in LOCAL_IMAGE_NODE_TYPES or not isinstance(inputs, dict):
+            continue
+
+        image_value = inputs.get("image")
+        if isinstance(image_value, str) and image_value:
+            inputs["image"] = REDACTED_IMAGE_INPUT_VALUE
+            adjustments["image_inputs_redacted"] += 1
+
+    return package_graph, adjustments
 
 
 def create_placeholder_thumbnail_bytes() -> bytes:

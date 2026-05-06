@@ -51,7 +51,7 @@ Export is intentionally blocking. If the workflow takes 20 minutes to run, the e
 
 When **Export to Noofy** is clicked, the frontend asks ComfyUI to convert the current graph to API prompt format. The extension backend then prepares an export graph, queues the graph in ComfyUI using the current `LoadImage` / `LoadImageMask` selections, and waits for the prompt history result.
 
-During the run, the extension samples memory usage and keeps the workflow’s selected models and image inputs intact except for the export-test batch-size normalization described above. If execution succeeds, the extension collects metadata and writes the `.noofy` archive. If execution fails, the response contains an error and no package is created.
+During the run, the extension samples memory usage and keeps the workflow’s selected models and image inputs intact except for the export-test batch-size normalization described above. If execution succeeds, the extension collects metadata and writes the `.noofy` archive with creator-local `LoadImage` / `LoadImageMask` filenames redacted to a runtime-input placeholder. If execution fails, the response contains an error and no package is created.
 
 ## Package Contents
 
@@ -108,7 +108,7 @@ All workflows exported by this extension use `public_unverified`. A successful e
 
 ## comfyui_graph.json
 
-`comfyui_graph.json` contains the execution-ready ComfyUI API prompt graph used for the successful export test run.
+`comfyui_graph.json` contains the execution-ready ComfyUI API prompt graph, with creator-local `LoadImage` / `LoadImageMask` image filenames replaced by a runtime-input placeholder before packaging.
 
 Noofy treats this graph as engine-specific execution data. Noofy uses package metadata, model records, custom-node records, dashboard schema, and runtime locks as the app-owned contract around the graph.
 
@@ -151,9 +151,9 @@ This file is useful for diagnostics and for explaining what the exporter observe
 
 ## Assets
 
-`assets/thumbnail.png` is generated from the first exported output image when available. If no output image can be resolved, a generic placeholder thumbnail is used.
+`assets/thumbnail.png` is generated from the first exported output image when available. If no output image can be resolved, or if the workflow uses `LoadImage` / `LoadImageMask` inputs, a generic placeholder thumbnail is used.
 
-The source images selected in `LoadImage` / `LoadImageMask` nodes are not copied into the `.noofy` archive. Imported workflows should receive image inputs through Noofy dashboard controls or user-supplied runtime inputs.
+The source images selected in `LoadImage` / `LoadImageMask` nodes are not copied into the `.noofy` archive, and their creator-local filenames are not preserved in the packaged graph. Imported workflows should receive image inputs through Noofy dashboard controls or user-supplied runtime inputs.
 
 ## Model Records
 

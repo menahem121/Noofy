@@ -49,6 +49,7 @@ if PromptServer is not None:
         flatten_warnings,
         output_export_path,
         prepare_graph_for_export,
+        redact_local_image_inputs_for_package,
         write_noofy_package,
     )
 
@@ -159,7 +160,7 @@ if PromptServer is not None:
 
                 started_at_iso = utc_now_iso()
 
-            graph, adjustments = prepare_graph_for_export(prompt)
+            test_graph, adjustments = prepare_graph_for_export(prompt)
 
             model_management = _model_management()
             runtime = collect_runtime_metadata(_comfyui_version(), model_management)
@@ -168,7 +169,7 @@ if PromptServer is not None:
             sampler_task = asyncio.create_task(_sample_memory_until_stopped(sampler, stop_event))
 
             history = await _run_prompt_once(
-                prompt=graph,
+                prompt=test_graph,
                 workflow=workflow,
                 client_id=client_id,
                 timeout_seconds=timeout_seconds,
@@ -178,15 +179,20 @@ if PromptServer is not None:
             await sampler_task
             sampler_task = None
 
-            output_paths = collect_history_output_paths(
-                history,
-                lambda directory_type: folder_paths.get_directory_by_type(directory_type),
-            )
-            thumbnail_bytes = create_thumbnail_bytes(output_paths[0] if output_paths else None)
+            package_graph, privacy_adjustments = redact_local_image_inputs_for_package(test_graph)
+            adjustments.update(privacy_adjustments)
+            if privacy_adjustments["image_inputs_redacted"]:
+                thumbnail_bytes = create_thumbnail_bytes(None)
+            else:
+                output_paths = collect_history_output_paths(
+                    history,
+                    lambda directory_type: folder_paths.get_directory_by_type(directory_type),
+                )
+                thumbnail_bytes = create_thumbnail_bytes(output_paths[0] if output_paths else None)
 
-            custom_nodes = detect_custom_nodes(graph, nodes)
+            custom_nodes = detect_custom_nodes(test_graph, nodes)
             models = detect_model_references(
-                graph,
+                test_graph,
                 lambda folder, filename: folder_paths.get_full_path(folder, filename),
             )
             duration_seconds = time.monotonic() - started_at
@@ -197,7 +203,7 @@ if PromptServer is not None:
             warnings = flatten_warnings(custom_nodes, collect_model_warnings(models))
             hardware = sampler.observation(runtime)
             documents = build_package_documents(
-                graph=graph,
+                graph=package_graph,
                 workflow_name=workflow_name,
                 runtime=runtime,
                 custom_nodes=custom_nodes,
@@ -213,7 +219,7 @@ if PromptServer is not None:
             target_path = output_export_path(folder_paths.get_output_directory(), filename)
             write_noofy_package(
                 target_path=target_path,
-                graph=graph,
+                graph=package_graph,
                 documents=documents,
                 custom_nodes=custom_nodes,
                 thumbnail_bytes=thumbnail_bytes,
