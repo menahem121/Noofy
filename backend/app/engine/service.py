@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import re
 from copy import deepcopy
 from pathlib import Path
@@ -73,6 +74,7 @@ from app.runtime.memory_governor import (
     WorkflowMemoryEstimateRequest,
     build_workflow_memory_estimate,
     decide_memory_admission,
+    default_memory_observer,
     likely_memory_error,
     memory_user_status_for_decision,
     record_memory_governor_decision,
@@ -990,6 +992,7 @@ class EngineService:
         memory_decision = self._memory_governor_decision_for_workflow_run(
             workflow_id=workflow_id,
             runner=runner,
+            input_profile_fingerprint=_memory_input_profile_fingerprint(inputs, options),
         )
         if memory_decision is not None:
             if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
@@ -1468,6 +1471,7 @@ class EngineService:
         *,
         workflow_id: str,
         runner: RunnerDescriptor,
+        input_profile_fingerprint: str | None = None,
     ) -> MemoryGovernorDecision | None:
         if self.memory_observer is None or runner.kind is not RunnerKind.ISOLATED_COMFYUI:
             return None
@@ -1478,6 +1482,7 @@ class EngineService:
                 runner_process_compatibility_key=runner.runner_process_compatibility_key,
                 machine_profile_id=machine_snapshot.machine_profile_id,
                 backend=machine_snapshot.backend,
+                input_profile_fingerprint=input_profile_fingerprint,
             )
             if self.memory_learning_store is not None
             else None
@@ -1487,6 +1492,7 @@ class EngineService:
                 workflow_id=workflow_id,
                 runner_process_compatibility_key=runner.runner_process_compatibility_key,
                 declared_memory_class=runner.memory_class,
+                input_profile_fingerprint=input_profile_fingerprint,
                 local_evidence=local_evidence,
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb,
@@ -1522,11 +1528,11 @@ class EngineService:
         if self.memory_observer is None or decision.workflow_estimate is None:
             return None
         required_free_vram_mb = _required_free_after_cleanup(
-            decision.workflow_estimate.estimated_peak_vram_mb,
+            _estimated_vram_after_cleanup(decision),
             decision.required_vram_margin_mb,
         )
         required_free_ram_mb = _required_free_after_cleanup(
-            decision.workflow_estimate.estimated_peak_ram_mb,
+            _estimated_ram_after_cleanup(decision),
             decision.required_ram_margin_mb,
         )
         if required_free_vram_mb is None and required_free_ram_mb is None:
@@ -1575,6 +1581,7 @@ class EngineService:
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 machine_profile_id=machine_snapshot.machine_profile_id,
                 backend=machine_snapshot.backend,
+                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2]),
             )
             if self.memory_learning_store is not None
             else None
@@ -1584,6 +1591,7 @@ class EngineService:
                 workflow_id=workflow_id,
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 declared_memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
+                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2]),
                 local_evidence=local_evidence,
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb if runner is not None else None,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb if runner is not None else None,
@@ -1689,6 +1697,7 @@ class EngineService:
             return
         if result.status not in {"completed", "failed", "canceled"}:
             return
+        run_request = self._job_run_requests.get(result.job_id)
         try:
             runner = self.runner_supervisor.runner_for_job(result.job_id)
         except JobRunnerNotFoundError:
@@ -1708,6 +1717,9 @@ class EngineService:
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 machine_profile_id=machine_snapshot.machine_profile_id if machine_snapshot is not None else None,
                 backend=machine_snapshot.backend if machine_snapshot is not None else MemoryBackend.UNKNOWN,
+                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2])
+                if run_request is not None
+                else None,
                 outcome=outcome,
                 memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
                 peak_vram_mb=(
@@ -1828,7 +1840,7 @@ def _workflow_runner_launch_spec(
         ),
         runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
         runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
-        memory_class=RunnerMemoryClass.GPU_HEAVY,
+        memory_class=_memory_class_for_runtime_backend(capsule_lock.runtime.gpu_backend),
         host=runtime_manager.managed_host,
         extra_args=extra_args,
         env={
@@ -2050,6 +2062,43 @@ def _required_free_after_cleanup(estimated_peak_mb: int | None, margin_mb: int |
     if estimated_peak_mb is None:
         return None
     return estimated_peak_mb + (margin_mb or 0)
+
+
+def _memory_input_profile_fingerprint(inputs: dict[str, Any], options: dict[str, Any]) -> str:
+    payload = {
+        "inputs": inputs,
+        "options": options,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _estimated_vram_after_cleanup(decision: MemoryGovernorDecision) -> int | None:
+    if decision.machine_snapshot is not None and decision.machine_snapshot.backend in {
+        MemoryBackend.MPS,
+        MemoryBackend.CPU,
+    }:
+        return None
+    if decision.workflow_estimate is None:
+        return None
+    return decision.workflow_estimate.estimated_peak_vram_mb
+
+
+def _estimated_ram_after_cleanup(decision: MemoryGovernorDecision) -> int | None:
+    if decision.workflow_estimate is None:
+        return None
+    if decision.workflow_estimate.estimated_peak_ram_mb is not None:
+        return decision.workflow_estimate.estimated_peak_ram_mb
+    if decision.machine_snapshot is not None and decision.machine_snapshot.backend in {
+        MemoryBackend.MPS,
+        MemoryBackend.CPU,
+    }:
+        return decision.workflow_estimate.estimated_peak_vram_mb
+    return None
+
+
+def _memory_class_for_runtime_backend(gpu_backend: str) -> RunnerMemoryClass:
+    return RunnerMemoryClass.CPU_ONLY if gpu_backend.lower() == "cpu" else RunnerMemoryClass.GPU_HEAVY
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
@@ -2512,6 +2561,8 @@ def create_default_engine_service() -> EngineService:
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
         imported_package_store=imported_package_store,
+        memory_observer=default_memory_observer(),
+        memory_learning_store=LocalMemoryLearningStore(paths.user_state_dir / "memory-learning"),
         comfyui_update_service=comfyui_update_service,
         comfyui_launch_settings_store=launch_settings_store,
     )

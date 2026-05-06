@@ -1,549 +1,217 @@
-# Memory Governor Implementation Plan
+# Memory Governor Current Status
+
+Date: 2026-05-06
+
+Status: Audited and updated after Runtime Isolation implementation.
+
+This document is no longer a phase-by-phase implementation checklist. The old
+plan was useful for building the v1 policy, but most of that detail now lives in
+code and tests. Keep this file short: it should help future agents understand
+what the Memory Governor actually does, what is intentionally conservative, and
+where the remaining work is.
+
+## Purpose
+
+The Memory Governor is Noofy's resource-management and run-admission decision
+system. Its main job is to help the user's workflow run successfully and
+efficiently when they press Run.
+
+It decides whether Noofy should:
 
-Date: 2026-05-03
-
-Status: Accepted v1 direction / implementation source
-
-This plan supersedes the older "one GPU-heavy runner only" v1 strategy as the complete policy. The single GPU-heavy rule remains the safe fallback, but v1 should already include an intelligent Memory Governor that can keep multiple runners warm when the evidence is strong enough.
-
-The goal is product behavior that feels fast without becoming mysterious or fragile:
-
-- avoid GPU crashes and memory errors
-- avoid unnecessary model and runner reloads
-- keep recent workflows quick to relaunch
-- allow multiple warm runners on machines that can really support them
-- learn each user's machine over time so repeated workflows become faster and more predictable
-- fall back to conservative behavior when signals are weak
-- recover cleanly after memory failures
-- explain decisions in beginner-friendly language
-
-## Core Product Rules
-
-- Opening or switching workflow tabs must not start, stop, load, or unload heavy runners.
-- Running a workflow is the moment where Noofy may start runners, load models, queue work, or evict warm runners.
-- The frontend reports user intent, such as workflow view open/close and cancel. The backend remains authoritative for runner and memory decisions.
-- No active run is killed automatically to make room for another workflow. A normal Cancel action remains available.
-- Unknown memory cost is treated as high risk.
-- Multiple warm GPU runners are allowed only through the Memory Governor, never through a simple "free VRAM exists" rule.
-- Co-resident warm runners do not imply unrestricted parallel GPU-heavy execution. V1 may keep multiple runners ready while still serializing heavy GPU work.
-- Runtime isolation remains unchanged. Co-resident runners are separate isolated processes with separate dependency environments and runner workspaces when their fingerprints differ.
-- Creator `.noofy` memory observations are starting hints, not machine-specific truth.
-- Local observations on the user's own device are more trustworthy than creator observations and should progressively replace them.
-- Learned memory behavior improves confidence, but never becomes a perfect guarantee.
-
-## Local Memory Learning Principle
-
-Noofy should not make a memory decision once and freeze it forever. The Memory Governor learns the user's machine over time.
-
-At first, Noofy starts with approximate confidence. It may use creator-side `.noofy` metrics, model size, workflow type, resolution, batch size, and conservative heuristics. This is enough to make a cautious first decision, but not enough to trust aggressive co-residence.
-
-Each local run gives Noofy more evidence:
-
-- a successful run under similar settings raises confidence for that workflow, runner, backend, and machine profile
-- repeated successful runs make Noofy more comfortable keeping the runner warm, co-residing it with safe neighbors, or avoiding unnecessary eviction
-- a memory failure lowers confidence and makes Noofy prefer eviction, cleanup, or blocking before repeating the same risky decision
-- retry outcomes teach Noofy whether cleanup actually helps on this machine
-
-Frequently used workflows should therefore feel faster and more reliable over time because Noofy learns their real memory behavior on this specific device. The learning is still probabilistic: local history improves confidence, but Noofy must still account for changed settings, other apps using the GPU, driver behavior, fragmentation, and temporary memory spikes.
-
-## Memory Metric Storage Decision
-
-Decision: learned local memory metrics are stored in Noofy's local app data, not written back into imported `.noofy` packages during normal use.
-
-Package-level `.noofy` memory metrics are creator/export-time observations. They are useful as initial hints, but they describe the creator's machine and tested settings. They must not be treated as authoritative requirements for another user's machine.
-
-Local learned metrics are machine-specific. They belong in mutable local state owned by the app, keyed by workflow/capsule identity, runner fingerprint, backend, machine profile, model set, and similar input settings. The Memory Governor should trust these local observations more than creator-side observations once local evidence exists.
-
-Normal workflow runs must not mutate `.noofy` packages, capsule locks, or imported package records with learned local memory history. This keeps packages portable, preserves trust/signing semantics, avoids noisy package churn, and reduces privacy risk from leaking device details or usage patterns.
-
-If Noofy later supports re-export after local use, it may offer an explicit export option to include anonymized local observations as advisory metadata. Such exported observations must be clearly marked as machine-specific hints and must remain weaker than the recipient's own local history.
-
-Short rule:
-
-- `.noofy` describes the workflow and what the creator/exporter observed.
-- Local app data describes what this user's machine has learned.
-- The Memory Governor trusts local app data first, but still treats it as evidence rather than a guarantee.
-
-## 1. Compatibility Reality Between Workflows
-
-Runner compatibility means two workflows can execute inside the same runner process without changing the dependency environment, runner workspace, custom-node set, launch configuration, or model-view compatibility contract.
-
-Expected compatibility in practice:
-
-| Workflow relationship | Expected runner sharing | Notes |
-| --- | --- | --- |
-| Noofy Verified workflows from the same pack | Frequent | Packs can be authored to share a runtime profile, dependency lock, custom-node workspace, and model-view contract. |
-| Core-only workflows | Frequent | They usually depend only on the pinned ComfyUI profile and default nodes. |
-| Community workflows from the same ecosystem | Medium | They may share popular custom nodes, but version and dependency drift still matters. |
-| Random community workflows | Low to medium | Custom nodes, dependency pins, and model-view expectations often differ. |
-| Workflows with conflicting custom nodes or dependencies | Not compatible | They must use different runner workspaces or dependency environments. |
-
-When two workflows cannot share a runner, Noofy can still keep both runners warm if the Memory Governor decides their combined idle footprint and predicted next-run peak fit safely on the machine. The decision is about co-residence, not compatibility.
-
-## 2. Runner Memory Classes
-
-Every prepared workflow and resident runner has a memory class plus confidence metadata. The class is a decision input, not a guarantee.
-
-| Class | Typical workflows | V1 co-residence policy |
-| --- | --- | --- |
-| `gpu_heavy` | SDXL/Flux/video, large ControlNet chains, high-resolution generation, large batch, unknown large checkpoints | One by default. Co-resident with another heavy only on large GPUs with high-confidence local observations and large margin. |
-| `gpu_medium` | SD1.5 generation at moderate settings, img2img, many upscalers, moderate ControlNet | Can co-reside with light; can co-reside with heavy or medium only with reliable estimates and enough margin. |
-| `gpu_light` | Lightweight post-processing, preview, metadata, small image transforms, tiny utility models | Usually allowed to co-reside if RAM/VRAM pressure is low. |
-| `cpu_only` | CPU-side transforms, file preparation, metadata, non-GPU utility flows | Allowed with GPU runners unless system RAM pressure is high. |
-| `unknown` | Missing estimates, first run of ambiguous workflow, community workflow with untrusted or incomplete metadata | Treated as `gpu_heavy` and high risk until local observations prove otherwise. |
-
-Memory class fields should record:
-
-- class value
-- source: `declared`, `creator_observed`, `local_observed`, `heuristic`, or `unknown`
-- confidence: `high`, `medium`, `low`
-- estimated peak VRAM and RAM
-- observed idle footprint when warm
-- observed load/start peak
-- observed execution peak for each relevant input profile
-- last memory error timestamp, if any
-
-## 3. Signals Used For Decisions
-
-Reliable signals:
-
-- VRAM total
-- current VRAM free/used when the backend can query it
-- current RAM free/used
-- memory pressure state on platforms that expose it
-- backend type: CUDA, MPS, DirectML, CPU
-- runner state: running, idle, idle-warm, queued, stopping
-- runner compatibility fingerprint
-- local run history for the same workflow/input profile/backend
-- repeated local success count under similar settings
-- local memory errors and retry outcomes
-- observed runner idle footprint and execution peak
-
-Useful but approximate signals:
-
-- creator/export `.noofy` hardware observations
-- model file sizes and model family hints
-- workflow type: generation, upscale, ControlNet, video, utility
-- resolution and batch size
-- sampler/step count when available
-- custom-node package identity and known memory behavior
-- current number of warm runners
-- estimated duration
-
-Uncertain signals:
-
-- VRAM fragmentation
-- temporary allocator spikes
-- arbitrary community custom-node behavior
-- other applications using GPU memory after Noofy takes a snapshot
-- differences between creator hardware and user hardware
-- PyTorch/ComfyUI backend-specific cache behavior
-- driver or OS-specific delayed memory release
-
-The Memory Governor must use a confidence score. It should never promote an uncertain estimate into a high-confidence decision just because the machine appears to have free memory.
-
-## 4. V1 Co-Residence Policy
-
-Noofy may keep multiple runners warm only if all of these are true:
-
-- no active job would be interrupted
-- all co-resident runners are idle or explicitly allowed to remain warm
-- memory classes are compatible under the matrix below
-- current RAM/VRAM has enough safety margin
-- the next workflow has a high- or medium-confidence estimate
-- local learning does not show recent memory failure for the same workflow, backend, machine profile, or similar input settings
-- no recent memory instability exists on this machine/profile
-- Noofy has a bounded way to evict an idle runner if pressure appears
-- diagnostics can explain why co-residence was allowed
-
-Co-residence matrix:
-
-| Combination | V1 policy |
-| --- | --- |
-| `gpu_heavy + gpu_heavy` | Deny by default. Allow only on 24 GB+ CUDA-class GPUs or equivalent, with high-confidence local observations for both, no recent memory errors, and large margin. |
-| `gpu_heavy + gpu_medium` | Allow only with reliable estimate and large margin. Prefer eviction on 12 GB or smaller GPUs. |
-| `gpu_heavy + gpu_light` | Allow when current free memory remains above margin and no instability is present. |
-| `gpu_medium + gpu_medium` | Allow on 16 GB+ or when both have strong local observations and safe margin. |
-| `gpu_medium + gpu_light` | Usually allow if margin remains healthy. |
-| `gpu_light + gpu_light` | Allow unless system pressure is high. |
-| `cpu_only + GPU runner` | Allow unless RAM pressure is high. |
-| `unknown + anything` | Treat unknown as heavy and high risk. Deny extra co-residence unless the other runner is CPU-only or trivially light and margins are large. |
-
-V1 execution policy can remain stricter than warm policy. For example, Noofy may keep two heavy runners warm on a 24 GB GPU after strong observations, while still queueing simultaneous heavy jobs.
-
-## 5. Safety Margins
-
-Margins are deliberately conservative. They should be configurable in developer settings later, but product defaults should prioritize reliability.
-
-CUDA / dedicated GPU suggested minimum free margin after predicted allocation:
-
-| VRAM | Minimum free margin |
-| --- | --- |
-| 6-8 GB | max(30%, 2 GB) |
-| 10-12 GB | max(25%, 2.5 GB) |
-| 16 GB | max(20%, 3.5 GB) |
-| 24 GB | max(18%, 4 GB) |
-| 48 GB+ | max(12%, 6 GB) |
-
-MPS / Apple Silicon unified memory:
-
-- treat RAM and GPU memory as one shared pressure pool
-- reserve at least 25% system memory or 8 GB, whichever is smaller but still leaves normal app responsiveness
-- avoid co-resident heavy runners when swap or high memory pressure is observed
-
-DirectML / Windows GPU backends:
-
-- start with CUDA-like margins plus an extra caution factor until local observations prove stable
-- downgrade confidence after driver reset, device lost, or allocation errors
-
-CPU-only:
-
-- use RAM pressure and swap pressure instead of VRAM
-- allow co-residence more freely, but avoid pushing the system into swap
-
-## 6. Memory Decision Flow
-
-Before starting or reusing a runner, Noofy builds a decision record:
-
-1. Identify requested workflow, input profile, runner fingerprint, and memory class.
-2. Collect machine memory snapshot.
-3. Collect resident runner snapshots.
-4. Find compatible resident runner, if any.
-5. Estimate requested load and execution peak.
-6. Score confidence: repeated local success > single local success > creator observation > heuristic > unknown.
-7. Decide:
-   - reuse compatible runner
-   - keep current idle runners and start another runner
-   - evict one or more idle runners first
-   - queue because another job is active
-   - block because memory risk is too high
-8. Emit a structured diagnostic with inputs, decision, and user-facing reason.
-
-Confidence must be scoped to similar conditions. A workflow that was stable at 1024x1024 batch 1 is not automatically high-confidence at 2048x2048 batch 4. If inputs, model selection, backend, runtime profile, or machine profile change materially, Noofy should lower confidence and rebuild it from new evidence.
-
-Decision outcomes:
-
-- `reuse_runner`
-- `start_co_resident`
-- `evict_then_start`
-- `queue_pending_switch`
-- `queue_pending_memory`
-- `wait_for_memory_release`
-- `retry_after_memory_cleanup`
-- `blocked_by_memory`
-
-## 7. Eviction Policy
-
-Noofy evicts warm runners when:
-
-- an incompatible workflow needs memory
-- estimated memory is insufficient
-- actual memory pressure rises
-- a runner is idle past lease/cooldown policy
-- a workflow view closes and no likely reuse remains
-- a memory error recently occurred
-- local history shows this workflow or a similar input profile is memory-risky on this machine
-- a higher-priority user action needs the GPU
-- the app is shutting down
-
-Eviction order:
-
-1. Idle runners with no open workflow lease.
-2. Least recently used idle runners.
-3. Runners with low predicted reuse.
-4. Runners with high idle footprint.
-5. Runners incompatible with currently open workflows.
-6. Runners associated with recent memory errors.
-7. Runners whose local history says they are unlikely to be reused soon.
-8. Never kill an active job without explicit user cancellation.
-
-An eviction record should include:
-
-- runner ID and fingerprint
-- memory class
-- idle time
-- lease state
-- estimated freed RAM/VRAM
-- decision reason
-- stop duration
-- memory released or timeout result
-
-## 8. Memory Release Checks
-
-After stopping a runner for memory, Noofy should wait for bounded release:
-
-- poll VRAM/RAM for a short window
-- accept release when memory reaches the expected safe threshold
-- time out with diagnostics rather than waiting indefinitely
-- continue only when the next start has enough margin or the policy explicitly allows a cautious attempt
-
-If memory does not release:
-
-- report `waiting_for_memory_release` while polling
-- then either retry with stronger cleanup or surface `blocked_by_memory`
-- record driver/backend details for developer diagnostics
-
-## 9. Recovery After Memory Error
-
-If a workflow likely fails due to memory:
-
-1. Classify the error as memory-related when possible: CUDA OOM, MPS allocation failure, DirectML device allocation failure, process killed by memory pressure, or model load allocation failure.
-2. Stop idle runners.
-3. Wait for memory release.
-4. Retry once if safe.
-5. If retry fails, show a clear user error.
-6. Record local failure history.
-7. Lower future confidence and prefer eviction before future attempts.
-
-Safe to retry:
-
-- normal generation or transformation with no irreversible side effects
-- no external paid service
-- no destructive overwrite
-- no previous retry for this same run
-- memory is now above minimum margin
-- error signature is likely memory, not an arbitrary custom-node bug
-
-Not safe to retry:
-
-- destructive export or overwrite
-- long-running job whose failure cause is unclear
-- repeated memory failure
-- process crash with uncertain cause
-- workflow with side effects outside Noofy's output directory
-
-## 10. Local Learning Policy
-
-Noofy records local memory observations after each run. These local observations gradually replace creator `.noofy` metrics for decisions on the user's machine.
-
-This is part of v1, not a future optimization. The Memory Governor's confidence model, co-residence decisions, eviction decisions, retry decisions, and user-facing explanations should all use local learning when evidence exists.
-
-Evidence hierarchy:
-
-1. Recent repeated local observations under similar settings on the same machine/backend.
-2. A single local observation under similar settings.
-3. Creator-side `.noofy` observations from export.
-4. Heuristics from model size, workflow type, resolution, batch size, and backend.
-5. Unknown.
-
-Creator-side metrics are useful as a first-run estimate only. They describe the creator's machine and tested settings, not the user's machine. Once local observations exist, local observations are more trustworthy.
-
-Persist per observation:
-
-- workflow ID and capsule fingerprint
-- runner fingerprint and dependency env fingerprint
-- model references
-- input profile: resolution, batch size, relevant options
-- backend: CUDA, MPS, DirectML, CPU
-- machine profile: GPU name, VRAM total, RAM total, OS, driver/backend version when available
-- duration
-- runner start/load time
-- observed idle RAM/VRAM
-- observed peak RAM/VRAM
-- success/failure
-- memory error signature
-- eviction required
-- retry required and retry result
-- confidence before the run
-- confidence after the run
-
-These observations are stored in local app data, not in the `.noofy` archive or immutable capsule lock.
-
-Use observations to:
-
-- raise confidence for known-good workflow/input profiles
-- raise confidence more when success is repeated under similar settings
-- keep frequently used stable workflows warm more often
-- downgrade memory class when a workflow proves light locally
-- upgrade memory class after high peak or memory error
-- avoid repeating failed co-residence decisions
-- decide whether multiple runners can stay warm
-- decide whether a runner should be evicted or retained based on real reuse and memory behavior
-- decide whether retry-after-cleanup is likely to help
-- display better user guidance
-
-Memory failures are also learning events. If a workflow fails because of memory, Noofy should remember that for the workflow, machine profile, backend, runner fingerprint, model set, and similar input settings. Future decisions should become more conservative: evict first, avoid co-residence, require larger margins, or block earlier with a clearer explanation.
-
-Learned metrics are evidence, not guarantees. Noofy must still lower confidence when inputs change, models change, another app consumes GPU memory, the backend/driver changes, or observed system pressure becomes unstable.
-
-Product effect: the first run of a workflow may be cautious. After several successful local runs, Noofy can make the workflow feel faster by keeping it warm more confidently, avoiding unnecessary eviction, and allowing safe co-residence on machines that have proved they can handle it.
-
-## 11. User-Facing UI Language
-
-The UI should explain actions, not implementation details.
-
-| Situation | Suggested text |
-| --- | --- |
-| Runner kept warm | "Ready to run again quickly" |
-| Multiple runners warm | "Several workflows are ready to run again" |
-| Workflow queued | "Waiting for the GPU" |
-| Switching runner | "Preparing this workflow" |
-| Evicting for memory | "Freeing memory before starting" |
-| Waiting for release | "Waiting for memory to clear" |
-| Retry after cleanup | "Noofy freed memory and is trying again" |
-| Blocked by memory | "Not enough memory for this workflow" |
-| Machine is near limit | "This workflow may be slower on this machine" |
-| Not kept warm | "Noofy closed this workflow to avoid a memory problem" |
-| Learned stable workflow | "Noofy knows this workflow runs well on this machine" |
-| Learned memory risk | "Noofy is being careful because this workflow needed more memory before" |
-
-Developer details can include VRAM, RAM, runner IDs, fingerprints, estimates, and raw errors. Default user text should avoid CUDA, allocator, Python, and stack trace terminology.
-
-## 12. Backend And API State Surface
-
-Runner and job state should support:
-
-- `idle_warm`
-- `running`
-- `queued`
-- `queued_pending_switch`
-- `queued_pending_memory`
-- `switching`
-- `evicting_runner`
-- `waiting_for_memory_release`
-- `loading_model`
-- `retrying_after_memory_cleanup`
-- `blocked_by_memory`
-- `memory_cleanup_failed`
-- `evicted_for_memory`
-- `evicted_after_cooldown`
-- `co_resident`
-
-Memory risk should be exposed as structured metadata:
-
-- `memory_risk_low`
-- `memory_risk_medium`
-- `memory_risk_high`
-- `memory_estimate_confidence`
-- `memory_estimate_source`
-- `local_memory_evidence_count`
-- `recent_local_memory_failure`
-- `memory_decision_reason`
-- `can_retry_after_cleanup`
-
-API payloads should remain beginner-friendly by default, with developer details behind an explicit diagnostics view.
-
-## 13. Implementation Phases
-
-### MG1: Schemas And Decision Records
-
-- [x] Add memory class enum with `gpu_medium`.
-- [x] Add workflow memory estimate schema.
-- [x] Add local memory observation summary schema.
-- [x] Add runner memory snapshot schema.
-- [x] Add machine memory snapshot schema.
-- [x] Add Memory Governor decision schema.
-- [x] Persist decision records in diagnostics.
-
-Acceptance:
-
-- [x] Unit tests cover schema validation, unknown-as-heavy behavior, local evidence summaries, local-observation precedence, and decision serialization.
-
-### MG2: Hardware And Memory Observers
-
-- [x] Implement backend-specific observers for CUDA first.
-- [x] Add MPS, DirectML, CPU/RAM observer interfaces even if initial implementation is conservative.
-- [x] Capture total/free VRAM, total/free RAM, backend name, device name, and pressure indicators.
-
-Acceptance:
-
-- [x] Fake observer tests cover normal, unavailable, and partial-data cases.
-
-### MG3: Estimation Engine
-
-- [x] Build first-pass estimates from repeated local history, single local observations, `.noofy` creator metrics, declared requirements, model size, resolution, batch size, and heuristics.
-- [x] Attach confidence level and reason list.
-- [x] Treat missing estimates as `unknown`/high risk.
-- [x] Lower confidence when local observations do not match the requested settings.
-- [x] Add app-local learning store for local run observations and evidence summaries.
-- [x] Use exact machine-profile matching and conservative workflow-type heuristics before policy integration.
-
-Acceptance:
-
-- [x] Tests prove repeated local observations outrank single local observations, local observations outrank creator observations, creator observations outrank heuristics, unknown remains conservative, and materially changed settings lower confidence.
-
-### MG4: Co-Residence And Eviction Policy
-
-- [x] Implement co-residence matrix.
-- [x] Implement safety margins per backend/device tier.
-- [x] Implement eviction scoring.
-- [x] Integrate decisions into runner start requests when a Memory Governor observer is configured.
-- [x] Integrate decisions into workflow run requests and queued job handoff.
-
-Acceptance:
-
-- [x] Tests cover heavy/heavy deny, heavy/light allow with margin, unknown deny, large-GPU high-confidence allow, and memory-pressure eviction.
-
-### MG5: Queue And Handoff
-
-- [x] Add `queued_pending_memory`.
-- [x] Persist in-memory queue records while backend is running.
-- [x] Handoff queued runner-start work after active runner/job release or memory release completes.
-- [x] Keep normal cancellation behavior.
-- [x] Extend handoff to submitted workflow jobs after run-request admission is integrated.
-
-Acceptance:
-
-- [x] Tests cover queue behind active job, queue after memory cleanup, cancellation of queued work, and no active-job auto-kill.
-
-### MG6: Memory Release And Retry
-
-- [x] Stop idle runners and wait for bounded RAM/VRAM release before starting the next runner.
-- [x] Detect likely memory errors.
-- [x] Decide whether one retry after cleanup is safe.
-- [x] Record failure history and downgrade future confidence.
-- [x] Record successful local runs and raise future confidence only for similar settings.
-- [x] Integrate automatic retry execution around submitted workflow jobs.
-
-Acceptance:
-
-- [x] Tests cover release success, release timeout, retry success, retry blocked, repeated memory failure avoiding the same optimistic decision, and repeated success increasing confidence for future warm retention.
-
-### MG7: UI And Diagnostics Contract
-
-- [x] Extend API payloads with user-facing memory status summaries.
-- [x] Add developer details for decision signals and raw errors.
-- [x] Add backend diagnostic counters for memory admission, queueing, eviction, retry, blocked-by-memory, and learned observation outcomes.
-- [x] Add frontend-ready states and copy for memory decisions.
-
-Acceptance:
-
-- [x] API tests cover response shape for memory metrics and runtime payloads.
-- [x] Backend tests cover memory waiting, retry, blocked, and warm co-residence states.
-- [x] Frontend run-page tests cover memory waiting and blocked-memory states.
-
-### MG8: Integration And Hardware Validation
-
-- Use fake/lightweight runners for CI.
-- Add optional real CUDA validation for memory release and warm co-residence.
-- Add manual or automated platform checks for MPS, DirectML, and CPU-only behavior.
-
-Acceptance:
-
-- Full default test suite remains hardware-independent.
-- Real hardware validation produces a decision log that can be reviewed without raw stack traces.
-
-## 14. V1 Completion Gate
-
-Memory Governor v1 is complete when:
-
-- runner memory classes and estimates exist
-- local memory observations are persisted
-- repeated local successes increase confidence for similar future decisions
-- local memory failures make future decisions more conservative for the workflow, machine, backend, and similar settings
-- creator `.noofy` observations are used as initial hints only until local evidence exists
-- decisions use reliability-ranked signals
-- co-resident warm runners are allowed only through policy
-- idle runner eviction happens before user-facing memory failure
-- memory release is bounded and diagnosed
-- one safe retry after cleanup exists for likely memory errors
-- UI/API states explain waiting, cleanup, retry, blocked, and warm readiness
-- tests cover success, uncertainty fallback, memory pressure, eviction, retry, and blocked failure
-
-Current v1 status: complete for Phase 5f. The backend exposes
-`memory_decision` for developer diagnostics, `memory_status` for UI copy, and
-`/api/memory-governor/metrics` for aggregate counters. Frontend presentation can
-consume those states without calling ComfyUI directly or changing the Memory
-Governor contract.
-
-The safe fallback remains: if Memory Governor cannot make a confident decision, Noofy behaves as though only one GPU-heavy runner may remain resident.
+- run while keeping existing runners and models warm
+- reuse a compatible warm runner
+- unload or evict idle runners before running
+- queue behind active GPU work
+- wait for memory release after cleanup
+- retry once after likely memory cleanup
+- warn the user that the machine is near its limit
+- refuse execution only as a last resort
+
+The Memory Governor should not become an overly defensive blocker. If evidence
+is uncertain, Noofy should prefer reversible preparation steps such as evicting
+idle runners, freeing memory, queueing behind active work, or showing a clear
+warning. Blocking is appropriate only when there is strong evidence that the run
+cannot proceed safely, or after reasonable cleanup/retry steps have already
+failed.
+
+Runtime Isolation protects the trusted backend from dependency conflicts. The
+Memory Governor works on top of that architecture to reduce memory-risky runner
+and workflow decisions.
+
+## Current Behavior
+
+The Memory Governor is implemented in `backend/app/runtime/memory_governor.py`
+and integrated by `backend/app/engine/service.py`.
+
+Before starting an isolated workflow runner, Noofy:
+
+1. Builds a workflow memory estimate from local evidence, creator observations,
+   declared requirements, installed model size, or heuristics.
+2. Reads a machine memory snapshot.
+3. Compares the requested runner with resident isolated runners.
+4. Chooses one of: start co-resident, evict idle runners then start, queue behind
+   active work, or refuse execution when the available evidence is too strong to
+   justify a run attempt.
+5. Records a structured diagnostic and memory metric.
+
+For submitted isolated workflow runs, Noofy also gates execution when another
+isolated runner is active or when memory evidence requires cleanup first.
+Input/options are hashed into an input-profile fingerprint, so local learning is
+scoped to similar run settings instead of being blindly reused across materially
+different runs.
+
+After a workflow result, Noofy records a local observation for completed,
+failed, canceled, and memory-error outcomes. Memory errors lower future
+confidence. Repeated successful observations raise confidence only for the same
+workflow, runner compatibility key, machine profile, backend, and input profile.
+
+If a submitted job fails with a likely memory error, Noofy may stop idle
+isolated runners, wait for bounded memory release, and retry the same workflow
+once. It does not retry non-memory failures or repeat memory retries forever.
+
+## Core Runner Direction
+
+Current v1 coverage is strongest for isolated workflow runners. The desired
+architecture is broader: the core/default/trusted runner should also be covered
+by the same memory-governance strategy, or routed through an equivalent
+admission path before workflow execution.
+
+The reason is not to protect Noofy from the core runner. The reason is to make
+the correct RAM/VRAM and runner-residency decision before running any workflow.
+Core-runner admission should follow the same product policy:
+
+- prefer reuse when it is likely to be fast and safe
+- prefer cleanup or idle-runner eviction when memory is uncertain
+- queue behind active work rather than interrupt it
+- warn when the machine is near its practical limit
+- avoid refusing execution unless there is strong evidence the run cannot
+  proceed or cleanup/retry has already failed
+
+Noofy should not claim full app-wide memory governance until core-runner run
+admission is implemented or explicitly scoped through an equivalent path.
+
+## Platform Policy
+
+CUDA uses `nvidia-smi` for VRAM when available, with system RAM included in the
+snapshot when possible.
+
+macOS Apple Silicon uses RAM as the unified CPU/GPU pressure pool. MPS admission
+does not require dedicated VRAM fields.
+
+CPU fallback uses RAM pressure. GPU-style estimates can be used as a RAM
+pressure proxy when no dedicated RAM estimate exists. Capsules whose runtime
+backend is explicitly `cpu` are classified as `cpu_only`.
+
+DirectML remains incomplete. The current RAM fallback is acceptable as a
+conservative fallback, but it should not be the final Windows GPU strategy.
+Future work should investigate Windows-compatible GPU memory observation for
+DirectML, AMD, Intel, and NVIDIA paths, while preserving graceful fallback when
+reliable data is unavailable.
+
+## Measurement Direction
+
+Current runner descriptors and snapshots are useful but not enough for the
+accuracy Noofy should eventually have. Noofy should improve peak RAM/VRAM
+observation from Noofy's side without modifying vendored ComfyUI source.
+
+Do not modify or fork code under `third_party/comfyui`.
+
+Future measurement work should investigate and implement the best available
+Noofy-side approach using:
+
+- process observation
+- backend-specific APIs
+- adapter-level hooks
+- wrapper logic around runner launch and job execution
+- launch configuration
+- logs
+- supported ComfyUI APIs or events
+- external system metrics
+
+The target measurement windows are:
+
+- runner startup
+- model loading
+- workflow execution
+- retry after cleanup
+- memory release after runner stop
+
+These observations are best-effort evidence, not guaranteed exact true peaks on
+every backend and platform. The goal is to make decisions less theoretical and
+more grounded in local behavior, while staying honest about fragmentation,
+allocator caches, delayed release, other applications, and backend-specific
+visibility limits.
+
+## Safety Margins
+
+Current safety margins are conservative constants. Before adding more custom
+margin logic, investigate whether the operating system, GPU backend, PyTorch,
+DirectML, CUDA, MPS, or available platform APIs expose useful pressure signals,
+allocation feedback, or memory-release signals.
+
+Margins that are too large will handicap users by causing unnecessary unloading,
+queueing, or refusal. Margins that are too small will cause avoidable memory
+failures. Prefer real system/backend pressure signals where possible. If Noofy
+still needs its own margins, they should be justified, conservative, and
+preferably adaptive based on local observations rather than fixed forever.
+
+## Obsolete Plan Parts
+
+The old phase checklist has been removed. It duplicated tests and created the
+false impression that every listed future enhancement had to be implemented.
+
+The detailed signal matrix, long UI copy table, and acceptance checklists are no
+longer useful as the source of truth. The source of truth is now:
+
+- `backend/app/runtime/memory_governor.py`
+- `backend/app/engine/service.py`
+- `backend/tests/test_memory_governor.py`
+- runner/engine service tests covering queueing, eviction, retry, and API shape
+
+The old "complete for Phase 5f" status was too broad. The more accurate status
+is: complete enough for v1 isolated runner memory admission, with the limitations
+and follow-up directions above.
+
+## Test Coverage
+
+Current tests cover:
+
+- schema validation and decision serialization
+- CUDA observer success/failure/partial data
+- RAM fallback observer behavior
+- MPS and CPU RAM-pressure admission
+- local evidence precedence and persistence
+- input-profile-sensitive confidence lowering
+- heavy/heavy denial and large-GPU high-confidence allowance
+- memory-pressure eviction and active-runner queueing
+- bounded memory-release success and timeout
+- retry-after-cleanup success and blocked retry
+- service-level runner start eviction, co-residence, and memory blocking
+- service-level workflow run queueing, blocking, local learning, and retry
+- API payloads for memory status and metrics
+- frontend display of memory waiting and blocked states
+
+Default repo command remains:
+
+```bash
+make test
+```
+
+## V1 Completion Gate
+
+Memory Governor v1 is complete enough for isolated workflow runners when:
+
+- the default service wires an observer and local learning store
+- isolated runner starts use Memory Governor admission
+- isolated workflow runs can queue, clean up, warn, or refuse based on memory
+  decisions
+- local observations are persisted outside `.noofy` packages
+- memory errors make future decisions more conservative
+- safe retry-after-cleanup is bounded to one retry
+- API/UI payloads explain waiting, cleanup, retry, blocked, and warm states
+- tests remain hardware-independent by default
+
+That gate is currently met for isolated workflow runners. The next meaningful
+work is targeted hardening around core-runner admission, better Noofy-side peak
+memory observation, DirectML/Windows GPU observation, adaptive safety margins,
+and real hardware validation logs.

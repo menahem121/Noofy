@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.engine.diagnostics import LogStore
 from app.runtime.memory_governor import (
+    FallbackMemoryObserver,
     LocalMemoryEvidenceSummary,
     LocalMemoryLearningStore,
     LocalMemoryObservation,
@@ -255,6 +256,33 @@ def test_system_and_unavailable_memory_observers_return_structured_snapshots() -
     assert unavailable_snapshot.available is False
     assert unavailable_snapshot.backend is MemoryBackend.MPS
     assert unavailable_snapshot.error == "not implemented yet"
+
+
+def test_fallback_memory_observer_uses_ram_snapshot_when_cuda_is_unavailable() -> None:
+    class StaticObserver:
+        def __init__(self, snapshot: MachineMemorySnapshot) -> None:
+            self.snapshot_value = snapshot
+
+        def snapshot(self) -> MachineMemorySnapshot:
+            return self.snapshot_value
+
+    observer = FallbackMemoryObserver(
+        UnavailableMemoryObserver(backend=MemoryBackend.CUDA, error="nvidia_smi_not_found"),
+        StaticObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CPU,
+                total_ram_mb=32_000,
+                free_ram_mb=24_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    snapshot = observer.snapshot()
+
+    assert snapshot.available is True
+    assert snapshot.backend is MemoryBackend.CPU
+    assert snapshot.free_ram_mb == 24_000
 
 
 def test_memory_pressure_from_free_ratio() -> None:
@@ -782,6 +810,57 @@ def test_memory_admission_eviction_for_memory_pressure_and_queue_for_active_runn
     assert idle_decision.evict_runner_ids == ["runner-big", "runner-small"]
     assert active_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY
     assert active_decision.queued_behind_runner_id == "runner-active"
+
+
+def test_mps_unified_memory_uses_ram_margin_instead_of_requiring_vram() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-mps",
+                RunnerMemoryClass.GPU_HEAVY,
+                6_000,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=MachineMemorySnapshot(
+                backend=MemoryBackend.MPS,
+                total_ram_mb=32_000,
+                free_ram_mb=20_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.required_vram_margin_mb == 0
+    assert decision.required_ram_margin_mb == 8_000
+    assert decision.predicted_free_ram_after_mb == 14_000
+
+
+def test_cpu_backend_uses_vram_estimate_as_ram_pressure_proxy() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-cpu",
+                RunnerMemoryClass.GPU_HEAVY,
+                12_000,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=MachineMemorySnapshot(
+                backend=MemoryBackend.CPU,
+                total_ram_mb=16_000,
+                free_ram_mb=13_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert decision.reason_code == "insufficient_ram_margin"
+    assert decision.required_vram_margin_mb == 0
 
 
 def test_eviction_candidates_prefers_idle_unused_large_runners() -> None:

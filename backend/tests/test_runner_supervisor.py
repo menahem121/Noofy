@@ -801,14 +801,10 @@ async def test_get_result_records_successful_local_memory_observation(tmp_path: 
 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
     await service.get_result(job.job_id)
-    summary = learning_store.summary_for(
-        workflow_id="text_to_image_v0",
-        runner_process_compatibility_key="runner-key-a",
-        machine_profile_id="machine-a",
-        backend=MemoryBackend.CUDA,
-    )
+    summary = learning_store.list_summaries()[0]
 
     assert summary is not None
+    assert summary.input_profile_fingerprint is not None
     assert summary.successful_runs == 1
     assert summary.memory_error_runs == 0
     assert summary.observed_peak_vram_mb == 2400

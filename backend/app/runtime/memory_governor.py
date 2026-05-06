@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import json
+import platform
 import subprocess
 import threading
 import time
@@ -418,12 +419,15 @@ class NvidiaSmiMemoryObserver:
             return _unavailable_cuda_snapshot(error)
 
         device_name, total_vram_mb, free_vram_mb = _parse_nvidia_smi_memory_row(result.stdout)
+        total_ram_mb, free_ram_mb = _system_ram_mb()
         return MachineMemorySnapshot(
             available=total_vram_mb is not None or free_vram_mb is not None,
             backend=MemoryBackend.CUDA,
             device_name=device_name,
             total_vram_mb=total_vram_mb,
             free_vram_mb=free_vram_mb,
+            total_ram_mb=total_ram_mb,
+            free_ram_mb=free_ram_mb,
             memory_pressure=memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb),
             observed_at=_now_iso(),
             error=None if total_vram_mb is not None or free_vram_mb is not None else "nvidia_smi_parse_failed",
@@ -437,6 +441,35 @@ class NvidiaSmiMemoryObserver:
             text=True,
             timeout=self._timeout_seconds,
         )
+
+
+class FallbackMemoryObserver:
+    """Use a precise backend observer when available, otherwise fall back to RAM."""
+
+    def __init__(self, primary: MachineMemoryObserver, fallback: MachineMemoryObserver) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        primary_snapshot = self.primary.snapshot()
+        if primary_snapshot.available:
+            return primary_snapshot
+        fallback_snapshot = self.fallback.snapshot()
+        if fallback_snapshot.available:
+            return fallback_snapshot
+        return primary_snapshot
+
+
+def default_memory_observer() -> MachineMemoryObserver:
+    """Return the product default best-effort memory observer for this host."""
+    if platform.system() == "Darwin":
+        machine = platform.machine().lower()
+        backend = MemoryBackend.MPS if machine in {"arm64", "aarch64"} else MemoryBackend.CPU
+        return SystemMemoryObserver(backend=backend)
+    return FallbackMemoryObserver(
+        NvidiaSmiMemoryObserver(),
+        SystemMemoryObserver(backend=MemoryBackend.CPU),
+    )
 
 
 class LocalMemoryLearningStore:
@@ -708,8 +741,14 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
     idle_runners = [runner for runner in runners if not _runner_snapshot_is_active(runner)]
     required_vram_margin_mb = required_vram_margin(machine, estimate)
     required_ram_margin_mb = required_ram_margin(machine, estimate)
-    predicted_free_vram_after_mb = _subtract_optional(machine.free_vram_mb, estimate.estimated_peak_vram_mb)
-    predicted_free_ram_after_mb = _subtract_optional(machine.free_ram_mb, estimate.estimated_peak_ram_mb)
+    predicted_free_vram_after_mb = _subtract_optional(
+        machine.free_vram_mb,
+        _estimated_vram_pressure_mb(machine, estimate),
+    )
+    predicted_free_ram_after_mb = _subtract_optional(
+        machine.free_ram_mb,
+        _estimated_ram_pressure_mb(machine, estimate),
+    )
     runner_ids = [runner.runner_id for runner in runners]
 
     if _request_is_cpu_only(estimate):
@@ -1070,6 +1109,8 @@ def _local_evidence_matches_request(
 def required_vram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int:
     if _request_is_cpu_only(estimate):
         return 0
+    if _accelerator_memory_uses_system_ram(machine):
+        return 0
     if machine.backend is not MemoryBackend.CUDA or machine.total_vram_mb is None:
         return 4096
     total = machine.total_vram_mb
@@ -1085,7 +1126,9 @@ def required_vram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemor
 def required_ram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int:
     del estimate
     if machine.backend is MemoryBackend.MPS:
-        return max(4096, int((machine.total_ram_mb or 0) * 0.20))
+        if machine.total_ram_mb is None:
+            return 4096
+        return min(8192, int(machine.total_ram_mb * 0.25))
     if machine.total_ram_mb is None:
         return 2048
     return max(2048, int(machine.total_ram_mb * 0.10))
@@ -1299,9 +1342,12 @@ def _vram_margin_ok(
 ) -> bool:
     if _request_is_cpu_only(estimate):
         return True
-    if machine.free_vram_mb is None or estimate.estimated_peak_vram_mb is None:
+    if _accelerator_memory_uses_system_ram(machine):
+        return True
+    estimated_vram_mb = _estimated_vram_pressure_mb(machine, estimate)
+    if machine.free_vram_mb is None or estimated_vram_mb is None:
         return False
-    return machine.free_vram_mb - estimate.estimated_peak_vram_mb >= required_vram_margin_mb
+    return machine.free_vram_mb - estimated_vram_mb >= required_vram_margin_mb
 
 
 def _ram_margin_ok(
@@ -1309,9 +1355,28 @@ def _ram_margin_ok(
     estimate: WorkflowMemoryEstimate,
     required_ram_margin_mb: int,
 ) -> bool:
-    if machine.free_ram_mb is None or estimate.estimated_peak_ram_mb is None:
+    estimated_ram_mb = _estimated_ram_pressure_mb(machine, estimate)
+    if machine.free_ram_mb is None or estimated_ram_mb is None:
         return True
-    return machine.free_ram_mb - estimate.estimated_peak_ram_mb >= required_ram_margin_mb
+    return machine.free_ram_mb - estimated_ram_mb >= required_ram_margin_mb
+
+
+def _accelerator_memory_uses_system_ram(machine: MachineMemorySnapshot) -> bool:
+    return machine.backend in {MemoryBackend.MPS, MemoryBackend.CPU}
+
+
+def _estimated_vram_pressure_mb(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int | None:
+    if _accelerator_memory_uses_system_ram(machine):
+        return None
+    return estimate.estimated_peak_vram_mb
+
+
+def _estimated_ram_pressure_mb(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int | None:
+    if estimate.estimated_peak_ram_mb is not None:
+        return estimate.estimated_peak_ram_mb
+    if _accelerator_memory_uses_system_ram(machine):
+        return estimate.estimated_peak_vram_mb
+    return None
 
 
 def _co_residence_risk_level(
@@ -1422,6 +1487,8 @@ def _unavailable_cuda_snapshot(error: str) -> MachineMemorySnapshot:
 
 
 def _system_ram_mb() -> tuple[int | None, int | None]:
+    if os.name == "nt":
+        return _windows_system_ram_mb()
     if os.name != "posix":
         return None, None
     try:
@@ -1432,6 +1499,38 @@ def _system_ram_mb() -> tuple[int | None, int | None]:
         return None, None
     total_ram_mb = int(page_size * total_pages / (1024 * 1024))
     free_ram_mb = int(page_size * available_pages / (1024 * 1024))
+    return total_ram_mb, free_ram_mb
+
+
+def _windows_system_ram_mb() -> tuple[int | None, int | None]:
+    try:
+        import ctypes
+    except ImportError:
+        return None, None
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    status = MEMORYSTATUSEX()
+    status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+    try:
+        success = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return None, None
+    if not success:
+        return None, None
+    total_ram_mb = int(status.ullTotalPhys / (1024 * 1024))
+    free_ram_mb = int(status.ullAvailPhys / (1024 * 1024))
     return total_ram_mb, free_ram_mb
 
 
