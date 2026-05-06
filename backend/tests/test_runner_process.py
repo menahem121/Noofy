@@ -1,10 +1,13 @@
 from pathlib import Path
+import builtins
 import os
 import subprocess
+import sys
 
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.runtime import runner_memory_probe
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.supervisor import RunnerKind, RunnerMemoryClass, RunnerStatus
 
@@ -39,6 +42,20 @@ def _launch_spec(tmp_path: Path, *, port: int | None = 8188) -> RunnerLaunchSpec
         host="127.0.0.1",
         port=port,
     )
+
+
+def test_memory_probe_does_not_import_torch_before_target_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    sys.modules.pop("torch", None)
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "torch":
+            raise AssertionError("runner memory probe imported torch before the target runtime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    assert runner_memory_probe._sample_torch() == {}
 
 
 @pytest.mark.anyio
@@ -192,6 +209,8 @@ async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is
     assert command[1].endswith("runner_memory_probe.py")
     assert "--telemetry-file" in command
     assert str(telemetry_path) in command
+    assert "--sample-interval-seconds" in command
+    assert "0.1" in command
     assert "--" in command
     assert command[-5:] == ["main.py", "--listen", "127.0.0.1", "--port", "8188"]
 

@@ -506,6 +506,8 @@ def _memory_probe_command(spec: RunnerLaunchSpec, target_command: list[str]) -> 
         str(spec.memory_telemetry_path),
         "--sample-window",
         "runner_startup",
+        "--sample-interval-seconds",
+        "0.1",
         "--",
         *target_command,
     ]

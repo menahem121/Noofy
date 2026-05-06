@@ -10,6 +10,7 @@ backend/.venv/
 
 # Local backend/runtime state
 backend/.env
+.noofy-runtime/
 
 # Frontend dependencies and build outputs
 frontend/node_modules/

@@ -2695,6 +2695,10 @@ Get-CimInstance Win32_Process |
 def _system_ram_mb() -> tuple[int | None, int | None]:
     if os.name == "nt":
         return _windows_system_ram_mb()
+    if platform.system() == "Linux":
+        linux = _linux_system_ram_mb()
+        if linux != (None, None):
+            return linux
     if platform.system() == "Darwin":
         darwin = _darwin_system_ram_mb()
         if darwin != (None, None):
@@ -2710,6 +2714,35 @@ def _system_ram_mb() -> tuple[int | None, int | None]:
     total_ram_mb = int(page_size * total_pages / (1024 * 1024))
     free_ram_mb = int(page_size * available_pages / (1024 * 1024))
     return total_ram_mb, free_ram_mb
+
+
+def _linux_system_ram_mb(reader: Callable[[], str] | None = None) -> tuple[int | None, int | None]:
+    try:
+        text = reader() if reader is not None else Path("/proc/meminfo").read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    values_kb: dict[str, int] = {}
+    for raw_line in text.splitlines():
+        key, separator, rest = raw_line.partition(":")
+        if separator != ":":
+            continue
+        parts = rest.strip().split()
+        if not parts:
+            continue
+        try:
+            values_kb[key] = int(parts[0])
+        except ValueError:
+            continue
+    total_kb = values_kb.get("MemTotal")
+    available_kb = values_kb.get("MemAvailable")
+    if available_kb is None:
+        free_kb = values_kb.get("MemFree")
+        if free_kb is not None:
+            available_kb = free_kb + values_kb.get("Buffers", 0) + values_kb.get("Cached", 0)
+    return (
+        int(total_kb / 1024) if total_kb is not None else None,
+        int(available_kb / 1024) if available_kb is not None else None,
+    )
 
 
 def _darwin_system_ram_mb() -> tuple[int | None, int | None]:

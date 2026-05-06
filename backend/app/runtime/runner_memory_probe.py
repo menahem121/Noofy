@@ -112,9 +112,8 @@ def _sample_payload(runner_id: str, sample_window: str) -> dict[str, Any]:
 
 
 def _sample_torch() -> dict[str, Any]:
-    try:
-        import torch  # type: ignore[import-not-found]
-    except Exception:
+    torch = sys.modules.get("torch")
+    if torch is None:
         return {}
     payload: dict[str, Any] = {}
     cuda = _sample_torch_cuda(torch)

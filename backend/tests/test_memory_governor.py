@@ -48,6 +48,7 @@ from app.runtime.memory_governor import (
     retry_after_memory_cleanup_decision,
     summarize_local_memory_observations,
     wait_for_memory_release,
+    _linux_system_ram_mb,
 )
 from app.runtime.supervisor import (
     RunnerDescriptor,
@@ -605,6 +606,35 @@ def test_system_memory_observer_reports_invalid_linux_psi_without_failing() -> N
 
     assert "linux_psi" in snapshot.signal_sources
     assert "linux_psi_parse_failed" in snapshot.pressure_reasons
+
+
+def test_linux_system_ram_uses_memavailable_instead_of_immediately_free_pages() -> None:
+    total, available = _linux_system_ram_mb(
+        lambda: """
+MemTotal:       16000000 kB
+MemFree:         1000000 kB
+MemAvailable:  12000000 kB
+Buffers:          100000 kB
+Cached:         11000000 kB
+"""
+    )
+
+    assert total == 15625
+    assert available == 11718
+
+
+def test_linux_system_ram_falls_back_to_reclaimable_file_cache_when_memavailable_is_missing() -> None:
+    total, available = _linux_system_ram_mb(
+        lambda: """
+MemTotal:       16000000 kB
+MemFree:         1000000 kB
+Buffers:          250000 kB
+Cached:          2000000 kB
+"""
+    )
+
+    assert total == 15625
+    assert available == 3173
 
 
 def test_fallback_memory_observer_uses_ram_snapshot_when_cuda_is_unavailable() -> None:

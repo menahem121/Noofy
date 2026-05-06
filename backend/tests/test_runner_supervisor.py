@@ -1053,6 +1053,8 @@ async def test_get_result_prefers_process_tree_and_nvml_process_attribution(tmp_
     assert finish_event.details["runner_root_pid"] == 4242
     assert finish_event.details["runner_child_pids"] == [4243]
     assert finish_event.details["attribution_quality"] == "process_exact"
+    assert MemorySampleWindow.BEFORE_SUBMIT.value in finish_event.details["sample_windows_observed"]
+    assert MemorySampleWindow.AFTER_COMPLETION.value in finish_event.details["sample_windows_observed"]
 
 
 @pytest.mark.anyio
@@ -1113,6 +1115,7 @@ async def test_get_result_records_backend_allocator_telemetry_and_peak_window(tm
     assert "pytorch_cuda_allocator" in summary.attribution_sources
     assert finish_event.details["backend_allocator_peak_vram_mb"] == 3600
     assert finish_event.details["sample_window"] == MemorySampleWindow.BEFORE_SUBMIT.value
+    assert MemorySampleWindow.BEFORE_SUBMIT.value in finish_event.details["sample_windows_observed"]
 
 
 @pytest.mark.anyio

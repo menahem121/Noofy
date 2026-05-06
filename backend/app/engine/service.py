@@ -1878,6 +1878,7 @@ class EngineService:
             for snapshot in snapshots
             for pid in snapshot.runner_child_pids
         )
+        sample_windows_observed = _unique_service_values(snapshot.sample_window.value for snapshot in snapshots)
         self._job_memory_attribution[job_id] = {
             "runner_root_pid": runner_root_pid,
             "runner_child_pids": runner_child_pids,
@@ -1897,6 +1898,7 @@ class EngineService:
             "attribution_quality": attribution_quality,
             "attribution_sources": attribution_sources,
             "attribution_reasons": attribution_reasons,
+            "sample_windows_observed": sample_windows_observed,
         }
         if runner is not None:
             self.runner_supervisor.fill_runner_memory_observation(
@@ -1920,6 +1922,7 @@ class EngineService:
                 "system_peak_delta_ram_mb": system_peak_ram_mb,
                 "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
                 "sample_window": self._job_memory_attribution[job_id]["sample_window"].value,
+                "sample_windows_observed": sample_windows_observed,
                 "runner_id": runner.runner_id if runner is not None else None,
                 "runner_root_pid": runner_root_pid,
                 "runner_child_pids": runner_child_pids,
@@ -2991,7 +2994,7 @@ def create_default_engine_service() -> EngineService:
         ),
         execution_fixture_resolver=lambda capsule_lock, prepared_workspace: _smoke_execution_fixture_for_capsule(
             capsule_lock,
-            workflow_loader=workflow_loader,
+            workflow_loader=loader,
         ),
         log_store=log_store,
     )
@@ -3019,7 +3022,7 @@ def create_default_engine_service() -> EngineService:
             custom_node_materializer=CustomNodeWorkspaceMaterializer(),
             custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
                 workflow_id,
-                workflow_loader=workflow_loader,
+                workflow_loader=loader,
                 imported_package_store=imported_package_store,
             ),
             custom_node_source_cache_dir=paths.custom_node_cache_dir,

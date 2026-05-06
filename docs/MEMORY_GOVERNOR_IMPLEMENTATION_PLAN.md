@@ -258,6 +258,12 @@ Current tests cover:
 - Linux PSI pressure parsing and unavailable fallback behavior
 - RAM and Windows GPU-counter fallback observer behavior
 - MPS and CPU RAM-pressure admission
+
+For production-like Ubuntu CUDA hardware validation, use
+[`MEMORY_GOVERNOR_LINUX_VALIDATION.md`](MEMORY_GOVERNOR_LINUX_VALIDATION.md).
+That path prepares the managed ComfyUI runtime under app data, verifies runner
+side PyTorch CUDA telemetry, and runs a model-free managed workflow through the
+EngineService path.
 - local evidence precedence and persistence
 - input-profile-sensitive confidence lowering
 - heavy/heavy denial and large-GPU high-confidence allowance
