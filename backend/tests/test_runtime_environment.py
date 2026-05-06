@@ -212,3 +212,20 @@ def test_torch_plan_selects_cuda_wheel_from_driver_capability() -> None:
 
     assert plan.accelerator == "nvidia_cuda"
     assert plan.pip_args == ["--index-url", "https://download.pytorch.org/whl/cu124"]
+
+
+def test_torch_plan_selects_cuda_130_for_modern_driver_capability() -> None:
+    plan = plan_torch_install(
+        RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="nvidia_cuda",
+            gpu_names=["NVIDIA A10G"],
+            cuda_version="13.2",
+        )
+    )
+
+    assert plan.accelerator == "nvidia_cuda"
+    assert plan.pip_args == ["--index-url", "https://download.pytorch.org/whl/cu130"]

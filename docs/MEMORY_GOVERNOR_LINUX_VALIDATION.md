@@ -30,6 +30,10 @@ managed venv, installs CUDA PyTorch into that venv, then installs
 `third_party/comfyui/requirements.txt`. It does not install PyTorch into the
 trusted backend venv.
 
+On modern NVIDIA drivers that report CUDA 13.0 or newer, the bootstrap policy
+should select the `cu130` PyTorch wheel index to match the
+`linux-x64-cuda130` runtime profile.
+
 ## What It Validates
 
 The validation command:

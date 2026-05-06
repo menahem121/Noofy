@@ -1,58 +1,216 @@
-# Local AI Workflow App
+# Noofy
 
-A desktop app for running local AI workflows on Linux, Windows, and macOS.
+**Turn powerful ComfyUI workflows into simple, local, app-like dashboards.**
 
-The goal is to make powerful AI tools easy for beginners: users choose a ready-made workflow, press a simple button, and the app runs the AI process in the background.
+Noofy is a desktop-first, local AI workflow app. It lets creators build or reuse
+advanced workflows in ComfyUI, export them as `.noofy` packages, and turn them
+into focused dashboards that normal users can run without touching a node graph.
 
-## Core Idea
+ComfyUI remains the first execution engine behind the scenes. Noofy is the layer
+around it: workflow import, dashboard design, model/runtime preparation, local
+execution, and beginner-friendly controls.
 
-This project will provide a clean desktop interface for local AI tasks such as:
+## Why Noofy Exists
 
-- Text-to-image generation
-- Background removal
-- Image erasing / inpainting
-- Image editing workflows
-- Future local AI utilities built on reusable workflows
+ComfyUI is powerful, but a raw ComfyUI workflow is not a good interface for most
+people. It contains nodes, internal values, technical names, model paths,
+custom-node assumptions, Python dependencies, and many parameters that should
+not be edited casually.
 
-## Planned Architecture
+Noofy keeps the ComfyUI graph as execution data and builds a curated dashboard
+around it. The dashboard exposes only the values the creator or importer chooses
+to make editable, such as:
 
-- Frontend: TypeScript + React
-- Desktop shell: Tauri / Rust
-- Backend: Python
-- AI engine: ComfyUI-based workflow engine
-- Communication: local HTTP + WebSocket API
+- prompt
+- input image
+- transformation strength
+- width and height
+- style or LoRA choice
+- seed / variation ID
+- output image
 
-The desktop app will start and manage the local Python backend, then communicate with it through a local API.
+Noofy is not trying to replace ComfyUI as a workflow authoring tool. It exists
+to make finished ComfyUI workflows feel like clean local apps.
 
-For product v1, ComfyUI should run as an app-managed hidden sidecar with its own isolated Python environment. Users should not need to manually launch ComfyUI or install its Python dependencies.
+## Who It Is For
 
-Noofy keeps its app-owned ComfyUI source snapshot in `third_party/comfyui/`. That source is used for local managed development and as the input for future packaged runtime artifacts; it is not a user's external ComfyUI installation. Developers can still use external mode to point the backend at an already-running ComfyUI while iterating.
+- **Creators** who build workflows in ComfyUI and want to share them as usable
+  tools instead of raw node graphs.
+- **Importers and power users** who want to adapt community workflows into
+  reliable local dashboards.
+- **Normal users** who want to run local AI workflows without learning ComfyUI,
+  Python environments, model folders, custom nodes, or backend setup.
+- **Developers and server users** who want an open-source local workflow app
+  with a clear terminal install path.
 
-Managed builds can also install stable upstream ComfyUI releases from the
-settings screen. These user-managed updates are stored in Noofy runtime storage,
-validated locally before activation, and never modify `third_party/comfyui/`.
+## Core Workflow
 
-## Project Direction
+1. **Build or load a workflow in ComfyUI.**
+2. **Export it with the Noofy ComfyUI export extension.**
+   The extension runs the workflow once and writes a `.noofy` package.
+3. **Import the `.noofy` package into Noofy.**
+   Noofy reads the archive as data and normalizes it into an app-owned workflow
+   package.
+4. **Choose dashboard widgets.**
+   The creator/importer decides which workflow values become user-facing
+   controls.
+5. **Arrange and save the dashboard.**
+   The saved dashboard becomes the normal user interface for that workflow.
+6. **Run the workflow from the dashboard.**
+   The normal user sees a simple tool, not ComfyUI internals.
 
-Version 1 will focus on a reliable cross-platform app for Linux, Windows, and macOS using a Python/ComfyUI backend. Linux CUDA workstations and servers are a first-class validation target for the ComfyUI backend.
+## `.noofy` Packages
 
-Noofy should support community workflows from the internet as a first-class product direction. Users should be able to import workflows made by other people without manually installing Python packages, copying custom node folders, editing ComfyUI paths, or troubleshooting dependency conflicts.
+A `.noofy` package is richer than a raw ComfyUI JSON file. It can include:
 
-Community workflows must be prepared through isolated workflow capsules and runner environments. Noofy should automatically resolve, download, install, and smoke-test custom nodes and normal Python dependencies when technically possible, including common custom-node repositories that declare dependencies in `requirements.txt`. Those installs must never mutate the trusted core runtime or another installed workflow.
+- the execution-ready ComfyUI graph
+- package metadata
+- model references and identity hints
+- custom-node information
+- export diagnostics
+- creator-side hardware observations
+- an initial dashboard schema
 
-Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible. Noofy protects the app architecture from dependency conflicts and broken installs; it does not claim arbitrary Python code from the internet is secure.
+Raw ComfyUI JSON imports may still be useful, but they are degraded imports:
+they usually need more dashboard setup and provide less information for runtime
+preparation.
 
-In later platform-focused phases, the AI inference layer can add native acceleration paths where appropriate, such as Apple-native acceleration through Core ML, Metal, or MLX, Windows-native inference paths, or Linux CUDA-specific optimizations. These should improve performance and integration while keeping the general workflow system flexible.
+## Dashboards
 
-## Future Workflow Creator Mode
+The dashboard is curated, not generated blindly.
 
-A later phase may add a creator-focused workflow packaging system.
+A workflow may contain many editable values, but only a few usually belong in
+the interface. Noofy may suggest controls, but the creator/importer is
+responsible for deciding what the normal user should see.
 
-Workflow creators will be able to build a workflow in ComfyUI, then export it through a custom ComfyUI node or extension made for this project. That exported workflow package will include the ComfyUI graph, required model information, metadata, and the controls that should appear in the desktop app.
+Normal users should not see workflow nodes, raw node values, package internals,
+custom-node details, runtime state, Python setup, or ComfyUI-specific concepts
+unless they explicitly open advanced/developer details.
 
-Inside the desktop app, the creator will be able to turn selected workflow inputs into a simple modular dashboard. For example, a creator could expose only the prompt field, strength slider, image upload, style selector, or run button while hiding the full node graph from the end user.
+## Current Capabilities
 
-The end user would then open the workflow as a clean, intuitive interface designed by the creator. The app would detect missing models, show what needs to be downloaded, ask for user approval, and then download the required models from verified sources automatically.
+Noofy currently includes foundations for:
+
+- a React frontend and Python/FastAPI backend
+- an app-owned engine contract with ComfyUI as the first adapter
+- managed ComfyUI startup for local app use
+- `.noofy` archive import and workflow package normalization
+- dashboard widget selection and layout work
+- model validation through the active engine adapter
+- isolated workflow/runtime preparation for community workflows when possible
+- structured diagnostics for runtime, install, workflow, and memory behavior
+- a Noofy ComfyUI export extension
+
+Noofy is still in active development. The V1 direction is a desktop app where
+users open Noofy, choose a workflow dashboard, and run it locally without
+manually launching ComfyUI or installing ComfyUI Python dependencies.
+
+## Local Development
+
+For advanced users, contributors, and Unix-like source checkouts:
+
+```bash
+git clone <repo-url> Noofy
+cd Noofy
+make install
+make run
+```
+
+On Windows PowerShell:
+
+```powershell
+git clone <repo-url> Noofy
+cd Noofy
+.\scripts\install.ps1
+.\scripts\run.ps1
+```
+
+`make install` creates the trusted backend virtual environment, installs
+frontend dependencies, and prepares Noofy's managed ComfyUI runtime under
+`.noofy-runtime/data`.
+
+PyTorch and ComfyUI dependencies are installed into the managed runtime
+environment, not globally and not into the trusted backend venv.
+
+For backend-only/server use:
+
+```bash
+make run-backend
+```
+
+On Windows:
+
+```powershell
+.\scripts\run-backend.ps1
+```
+
+## Tests
+
+Run the full test suite from the repo root:
+
+```bash
+make test
+```
+
+This runs backend tests, frontend tests, and the ComfyUI export extension tests.
+
+## ComfyUI Export Extension
+
+Noofy includes a ComfyUI extension in
+[`comfyui_export2noofy_node/`](comfyui_export2noofy_node/).
+
+To install it in a development ComfyUI checkout, copy or symlink the folder into
+ComfyUI's `custom_nodes/` directory:
+
+```text
+ComfyUI/
+  custom_nodes/
+    comfyui_export2noofy_node/
+```
+
+Restart ComfyUI after installing it. The extension adds an **Export to Noofy**
+action to the ComfyUI interface.
+
+To export a workflow:
+
+1. Open ComfyUI.
+2. Load or build the workflow.
+3. Click **Export to Noofy**.
+4. Wait for the export test run to finish.
+5. Save the downloaded `.noofy` package.
+
+The exporter only creates a package after ComfyUI reports a successful test run.
+It does not bundle model files, and it does not mark community workflows as
+trusted or Noofy Verified.
+
+See the [export extension README](comfyui_export2noofy_node/README.md) for the
+full package format and exporter behavior.
+
+## Importing And Configuring A Workflow
+
+After importing a `.noofy` package, Noofy stores an internal editable copy of the
+workflow package. The creator/importer can then:
+
+1. inspect bindable workflow inputs and outputs
+2. choose which values become dashboard widgets
+3. name the widgets with user-friendly labels
+4. arrange the dashboard layout
+5. save the dashboard
+6. run the workflow from the finished interface
+
+The original imported `.noofy` archive is not silently modified. If a user wants
+to share the configured workflow later, Noofy should export a new package.
+
+## Trust, Safety, And Limitations
+
+Community workflows can include custom nodes and Python dependencies. Noofy
+prepares those through isolated runtime artifacts when it can, so one workflow's
+dependencies do not mutate the trusted backend or the core ComfyUI runtime.
+
+This is dependency and runtime isolation, not a full security sandbox. Noofy
+does not claim that arbitrary Python code from the internet is safe. Unsupported
+or unresolved workflows should fail gracefully with useful diagnostics instead
+of asking beginners to repair Python, pip, folders, or ComfyUI internals.
 
 ## Developer Docs
 
@@ -61,15 +219,12 @@ The end user would then open the workflow as a clean, intuitive interface design
 - [Architecture](docs/ARCHITECTURE.md)
 - [Engine contract](docs/ENGINE_CONTRACT.md)
 - [Workflow packages](docs/WORKFLOW_PACKAGES.md)
+- [Import and dashboard widget flow](docs/NOOFY_IMPORT_DASHBOARD_WIDGET_FLOW.md)
+- [Dashboard canvas](docs/DASHBOARD_CANVAS.md)
 - [Runtime isolation architecture](docs/RUNTIME_ISOLATION_ARCHITECTURE.md)
-- [Runtime isolation implementation plan](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md)
-- [Noofy Verified publishing process](docs/NOOFY_VERIFIED_PUBLISHING.md)
+- [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
+- [ComfyUI updates](docs/COMFYUI_UPDATES.md)
+- [Noofy Verified publishing](docs/NOOFY_VERIFIED_PUBLISHING.md)
 - [OS sandboxing feasibility](docs/OS_SANDBOXING_FEASIBILITY.md)
 - [Memory Governor implementation plan](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md)
-- [Milestone 1](docs/MILESTONE_1.md)
-- [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
-- [Import, dashboard widgets, and user dashboard flow](docs/NOOFY_IMPORT_DASHBOARD_WIDGET_FLOW.md)
-
-## Main Goal
-
-Make local AI workflows feel simple, private, and approachable without requiring users to understand ComfyUI, Python, model folders, or complex node graphs.
+- [Memory Governor Linux validation](docs/MEMORY_GOVERNOR_LINUX_VALIDATION.md)

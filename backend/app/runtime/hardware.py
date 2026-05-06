@@ -148,6 +148,7 @@ def _parse_cuda_version(output: str) -> str | None:
 
 def _select_cuda_index_url(cuda_version: str | None) -> str | None:
     supported_versions = [
+        ((13, 0), "https://download.pytorch.org/whl/cu130"),
         ((12, 8), "https://download.pytorch.org/whl/cu128"),
         ((12, 6), "https://download.pytorch.org/whl/cu126"),
         ((12, 4), "https://download.pytorch.org/whl/cu124"),
