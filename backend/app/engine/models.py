@@ -148,6 +148,7 @@ class ComfyUIRuntimeStatus(BaseModel):
     base_url: str
     repo_dir: str
     managed_process_running: bool = False
+    sidecar_starting: bool = False
     pid: int | None = None
     error: str | None = None
     environment: RuntimeEnvironmentStatus | None = None

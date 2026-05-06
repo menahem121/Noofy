@@ -1,3 +1,4 @@
+import asyncio
 import socket
 import sys
 from pathlib import Path
@@ -419,3 +420,129 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
 
 def _arg_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
+
+
+# ---------------------------------------------------------------------------
+# sidecar_starting flag
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_sidecar_starting_is_true_while_polling(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    fake_process = FakeProcess()
+
+    # Always unreachable until start() sets _sidecar_starting, then reachable.
+    # Use an event so the health check only flips after the process was spawned
+    # (i.e., inside _poll_until_reachable), not during the pre-start status check.
+    process_spawned = asyncio.Event()
+    poll_count = 0
+
+    async def health_after_spawn(url: str) -> tuple[bool, str | None]:
+        nonlocal poll_count
+        if not process_spawned.is_set():
+            return False, "not yet"
+        poll_count += 1
+        return True, None
+
+    async def create_process(*args, **kwargs):
+        process_spawned.set()
+        return fake_process
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        startup_timeout_seconds=5,
+        health_poll_interval_seconds=0.001,
+        process_factory=create_process,
+        health_check=health_after_spawn,
+    )
+
+    # Before start() is called, sidecar_starting must be False.
+    assert not manager._sidecar_starting
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert poll_count >= 1, "health check must have been polled after spawn"
+    assert not manager._sidecar_starting
+
+
+@pytest.mark.anyio
+async def test_sidecar_starting_cleared_on_timeout(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    fake_process = FakeProcess()
+
+    async def create_process(*args, **kwargs):
+        return fake_process
+
+    async def unreachable(_: str) -> tuple[bool, str | None]:
+        return False, "not reachable"
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        startup_timeout_seconds=0.01,
+        health_poll_interval_seconds=0.001,
+        process_factory=create_process,
+        health_check=unreachable,
+    )
+
+    result = await manager.start()
+
+    assert result.status == "startup_timeout"
+    assert not (await manager.status()).sidecar_starting
+
+
+# ---------------------------------------------------------------------------
+# Concurrent start guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_concurrent_start_calls_are_serialised(tmp_path: Path) -> None:
+    """Two concurrent start() calls must not spawn two processes."""
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+
+    spawn_count = 0
+    # Health returns unreachable until the process has been spawned, then reachable.
+    # It never blocks, so there is no deadlock risk.
+    spawned = False
+
+    async def create_process(*args, **kwargs):
+        nonlocal spawn_count, spawned
+        spawn_count += 1
+        spawned = True
+        return FakeProcess()
+
+    async def health(url: str) -> tuple[bool, str | None]:
+        if spawned:
+            return True, None
+        return False, "not yet"
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        startup_timeout_seconds=5,
+        health_poll_interval_seconds=0.001,
+        process_factory=create_process,
+        health_check=health,
+    )
+
+    r1, r2 = await asyncio.gather(manager.start(), manager.start())
+
+    assert spawn_count == 1, "process must only be spawned once"
+    assert r1.status in {"started", "already_running"}
+    assert r2.status in {"started", "already_running"}

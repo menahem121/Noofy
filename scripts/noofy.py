@@ -18,7 +18,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,7 +77,7 @@ class CommandResult:
 
 
 CommandRunner = Callable[
-    [list[str], Path | None, Mapping[str, str] | None, bool],
+    [list[str], Optional[Path], Optional[Mapping[str, str]], bool],
     CommandResult,
 ]
 
@@ -244,7 +244,7 @@ class NoofyCheckout:
         )
 
     def install_frontend_dependencies(self) -> None:
-        require_command("npm", "Node.js/npm is required to install and run the Noofy frontend.")
+        require_node()
         command = frontend_install_command(self.frontend_dir)
         print(f"Installing frontend dependencies with {' '.join(command)}")
         self.command_runner(command, self.frontend_dir, None, False)
@@ -320,7 +320,7 @@ class NoofyCheckout:
         if not self.backend_python.exists():
             print("Backend venv is missing. Run: make install", file=sys.stderr)
             return 1
-        require_command("npm", "Node.js/npm is required to run the Noofy frontend.")
+        require_node()
         if not (self.frontend_dir / "node_modules").exists():
             print("Frontend dependencies are missing. Run: make install", file=sys.stderr)
             return 1
@@ -357,6 +357,76 @@ def require_python_version() -> None:
 def require_command(command: str, message: str) -> None:
     if shutil.which(command) is None:
         raise SystemExit(message)
+
+
+# Minimum Node.js major version required to build and run the frontend.
+_MIN_NODE_MAJOR = 18
+
+
+def require_node() -> None:
+    """Check that node and npm are present and meet the minimum version."""
+    node = shutil.which("node")
+    npm = shutil.which("npm")
+    missing = [tool for tool, found in (("node", node), ("npm", npm)) if not found]
+    if missing:
+        _fail_missing_node(missing)
+
+    result = subprocess.run(
+        ["node", "--version"], capture_output=True, text=True
+    )
+    raw = result.stdout.strip().lstrip("v")
+    try:
+        major = int(raw.split(".")[0])
+    except ValueError:
+        major = 0
+    if major < _MIN_NODE_MAJOR:
+        _fail_old_node(raw)
+
+    npm_result = subprocess.run(["npm", "--version"], capture_output=True, text=True)
+    print(f"node {result.stdout.strip()}  npm {npm_result.stdout.strip()}")
+
+
+def _fail_missing_node(missing: list[str]) -> None:
+    tools = " and ".join(missing)
+    platform = sys.platform
+    msg = [
+        f"\nError: {tools} not found.",
+        "Noofy source-checkout requires Node.js LTS (v18 or newer) and npm",
+        "to build and run the frontend. These are source-build tools and are",
+        "not installed automatically.",
+        "",
+    ]
+    if platform == "darwin":
+        msg += [
+            "Install on macOS:",
+            "  brew install node          # Homebrew",
+            "  https://nodejs.org/en/download  # official LTS installer",
+            "  https://github.com/nvm-sh/nvm   # version manager (nvm)",
+        ]
+    elif platform == "win32":
+        msg += [
+            "Install on Windows:",
+            "  https://nodejs.org/en/download  # official LTS installer (.msi)",
+            "  winget install OpenJS.NodeJS.LTS",
+            "  https://github.com/coreybutler/nvm-windows  # version manager",
+        ]
+    else:
+        msg += [
+            "Install on Linux:",
+            "  sudo apt install nodejs npm          # Debian/Ubuntu (may need NodeSource for LTS)",
+            "  sudo dnf install nodejs npm          # Fedora/RHEL",
+            "  https://github.com/nodesource/distributions  # NodeSource LTS packages",
+            "  https://github.com/nvm-sh/nvm        # version manager (nvm)",
+        ]
+    raise SystemExit("\n".join(msg))
+
+
+def _fail_old_node(found: str) -> None:
+    raise SystemExit(
+        f"\nError: Node.js v{found} is too old.\n"
+        f"Noofy requires Node.js LTS v{_MIN_NODE_MAJOR} or newer.\n"
+        "Update via your package manager or https://nodejs.org/en/download"
+    )
 
 
 def wait_for_processes(processes: list[subprocess.Popen[bytes]]) -> int:

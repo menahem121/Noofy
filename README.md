@@ -109,6 +109,13 @@ manually launching ComfyUI or installing ComfyUI Python dependencies.
 
 For advanced users, contributors, and Unix-like source checkouts:
 
+**Prerequisites** — these are source-build tools; Noofy does not install them for you:
+
+| Tool | Minimum | Install |
+|------|---------|---------|
+| Python | 3.11 | `brew install python@3.13` · [python.org](https://www.python.org/downloads) |
+| Node.js + npm | LTS v18 | `brew install node` · [nodejs.org](https://nodejs.org/en/download) |
+
 ```bash
 git clone <repo-url> Noofy
 cd Noofy
@@ -116,7 +123,7 @@ make install
 make run
 ```
 
-On Windows PowerShell:
+On Windows PowerShell (same prerequisites apply; install Node.js LTS from [nodejs.org](https://nodejs.org/en/download) or via `winget install OpenJS.NodeJS.LTS`):
 
 ```powershell
 git clone <repo-url> Noofy

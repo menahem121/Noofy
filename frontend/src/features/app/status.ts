@@ -32,12 +32,20 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
     };
   }
 
-  if (state.runtime.managed_process_running) {
+  if (state.runtime.sidecar_starting || state.runtime.managed_process_running) {
     return {
       label: "Engine starting",
       description: "The local engine process is still warming up",
       tone: "info",
       loading: true,
+    };
+  }
+
+  if (state.runtime.error) {
+    return {
+      label: "Engine offline",
+      description: state.runtime.error,
+      tone: "error",
     };
   }
 

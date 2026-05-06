@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,12 +10,29 @@ from app.api import routes
 from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+
+async def _start_comfyui_background() -> None:
+    try:
+        result = await routes.engine_service.start_comfyui()
+        logger.info("Managed ComfyUI startup: status=%s", result.status)
+    except Exception:
+        logger.exception("Managed ComfyUI failed to start during backend startup")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    startup_task: asyncio.Task[None] | None = None
+    if settings.comfyui_runtime_mode == "managed":
+        startup_task = asyncio.create_task(_start_comfyui_background())
     try:
         yield
     finally:
+        if startup_task is not None and not startup_task.done():
+            startup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await startup_task
         await routes.engine_service.shutdown()
 
 

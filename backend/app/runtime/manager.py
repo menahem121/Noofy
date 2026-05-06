@@ -98,6 +98,8 @@ class RuntimeManager:
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
         self._last_error: str | None = None
+        self._sidecar_starting: bool = False
+        self._start_lock: asyncio.Lock = asyncio.Lock()
 
         # Crash / restart state
         self._crash_count: int = 0
@@ -135,6 +137,7 @@ class RuntimeManager:
             base_url=self.base_url,
             repo_dir=str(self.repo_dir),
             managed_process_running=self._is_managed_process_running(),
+            sidecar_starting=self._sidecar_starting,
             pid=self._process.pid if self._is_managed_process_running() else None,
             error=error,
             environment=environment_status,
@@ -169,6 +172,10 @@ class RuntimeManager:
         self.managed_vram_mode = mode
 
     async def start(self) -> ProcessActionResult:
+        async with self._start_lock:
+            return await self._start_locked()
+
+    async def _start_locked(self) -> ProcessActionResult:
         current = await self.status()
         if self.mode == "external":
             if current.reachable:
@@ -225,42 +232,45 @@ class RuntimeManager:
 
         self._stopping = False
         self._restart_attempt = 0
+        self._sidecar_starting = True
+        try:
+            if not self._is_managed_process_running():
+                await self._start_process()
 
-        if not self._is_managed_process_running():
-            await self._start_process()
+            started = await self._poll_until_reachable(self.startup_timeout_seconds)
+            if started:
+                self._last_error = None
+                self._started_at = datetime.now(timezone.utc)
+                status = await self.status()
+                self.log_store.add(
+                    "info",
+                    "Managed ComfyUI started",
+                    "runtime.manager",
+                    details={"base_url": self.base_url, "pid": status.pid},
+                )
+                return ProcessActionResult(status="started", comfyui=status)
 
-        started = await self._poll_until_reachable(self.startup_timeout_seconds)
-        if started:
-            self._last_error = None
-            self._started_at = datetime.now(timezone.utc)
-            status = await self.status()
-            self.log_store.add(
-                "info",
-                "Managed ComfyUI started",
-                "runtime.manager",
-                details={"base_url": self.base_url, "pid": status.pid},
-            )
-            return ProcessActionResult(status="started", comfyui=status)
+            if self._process is not None and getattr(self._process, "returncode", None) is not None:
+                self._last_error = f"ComfyUI process exited during startup with code {self._process.returncode}"
+                self.log_store.add(
+                    "error",
+                    "Managed ComfyUI startup failed",
+                    "runtime.manager",
+                    details={"error": self._last_error},
+                )
+                return ProcessActionResult(status="startup_failed", comfyui=(await self.status()))
 
-        if self._process is not None and getattr(self._process, "returncode", None) is not None:
-            self._last_error = f"ComfyUI process exited during startup with code {self._process.returncode}"
+            self._last_error = f"ComfyUI startup timed out after {self.startup_timeout_seconds:g} seconds"
             self.log_store.add(
                 "error",
-                "Managed ComfyUI startup failed",
+                "Managed ComfyUI startup timed out",
                 "runtime.manager",
                 details={"error": self._last_error},
             )
-            return ProcessActionResult(status="startup_failed", comfyui=(await self.status()))
-
-        self._last_error = f"ComfyUI startup timed out after {self.startup_timeout_seconds:g} seconds"
-        self.log_store.add(
-            "error",
-            "Managed ComfyUI startup timed out",
-            "runtime.manager",
-            details={"error": self._last_error},
-        )
-        await self._stop_managed_process()
-        return ProcessActionResult(status="startup_timeout", comfyui=(await self.status()))
+            await self._stop_managed_process()
+            return ProcessActionResult(status="startup_timeout", comfyui=(await self.status()))
+        finally:
+            self._sidecar_starting = False
 
     async def stop(self) -> ProcessActionResult:
         if self.mode == "external":

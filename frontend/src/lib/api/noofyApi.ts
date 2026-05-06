@@ -99,6 +99,7 @@ export interface RuntimeStatus {
   base_url: string;
   repo_dir: string;
   managed_process_running: boolean;
+  sidecar_starting: boolean;
   pid: number | null;
   error: string | null;
   environment: RuntimeEnvironmentStatus | null;
