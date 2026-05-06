@@ -39,6 +39,7 @@ from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
 from app.runtime.dependency_lock import core_dependency_lock_from_capsule
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.dependency_resolver import UvDependencyLockResolver
+from app.runtime.uv_executable import resolve_noofy_uv_executable
 from app.runtime.custom_nodes import CustomNodeWorkspaceMaterializer
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_state import (
@@ -3010,6 +3011,7 @@ def create_default_engine_service() -> EngineService:
             dependency_env_installer=UvDependencyEnvironmentInstaller(
                 wheel_cache_dir=paths.wheel_cache_dir,
                 uv_cache_dir=paths.cache_dir / "uv",
+                uv_executable=resolve_noofy_uv_executable(),
                 log_store=log_store,
             ),
             dependency_lock_store=dependency_lock_store,
@@ -3017,6 +3019,7 @@ def create_default_engine_service() -> EngineService:
                 wheel_cache_dir=paths.wheel_cache_dir,
                 work_dir=paths.install_transactions_dir,
                 uv_cache_dir=paths.cache_dir / "uv",
+                uv_executable=resolve_noofy_uv_executable(),
                 log_store=log_store,
             ),
             custom_node_materializer=CustomNodeWorkspaceMaterializer(),

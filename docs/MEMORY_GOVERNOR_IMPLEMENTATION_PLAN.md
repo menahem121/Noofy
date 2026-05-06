@@ -264,6 +264,17 @@ For production-like Ubuntu CUDA hardware validation, use
 That path prepares the managed ComfyUI runtime under app data, verifies runner
 side PyTorch CUDA telemetry, and runs a model-free managed workflow through the
 EngineService path.
+
+Apple Silicon validation has been run on macOS 15.6 with an Apple M2 and 8 GB
+unified memory. That pass confirmed Darwin RAM sampling through `sysctl` /
+`vm_stat`, MPS-as-unified-memory admission with no dedicated VRAM requirement,
+runner-side PyTorch MPS current/driver/recommended memory telemetry when the
+APIs are available, process-tree RSS sampling during a managed runner workflow,
+local observation persistence, and model-free `EmptyImage -> SaveImage`
+execution through the EngineService path. The local validation artifact is
+written under `.noofy-runtime/validation/memory-governor-mps-validation.json`.
+This validates MPS signal availability and unified-memory behavior, not peak
+behavior for large model loads.
 - local evidence precedence and persistence
 - input-profile-sensitive confidence lowering
 - heavy/heavy denial and large-GPU high-confidence allowance
@@ -316,6 +327,9 @@ That gate is met in hardware-independent code and tests, with important accuracy
 limits. Windows DirectML still needs real-hardware validation to decide whether
 the current runner-side DXGI ctypes path is sufficient or should become a tiny
 native Noofy helper. CUDA/MPS allocator telemetry depends on which PyTorch APIs
-exist in the runner environment. Remaining validation should happen on real
-NVIDIA CUDA, Windows DirectML/AMD/Intel/NVIDIA, Apple Silicon MPS, and Linux
-PSI-enabled machines.
+exist in the runner environment. Apple Silicon MPS has local validation for
+MPS telemetry availability and shared RAM pressure on one M2 macOS machine, but
+large model-load behavior still needs broader hardware coverage. Remaining
+validation should happen on real NVIDIA CUDA, Windows
+DirectML/AMD/Intel/NVIDIA, Linux PSI-enabled machines, and additional Apple
+Silicon memory sizes.
