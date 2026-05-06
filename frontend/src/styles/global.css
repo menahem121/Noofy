@@ -2206,6 +2206,21 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.gallery-clear-filter-btn {
+  min-height: 38px;
+  background: rgba(248, 113, 113, 0.06);
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fca5a5;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.gallery-clear-filter-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fecaca;
+}
+
 /* ── Active filter chips ── */
 
 .gallery-active-filters {

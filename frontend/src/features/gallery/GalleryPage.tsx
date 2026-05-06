@@ -176,6 +176,9 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     [workflows],
   );
 
+  const hasActiveFilters =
+    filters.query.trim() !== "" || filters.filterFavorites || filterWorkflowId !== "";
+
   const selectedImageIndex = useMemo(
     () => (selectedImageId ? displayedImages.findIndex((img) => img.id === selectedImageId) : -1),
     [selectedImageId, displayedImages],
@@ -202,6 +205,12 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
       total: prev.total - 1,
     }));
     if (selectedImageId === id) setSelectedImageId(null);
+  }
+
+  function handleClearFilters() {
+    setFilters((prev) => ({ ...prev, query: "", filterFavorites: false }));
+    setFilterWorkflowId("");
+    setShowFilterPanel(false);
   }
 
   const status = runtimeStatusCopy({ loading: galleryState.phase === "loading", runtime: null });
@@ -319,6 +328,18 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
               </div>
             )}
           </div>
+
+          {hasActiveFilters && (
+            <button
+              className="secondary-button secondary-button--danger gallery-clear-filter-btn"
+              type="button"
+              aria-label="Clear gallery filters"
+              onClick={handleClearFilters}
+            >
+              <X size={14} aria-hidden="true" />
+              Clear
+            </button>
+          )}
         </div>
       </div>
 
@@ -362,10 +383,7 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
           <button
             className="secondary-button"
             type="button"
-            onClick={() => {
-              setFilters({ query: "", sortOrder: "newest", filterFavorites: false });
-              setFilterWorkflowId("");
-            }}
+            onClick={handleClearFilters}
           >
             Clear filters
           </button>
