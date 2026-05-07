@@ -73,6 +73,10 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `NOOFY_INPUT_DIR`: optional ComfyUI input/staging directory override. Defaults to `<data_dir>/input`.
 - `COMFYUI_PYTHON_EXECUTABLE`: optional runtime Python override. When unset, managed mode uses the app-owned virtual environment under the resolved `runtime_dir`.
 - `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE`: Python used to create the managed virtual environment. Defaults to `python3`.
+- `NOOFY_BUNDLED_RESOURCE_DIR`: packaged-app read-only resource root. The Tauri shell sets this for installers.
+- `NOOFY_BUNDLED_COMFYUI_DIR`: packaged-app ComfyUI source snapshot. This is not a developer override and does not disable managed updates.
+- `NOOFY_BUNDLED_WORKFLOWS_DIR`: packaged-app starter workflow packages.
+- `NOOFY_UV_EXECUTABLE`: Noofy-owned bundled `uv` executable for isolated dependency environments. The backend never falls back to global `uv`.
 - `COMFYUI_TORCH_CUDA_INDEX_URL`: optional override for the PyTorch CUDA wheel index. When unset, the backend chooses from detected NVIDIA CUDA capability.
 - `COMFYUI_TORCH_CPU_INDEX_URL`: PyTorch CPU wheel index for CPU-only Linux/Windows installs. Defaults to `https://download.pytorch.org/whl/cpu`.
 - `COMFYUI_MANAGED_HOST`: managed sidecar bind host, default `127.0.0.1`

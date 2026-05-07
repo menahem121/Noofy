@@ -14,6 +14,8 @@ def resolve_noofy_uv_executable() -> str:
     """Return an absolute path to the `uv` binary inside the running venv.
 
     Resolution order:
+    0. ``NOOFY_UV_EXECUTABLE`` when the desktop package points at a bundled
+       Noofy-owned uv binary.
     1. The sibling of ``sys.executable`` inside the active venv's bin/Scripts
        directory (the normal case when the backend runs from backend/.venv).
     2. Raise ``FileNotFoundError`` with a clear diagnostic if nothing is found.
@@ -21,6 +23,15 @@ def resolve_noofy_uv_executable() -> str:
     This never falls back to ``shutil.which("uv")`` so global PATH state
     cannot silently satisfy the requirement.
     """
+    override = os.environ.get("NOOFY_UV_EXECUTABLE")
+    if override:
+        override_path = Path(override)
+        if override_path.is_file():
+            return str(override_path)
+        raise FileNotFoundError(
+            f"NOOFY_UV_EXECUTABLE points to a missing uv executable: {override_path}"
+        )
+
     candidate = _venv_uv_path(Path(sys.executable))
     if candidate.is_file():
         return str(candidate)

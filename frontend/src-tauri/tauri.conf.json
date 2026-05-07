@@ -5,7 +5,7 @@
   "identifier": "app.noofy.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run tauri:verify-runtime",
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
   },
@@ -16,6 +16,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "resources": {
+      "resources/noofy-runtime/python": "noofy-runtime/python",
+      "../../backend/app": "noofy-runtime/backend/app",
+      "../../backend/pyproject.toml": "noofy-runtime/backend/pyproject.toml",
+      "../../third_party/comfyui": "noofy-runtime/comfyui"
+    }
   }
 }

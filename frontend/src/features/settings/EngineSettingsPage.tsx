@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, Loader2, Play, RotateCcw, Square, Wrench } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Play, RotateCcw, Square, Wrench, Zap } from "lucide-react";
 
 import {
   bootstrapEngine,
@@ -251,9 +251,9 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
       <section className="page-heading page-heading--compact" aria-labelledby="engine-settings-title">
         <div>
-          <p className="eyebrow">Local engine</p>
+          <p className="eyebrow">Local AI engine</p>
           <h1 id="engine-settings-title">Engine Settings</h1>
-          <p>Prepare, start, and inspect the local AI engine without exposing ComfyUI details.</p>
+          <p>Set up and manage the AI engine that runs workflows on this machine.</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void refresh()}>
           <RotateCcw size={16} aria-hidden="true" />
@@ -284,11 +284,16 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       ) : null}
 
       <section className="settings-grid">
-        <article className="settings-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Engine Status</h2>
-              <p>{status.description}</p>
+        <article className="settings-panel engine-status-card">
+          <div className="engine-status-card__header">
+            <div className="engine-status-card__title-row">
+              <div className="engine-status-card__icon" aria-hidden="true">
+                <Zap size={18} />
+              </div>
+              <div>
+                <h2 className="engine-status-card__title">Local AI</h2>
+                <p className="engine-status-card__subtitle">Noofy runs AI workflows privately on your computer — nothing is sent to the cloud.</p>
+              </div>
             </div>
             <span className={`status-pill status-pill--${status.tone}`}>
               {status.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
@@ -296,20 +301,41 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
             </span>
           </div>
 
-          <dl className="detail-list">
-            <div>
-              <dt>Mode</dt>
-              <dd>{state.runtime?.mode ?? "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Process</dt>
-              <dd>{state.runtime?.managed_process_running ? `Running as ${state.runtime.pid}` : "Not running"}</dd>
-            </div>
-            <div>
-              <dt>Runtime environment</dt>
-              <dd>{environment?.prepared ? "Prepared" : "Not prepared"}</dd>
-            </div>
-          </dl>
+          <ul className="engine-status-card__steps">
+            <li className="engine-status-card__step">
+              <div className={`engine-status-card__step-icon ${environment?.prepared ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`} aria-hidden="true">
+                {environment?.prepared ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+              </div>
+              <div className="engine-status-card__step-body">
+                <span className="engine-status-card__step-label">
+                  {environment?.prepared ? "ComfyUI is installed" : "ComfyUI is not installed yet"}
+                </span>
+                <span className="engine-status-card__step-hint">
+                  {environment?.prepared
+                    ? "ComfyUI is installed and ready on this computer."
+                    : <>Use the &ldquo;Set Up&rdquo; button below to install it.</>}
+                </span>
+              </div>
+            </li>
+            <li className="engine-status-card__step">
+              <div className={`engine-status-card__step-icon ${state.runtime?.reachable ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`} aria-hidden="true">
+                {state.runtime?.reachable ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+              </div>
+              <div className="engine-status-card__step-body">
+                <span className="engine-status-card__step-label">
+                  {state.runtime?.reachable ? "ComfyUI is active and ready" : "ComfyUI is not running"}
+                </span>
+                <span className="engine-status-card__step-hint">
+                  {state.runtime?.reachable
+                    ? "Your workflows can run on this computer right now."
+                    : "Press Start to activate it before running a workflow."}
+                </span>
+              </div>
+              {state.runtime?.managed_process_running && state.runtime.pid ? (
+                <span className="engine-status-card__pid">PID {state.runtime.pid}</span>
+              ) : null}
+            </li>
+          </ul>
 
           <div className="button-row">
             <button
@@ -318,8 +344,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               disabled={state.action !== null}
               onClick={() => void runAction("bootstrap", bootstrapEngine)}
             >
-              <Wrench size={16} aria-hidden="true" />
-              Prepare Engine
+              {state.action === "bootstrap" ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Wrench size={16} aria-hidden="true" />}
+              {environment?.prepared ? "Repair Installation" : "Set Up"}
             </button>
             <button
               className="secondary-button"
@@ -397,7 +423,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
           <div className="panel-heading">
             <div>
               <h2>ComfyUI Version</h2>
-              <p>Install upstream ComfyUI releases into Noofy’s managed sidecar.</p>
+              <p>Install upstream ComfyUI releases into Noofy's managed sidecar.</p>
             </div>
           </div>
 
@@ -516,30 +542,6 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               Rebuild Environment
             </button>
           </div>
-        </article>
-
-        <article className="settings-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>First Run Checklist</h2>
-              <p>The desktop shell will eventually run this preparation automatically.</p>
-            </div>
-          </div>
-
-          <ul className="check-list">
-            <li>
-              <CheckCircle2 size={17} aria-hidden="true" />
-              Backend API is the only frontend boundary.
-            </li>
-            <li className={environment?.prepared ? "" : "check-list__muted"}>
-              <CheckCircle2 size={17} aria-hidden="true" />
-              Local engine environment is prepared.
-            </li>
-            <li className={state.runtime?.reachable ? "" : "check-list__muted"}>
-              <CheckCircle2 size={17} aria-hidden="true" />
-              Local AI engine is reachable.
-            </li>
-          </ul>
         </article>
 
         <article className="settings-panel">

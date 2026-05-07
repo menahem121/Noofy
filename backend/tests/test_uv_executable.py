@@ -50,6 +50,25 @@ def test_resolve_returns_absolute_path_when_uv_present(tmp_path: Path) -> None:
     assert Path(result).is_absolute()
 
 
+def test_resolve_uses_noofy_uv_executable_override(tmp_path: Path) -> None:
+    bundled_uv = tmp_path / "Noofy.app" / "Contents" / "Resources" / "noofy-runtime" / "python" / "bin" / "uv"
+    bundled_uv.parent.mkdir(parents=True)
+    bundled_uv.touch()
+
+    with patch.dict("os.environ", {"NOOFY_UV_EXECUTABLE": str(bundled_uv)}):
+        assert resolve_noofy_uv_executable() == str(bundled_uv)
+
+
+def test_resolve_rejects_missing_noofy_uv_executable_override(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-uv"
+
+    with patch.dict("os.environ", {"NOOFY_UV_EXECUTABLE": str(missing)}):
+        with pytest.raises(FileNotFoundError) as exc_info:
+            resolve_noofy_uv_executable()
+
+    assert str(missing) in str(exc_info.value)
+
+
 def test_resolve_raises_file_not_found_when_uv_missing(tmp_path: Path) -> None:
     fake_python = tmp_path / "bin" / "python"
     fake_python.parent.mkdir(parents=True)

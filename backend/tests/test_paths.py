@@ -130,6 +130,33 @@ class TestBundledWorkflowsDir:
         assert "packages" in str(paths.bundled_workflows_dir)
         assert str(paths.bundled_workflows_dir) != str(paths.user_workflows_dir)
 
+    def test_packaged_resource_dir_sets_read_only_resource_defaults(self) -> None:
+        env = {
+            "NOOFY_DATA_DIR": "/tmp/noofy",
+            "NOOFY_BUNDLED_RESOURCE_DIR": "/Applications/Noofy.app/Contents/Resources",
+        }
+
+        paths = resolve_paths(env=env)
+
+        assert paths.comfyui_repo_dir == Path(
+            "/Applications/Noofy.app/Contents/Resources/noofy-runtime/comfyui"
+        )
+        assert paths.bundled_workflows_dir == Path(
+            "/Applications/Noofy.app/Contents/Resources/noofy-runtime/backend/app/workflows/packages"
+        )
+
+    def test_packaged_resource_specific_overrides_win_over_resource_root(self) -> None:
+        env = {
+            "NOOFY_BUNDLED_RESOURCE_DIR": "/app/resources",
+            "NOOFY_BUNDLED_COMFYUI_DIR": "/custom/comfyui",
+            "NOOFY_BUNDLED_WORKFLOWS_DIR": "/custom/workflows",
+        }
+
+        paths = resolve_paths(env=env)
+
+        assert paths.comfyui_repo_dir == Path("/custom/comfyui")
+        assert paths.bundled_workflows_dir == Path("/custom/workflows")
+
 
 class TestEnsureDirectories:
     def test_ensure_directories_creates_writable_dirs(self, tmp_path: Path) -> None:

@@ -967,6 +967,116 @@ button:disabled {
   color: var(--border-strong);
 }
 
+/* Engine status card — merged status + readiness steps */
+.engine-status-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.engine-status-card__title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.engine-status-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.14);
+  color: var(--primary);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.engine-status-card__title {
+  margin: 0;
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.engine-status-card__subtitle {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.engine-status-card__steps {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0 0 20px;
+  list-style: none;
+}
+
+.engine-status-card__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(66, 64, 71, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.engine-status-card__step-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.engine-status-card__step-icon--done {
+  color: var(--success);
+}
+
+.engine-status-card__step-icon--pending {
+  color: var(--border-strong);
+}
+
+.engine-status-card__step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.engine-status-card__step-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+
+.engine-status-card__step-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.engine-status-card__pid {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 3px 7px;
+  white-space: nowrap;
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .settings-option-group {
   display: grid;
   gap: 8px;

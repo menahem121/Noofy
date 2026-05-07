@@ -9,6 +9,8 @@ Override everything:  NOOFY_DATA_DIR
 Targeted overrides:   NOOFY_RUNTIME_DIR, NOOFY_MODELS_DIR, NOOFY_WORKFLOWS_DIR,
                       NOOFY_INPUT_DIR, NOOFY_OUTPUTS_DIR, NOOFY_LOGS_DIR, NOOFY_CACHE_DIR,
                       NOOFY_TEMP_DIR, COMFYUI_REPO_DIR
+Packaged resources:   NOOFY_BUNDLED_RESOURCE_DIR, NOOFY_BUNDLED_COMFYUI_DIR,
+                      NOOFY_BUNDLED_WORKFLOWS_DIR
 """
 
 from __future__ import annotations
@@ -38,6 +40,11 @@ def _platform_data_dir(env: dict[str, str] | None = None) -> Path:
     if xdg:
         return Path(xdg) / "noofy"
     return Path.home() / ".local" / "share" / "noofy"
+
+
+def _bundled_resource_dir(env: dict[str, str]) -> Path | None:
+    value = env.get("NOOFY_BUNDLED_RESOURCE_DIR")
+    return Path(value) if value else None
 
 
 @dataclass(frozen=True)
@@ -266,11 +273,25 @@ def resolve_paths(
     cache_dir = Path(env["NOOFY_CACHE_DIR"]) if env.get("NOOFY_CACHE_DIR") else base / "cache"
     temp_dir = Path(env["NOOFY_TEMP_DIR"]) if env.get("NOOFY_TEMP_DIR") else base / "temp"
 
-    bundled_workflows_dir = _BACKEND_APP_DIR / "workflows" / "packages"
-
-    comfyui_repo_dir = (
-        Path(env["COMFYUI_REPO_DIR"]) if env.get("COMFYUI_REPO_DIR") else _PROJECT_ROOT / "third_party" / "comfyui"
+    bundled_resource_dir = _bundled_resource_dir(env)
+    bundled_workflows_dir = (
+        Path(env["NOOFY_BUNDLED_WORKFLOWS_DIR"])
+        if env.get("NOOFY_BUNDLED_WORKFLOWS_DIR")
+        else (
+            bundled_resource_dir / "noofy-runtime" / "backend" / "app" / "workflows" / "packages"
+            if bundled_resource_dir is not None
+            else _BACKEND_APP_DIR / "workflows" / "packages"
+        )
     )
+
+    if env.get("COMFYUI_REPO_DIR"):
+        comfyui_repo_dir = Path(env["COMFYUI_REPO_DIR"])
+    elif env.get("NOOFY_BUNDLED_COMFYUI_DIR"):
+        comfyui_repo_dir = Path(env["NOOFY_BUNDLED_COMFYUI_DIR"])
+    elif bundled_resource_dir is not None:
+        comfyui_repo_dir = bundled_resource_dir / "noofy-runtime" / "comfyui"
+    else:
+        comfyui_repo_dir = _PROJECT_ROOT / "third_party" / "comfyui"
 
     return NoofyPaths(
         data_dir=base,

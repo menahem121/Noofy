@@ -105,6 +105,20 @@ Noofy is still in active development. The V1 direction is a desktop app where
 users open Noofy, choose a workflow dashboard, and run it locally without
 manually launching ComfyUI or installing ComfyUI Python dependencies.
 
+## Installing Noofy
+
+Packaged installers are the normal-user path:
+
+- Windows: `.exe`
+- macOS: `.dmg`
+- Linux: `.deb` or equivalent
+
+Packaged apps must ship built frontend assets and a Noofy-owned backend/Python
+runtime. They must not require Python, Node, npm, ComfyUI, pip, venv, Homebrew,
+Conda, or other developer tools on the user's machine. The packaged app starts
+the backend with bundled resources, runs ComfyUI in managed mode, and prepares
+PyTorch and ComfyUI dependencies inside Noofy-managed runtime directories.
+
 ## Local Development
 
 For advanced users, contributors, and Unix-like source checkouts:
