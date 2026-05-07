@@ -117,4 +117,27 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
     await waitFor(() => expect(onSaveComplete).toHaveBeenCalledWith("wf-1"));
   });
+
+  it("uses resize handles instead of bottom size preset buttons", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /^resize prompt$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
+  });
 });

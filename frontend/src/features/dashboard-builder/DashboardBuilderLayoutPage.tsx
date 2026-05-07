@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -21,13 +21,16 @@ import {
 
 import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetType, WIDGET_SIZE_PRESETS, type WidgetSizePreset } from "../../lib/widgetSizes";
+import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DashboardCanvasFrame,
+  DashboardCanvasResizeHandles,
   DashboardCanvasSurface,
   DashboardCanvasWidgetShell,
+  type DashboardResizeHandle,
   canvasRowsForItems,
   layoutFromCanvasPointer,
+  resizeLayoutFromPointerDelta,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
@@ -120,6 +123,13 @@ export function DashboardBuilderLayoutPage({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const resizeStateRef = useRef<{
+    widgetId: string;
+    handle: DashboardResizeHandle;
+    startLayout: DashboardWidgetLayout;
+    startClientX: number;
+    startClientY: number;
+  } | null>(null);
 
   useEffect(() => {
     setSchema(initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow));
@@ -256,6 +266,65 @@ export function DashboardBuilderLayoutPage({
       }),
     }));
     setSelectedWidgetId((current) => (current === widgetId ? null : current));
+  }
+
+  function handleResizeStart(
+    event: PointerEvent<HTMLButtonElement>,
+    widgetId: string,
+    layout: DashboardWidgetLayout,
+    handle: DashboardResizeHandle,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    resizeStateRef.current = {
+      widgetId,
+      handle,
+      startLayout: layout,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+    };
+
+    function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState) return;
+      setSchema((current) => {
+        const candidate = fitLayout(
+          resizeLayoutFromPointerDelta({
+            startLayout: resizeState.startLayout,
+            startClientX: resizeState.startClientX,
+            startClientY: resizeState.startClientY,
+            clientX: pointerEvent.clientX,
+            clientY: pointerEvent.clientY,
+            canvas: canvasRef.current,
+            handle: resizeState.handle,
+            columns: current.layout.gridColumns,
+            rowHeight: current.layout.rowHeight,
+          }),
+          current.layout.gridColumns,
+        );
+        const collides = current.widgets.some((widget) => {
+          if (widget.id === resizeState.widgetId || !widget.layout) return false;
+          return layoutsOverlap(candidate, widget.layout);
+        });
+        if (collides) return current;
+        return {
+          ...current,
+          widgets: current.widgets.map((widget) =>
+            widget.id === resizeState.widgetId ? { ...widget, layout: candidate } : widget,
+          ),
+        };
+      });
+    }
+
+    function handlePointerUp() {
+      resizeStateRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
   }
 
   function handleSaveDraft() {
@@ -403,14 +472,7 @@ export function DashboardBuilderLayoutPage({
                     onRemove={() => removeWidget(widget.id)}
                     onDragStart={handleDragStart}
                     onDragEnd={handleDragEnd}
-                    onPresetChange={(newLayout) =>
-                      setSchema((current) => ({
-                        ...current,
-                        widgets: current.widgets.map((w) =>
-                          w.id === widget.id ? { ...w, layout: newLayout } : w,
-                        ),
-                      }))
-                    }
+                    onResizeStart={(event, handle) => handleResizeStart(event, widget.id, widget.layout!, handle)}
                   />
                 ) : null,
               )}
@@ -474,7 +536,7 @@ function PlacedDashboardWidget({
   onRemove,
   onDragStart,
   onDragEnd,
-  onPresetChange,
+  onResizeStart,
   preview = false,
 }: {
   widget: DashboardWidget;
@@ -487,7 +549,7 @@ function PlacedDashboardWidget({
   onRemove: () => void;
   onDragStart: (event: DragEvent, widgetId: string) => void;
   onDragEnd: () => void;
-  onPresetChange?: (layout: DashboardWidgetLayout) => void;
+  onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
   preview?: boolean;
 }) {
   const Icon = WIDGET_ICONS[widget.widgetType];
@@ -528,13 +590,7 @@ function PlacedDashboardWidget({
       </header>
 
       <WidgetSurfacePreview widget={widget} />
-
-      {selected && !preview && onPresetChange ? (
-        <div onClick={(e) => e.stopPropagation()}>
-          <p style={{ margin: "6px 0 4px", fontSize: 11, color: "var(--text-muted)", fontWeight: 650 }}>Size</p>
-          <SizePresetPicker current={layout} onChange={onPresetChange} />
-        </div>
-      ) : null}
+      {!preview ? <DashboardCanvasResizeHandles label={widget.title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
   );
 }
@@ -566,6 +622,7 @@ function DragPreviewWidget({
       onRemove={() => undefined}
       onDragStart={() => undefined}
       onDragEnd={() => undefined}
+      onResizeStart={() => undefined}
       preview
     />
   );
@@ -659,37 +716,6 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   }
 
   return null;
-}
-
-// ─── Size preset UI ───────────────────────────────────────────────────────────
-
-const ALL_PRESETS: WidgetSizePreset[] = ["compact", "standard", "wide", "media", "media-large"];
-
-function SizePresetPicker({
-  current,
-  onChange,
-}: {
-  current: DashboardWidgetLayout;
-  onChange: (layout: DashboardWidgetLayout) => void;
-}) {
-  return (
-    <div className="size-preset-picker">
-      {ALL_PRESETS.map((preset) => {
-        const def = WIDGET_SIZE_PRESETS[preset];
-        const isActive = current.w === def.w && current.h === def.h;
-        return (
-          <button
-            key={preset}
-            type="button"
-            className={`size-preset-btn ${isActive ? "size-preset-btn--active" : ""}`}
-            onClick={() => onChange({ ...current, w: def.w, h: def.h, minW: def.w, minH: def.h })}
-          >
-            {def.name}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 function readDragPayload(event: DragEvent): { widgetId: string } | null {

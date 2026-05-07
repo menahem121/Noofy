@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowRunPage } from "./WorkflowRunPage";
@@ -142,8 +143,25 @@ function mockConfiguredDashboardFetch(
   });
 }
 
-function renderRunPage() {
-  return render(<WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />);
+function renderRunPage(props: Partial<ComponentProps<typeof WorkflowRunPage>> = {}) {
+  return render(
+    <WorkflowRunPage
+      workflowId="text_to_image_v0"
+      onBack={vi.fn()}
+      onNavigate={vi.fn()}
+      {...props}
+    />,
+  );
+}
+
+function dispatchPointer(target: Window | Node, type: string, init: { pointerId?: number; clientX: number; clientY: number }) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { value: init.pointerId ?? 1 },
+    clientX: { value: init.clientX },
+    clientY: { value: init.clientY },
+  });
+  fireEvent(target, event);
 }
 
 describe("WorkflowRunPage", () => {
@@ -585,7 +603,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    await screen.findByRole("button", { name: /edit dashboard/i });
+    await screen.findByRole("button", { name: /workflow options/i });
     const promptCell = screen.getByRole("textbox").closest("article");
     const resultCell = screen.getByText("Result A").closest("article");
 
@@ -610,7 +628,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByRole("button", { name: /edit dashboard/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /workflow options/i })).toBeInTheDocument();
     expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(document.querySelector(".workspace-content--canvas-run")).toBeInTheDocument();
@@ -630,17 +648,38 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /edit dashboard/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
   });
 
-  it("shows canvas toolbar controls and hides reset when there are no layout overrides", async () => {
+  it("shows canvas actions in the top-right options menu and closes it from outside interactions", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
     renderRunPage();
 
-    expect(await screen.findByRole("button", { name: /restore default values/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /edit dashboard/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /reset layout/i })).not.toBeInTheDocument();
+    const optionsButton = await screen.findByRole("button", { name: /workflow options/i });
+    expect(screen.getByRole("button", { name: /cancel run/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeInTheDocument();
+    expect(screen.queryByText("Restore dashboard to the workflow default values")).not.toBeInTheDocument();
+
+    fireEvent.click(optionsButton);
+
+    expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /export as noofy/i })).toHaveAttribute(
+      "href",
+      "/api/workflows/text_to_image_v0/export",
+    );
+    expect(screen.getByRole("menuitem", { name: /export as json/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /edit dashboard layout/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /edit widgets/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i })).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
+
+    fireEvent.click(optionsButton);
+    expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
   });
 
   it("disables input controls while editing the canvas layout", async () => {
@@ -648,14 +687,125 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    await screen.findByRole("button", { name: /edit dashboard/i });
+    await screen.findByRole("button", { name: /workflow options/i });
     const promptInput = screen.getByRole("textbox");
     expect(promptInput).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: /resize prompt/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /edit dashboard/i }));
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
 
-    expect(screen.getByRole("button", { name: /edit variables/i })).toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /cancel run/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /run workflow/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Workflow progress")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save dashboard/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /resize prompt/i }).length).toBeGreaterThan(0);
     expect(promptInput).toBeDisabled();
+  });
+
+  it("cancels an edit layout session without applying the draft resize", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article");
+    dispatchPointer(screen.getByRole("button", { name: /resize prompt height/i }), "pointerdown", {
+      clientX: 600,
+      clientY: 192,
+    });
+    dispatchPointer(window, "pointermove", { clientX: 600, clientY: 256 });
+    dispatchPointer(window, "pointerup", { clientX: 600, clientY: 256 });
+
+    expect(promptCell).toHaveStyle({ height: "242px" });
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
+    expect(promptCell).toHaveStyle({ width: "calc(50% - 14px)" });
+    expect(promptCell).toHaveStyle({ height: "178px" });
+  });
+
+  it("saves a grid-snapped resized layout to user state overrides", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    dispatchPointer(screen.getByRole("button", { name: /resize prompt height/i }), "pointerdown", {
+      clientX: 600,
+      clientY: 192,
+    });
+    dispatchPointer(window, "pointermove", { clientX: 600, clientY: 256 });
+    dispatchPointer(window, "pointerup", { clientX: 600, clientY: 256 });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    expect(await screen.findByRole("button", { name: /workflow options/i })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 6, h: 4 });
+    });
+  });
+
+  it("opens the dashboard builder widget step from the canvas options menu", async () => {
+    const onEditWidgets = vi.fn();
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage({ onEditWidgets });
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit widgets/i }));
+
+    expect(onEditWidgets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowId: "text_to_image_v0",
+        workflowName: "Text to Image",
+        widgets: expect.arrayContaining([
+          expect.objectContaining({
+            id: "prompt",
+            widgetType: "textarea",
+            layout: expect.objectContaining({ x: 0, y: 0, w: 6, h: 3 }),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("renders each canvas output widget from its bound result node", async () => {

@@ -37,7 +37,14 @@ import {
   type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
+import type {
+  DashboardSchema,
+  DashboardWidget,
+  WidgetGroup,
+  WidgetType,
+} from "../dashboard-builder/dashboardBuilderContent";
 import type { GridItemLayout } from "../../lib/gridLayout";
+import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -48,6 +55,7 @@ import { DashboardInputControl } from "./DashboardInputControl";
 interface WorkflowRunPageProps {
   workflowId: string;
   onBack: () => void;
+  onEditWidgets?: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
@@ -78,9 +86,9 @@ const initialState: RunPageState = {
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const watchableJobStatuses = new Set(["queued", "running"]);
 
-export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunPageProps) {
+export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
-  const [isEditingLayout, setIsEditingLayout] = useState(false);
+  const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
 
@@ -132,8 +140,6 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
     restoreDefaults,
     layoutOverrides,
     setLayoutOverride,
-    resetLayout,
-    hasLayoutOverrides,
   } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardControlIds);
 
   // Build output-images-by-node-id map for canvas output widgets.
@@ -353,6 +359,36 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
   const hasDashboard = Boolean(
     state.packageData?.dashboard?.status === "configured" && allControls.length > 0,
   );
+  const isEditingLayout = draftLayoutOverrides !== null;
+
+  function handleEditWidgets() {
+    const schema = buildDashboardSchemaForEditing(
+      workflowId,
+      workflowSummary?.name ?? state.packageData?.metadata?.name ?? workflowId,
+      allControls,
+      inputIndex,
+      outputIndex,
+      layoutOverrides,
+    );
+    if (schema) onEditWidgets?.(schema);
+  }
+
+  function handleEnterEditLayout() {
+    setDraftLayoutOverrides({ ...layoutOverrides });
+  }
+
+  async function handleSaveLayout() {
+    if (!draftLayoutOverrides) return;
+    const entries = Object.entries(draftLayoutOverrides);
+    for (const [controlId, layout] of entries) {
+      await setLayoutOverride(controlId, layout);
+    }
+    setDraftLayoutOverrides(null);
+  }
+
+  function handleCancelLayoutEdit() {
+    setDraftLayoutOverrides(null);
+  }
 
   const pageHeader = (
     <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
@@ -450,9 +486,8 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
           inputValues={inputValues}
-          layoutOverrides={layoutOverrides}
+          layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
           isEditingLayout={isEditingLayout}
-          hasLayoutOverrides={hasLayoutOverrides}
           runState={{
             isRunning,
             canRun,
@@ -460,14 +495,19 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
             progress: state.progress,
             progressPercent,
           }}
+          exportNoofyUrl={exportWorkflowUrl(workflowId)}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
           onRestoreDefaults={() => void restoreDefaults()}
-          onToggleEditLayout={() => setIsEditingLayout((v) => !v)}
-          onResetLayout={() => void resetLayout()}
-          onLayoutOverride={(controlId: string, layout: GridItemLayout) => void setLayoutOverride(controlId, layout)}
+          onEnterEditLayout={handleEnterEditLayout}
+          onSaveLayout={() => void handleSaveLayout()}
+          onCancelLayoutEdit={handleCancelLayoutEdit}
+          onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
+          onLayoutOverride={(controlId: string, layout: GridItemLayout) =>
+            setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
+          }
         />
       </AppLayout>
     );
@@ -733,4 +773,128 @@ function extractImageUrls(result: JobResult | null) {
     }
   }
   return urls;
+}
+
+function buildDashboardSchemaForEditing(
+  workflowId: string,
+  workflowName: string,
+  controls: DashboardControlDef[],
+  inputIndex: Map<string, WorkflowInputDef>,
+  outputIndex: Map<string, WorkflowOutputDef>,
+  layoutOverrides: Record<string, GridItemLayout>,
+): DashboardSchema | null {
+  const widgets: DashboardWidget[] = [];
+
+  for (const control of controls) {
+    const override = layoutOverrides[control.id];
+    const layout = layoutForBuilderControl(control, override);
+
+    if (control.input_id) {
+      const input = inputIndex.get(control.input_id);
+      if (!input) continue;
+      widgets.push({
+        id: control.id,
+        valueId: input.id,
+        binding: { nodeId: input.binding.node_id, inputName: input.binding.input_name },
+        widgetType: toBuilderWidgetType(control.type),
+        title: control.label,
+        description: control.description ?? "",
+        orientation: "vertical",
+        group: toBuilderWidgetGroup(control.group),
+        defaultValue: input.default,
+        min: numberValidation(input.validation.min),
+        max: numberValidation(input.validation.max),
+        step: numberValidation(input.validation.step),
+        layout,
+      });
+      continue;
+    }
+
+    if (control.output_id) {
+      const output = outputIndex.get(control.output_id);
+      if (!output) continue;
+      widgets.push({
+        id: control.id,
+        valueId: output.id,
+        binding: { nodeId: output.node_id, inputName: "" },
+        widgetType: "display_image",
+        title: control.label,
+        description: control.description ?? "",
+        orientation: "vertical",
+        group: toBuilderWidgetGroup(control.group),
+        defaultValue: null,
+        showDownload: Boolean(control.show_download),
+        layout,
+      });
+    }
+  }
+
+  if (widgets.length === 0) return null;
+
+  return {
+    version: 1,
+    workflowId,
+    workflowName,
+    widgets,
+    layout: {
+      gridColumns: 12,
+      rowHeight: 64,
+      gridGap: 14,
+      responsive: true,
+    },
+  };
+}
+
+function layoutForBuilderControl(
+  control: DashboardControlDef,
+  override?: GridItemLayout,
+): DashboardWidget["layout"] {
+  const fallback = defaultLayoutForWidgetType(control.type);
+  if (override) {
+    return {
+      x: override.x,
+      y: override.y,
+      w: override.w,
+      h: override.h,
+      minW: override.minW ?? control.layout?.min_w ?? fallback.minW,
+      minH: override.minH ?? control.layout?.min_h ?? fallback.minH,
+    };
+  }
+
+  if (!control.layout) return undefined;
+
+  return {
+    x: control.layout.x,
+    y: control.layout.y,
+    w: control.layout.w,
+    h: control.layout.h,
+    minW: control.layout.min_w ?? fallback.minW,
+    minH: control.layout.min_h ?? fallback.minH,
+  };
+}
+
+function toBuilderWidgetType(type: string): WidgetType {
+  if (type === "result_image") return "display_image";
+  const knownTypes = new Set<WidgetType>([
+    "slider",
+    "int_field",
+    "string_field",
+    "textarea",
+    "toggle",
+    "load_image",
+    "load_image_mask",
+    "display_image",
+    "seed_widget",
+    "lora_loader",
+    "select",
+  ]);
+  return knownTypes.has(type as WidgetType) ? (type as WidgetType) : "string_field";
+}
+
+function toBuilderWidgetGroup(group: string | undefined): WidgetGroup {
+  return group === "advanced" ? "advanced" : "simple";
+}
+
+function numberValidation(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
 }

@@ -51,6 +51,14 @@ export default function App() {
         <WorkflowRunPage
           workflowId={route.workflowId}
           onBack={() => setRoute({ name: "home" })}
+          onEditWidgets={(schema) =>
+            setRoute({
+              name: "dashboard-builder",
+              workflowId: schema.workflowId,
+              workflowName: schema.workflowName,
+              initialSchema: schema,
+            })
+          }
           onNavigate={navigate}
         />
       );

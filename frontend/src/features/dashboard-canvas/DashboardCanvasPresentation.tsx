@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   type DragEvent,
   type HTMLAttributes,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 
@@ -22,6 +23,8 @@ export interface DashboardCanvasMetrics {
 export interface DashboardCanvasItem {
   layout?: GridItemLayout | null;
 }
+
+export type DashboardResizeHandle = "east" | "south" | "southeast";
 
 export function canvasRowsForItems(
   items: DashboardCanvasItem[],
@@ -69,6 +72,45 @@ export function layoutFromCanvasPointer(
     ...currentLayout,
     x: clamp(rawX, 0, columns - currentLayout.w),
     y: Math.max(0, rawY),
+  };
+}
+
+export function resizeLayoutFromPointerDelta({
+  startLayout,
+  startClientX,
+  startClientY,
+  clientX,
+  clientY,
+  canvas,
+  handle,
+  columns = DASHBOARD_CANVAS_COLUMNS,
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+}: {
+  startLayout: GridItemLayout;
+  startClientX: number;
+  startClientY: number;
+  clientX: number;
+  clientY: number;
+  canvas: HTMLElement | null;
+  handle: DashboardResizeHandle;
+} & DashboardCanvasMetrics): GridItemLayout {
+  const rect = canvas?.getBoundingClientRect();
+  const columnWidth = rect ? rect.width / columns : 1;
+  const deltaColumns = Math.round((clientX - startClientX) / columnWidth);
+  const deltaRows = Math.round((clientY - startClientY) / rowHeight);
+  const minW = startLayout.minW ?? 2;
+  const minH = startLayout.minH ?? 2;
+
+  return {
+    ...startLayout,
+    w:
+      handle === "east" || handle === "southeast"
+        ? clamp(startLayout.w + deltaColumns, minW, columns - startLayout.x)
+        : startLayout.w,
+    h:
+      handle === "south" || handle === "southeast"
+        ? Math.max(minH, startLayout.h + deltaRows)
+        : startLayout.h,
   };
 }
 
@@ -157,6 +199,40 @@ export function DashboardCanvasWidgetShell({
     >
       {children}
     </article>
+  );
+}
+
+export function DashboardCanvasResizeHandles({
+  label,
+  onResizeStart,
+}: {
+  label: string;
+  onResizeStart: (handle: DashboardResizeHandle, event: PointerEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <div className="layout-canvas-resize-handles" aria-hidden="false">
+      <button
+        className="layout-canvas-resize-handle layout-canvas-resize-handle--east"
+        type="button"
+        aria-label={`Resize ${label} width`}
+        title="Resize width"
+        onPointerDown={(event) => onResizeStart("east", event)}
+      />
+      <button
+        className="layout-canvas-resize-handle layout-canvas-resize-handle--south"
+        type="button"
+        aria-label={`Resize ${label} height`}
+        title="Resize height"
+        onPointerDown={(event) => onResizeStart("south", event)}
+      />
+      <button
+        className="layout-canvas-resize-handle layout-canvas-resize-handle--southeast"
+        type="button"
+        aria-label={`Resize ${label}`}
+        title="Resize"
+        onPointerDown={(event) => onResizeStart("southeast", event)}
+      />
+    </div>
   );
 }
 
