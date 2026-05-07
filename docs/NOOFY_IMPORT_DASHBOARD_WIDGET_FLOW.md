@@ -195,10 +195,10 @@ Example concept:
   "layout": {
     "x": 0,
     "y": 0,
-    "w": 5,
-    "h": 3,
-    "min_w": 3,
-    "min_h": 2
+    "w": 13,
+    "h": 6,
+    "min_w": 8,
+    "min_h": 4
   }
 }
 ```
@@ -534,10 +534,10 @@ This is a conceptual example, not a final strict schema.
       "layout": {
         "x": 0,
         "y": 0,
-        "w": 6,
-        "h": 3,
-        "min_w": 3,
-        "min_h": 2
+        "w": 16,
+        "h": 6,
+        "min_w": 8,
+        "min_h": 4
       }
     },
     {
@@ -559,9 +559,9 @@ This is a conceptual example, not a final strict schema.
       },
       "layout": {
         "x": 0,
-        "y": 3,
-        "w": 4,
-        "h": 2
+        "y": 6,
+        "w": 11,
+        "h": 4
       }
     },
     {
@@ -576,18 +576,18 @@ This is a conceptual example, not a final strict schema.
         "output_name": "images"
       },
       "layout": {
-        "x": 6,
+        "x": 16,
         "y": 0,
-        "w": 6,
-        "h": 6,
-        "min_w": 4,
-        "min_h": 4
+        "w": 16,
+        "h": 12,
+        "min_w": 11,
+        "min_h": 8
       }
     }
   ],
   "layout": {
-    "grid_columns": 12,
-    "row_height": 48,
+    "grid_columns": 32,
+    "row_height": 32,
     "responsive": true
   }
 }

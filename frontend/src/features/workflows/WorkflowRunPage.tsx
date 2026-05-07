@@ -837,8 +837,8 @@ function buildDashboardSchemaForEditing(
     workflowName,
     widgets,
     layout: {
-      gridColumns: 12,
-      rowHeight: 64,
+      gridColumns: 32,
+      rowHeight: 32,
       gridGap: 14,
       responsive: true,
     },

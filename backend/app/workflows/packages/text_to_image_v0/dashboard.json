@@ -79,7 +79,7 @@
           "input_id": "prompt",
           "description": "Describe what you want to generate.",
           "group": "simple",
-          "layout": { "x": 0, "y": 0, "w": 12, "h": 3 }
+          "layout": { "x": 0, "y": 0, "w": 32, "h": 6 }
         },
         {
           "id": "seed",
@@ -88,7 +88,7 @@
           "input_id": "seed",
           "description": "Random seed for reproducibility.",
           "group": "simple",
-          "layout": { "x": 0, "y": 3, "w": 6, "h": 2 }
+          "layout": { "x": 0, "y": 6, "w": 16, "h": 4 }
         },
         {
           "id": "width",
@@ -96,7 +96,7 @@
           "label": "Width",
           "input_id": "width",
           "group": "advanced",
-          "layout": { "x": 0, "y": 5, "w": 6, "h": 2 }
+          "layout": { "x": 0, "y": 10, "w": 16, "h": 4 }
         },
         {
           "id": "height",
@@ -104,7 +104,7 @@
           "label": "Height",
           "input_id": "height",
           "group": "advanced",
-          "layout": { "x": 6, "y": 5, "w": 6, "h": 2 }
+          "layout": { "x": 16, "y": 10, "w": 16, "h": 4 }
         },
         {
           "id": "result",
@@ -112,7 +112,7 @@
           "label": "Result",
           "output_id": "image",
           "group": "simple",
-          "layout": { "x": 0, "y": 7, "w": 12, "h": 6 }
+          "layout": { "x": 0, "y": 14, "w": 32, "h": 12 }
         }
       ]
     }

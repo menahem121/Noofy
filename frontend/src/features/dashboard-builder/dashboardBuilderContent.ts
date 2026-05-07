@@ -685,7 +685,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     show_download: Boolean(w.showDownload),
     layout: w.layout
       ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
-      : { x: 0, y: i * 2, w: 12, h: 2 },
+      : { x: 0, y: i * 4, w: 32, h: 4 },
   }));
 
   const dashboard: BackendDashboardPayload = {
@@ -726,8 +726,8 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     workflowName: workflow.name,
     widgets,
     layout: {
-      gridColumns: 12,
-      rowHeight: 64,
+      gridColumns: 32,
+      rowHeight: 32,
       gridGap: 14,
       responsive: true,
     },

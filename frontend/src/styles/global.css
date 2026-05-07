@@ -4868,7 +4868,12 @@ button:disabled {
   background-image:
     radial-gradient(circle at 1px 1px, rgba(244, 240, 250, 0.105) 1px, transparent 0),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0));
-  background-size: 24px 24px, 100% 100%;
+  background-position:
+    calc(var(--layout-grid-gap, 14px) * 0.5) calc(var(--layout-grid-gap, 14px) * 0.5),
+    0 0;
+  background-size:
+    var(--layout-column-width, 3.125%) var(--layout-row-height, 32px),
+    100% 100%;
 }
 
 .layout-canvas__surface::after {

@@ -28,9 +28,12 @@ import {
   DashboardCanvasWidgetShell,
   type DashboardResizeHandle,
   canvasRowsForItems,
+  fitMovedLayoutPosition,
   layoutFromCanvasPointer,
   moveLayoutFromPointerDelta,
+  nextAdjacentMoveLayout,
   resizeLayoutFromPointerDelta,
+  sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
@@ -115,6 +118,7 @@ export function DashboardBuilderLayoutPage({
   const [schema, setSchema] = useState<DashboardSchema>(
     () => initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow),
   );
+  const schemaRef = useRef(schema);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
   const activeDragWidgetIdRef = useRef<string | null>(null);
@@ -123,6 +127,7 @@ export function DashboardBuilderLayoutPage({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const moveFrameRef = useRef<number | null>(null);
   const resizeStateRef = useRef<{
     widgetId: string;
     handle: DashboardResizeHandle;
@@ -136,12 +141,17 @@ export function DashboardBuilderLayoutPage({
     startClientX: number;
     startClientY: number;
     lastLayout: DashboardWidgetLayout;
+    targetLayout: DashboardWidgetLayout;
   } | null>(null);
 
   useEffect(() => {
     setSchema(initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow));
     setSelectedWidgetId(null);
   }, [workflow, initialSchema]);
+
+  useEffect(() => {
+    schemaRef.current = schema;
+  }, [schema]);
 
   const appStatus = runtimeStatusCopy(runtimeState);
   const unplacedWidgets = schema.widgets.filter((widget) => !widget.layout);
@@ -292,49 +302,78 @@ export function DashboardBuilderLayoutPage({
       startClientX: event.clientX,
       startClientY: event.clientY,
       lastLayout: layout,
+      targetLayout: layout,
     };
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const moveState = moveStateRef.current;
       if (!moveState) return;
+      const currentSchema = schemaRef.current;
+      const candidate = fitMovedLayoutPosition(
+        moveLayoutFromPointerDelta({
+          startLayout: moveState.startLayout,
+          startClientX: moveState.startClientX,
+          startClientY: moveState.startClientY,
+          clientX: pointerEvent.clientX,
+          clientY: pointerEvent.clientY,
+          canvas: canvasRef.current,
+          columns: currentSchema.layout.gridColumns,
+          rowHeight: currentSchema.layout.rowHeight,
+        }),
+        currentSchema.layout.gridColumns,
+      );
+      if (sameGridLayout(candidate, moveState.targetLayout)) return;
+      moveState.targetLayout = candidate;
+      applyMoveStep();
+    }
+
+    function applyMoveStep() {
+      const moveState = moveStateRef.current;
+      if (!moveState || sameGridLayout(moveState.lastLayout, moveState.targetLayout)) return;
+
       setSchema((current) => {
-        const candidate = fitLayout(
-          moveLayoutFromPointerDelta({
-            startLayout: moveState.startLayout,
-            startClientX: moveState.startClientX,
-            startClientY: moveState.startClientY,
-            clientX: pointerEvent.clientX,
-            clientY: pointerEvent.clientY,
-            canvas: canvasRef.current,
-            columns: current.layout.gridColumns,
-            rowHeight: current.layout.rowHeight,
-          }),
-          current.layout.gridColumns,
-        );
-        if (
-          candidate.x === moveState.lastLayout.x &&
-          candidate.y === moveState.lastLayout.y &&
-          candidate.w === moveState.lastLayout.w &&
-          candidate.h === moveState.lastLayout.h
-        ) {
+        const latestMoveState = moveStateRef.current;
+        if (!latestMoveState || sameGridLayout(latestMoveState.lastLayout, latestMoveState.targetLayout)) {
           return current;
         }
+        const candidate = fitMovedLayoutPosition(
+          nextAdjacentMoveLayout(latestMoveState.lastLayout, latestMoveState.targetLayout),
+          current.layout.gridColumns,
+        );
         const collides = current.widgets.some((widget) => {
-          if (widget.id === moveState.widgetId || !widget.layout) return false;
+          if (widget.id === latestMoveState.widgetId || !widget.layout) return false;
           return layoutsOverlap(candidate, widget.layout);
         });
-        if (collides) return current;
-        moveState.lastLayout = candidate;
-        return {
+        if (collides) {
+          latestMoveState.targetLayout = latestMoveState.lastLayout;
+          return current;
+        }
+        latestMoveState.lastLayout = candidate;
+        if (!sameGridLayout(candidate, latestMoveState.targetLayout)) scheduleMoveStep();
+        const nextSchema = {
           ...current,
           widgets: current.widgets.map((widget) =>
-            widget.id === moveState.widgetId ? { ...widget, layout: candidate } : widget,
+            widget.id === latestMoveState.widgetId ? { ...widget, layout: candidate } : widget,
           ),
         };
+        schemaRef.current = nextSchema;
+        return nextSchema;
+      });
+    }
+
+    function scheduleMoveStep() {
+      if (moveFrameRef.current !== null) return;
+      moveFrameRef.current = window.requestAnimationFrame(() => {
+        moveFrameRef.current = null;
+        applyMoveStep();
       });
     }
 
     function handlePointerUp() {
+      if (moveFrameRef.current !== null) {
+        window.cancelAnimationFrame(moveFrameRef.current);
+        moveFrameRef.current = null;
+      }
       moveStateRef.current = null;
       setActiveDragWidgetId(null);
       window.removeEventListener("pointermove", handlePointerMove);
@@ -519,6 +558,7 @@ export function DashboardBuilderLayoutPage({
               ref={canvasRef}
               empty={placedWidgets.length === 0}
               rows={canvasRows}
+              columns={schema.layout.gridColumns}
               rowHeight={schema.layout.rowHeight}
               gridGap={schema.layout.gridGap}
               onDragOver={handleCanvasDragOver}

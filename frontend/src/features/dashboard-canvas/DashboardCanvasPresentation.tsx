@@ -9,10 +9,10 @@ import {
 
 import type { GridItemLayout } from "../../lib/gridLayout";
 
-export const DASHBOARD_CANVAS_COLUMNS = 12;
-export const DASHBOARD_CANVAS_ROW_HEIGHT = 64;
+export const DASHBOARD_CANVAS_COLUMNS = 32;
+export const DASHBOARD_CANVAS_ROW_HEIGHT = 32;
 export const DASHBOARD_CANVAS_GRID_GAP = 14;
-export const DASHBOARD_CANVAS_MIN_ROWS = 12;
+export const DASHBOARD_CANVAS_MIN_ROWS = 24;
 
 export interface DashboardCanvasMetrics {
   columns?: number;
@@ -143,6 +143,29 @@ export function moveLayoutFromPointerDelta({
   };
 }
 
+export function fitMovedLayoutPosition(
+  layout: GridItemLayout,
+  columns = DASHBOARD_CANVAS_COLUMNS,
+): GridItemLayout {
+  return {
+    ...layout,
+    x: clamp(layout.x, 0, columns - layout.w),
+    y: Math.max(0, layout.y),
+  };
+}
+
+export function nextAdjacentMoveLayout(current: GridItemLayout, target: GridItemLayout): GridItemLayout {
+  return {
+    ...current,
+    x: current.x + Math.sign(target.x - current.x),
+    y: current.y + Math.sign(target.y - current.y),
+  };
+}
+
+export function sameGridLayout(a: GridItemLayout, b: GridItemLayout): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
 export function DashboardCanvasFrame({
   children,
   className = "",
@@ -161,6 +184,7 @@ export function DashboardCanvasFrame({
 
 export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement> & {
   rows: number;
+  columns?: number;
   rowHeight?: number;
   gridGap?: number;
   empty?: boolean;
@@ -168,6 +192,7 @@ export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<
   children,
   className = "",
   rows,
+  columns = DASHBOARD_CANVAS_COLUMNS,
   rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
   gridGap = DASHBOARD_CANVAS_GRID_GAP,
   empty = false,
@@ -176,6 +201,8 @@ export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<
 }, ref) {
   const surfaceStyle = {
     minHeight: `${rows * rowHeight}px`,
+    "--layout-columns": columns,
+    "--layout-column-width": `${100 / columns}%`,
     "--layout-row-height": `${rowHeight}px`,
     "--layout-grid-gap": `${gridGap}px`,
     ...style,

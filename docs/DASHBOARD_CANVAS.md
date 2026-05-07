@@ -45,7 +45,7 @@ The Dashboard Builder already saves `layout` data into `dashboard.json` and the 
 | 3.13 | "Edit Dashboard Layout" mode does not allow changing widget bindings or exposing new workflow variables |
 | 3.14 | User layout overrides persist in Noofy-managed local app data |
 | 3.15 | Reset Layout reverts user layout overrides to the creator layout |
-| 3.16 | Widget placement uses a structured 12-column grid with named size presets |
+| 3.16 | Widget placement uses a structured 32-column grid with named size presets |
 | 3.17 | Canvas top-right action group shows: Run Workflow, Cancel Run, and a square workflow customization button. The workflow customization dropdown contains: Restore Default Values, Edit Dashboard Layout, Edit Widgets, Reset Layout, Export as JSON, Export as Noofy |
 
 ---
@@ -67,7 +67,7 @@ The Dashboard Builder already saves `layout` data into `dashboard.json` and the 
 
 When `dashboard.status === "configured"` and controls have `layout` data:
 
-- Run page renders a full-width CSS Grid canvas (12 columns, `minmax(64px, auto)` row height, 14 px gap).
+- Run page renders a full-width responsive canvas grid (32 columns, 32 px row height, 14 px gap).
 - Each widget is a card at `grid-column: x+1 / span w`, `grid-row: y+1 / span h`.
 - Widgets feel like independent dashboard blocks, not graph nodes.
 - Output image widgets show the result for their bound `output_id` inside their canvas cell.
@@ -130,15 +130,14 @@ Widgets have five named size presets. The creator/importer selects a preset in t
 
 | Preset | Grid columns (w) | Grid rows (h) | Use case |
 |---|---|---|---|
-| Compact | 3 | 2 | Sliders, toggles, simple number fields |
-| Standard | 4 | 2 | Most input fields, seed widget, dropdowns |
-| Wide | 6 | 3 | Textareas, prompt inputs |
-| Media | 5 | 5 | Image input / output at moderate size |
-| Media-Large | 7 | 7 | Primary output image, large preview |
+| Compact | 8 | 4 | Sliders, toggles, simple number fields |
+| Standard | 11 | 4 | Most input fields, seed widget, dropdowns |
+| Wide | 16 | 6 | Textareas, prompt inputs |
+| Media | 13 | 10 | Image input / output at moderate size |
+| Media-Large | 19 | 14 | Primary output image, large preview |
 
 Rules:
-- Sizes align to the 12-column grid. A row of three Standard widgets fills 12 columns exactly.
-- Two Compact widgets equal one Standard widget in width.
+- Sizes align to the 32-column grid. A row of four Compact widgets or two Wide widgets fills 32 columns exactly.
 - Named presets define `min_w` and `min_h` for each widget type. A widget cannot be resized smaller than its minimum.
 - The builder `defaultLayoutForWidget` function maps each widget type to a default preset.
 - The creator may override the preset in the builder layout step (no freeform pixel resize in the builder either).
@@ -435,7 +434,7 @@ Run all: `make test`
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Asset staging copies large images on every run | Medium | Use symlink on macOS/Linux; copy on Windows; clean up after job |
-| `grid-auto-rows: 64px` clips tall widgets | Medium | Use `minmax(64px, auto)` |
+| Fixed row heights clip tall widgets | Medium | Size widget shells from their configured row span and keep content internally constrained |
 | `WorkflowRunPage.tsx` size grows unwieldy | Medium | Extract `CanvasDashboardView` to its own file from the start |
 | Multi-output job result not per-node | Low-Medium | Document M2 single-output limitation clearly in the UI |
 | Builder `defaultLayoutForWidget` and named presets diverge | Low | Extract preset table to shared `widgetSizes.ts` constant used by both builder and run view |
@@ -459,7 +458,7 @@ Run all: `make test`
 ### Phase B — Canvas grid renderer ✅ DONE (UI corrected in Phase I)
 
 - `CanvasDashboardView.tsx` created (~580 lines).
-- Renders CSS Grid canvas (12 columns, `minmax(64px, auto)` rows). Each control at its `effectiveLayout` position (user override → creator layout → widget-type default).
+- Renders the shared responsive canvas grid (32 columns, 32 px rows). Each control at its `effectiveLayout` position (user override → creator layout → widget-type default).
 - `display_image` / `result_image` controls resolve output via `output_id → WorkflowOutput.node_id → job result`.
 - `AssetImageInput` fetches asset blob URLs with auth and revokes on unmount.
 - Integrated into `WorkflowRunPage`: `hasDashboard && viewMode === "canvas"` → renders canvas; classic two-panel otherwise.
@@ -616,7 +615,7 @@ Corrects the canvas interaction model to match §17 and §3.17. Phases B and G s
 The run canvas (Interactive Grid Layout view) must be visually indistinguishable from the Dashboard Layout Builder canvas:
 
 - Same canvas background, grid feel, widget card shape, border, shadow, spacing, and typography.
-- Same 12-column grid, same row height (`minmax(64px, auto)`), same gap.
+- Same 32-column grid, same 32 px row height, same gap.
 - Widget positions come directly from saved `layout.x/y/w/h` in `dashboard.json`.
 
 Do not redesign colors, button shapes, widget shapes, or any other element of the Noofy design system. Do not make the dashboard resemble a node editor.

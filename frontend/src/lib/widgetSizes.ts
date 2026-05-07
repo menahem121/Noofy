@@ -9,11 +9,11 @@ export interface WidgetPresetDef {
 }
 
 export const WIDGET_SIZE_PRESETS: Record<WidgetSizePreset, WidgetPresetDef> = {
-  compact: { name: "Compact", w: 3, h: 2 },
-  standard: { name: "Standard", w: 4, h: 2 },
-  wide: { name: "Wide", w: 6, h: 3 },
-  media: { name: "Media", w: 5, h: 5 },
-  "media-large": { name: "Media Large", w: 7, h: 7 },
+  compact: { name: "Compact", w: 8, h: 4 },
+  standard: { name: "Standard", w: 11, h: 4 },
+  wide: { name: "Wide", w: 16, h: 6 },
+  media: { name: "Media", w: 13, h: 10 },
+  "media-large": { name: "Media Large", w: 19, h: 14 },
 };
 
 export type WidgetTypeKey =

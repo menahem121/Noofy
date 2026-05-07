@@ -15,7 +15,7 @@ describe("toBackendPayload", () => {
       version: 1,
       workflowId: "wf-1",
       workflowName: "Workflow",
-      layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
       widgets: [
         {
           id: "ctrl-prompt",
@@ -27,7 +27,7 @@ describe("toBackendPayload", () => {
           orientation: "vertical",
           group: "simple",
           defaultValue: "a lake",
-          layout: { x: 0, y: 0, w: 6, h: 3, minW: 6, minH: 3 },
+          layout: { x: 0, y: 0, w: 16, h: 6, minW: 16, minH: 6 },
         },
         {
           id: "ctrl-output",
@@ -40,7 +40,7 @@ describe("toBackendPayload", () => {
           group: "simple",
           defaultValue: null,
           showDownload: true,
-          layout: { x: 6, y: 0, w: 6, h: 6, minW: 5, minH: 5 },
+          layout: { x: 16, y: 0, w: 16, h: 12, minW: 13, minH: 10 },
         },
       ],
     };
@@ -57,8 +57,8 @@ describe("toBackendPayload", () => {
       show_download: true,
     });
     expect(payload.dashboard.sections[0].controls[0].layout).toMatchObject({
-      min_w: 6,
-      min_h: 3,
+      min_w: 16,
+      min_h: 6,
     });
   });
 });
@@ -69,7 +69,7 @@ describe("saveDashboardDraft", () => {
       version: 1,
       workflowId: "wf-1",
       workflowName: "Workflow",
-      layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
       widgets: [],
     };
 
@@ -84,7 +84,7 @@ describe("saveDashboardDraft", () => {
       version: 1,
       workflowId: "wf-1",
       workflowName: "Workflow",
-      layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
       widgets: [],
     };
 

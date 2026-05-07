@@ -101,8 +101,8 @@ DASHBOARD_CONTROL_TYPES = frozenset(
 class ControlLayout(BaseModel):
     x: int = 0
     y: int = 0
-    w: int = 4
-    h: int = 2
+    w: int = 11
+    h: int = 4
     min_w: int | None = None
     min_h: int | None = None
 

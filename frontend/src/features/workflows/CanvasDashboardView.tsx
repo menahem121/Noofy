@@ -40,7 +40,10 @@ import {
   DashboardCanvasWidgetShell,
   type DashboardResizeHandle,
   canvasRowsForItems,
+  fitMovedLayoutPosition,
+  nextAdjacentMoveLayout,
   resizeLayoutFromPointerDelta,
+  sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
 
@@ -100,6 +103,7 @@ export function CanvasDashboardView({
   const [optionsOpen, setOptionsOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
+  const moveFrameRef = useRef<number | null>(null);
   const resizeStateRef = useRef<{
     controlId: string;
     handle: DashboardResizeHandle;
@@ -114,6 +118,7 @@ export function CanvasDashboardView({
     startClientY: number;
     columnWidth: number;
     lastLayout: GridItemLayout;
+    targetLayout: GridItemLayout;
   } | null>(null);
   const canvasItems = useMemo(
     () => controls.map((control) => ({ id: control.id, layout: effectiveLayout(control) })),
@@ -147,13 +152,26 @@ export function CanvasDashboardView({
     return defaultLayoutForWidgetType(control.type);
   }
 
-  function resolveLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
+  function resolveMoveLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
+    const fitted = fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS);
+    return layoutCollides(controlId, fitted)
+      ? effectiveLayout(controls.find((control) => control.id === controlId)!)
+      : fitted;
+  }
+
+  function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS);
+    return layoutCollides(controlId, fitted)
+      ? effectiveLayout(controls.find((control) => control.id === controlId)!)
+      : fitted;
+  }
+
+  function layoutCollides(controlId: string, layout: GridItemLayout): boolean {
     const collides = canvasItems.some((item) => {
       if (item.id === controlId || !item.layout) return false;
-      return layoutsOverlap(fitted, item.layout);
+      return layoutsOverlap(layout, item.layout);
     });
-    return collides ? effectiveLayout(controls.find((control) => control.id === controlId)!) : fitted;
+    return collides;
   }
 
   function handleMoveStart(
@@ -175,6 +193,7 @@ export function CanvasDashboardView({
       startClientY: event.clientY,
       columnWidth,
       lastLayout: layout,
+      targetLayout: layout,
     };
     setMovingControlId(controlId);
     setMovePreview({ controlId, layout });
@@ -184,7 +203,7 @@ export function CanvasDashboardView({
       if (!moveState) return;
       const deltaColumns = Math.round((pointerEvent.clientX - moveState.startClientX) / moveState.columnWidth);
       const deltaRows = Math.round((pointerEvent.clientY - moveState.startClientY) / DASHBOARD_CANVAS_ROW_HEIGHT);
-      const candidate = fitLayout(
+      const candidate = fitMovedLayoutPosition(
         {
           ...moveState.startLayout,
           x: Math.max(0, Math.min(moveState.startLayout.x + deltaColumns, DASHBOARD_CANVAS_COLUMNS - moveState.startLayout.w)),
@@ -192,23 +211,42 @@ export function CanvasDashboardView({
         },
         DASHBOARD_CANVAS_COLUMNS,
       );
-      if (
-        candidate.x === moveState.lastLayout.x &&
-        candidate.y === moveState.lastLayout.y &&
-        candidate.w === moveState.lastLayout.w &&
-        candidate.h === moveState.lastLayout.h
-      ) {
+      if (sameGridLayout(candidate, moveState.targetLayout)) return;
+      moveState.targetLayout = candidate;
+      applyMoveStep();
+    }
+
+    function applyMoveStep() {
+      const moveState = moveStateRef.current;
+      if (!moveState || sameGridLayout(moveState.lastLayout, moveState.targetLayout)) return;
+
+      const nextLayout = nextAdjacentMoveLayout(moveState.lastLayout, moveState.targetLayout);
+      const resolved = resolveMoveLayout(moveState.controlId, nextLayout);
+      if (!sameGridLayout(resolved, nextLayout)) {
+        moveState.targetLayout = moveState.lastLayout;
         return;
       }
-      const resolved = resolveLayout(moveState.controlId, candidate);
-      if (resolved.x !== candidate.x || resolved.y !== candidate.y) return;
+
       moveState.lastLayout = resolved;
       setMovePreview({ controlId: moveState.controlId, layout: resolved });
+      if (!sameGridLayout(resolved, moveState.targetLayout)) scheduleMoveStep();
+    }
+
+    function scheduleMoveStep() {
+      if (moveFrameRef.current !== null) return;
+      moveFrameRef.current = window.requestAnimationFrame(() => {
+        moveFrameRef.current = null;
+        applyMoveStep();
+      });
     }
 
     function handlePointerUp() {
       const finalLayout = moveStateRef.current?.lastLayout;
       if (finalLayout) onLayoutOverride(controlId, finalLayout);
+      if (moveFrameRef.current !== null) {
+        window.cancelAnimationFrame(moveFrameRef.current);
+        moveFrameRef.current = null;
+      }
       moveStateRef.current = null;
       setMovingControlId(null);
       setMovePreview(null);
@@ -250,7 +288,7 @@ export function CanvasDashboardView({
         canvas: canvasRef.current,
         handle: resizeState.handle,
       });
-      onLayoutOverride(resizeState.controlId, resolveLayout(resizeState.controlId, candidate));
+      onLayoutOverride(resizeState.controlId, resolveResizedLayout(resizeState.controlId, candidate));
     }
 
     function handlePointerUp() {

@@ -36,7 +36,7 @@ const placedSchema: DashboardSchema = {
   version: 1,
   workflowId: "wf-1",
   workflowName: "Workflow",
-  layout: { gridColumns: 12, rowHeight: 64, gridGap: 14, responsive: true },
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
   widgets: [
     {
       id: "ctrl-prompt",
@@ -48,7 +48,7 @@ const placedSchema: DashboardSchema = {
       orientation: "vertical",
       group: "simple",
       defaultValue: "a lake",
-      layout: { x: 0, y: 0, w: 6, h: 3 },
+      layout: { x: 0, y: 0, w: 16, h: 6 },
     },
   ],
 };
@@ -189,10 +189,64 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
 
     expect(promptCell).toHaveClass("layout-canvas-widget--preview");
-    expect(promptCell).toHaveStyle({ top: "71px" });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "71px" });
+    });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
     expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
     expect(promptCell).toHaveStyle({ top: "71px" });
+  });
+
+  it("steps through intermediate grid cells during fast placed-widget drags", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const singleWidgetSchema = {
+      ...placedSchema,
+      widgets: [
+        {
+          ...placedSchema.widgets[0],
+          layout: { x: 4, y: 2, w: 8, h: 6 },
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={singleWidgetSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /^resize prompt$/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
+    dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
+
+    expect(promptCell).toHaveStyle({ left: "calc(15.625% + 7px)" });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ left: "calc(18.75% + 7px)" });
+    });
+    dispatchPointer(window, "pointerup", { clientX: 325, clientY: 160 });
   });
 });

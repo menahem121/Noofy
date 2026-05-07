@@ -96,21 +96,21 @@ const configuredPackageData = {
             type: "textarea",
             label: "Prompt",
             input_id: "prompt",
-            layout: { x: 0, y: 0, w: 6, h: 3 },
+            layout: { x: 0, y: 0, w: 16, h: 6 },
           },
           {
             id: "result-a",
             type: "display_image",
             label: "Result A",
             output_id: "image_a",
-            layout: { x: 6, y: 0, w: 6, h: 4 },
+            layout: { x: 16, y: 0, w: 16, h: 8 },
           },
           {
             id: "result-b",
             type: "display_image",
             label: "Result B",
             output_id: "image_b",
-            layout: { x: 0, y: 4, w: 6, h: 4 },
+            layout: { x: 0, y: 8, w: 16, h: 8 },
           },
         ],
       },
@@ -608,6 +608,7 @@ describe("WorkflowRunPage", () => {
     const resultCell = screen.getByText("Result A").closest("article");
 
     expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
+    expect(document.querySelector("#canvas-dashboard-surface")).toHaveStyle({ "--layout-columns": "32" });
     expect(promptCell).toHaveClass("layout-canvas-widget", "layout-canvas-widget--run");
     expect(promptCell).toHaveStyle({
       left: "calc(0% + 7px)",
@@ -781,7 +782,7 @@ describe("WorkflowRunPage", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 6, h: 4 });
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 16, h: 8 });
     });
   });
 
@@ -815,7 +816,9 @@ describe("WorkflowRunPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
 
     expect(promptCell).toHaveClass("layout-canvas-widget--preview");
-    expect(promptCell).toHaveStyle({ top: "71px" });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "71px" });
+    });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
@@ -824,11 +827,93 @@ describe("WorkflowRunPage", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 1, w: 6, h: 3 });
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 2, w: 16, h: 6 });
     });
   });
 
-  it("blocks snapped widget moves into occupied grid cells", async () => {
+  it("steps through intermediate grid cells during fast horizontal drags", async () => {
+    const packageData = {
+      ...configuredPackageData,
+      outputs: [],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "prompt",
+                type: "textarea",
+                label: "Prompt",
+                input_id: "prompt",
+                layout: { x: 4, y: 2, w: 8, h: 6 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
+    dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
+
+    expect(promptCell).toHaveStyle({ left: "calc(15.625% + 7px)" });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ left: "calc(18.75% + 7px)" });
+    });
+
+    dispatchPointer(window, "pointerup", { clientX: 325, clientY: 160 });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 6, y: 2, w: 8, h: 6 });
+    });
+  });
+
+  it("blocks occupied snapped moves at the last valid grid cell", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
     renderRunPage();
@@ -855,9 +940,12 @@ describe("WorkflowRunPage", () => {
       clientY: 96,
     });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "71px" });
+    });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
 
-    expect(promptCell).toHaveStyle({ top: "7px" });
+    expect(promptCell).toHaveStyle({ top: "71px" });
   });
 
   it("opens the dashboard builder widget step from the canvas options menu", async () => {
@@ -877,7 +965,7 @@ describe("WorkflowRunPage", () => {
           expect.objectContaining({
             id: "prompt",
             widgetType: "textarea",
-            layout: expect.objectContaining({ x: 0, y: 0, w: 6, h: 3 }),
+            layout: expect.objectContaining({ x: 0, y: 0, w: 16, h: 6 }),
           }),
         ]),
       }),
@@ -919,21 +1007,21 @@ describe("WorkflowRunPage", () => {
                 type: "textarea",
                 label: "Prompt",
                 input_id: "prompt",
-                layout: { x: 0, y: 0, w: 6, h: 3 },
+                layout: { x: 0, y: 0, w: 16, h: 6 },
               },
               {
                 id: "result-a",
                 type: "display_image",
                 label: "Result A",
                 output_id: "image_a",
-                layout: { x: 6, y: 0, w: 6, h: 4 },
+                layout: { x: 16, y: 0, w: 16, h: 8 },
               },
               {
                 id: "result-b",
                 type: "display_image",
                 label: "Result B",
                 output_id: "image_b",
-                layout: { x: 0, y: 4, w: 6, h: 4 },
+                layout: { x: 0, y: 8, w: 16, h: 8 },
               },
             ],
           },

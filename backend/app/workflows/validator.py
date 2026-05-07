@@ -1,7 +1,7 @@
 from app.engine.models import MissingModel, WorkflowValidationResult
 from app.workflows.package import WorkflowPackage
 
-_GRID_COLUMNS = 12
+_GRID_COLUMNS = 32
 
 
 def _layouts_overlap(a: dict, b: dict) -> bool:
@@ -62,7 +62,7 @@ class WorkflowPackageValidator:
                             f"Dashboard control '{control.id}' references missing output '{control.output_id}'."
                         )
 
-                # Layout overlap detection (12-column grid).
+                # Layout overlap detection (responsive 32-column dashboard grid).
                 if control.layout is not None:
                     layout_dict = {
                         "x": control.layout.x,
