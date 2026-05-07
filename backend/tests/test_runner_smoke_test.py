@@ -18,7 +18,10 @@ from app.runtime.smoke_test import (
 )
 from app.runtime.supervisor import RunnerKind
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    RunnerWorkspaceManifestStore,
+)
 
 
 class FakeProcess:
@@ -89,7 +92,9 @@ def _capsule_lock(*, custom_nodes: list[dict] | None = None) -> CapsuleLock:
 def _prepared_workspace(tmp_path: Path):
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
         log_store=LogStore(),
     )
     return preparer.prepare(_capsule_lock())
@@ -109,11 +114,15 @@ def _prompt_node_types(prompt: dict[str, object]) -> set[str]:
 @pytest.mark.anyio
 async def test_real_comfyui_smoke_fixture_executes_when_enabled() -> None:
     if os.environ.get("NOOFY_REAL_COMFYUI_SMOKE") != "1":
-        pytest.skip("Set NOOFY_REAL_COMFYUI_SMOKE=1 to run the optional real ComfyUI smoke test.")
+        pytest.skip(
+            "Set NOOFY_REAL_COMFYUI_SMOKE=1 to run the optional real ComfyUI smoke test."
+        )
 
     prompt_path = os.environ.get("NOOFY_REAL_COMFYUI_SMOKE_PROMPT")
     if not prompt_path:
-        pytest.fail("Set NOOFY_REAL_COMFYUI_SMOKE_PROMPT to a small ComfyUI API prompt JSON file.")
+        pytest.fail(
+            "Set NOOFY_REAL_COMFYUI_SMOKE_PROMPT to a small ComfyUI API prompt JSON file."
+        )
 
     base_url = os.environ.get("NOOFY_REAL_COMFYUI_BASE_URL", "http://127.0.0.1:8188")
     timeout_seconds = float(os.environ.get("NOOFY_REAL_COMFYUI_SMOKE_TIMEOUT", "120"))
@@ -122,7 +131,10 @@ async def test_real_comfyui_smoke_fixture_executes_when_enabled() -> None:
     assert isinstance(prompt, dict)
 
     object_info = await _fetch_object_info(base_url)
-    missing_node_types = sorted(_prompt_node_types(prompt) - {str(node_type) for node_type in object_info.keys()})
+    missing_node_types = sorted(
+        _prompt_node_types(prompt)
+        - {str(node_type) for node_type in object_info.keys()}
+    )
     assert missing_node_types == []
 
     result = await _execute_prompt_and_wait(base_url, prompt, timeout_seconds)
@@ -133,7 +145,9 @@ async def test_real_comfyui_smoke_fixture_executes_when_enabled() -> None:
 
 
 @pytest.mark.anyio
-async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(tmp_path: Path) -> None:
+async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(
+    tmp_path: Path,
+) -> None:
     if os.environ.get("NOOFY_REAL_STAGED_COMFYUI_SMOKE") != "1":
         pytest.skip(
             "Set NOOFY_REAL_STAGED_COMFYUI_SMOKE=1 to run the optional staged ComfyUI smoke test."
@@ -145,9 +159,13 @@ async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(tmp_path: 
     if not source_dir:
         pytest.fail("Set NOOFY_REAL_COMFYUI_SOURCE_DIR to a ComfyUI source checkout.")
     if not python_executable:
-        pytest.fail("Set NOOFY_REAL_COMFYUI_PYTHON to a Python executable with ComfyUI dependencies.")
+        pytest.fail(
+            "Set NOOFY_REAL_COMFYUI_PYTHON to a Python executable with ComfyUI dependencies."
+        )
     if not prompt_path:
-        pytest.fail("Set NOOFY_REAL_COMFYUI_SMOKE_PROMPT to a small ComfyUI API prompt JSON file.")
+        pytest.fail(
+            "Set NOOFY_REAL_COMFYUI_SMOKE_PROMPT to a small ComfyUI API prompt JSON file."
+        )
 
     prompt = json.loads(Path(prompt_path).read_text(encoding="utf-8"))
     assert isinstance(prompt, dict)
@@ -156,7 +174,9 @@ async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(tmp_path: 
     capsule_lock = _capsule_lock()
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
         comfyui_source_dir=Path(source_dir),
         log_store=LogStore(),
     )
@@ -187,6 +207,7 @@ async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(tmp_path: 
             required_node_types=sorted(_prompt_node_types(prompt)),
             timeout_seconds=timeout_seconds,
         ),
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(capsule_lock, prepared)
@@ -194,11 +215,15 @@ async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(tmp_path: 
     assert report.dependency_env.status is SmokeStageStatus.PASSED
     assert report.runner_health.status is SmokeStageStatus.PASSED
     assert report.workflow_execution.status is SmokeStageStatus.PASSED
-    assert report.workflow_execution.details.get("output_node_count", 0) >= minimum_outputs
+    assert (
+        report.workflow_execution.details.get("output_node_count", 0) >= minimum_outputs
+    )
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_starts_health_checks_and_stops_runner(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_starts_health_checks_and_stops_runner(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     created: list[tuple[list[str], dict]] = []
 
@@ -214,6 +239,7 @@ async def test_runner_smoke_tester_starts_health_checks_and_stops_runner(tmp_pat
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     log_store = LogStore()
     prepared = _prepared_workspace(tmp_path)
@@ -247,7 +273,9 @@ async def test_runner_smoke_tester_starts_health_checks_and_stops_runner(tmp_pat
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     executed: list[tuple[str, dict[str, object], float]] = []
 
@@ -261,7 +289,9 @@ async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(tm
         assert base_url == "http://127.0.0.1:9191"
         return {"NoOp": {}, "PreviewImage": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
         executed.append((base_url, prompt, timeout_seconds))
         return {"prompt_id": "smoke-prompt", "output_node_count": 1}
 
@@ -270,6 +300,7 @@ async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(tm
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -293,12 +324,15 @@ async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(tm
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
 
     assert process.terminated
-    assert executed == [("http://127.0.0.1:9191", {"1": {"class_type": "NoOp", "inputs": {}}}, 7)]
+    assert executed == [
+        ("http://127.0.0.1:9191", {"1": {"class_type": "NoOp", "inputs": {}}}, 7)
+    ]
     assert report.dependency_env.status is SmokeStageStatus.PASSED
     assert report.runner_health.status is SmokeStageStatus.PASSED
     assert report.custom_node_import.status is SmokeStageStatus.SKIPPED
@@ -307,7 +341,9 @@ async def test_runner_smoke_tester_executes_fixture_after_node_metadata_check(tm
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_fails_when_execution_output_count_mismatches(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_fails_when_execution_output_count_mismatches(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -319,14 +355,21 @@ async def test_runner_smoke_tester_fails_when_execution_output_count_mismatches(
     async def object_info(base_url: str):
         return {"NoOp": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
-        return {"prompt_id": "smoke-prompt", "output_node_count": 0, "output_node_ids": []}
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
+        return {
+            "prompt_id": "smoke-prompt",
+            "output_node_count": 0,
+            "output_node_ids": [],
+        }
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -347,6 +390,7 @@ async def test_runner_smoke_tester_fails_when_execution_output_count_mismatches(
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -357,7 +401,9 @@ async def test_runner_smoke_tester_fails_when_execution_output_count_mismatches(
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_fails_when_expected_output_node_id_is_missing(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_fails_when_expected_output_node_id_is_missing(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -369,14 +415,21 @@ async def test_runner_smoke_tester_fails_when_expected_output_node_id_is_missing
     async def object_info(base_url: str):
         return {"NoOp": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
-        return {"prompt_id": "smoke-prompt", "output_node_count": 1, "output_node_ids": ["9"]}
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
+        return {
+            "prompt_id": "smoke-prompt",
+            "output_node_count": 1,
+            "output_node_ids": ["9"],
+        }
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -397,6 +450,7 @@ async def test_runner_smoke_tester_fails_when_expected_output_node_id_is_missing
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -406,7 +460,9 @@ async def test_runner_smoke_tester_fails_when_expected_output_node_id_is_missing
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_reports_execution_timeout_with_prompt_id(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_reports_execution_timeout_with_prompt_id(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -418,14 +474,19 @@ async def test_runner_smoke_tester_reports_execution_timeout_with_prompt_id(tmp_
     async def object_info(base_url: str):
         return {"NoOp": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
-        raise SmokePromptTimeoutError(prompt_id="smoke-prompt", timeout_seconds=timeout_seconds)
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
+        raise SmokePromptTimeoutError(
+            prompt_id="smoke-prompt", timeout_seconds=timeout_seconds
+        )
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -446,6 +507,7 @@ async def test_runner_smoke_tester_reports_execution_timeout_with_prompt_id(tmp_
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -460,7 +522,9 @@ async def test_runner_smoke_tester_reports_execution_timeout_with_prompt_id(tmp_
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_fails_execution_when_fixture_node_is_missing(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_fails_execution_when_fixture_node_is_missing(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -472,14 +536,19 @@ async def test_runner_smoke_tester_fails_execution_when_fixture_node_is_missing(
     async def object_info(base_url: str):
         return {"OtherNode": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
-        raise AssertionError("prompt executor should not run when required nodes are absent")
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
+        raise AssertionError(
+            "prompt executor should not run when required nodes are absent"
+        )
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -499,6 +568,7 @@ async def test_runner_smoke_tester_fails_execution_when_fixture_node_is_missing(
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -509,7 +579,9 @@ async def test_runner_smoke_tester_fails_execution_when_fixture_node_is_missing(
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     executed: list[tuple[str, dict[str, object], float]] = []
 
@@ -522,7 +594,9 @@ async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(tmp_path: P
     async def object_info(base_url: str):
         return {"FixtureNode": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
         executed.append((base_url, prompt, timeout_seconds))
         return {"prompt_id": "resolved-fixture"}
 
@@ -531,6 +605,7 @@ async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(tmp_path: P
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
 
@@ -557,6 +632,7 @@ async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(tmp_path: P
         execution_fixture_resolver=fixture_resolver,
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -568,7 +644,9 @@ async def test_runner_smoke_tester_uses_per_capsule_fixture_resolver(tmp_path: P
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_verifies_custom_node_registration(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_verifies_custom_node_registration(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -585,6 +663,7 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(tmp_path: P
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -598,6 +677,7 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(tmp_path: P
             port=9191,
         ),
         object_info_fetcher=object_info,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(
@@ -619,7 +699,9 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(tmp_path: P
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_requires_custom_node_fixture_to_exercise_custom_node(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_requires_custom_node_fixture_to_exercise_custom_node(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     prompt_called = False
 
@@ -632,16 +714,23 @@ async def test_runner_smoke_tester_requires_custom_node_fixture_to_exercise_cust
     async def object_info(base_url: str):
         return {"CustomSamplerNode": {}, "NoOp": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
         nonlocal prompt_called
         prompt_called = True
-        return {"prompt_id": "smoke-prompt", "output_node_count": 0, "output_node_ids": []}
+        return {
+            "prompt_id": "smoke-prompt",
+            "output_node_count": 0,
+            "output_node_ids": [],
+        }
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -661,6 +750,7 @@ async def test_runner_smoke_tester_requires_custom_node_fixture_to_exercise_cust
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(
@@ -683,12 +773,16 @@ async def test_runner_smoke_tester_requires_custom_node_fixture_to_exercise_cust
     assert report.workflow_execution.message == (
         "Workflow execution smoke fixture does not exercise declared custom node types."
     )
-    assert report.workflow_execution.details["declared_custom_node_types"] == ["CustomSamplerNode"]
+    assert report.workflow_execution.details["declared_custom_node_types"] == [
+        "CustomSamplerNode"
+    ]
     assert report.workflow_execution.details["fixture_node_types"] == ["NoOp"]
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_records_custom_node_types_exercised_by_fixture(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_records_custom_node_types_exercised_by_fixture(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -700,14 +794,21 @@ async def test_runner_smoke_tester_records_custom_node_types_exercised_by_fixtur
     async def object_info(base_url: str):
         return {"CustomSamplerNode": {}}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
-        return {"prompt_id": "smoke-prompt", "output_node_count": 1, "output_node_ids": ["1"]}
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
+        return {
+            "prompt_id": "smoke-prompt",
+            "output_node_count": 1,
+            "output_node_ids": ["1"],
+        }
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -729,6 +830,7 @@ async def test_runner_smoke_tester_records_custom_node_types_exercised_by_fixtur
         ),
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(
@@ -747,11 +849,15 @@ async def test_runner_smoke_tester_records_custom_node_types_exercised_by_fixtur
 
     assert report.custom_node_import.status is SmokeStageStatus.PASSED
     assert report.workflow_execution.status is SmokeStageStatus.PASSED
-    assert report.workflow_execution.details["exercised_custom_node_types"] == ["CustomSamplerNode"]
+    assert report.workflow_execution.details["exercised_custom_node_types"] == [
+        "CustomSamplerNode"
+    ]
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_reports_missing_custom_node_registration(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_reports_missing_custom_node_registration(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -768,6 +874,7 @@ async def test_runner_smoke_tester_reports_missing_custom_node_registration(tmp_
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -781,6 +888,7 @@ async def test_runner_smoke_tester_reports_missing_custom_node_registration(tmp_
             port=9191,
         ),
         object_info_fetcher=object_info,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(
@@ -798,12 +906,16 @@ async def test_runner_smoke_tester_reports_missing_custom_node_registration(tmp_
     )
 
     assert report.custom_node_import.status is SmokeStageStatus.FAILED
-    assert report.custom_node_import.details["missing_node_types"] == ["CustomSamplerNode"]
+    assert report.custom_node_import.details["missing_node_types"] == [
+        "CustomSamplerNode"
+    ]
     assert report.workflow_execution.status is SmokeStageStatus.BLOCKED
 
 
 @pytest.mark.anyio
-async def test_dependency_import_smoke_runs_declared_non_core_wheels(tmp_path: Path) -> None:
+async def test_dependency_import_smoke_runs_declared_non_core_wheels(
+    tmp_path: Path,
+) -> None:
     prepared = _prepared_workspace(tmp_path)
     python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
     python_path.parent.mkdir(parents=True)
@@ -812,7 +924,11 @@ async def test_dependency_import_smoke_runs_declared_non_core_wheels(tmp_path: P
         json.dumps(
             {
                 "wheels": [
-                    {"name": "demo-package", "relationship": "direct", "import_names": ["demo_import"]},
+                    {
+                        "name": "demo-package",
+                        "relationship": "direct",
+                        "import_names": ["demo_import"],
+                    },
                     {"name": "core-package", "relationship": "core"},
                 ]
             }
@@ -825,10 +941,14 @@ async def test_dependency_import_smoke_runs_declared_non_core_wheels(tmp_path: P
         commands.append(command)
         return 0, ""
 
-    result = await _check_dependency_imports_with_runner(prepared, command_runner=command_runner)
+    result = await _check_dependency_imports_with_runner(
+        prepared, command_runner=command_runner
+    )
 
     assert result.status is SmokeStageStatus.PASSED
-    assert result.details["import_targets"] == [{"package_name": "demo-package", "import_names": ["demo_import"]}]
+    assert result.details["import_targets"] == [
+        {"package_name": "demo-package", "import_names": ["demo_import"]}
+    ]
     assert commands[0][0] == str(python_path)
     assert "demo-package" in commands[0][2]
     assert "demo_import" in commands[0][2]
@@ -849,16 +969,22 @@ async def test_dependency_import_smoke_reports_import_failure(tmp_path: Path) ->
     async def command_runner(command: list[str], prepared_workspace):
         return 1, "ModuleNotFoundError: No module named 'broken_package'"
 
-    result = await _check_dependency_imports_with_runner(prepared, command_runner=command_runner)
+    result = await _check_dependency_imports_with_runner(
+        prepared, command_runner=command_runner
+    )
 
     assert result.status is SmokeStageStatus.FAILED
     assert result.message == "Dependency environment import smoke failed."
-    assert result.details["import_targets"] == [{"package_name": "broken-package", "import_names": []}]
+    assert result.details["import_targets"] == [
+        {"package_name": "broken-package", "import_names": []}
+    ]
     assert "ModuleNotFoundError" in result.details["output"]
 
 
 @pytest.mark.anyio
-async def test_runner_smoke_tester_does_not_start_runner_when_dependency_smoke_fails(tmp_path: Path) -> None:
+async def test_runner_smoke_tester_does_not_start_runner_when_dependency_smoke_fails(
+    tmp_path: Path,
+) -> None:
     started = False
 
     async def process_factory(command: list[str], **kwargs):
@@ -880,6 +1006,7 @@ async def test_runner_smoke_tester_does_not_start_runner_when_dependency_smoke_f
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     prepared = _prepared_workspace(tmp_path)
     smoke_tester = RunnerSmokeTester(
@@ -893,6 +1020,7 @@ async def test_runner_smoke_tester_does_not_start_runner_when_dependency_smoke_f
             port=9191,
         ),
         dependency_import_checker=dependency_import_checker,
+        log_store=LogStore(),
     )
 
     report = await smoke_tester.run(_capsule_lock(), prepared)
@@ -918,6 +1046,7 @@ async def test_runner_smoke_tester_reports_startup_failure(tmp_path: Path) -> No
         health_check=unhealthy,
         startup_timeout_seconds=0.01,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     log_store = LogStore()
     prepared = _prepared_workspace(tmp_path)
@@ -934,7 +1063,9 @@ async def test_runner_smoke_tester_reports_startup_failure(tmp_path: Path) -> No
         log_store=log_store,
     )
 
-    with pytest.raises(RunnerSmokeTestError, match="Runner smoke test failed") as exc_info:
+    with pytest.raises(
+        RunnerSmokeTestError, match="Runner smoke test failed"
+    ) as exc_info:
         await smoke_tester.run(_capsule_lock(), prepared)
 
     assert process.terminated

@@ -44,13 +44,17 @@ def _launch_spec(tmp_path: Path, *, port: int | None = 8188) -> RunnerLaunchSpec
     )
 
 
-def test_memory_probe_does_not_import_torch_before_target_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_memory_probe_does_not_import_torch_before_target_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sys.modules.pop("torch", None)
     original_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
         if name == "torch":
-            raise AssertionError("runner memory probe imported torch before the target runtime")
+            raise AssertionError(
+                "runner memory probe imported torch before the target runtime"
+            )
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
@@ -99,7 +103,10 @@ async def test_start_returns_ready_handle_and_descriptor(tmp_path: Path) -> None
         assert created[0][1]["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         assert created[0][1]["start_new_session"] is True
-    assert any(event.message == "Runner process ready" for event in log_store.list_events().events)
+    assert any(
+        event.message == "Runner process ready"
+        for event in log_store.list_events().events
+    )
 
 
 @pytest.mark.anyio
@@ -116,6 +123,7 @@ async def test_runner_pid_file_written_and_removed(tmp_path: Path) -> None:
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
         pid_dir=tmp_path / "runner-pids",
+        log_store=LogStore(),
     )
 
     await supervisor.start(_launch_spec(tmp_path))
@@ -128,14 +136,19 @@ async def test_runner_pid_file_written_and_removed(tmp_path: Path) -> None:
     assert not pid_file.exists()
 
 
-def test_runner_startup_sweep_removes_stale_pid_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runner_startup_sweep_removes_stale_pid_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     killed: list[int] = []
     pid_dir = tmp_path / "runner-pids"
     pid_dir.mkdir()
     (pid_dir / "runner-old.pid").write_text("4321", encoding="utf-8")
     monkeypatch.setattr("app.runtime.runner_process._is_pid_alive", lambda pid: True)
-    monkeypatch.setattr("app.runtime.runner_process._terminate_stale_pid", lambda pid: killed.append(pid))
-    supervisor = RunnerProcessSupervisor(pid_dir=pid_dir)
+    monkeypatch.setattr(
+        "app.runtime.runner_process._terminate_stale_pid",
+        lambda pid: killed.append(pid),
+    )
+    supervisor = RunnerProcessSupervisor(pid_dir=pid_dir, log_store=LogStore())
 
     cleaned = supervisor.cleanup_stale_pid_files()
 
@@ -157,6 +170,7 @@ async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> Non
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     spec = _launch_spec(tmp_path).model_copy(
         update={
@@ -180,11 +194,15 @@ async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> Non
     assert handle.descriptor.runtime_profile_id == "noofy-comfyui-v1-default"
     assert handle.descriptor.runtime_profile_variant_id == "linux-x64-cuda130"
     assert handle.descriptor.memory_class is RunnerMemoryClass.GPU_HEAVY
-    assert handle.descriptor.memory_telemetry_path == str(tmp_path / ".noofy" / "memory" / "runner-1.jsonl")
+    assert handle.descriptor.memory_telemetry_path == str(
+        tmp_path / ".noofy" / "memory" / "runner-1.jsonl"
+    )
 
 
 @pytest.mark.anyio
-async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is_set(tmp_path: Path) -> None:
+async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is_set(
+    tmp_path: Path,
+) -> None:
     created: list[tuple[list[str], dict]] = []
 
     async def process_factory(command: list[str], **kwargs):
@@ -199,10 +217,15 @@ async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     telemetry_path = tmp_path / ".noofy" / "memory" / "runner-1.jsonl"
 
-    await supervisor.start(_launch_spec(tmp_path).model_copy(update={"memory_telemetry_path": telemetry_path}))
+    await supervisor.start(
+        _launch_spec(tmp_path).model_copy(
+            update={"memory_telemetry_path": telemetry_path}
+        )
+    )
 
     command = created[0][0]
     assert command[0] == "/opt/noofy/python"
@@ -216,7 +239,9 @@ async def test_start_wraps_runner_with_noofy_memory_probe_when_telemetry_path_is
 
 
 @pytest.mark.anyio
-async def test_start_merges_runner_environment_with_parent_environment(tmp_path: Path, monkeypatch) -> None:
+async def test_start_merges_runner_environment_with_parent_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
     created: list[tuple[list[str], dict]] = []
     monkeypatch.setenv("NOOFY_PARENT_ENV", "kept")
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
@@ -233,8 +258,11 @@ async def test_start_merges_runner_environment_with_parent_environment(tmp_path:
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
-    spec = _launch_spec(tmp_path).model_copy(update={"env": {"NOOFY_WORKFLOW_ID": "text_to_image_v0"}})
+    spec = _launch_spec(tmp_path).model_copy(
+        update={"env": {"NOOFY_WORKFLOW_ID": "text_to_image_v0"}}
+    )
 
     await supervisor.start(spec)
 
@@ -245,7 +273,9 @@ async def test_start_merges_runner_environment_with_parent_environment(tmp_path:
 
 
 @pytest.mark.anyio
-async def test_start_strips_api_token_even_without_spec_env(tmp_path: Path, monkeypatch) -> None:
+async def test_start_strips_api_token_even_without_spec_env(
+    tmp_path: Path, monkeypatch
+) -> None:
     created: list[tuple[list[str], dict]] = []
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
@@ -261,6 +291,7 @@ async def test_start_strips_api_token_even_without_spec_env(tmp_path: Path, monk
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
 
     await supervisor.start(_launch_spec(tmp_path).model_copy(update={"env": None}))
@@ -269,7 +300,9 @@ async def test_start_strips_api_token_even_without_spec_env(tmp_path: Path, monk
 
 
 @pytest.mark.anyio
-async def test_status_marks_running_unhealthy_process_unreachable(tmp_path: Path) -> None:
+async def test_status_marks_running_unhealthy_process_unreachable(
+    tmp_path: Path,
+) -> None:
     async def process_factory(command: list[str], **kwargs):
         return FakeProcess()
 
@@ -285,6 +318,7 @@ async def test_status_marks_running_unhealthy_process_unreachable(tmp_path: Path
         health_check=health_check,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     await supervisor.start(_launch_spec(tmp_path))
     healthy["value"] = False
@@ -296,7 +330,9 @@ async def test_status_marks_running_unhealthy_process_unreachable(tmp_path: Path
 
 
 @pytest.mark.anyio
-async def test_stop_is_idempotent_and_terminates_running_process(tmp_path: Path) -> None:
+async def test_stop_is_idempotent_and_terminates_running_process(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):
@@ -310,6 +346,7 @@ async def test_stop_is_idempotent_and_terminates_running_process(tmp_path: Path)
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     await supervisor.start(_launch_spec(tmp_path))
 
@@ -322,7 +359,9 @@ async def test_stop_is_idempotent_and_terminates_running_process(tmp_path: Path)
 
 
 @pytest.mark.anyio
-async def test_stop_uses_process_tree_terminator_when_configured(tmp_path: Path) -> None:
+async def test_stop_uses_process_tree_terminator_when_configured(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     terminated: list[int] = []
 
@@ -342,6 +381,7 @@ async def test_stop_uses_process_tree_terminator_when_configured(tmp_path: Path)
         process_tree_terminator=terminate_tree,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     await supervisor.start(_launch_spec(tmp_path))
 
@@ -368,9 +408,18 @@ async def test_stop_all_terminates_all_tracked_processes(tmp_path: Path) -> None
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
-    await supervisor.start(_launch_spec(tmp_path).model_copy(update={"runner_id": "runner-1", "port": 8191}))
-    await supervisor.start(_launch_spec(tmp_path).model_copy(update={"runner_id": "runner-2", "port": 8192}))
+    await supervisor.start(
+        _launch_spec(tmp_path).model_copy(
+            update={"runner_id": "runner-1", "port": 8191}
+        )
+    )
+    await supervisor.start(
+        _launch_spec(tmp_path).model_copy(
+            update={"runner_id": "runner-2", "port": 8192}
+        )
+    )
 
     statuses = await supervisor.stop_all()
 
@@ -381,7 +430,9 @@ async def test_stop_all_terminates_all_tracked_processes(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
-async def test_startup_timeout_stops_process_and_emits_diagnostic(tmp_path: Path) -> None:
+async def test_startup_timeout_stops_process_and_emits_diagnostic(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
 
     async def process_factory(command: list[str], **kwargs):

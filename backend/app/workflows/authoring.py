@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import (
     DashboardSchema,
@@ -34,13 +34,14 @@ class DashboardAuthoringService:
         self,
         workflow_store_dir: Path,
         workflow_loader: WorkflowPackageLoader,
+        *,
+        log_store: DiagnosticsSink,
         validator: WorkflowPackageValidator | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
         self.validator = validator or WorkflowPackageValidator()
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     # ------------------------------------------------------------------
     # Read
@@ -60,7 +61,9 @@ class DashboardAuthoringService:
         package = self._get_package(workflow_id)
         return {
             "workflow_id": workflow_id,
-            "unresolved_inputs": [u.model_dump() for u in package.unresolved_runtime_inputs],
+            "unresolved_inputs": [
+                u.model_dump() for u in package.unresolved_runtime_inputs
+            ],
         }
 
     # ------------------------------------------------------------------
@@ -74,7 +77,9 @@ class DashboardAuthoringService:
         dashboard: dict[str, Any],
     ) -> dict[str, Any]:
         package = self._get_package(workflow_id)
-        parsed_inputs, parsed_outputs, parsed_schema = _parse_dashboard_payload(inputs, dashboard)
+        parsed_inputs, parsed_outputs, parsed_schema = _parse_dashboard_payload(
+            inputs, dashboard
+        )
         candidate = package.model_copy(
             update={
                 "inputs": parsed_inputs,
@@ -101,7 +106,9 @@ class DashboardAuthoringService:
         dashboard: dict[str, Any],
     ) -> dict[str, Any]:
         package = self._get_package(workflow_id)
-        parsed_inputs, parsed_outputs, parsed_schema = _parse_dashboard_payload(inputs, dashboard)
+        parsed_inputs, parsed_outputs, parsed_schema = _parse_dashboard_payload(
+            inputs, dashboard
+        )
         candidate = package.model_copy(
             update={
                 "inputs": parsed_inputs,
@@ -170,7 +177,9 @@ class DashboardAuthoringService:
         package = self._get_package(workflow_id)
         if package.identity is None:
             return None
-        from app.workflows.importer import _safe_store_segment  # local import to avoid circular deps
+        from app.workflows.importer import (
+            _safe_store_segment,
+        )  # local import to avoid circular deps
 
         candidate = (
             self.workflow_store_dir
@@ -193,6 +202,7 @@ def _parse_dashboard_payload(
     dashboard_raw: dict[str, Any],
 ) -> tuple[list[WorkflowInput], list[WorkflowOutput], DashboardSchema]:
     from pydantic import ValidationError
+
     dashboard_payload = dict(dashboard_raw)
 
     inputs: list[WorkflowInput] = []
@@ -270,7 +280,9 @@ def _classify_graph_inputs(graph: dict[str, Any]) -> list[dict[str, Any]]:
                     "input_name": input_name,
                     "current_value": value,
                     "kind": kind,
-                    "suggested_widget_type": widget_types[0] if widget_types else "string_field",
+                    "suggested_widget_type": (
+                        widget_types[0] if widget_types else "string_field"
+                    ),
                     "widget_types": widget_types,
                 }
             )

@@ -17,7 +17,7 @@ from typing import Iterable
 
 from app.artifacts import AssetOwnership
 from app.core.paths import NoofyPaths
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.install_transactions import INSTALL_QUARANTINE_FILENAME
 from app.runtime.isolation import CapsuleLock, InstallState, InstallStatus
@@ -58,7 +58,9 @@ class RuntimeStorageGcAction(StrEnum):
 @dataclass(frozen=True)
 class RuntimeStorageGcConfig:
     failed_transaction_retention_days: int = DEFAULT_FAILED_TRANSACTION_RETENTION_DAYS
-    unreferenced_runtime_retention_days: int = DEFAULT_UNREFERENCED_RUNTIME_RETENTION_DAYS
+    unreferenced_runtime_retention_days: int = (
+        DEFAULT_UNREFERENCED_RUNTIME_RETENTION_DAYS
+    )
     orphan_model_view_retention_days: int = DEFAULT_ORPHAN_MODEL_VIEW_RETENTION_DAYS
     wheel_cache_cap_bytes: int = DEFAULT_WHEEL_CACHE_CAP_BYTES
     custom_node_source_cache_cap_bytes: int = DEFAULT_CUSTOM_NODE_SOURCE_CACHE_CAP_BYTES
@@ -132,14 +134,20 @@ class RuntimeStorageGcResult:
 
     @property
     def deleted_paths(self) -> list[Path]:
-        return [decision.path for decision in self.decisions if decision.action is RuntimeStorageGcAction.DELETE]
+        return [
+            decision.path
+            for decision in self.decisions
+            if decision.action is RuntimeStorageGcAction.DELETE
+        ]
 
 
 @dataclass(frozen=True)
 class RuntimeStorageReferenceIndex:
     artifacts: list[RuntimeStorageArtifactMetadata]
 
-    def by_kind(self, kind: RuntimeStorageArtifactKind) -> list[RuntimeStorageArtifactMetadata]:
+    def by_kind(
+        self, kind: RuntimeStorageArtifactKind
+    ) -> list[RuntimeStorageArtifactMetadata]:
         return [artifact for artifact in self.artifacts if artifact.kind is kind]
 
     def to_diagnostics(self) -> dict[str, object]:
@@ -179,15 +187,15 @@ class RuntimeStorageGarbageCollector:
         *,
         roots: RuntimeStorageRoots,
         install_states: Iterable[InstallState],
+        log_store: DiagnosticsSink,
         runner_descriptors: Iterable[RunnerDescriptor] = (),
         config: RuntimeStorageGcConfig | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.roots = roots
         self.install_states = list(install_states)
         self.runner_descriptors = list(runner_descriptors)
         self.config = config or RuntimeStorageGcConfig()
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     def build_reference_index(self) -> RuntimeStorageReferenceIndex:
         workflow_records = _scan_workflow_records(
@@ -205,16 +213,21 @@ class RuntimeStorageGarbageCollector:
         root_states = [
             state
             for state in self.install_states
-            if state.status in {InstallStatus.READY, InstallStatus.PREPARED_NEEDS_INPUT_SETUP}
+            if state.status
+            in {InstallStatus.READY, InstallStatus.PREPARED_NEEDS_INPUT_SETUP}
         ]
         workflow_for_state = {
-            state.capsule_fingerprint: _workflow_id_for_state(state, workflows_by_capsule)
+            state.capsule_fingerprint: _workflow_id_for_state(
+                state, workflows_by_capsule
+            )
             for state in root_states
         }
         workflow_trust_by_id = {
-            workflow_for_state[state.capsule_fingerprint]: workflows_by_capsule.get(state.capsule_fingerprint).trust_level
-            if state.capsule_fingerprint in workflows_by_capsule
-            else None
+            workflow_for_state[state.capsule_fingerprint]: (
+                workflows_by_capsule.get(state.capsule_fingerprint).trust_level
+                if state.capsule_fingerprint in workflows_by_capsule
+                else None
+            )
             for state in root_states
         }
         referenced_dependency_envs: dict[str, set[str]] = {}
@@ -226,32 +239,49 @@ class RuntimeStorageGarbageCollector:
         for state in root_states:
             workflow_id = workflow_for_state[state.capsule_fingerprint]
             if state.dependency_env_fingerprint:
-                referenced_dependency_envs.setdefault(state.dependency_env_fingerprint, set()).add(workflow_id)
+                referenced_dependency_envs.setdefault(
+                    state.dependency_env_fingerprint, set()
+                ).add(workflow_id)
             if state.runner_workspace_fingerprint:
-                referenced_runner_workspaces.setdefault(state.runner_workspace_fingerprint, set()).add(workflow_id)
+                referenced_runner_workspaces.setdefault(
+                    state.runner_workspace_fingerprint, set()
+                ).add(workflow_id)
             for model_ref in state.model_references:
                 policy = model_reference_cleanup_policy(model_ref)
-                if model_ref.asset_ownership in {AssetOwnership.USER_LOCAL, AssetOwnership.EXTERNAL_REFERENCE}:
+                if model_ref.asset_ownership in {
+                    AssetOwnership.USER_LOCAL,
+                    AssetOwnership.EXTERNAL_REFERENCE,
+                }:
                     if policy.source_path is not None:
                         protected_user_sources.add(policy.source_path)
                 if policy.source_path is not None and model_ref.asset_ownership in {
                     AssetOwnership.NOOFY_DOWNLOADED,
                     AssetOwnership.NOOFY_IMPORTED,
                 }:
-                    referenced_model_blobs.setdefault(policy.source_path, set()).add(workflow_id)
+                    referenced_model_blobs.setdefault(policy.source_path, set()).add(
+                        workflow_id
+                    )
                 if policy.materialized_path is not None:
-                    model_view = _model_view_root_for_path(self.roots.model_materialized_dir, policy.materialized_path)
+                    model_view = _model_view_root_for_path(
+                        self.roots.model_materialized_dir, policy.materialized_path
+                    )
                     if model_view is not None:
-                        referenced_model_views.setdefault(model_view, set()).add(workflow_id)
+                        referenced_model_views.setdefault(model_view, set()).add(
+                            workflow_id
+                        )
 
         for runner in self.runner_descriptors:
             if not _runner_protects_artifacts(runner):
                 continue
             workflow_id = f"runner:{runner.runner_id}"
             if runner.dependency_env_fingerprint:
-                referenced_dependency_envs.setdefault(runner.dependency_env_fingerprint, set()).add(workflow_id)
+                referenced_dependency_envs.setdefault(
+                    runner.dependency_env_fingerprint, set()
+                ).add(workflow_id)
             if runner.runner_workspace_fingerprint:
-                referenced_runner_workspaces.setdefault(runner.runner_workspace_fingerprint, set()).add(workflow_id)
+                referenced_runner_workspaces.setdefault(
+                    runner.runner_workspace_fingerprint, set()
+                ).add(workflow_id)
             if runner.model_view_fingerprint:
                 referenced_model_views.setdefault(
                     self.roots.model_materialized_dir
@@ -260,24 +290,40 @@ class RuntimeStorageGarbageCollector:
                     set(),
                 ).add(workflow_id)
 
-        referenced_wheels = self._referenced_wheel_cache_paths(referenced_dependency_envs)
-        referenced_custom_node_sources = self._referenced_custom_node_source_cache_paths(
-            workflow_records,
-            workflow_for_state,
+        referenced_wheels = self._referenced_wheel_cache_paths(
+            referenced_dependency_envs
         )
-        package_archive_refs = self._referenced_package_archives(workflow_records, workflow_for_state)
+        referenced_custom_node_sources = (
+            self._referenced_custom_node_source_cache_paths(
+                workflow_records,
+                workflow_for_state,
+            )
+        )
+        package_archive_refs = self._referenced_package_archives(
+            workflow_records, workflow_for_state
+        )
 
         artifacts: list[RuntimeStorageArtifactMetadata] = []
         artifacts.extend(
-            self._dependency_env_artifacts(referenced_dependency_envs, workflow_trust_by_id)
+            self._dependency_env_artifacts(
+                referenced_dependency_envs, workflow_trust_by_id
+            )
         )
         artifacts.extend(
-            self._runner_workspace_artifacts(referenced_runner_workspaces, workflow_trust_by_id)
+            self._runner_workspace_artifacts(
+                referenced_runner_workspaces, workflow_trust_by_id
+            )
         )
         artifacts.extend(self._model_blob_artifacts(referenced_model_blobs))
         artifacts.extend(self._model_view_artifacts(referenced_model_views))
         artifacts.extend(self._transaction_artifacts())
-        artifacts.extend(self._cache_entry_artifacts(RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY, self.roots.wheel_cache_dir, referenced_wheels))
+        artifacts.extend(
+            self._cache_entry_artifacts(
+                RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY,
+                self.roots.wheel_cache_dir,
+                referenced_wheels,
+            )
+        )
         artifacts.extend(
             self._cache_entry_artifacts(
                 RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY,
@@ -328,9 +374,18 @@ class RuntimeStorageGarbageCollector:
             decisions.append(decision)
 
         for cap_kind, cap_bytes in (
-            (RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY, self.config.wheel_cache_cap_bytes),
-            (RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY, self.config.custom_node_source_cache_cap_bytes),
-            (RuntimeStorageArtifactKind.PACKAGE_ARCHIVE, self.config.package_archive_cache_cap_bytes),
+            (
+                RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY,
+                self.config.wheel_cache_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY,
+                self.config.custom_node_source_cache_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.PACKAGE_ARCHIVE,
+                self.config.package_archive_cache_cap_bytes,
+            ),
         ):
             cap_decisions = self._cap_decisions(index.by_kind(cap_kind), cap_bytes)
             for decision in cap_decisions:
@@ -370,7 +425,9 @@ class RuntimeStorageGarbageCollector:
     ) -> RuntimeStorageGcDecision | None:
         refs = tuple(sorted(artifact.referenced_workflows))
         if artifact.protected:
-            if artifact.status == "active_runner_protected" or _refs_include_runner(artifact.referenced_workflows):
+            if artifact.status == "active_runner_protected" or _refs_include_runner(
+                artifact.referenced_workflows
+            ):
                 action = RuntimeStorageGcAction.SKIP_ACTIVE_RUNNER
                 reason = "artifact is protected by an active or idle-warm runner"
             elif artifact.status == "user_local_source_protected":
@@ -430,8 +487,15 @@ class RuntimeStorageGarbageCollector:
                 artifact.size_bytes,
                 refs,
             )
-        if artifact.kind in {RuntimeStorageArtifactKind.DEPENDENCY_ENV, RuntimeStorageArtifactKind.RUNNER_WORKSPACE}:
-            if not _older_than(artifact.last_used_at or artifact.created_at, now, self.config.unreferenced_runtime_retention_days):
+        if artifact.kind in {
+            RuntimeStorageArtifactKind.DEPENDENCY_ENV,
+            RuntimeStorageArtifactKind.RUNNER_WORKSPACE,
+        }:
+            if not _older_than(
+                artifact.last_used_at or artifact.created_at,
+                now,
+                self.config.unreferenced_runtime_retention_days,
+            ):
                 return RuntimeStorageGcDecision(
                     artifact.kind,
                     artifact.path,
@@ -449,7 +513,11 @@ class RuntimeStorageGarbageCollector:
                 refs,
             )
         if artifact.kind is RuntimeStorageArtifactKind.MODEL_VIEW:
-            if not _older_than(artifact.last_used_at or artifact.created_at, now, self.config.orphan_model_view_retention_days):
+            if not _older_than(
+                artifact.last_used_at or artifact.created_at,
+                now,
+                self.config.orphan_model_view_retention_days,
+            ):
                 return RuntimeStorageGcDecision(
                     artifact.kind,
                     artifact.path,
@@ -466,8 +534,14 @@ class RuntimeStorageGarbageCollector:
                 artifact.size_bytes,
                 refs,
             )
-        if artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB and artifact.path.is_relative_to(self.roots.model_blobs_dir):
-            if artifact.size_bytes >= self.config.large_model_confirmation_bytes and not confirm_large_model_deletion:
+        if (
+            artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB
+            and artifact.path.is_relative_to(self.roots.model_blobs_dir)
+        ):
+            if (
+                artifact.size_bytes >= self.config.large_model_confirmation_bytes
+                and not confirm_large_model_deletion
+            ):
                 return RuntimeStorageGcDecision(
                     artifact.kind,
                     artifact.path,
@@ -502,7 +576,9 @@ class RuntimeStorageGarbageCollector:
             for artifact in artifacts
             if not artifact.protected and not artifact.referenced_workflows
         ]
-        for artifact in sorted(candidates, key=lambda item: item.last_used_at or item.created_at or ""):
+        for artifact in sorted(
+            candidates, key=lambda item: item.last_used_at or item.created_at or ""
+        ):
             decisions.append(
                 RuntimeStorageGcDecision(
                     artifact.kind,
@@ -518,7 +594,9 @@ class RuntimeStorageGarbageCollector:
                 break
         return decisions
 
-    def _apply_decision(self, decision: RuntimeStorageGcDecision, *, dry_run: bool) -> int:
+    def _apply_decision(
+        self, decision: RuntimeStorageGcDecision, *, dry_run: bool
+    ) -> int:
         if decision.action is not RuntimeStorageGcAction.DELETE:
             return 0
         size = decision.size_bytes
@@ -537,16 +615,30 @@ class RuntimeStorageGarbageCollector:
             if not path.is_dir():
                 continue
             manifest = _read_json(path / "manifest.json")
-            fingerprint = manifest.get("fingerprint") if isinstance(manifest.get("fingerprint"), str) else _fingerprint_from_dir(path, "dep-env-")
+            fingerprint = (
+                manifest.get("fingerprint")
+                if isinstance(manifest.get("fingerprint"), str)
+                else _fingerprint_from_dir(path, "dep-env-")
+            )
             workflows = set(refs.get(fingerprint, set()))
-            protected = fingerprint in self.config.pinned_dependency_env_fingerprints or _refs_include_runner(workflows)
+            protected = (
+                fingerprint in self.config.pinned_dependency_env_fingerprints
+                or _refs_include_runner(workflows)
+            )
             artifacts.append(
                 _metadata_for_path(
                     RuntimeStorageArtifactKind.DEPENDENCY_ENV,
                     path,
                     fingerprint=fingerprint,
                     referenced_workflows=workflows,
-                    status="active_runner_protected" if protected else str(manifest.get("status") or ("referenced" if workflows else "unreferenced")),
+                    status=(
+                        "active_runner_protected"
+                        if protected
+                        else str(
+                            manifest.get("status")
+                            or ("referenced" if workflows else "unreferenced")
+                        )
+                    ),
                     protected=protected,
                     trust_level=_trust_for_workflows(workflows, workflow_trust_by_id),
                     developer_details={"manifest": manifest},
@@ -564,16 +656,30 @@ class RuntimeStorageGarbageCollector:
             if not path.is_dir():
                 continue
             manifest = _read_json(path / "manifest.json")
-            fingerprint = manifest.get("fingerprint") if isinstance(manifest.get("fingerprint"), str) else _fingerprint_from_dir(path, "runner-workspace-")
+            fingerprint = (
+                manifest.get("fingerprint")
+                if isinstance(manifest.get("fingerprint"), str)
+                else _fingerprint_from_dir(path, "runner-workspace-")
+            )
             workflows = set(refs.get(fingerprint, set()))
-            protected = fingerprint in self.config.pinned_runner_workspace_fingerprints or _refs_include_runner(workflows)
+            protected = (
+                fingerprint in self.config.pinned_runner_workspace_fingerprints
+                or _refs_include_runner(workflows)
+            )
             artifacts.append(
                 _metadata_for_path(
                     RuntimeStorageArtifactKind.RUNNER_WORKSPACE,
                     path,
                     fingerprint=fingerprint,
                     referenced_workflows=workflows,
-                    status="active_runner_protected" if protected else str(manifest.get("status") or ("referenced" if workflows else "unreferenced")),
+                    status=(
+                        "active_runner_protected"
+                        if protected
+                        else str(
+                            manifest.get("status")
+                            or ("referenced" if workflows else "unreferenced")
+                        )
+                    ),
                     protected=protected,
                     trust_level=_trust_for_workflows(workflows, workflow_trust_by_id),
                     developer_details={"manifest": manifest},
@@ -581,7 +687,9 @@ class RuntimeStorageGarbageCollector:
             )
         return artifacts
 
-    def _model_blob_artifacts(self, refs: dict[Path, set[str]]) -> list[RuntimeStorageArtifactMetadata]:
+    def _model_blob_artifacts(
+        self, refs: dict[Path, set[str]]
+    ) -> list[RuntimeStorageArtifactMetadata]:
         artifacts: list[RuntimeStorageArtifactMetadata] = []
         for path in sorted(self.roots.model_blobs_dir.glob("*/blob")):
             if not path.is_file():
@@ -600,9 +708,13 @@ class RuntimeStorageGarbageCollector:
             )
         return artifacts
 
-    def _model_view_artifacts(self, refs: dict[Path, set[str]]) -> list[RuntimeStorageArtifactMetadata]:
+    def _model_view_artifacts(
+        self, refs: dict[Path, set[str]]
+    ) -> list[RuntimeStorageArtifactMetadata]:
         artifacts: list[RuntimeStorageArtifactMetadata] = []
-        for path in sorted((self.roots.model_materialized_dir / "views").glob("model-view-*")):
+        for path in sorted(
+            (self.roots.model_materialized_dir / "views").glob("model-view-*")
+        ):
             if not path.is_dir():
                 continue
             workflows = set(refs.get(path, set()))
@@ -612,7 +724,11 @@ class RuntimeStorageGarbageCollector:
                     path,
                     fingerprint=_fingerprint_from_dir(path, "model-view-"),
                     referenced_workflows=workflows,
-                    status="active_runner_protected" if _refs_include_runner(workflows) else ("referenced" if workflows else "orphan"),
+                    status=(
+                        "active_runner_protected"
+                        if _refs_include_runner(workflows)
+                        else ("referenced" if workflows else "orphan")
+                    ),
                     protected=_refs_include_runner(workflows),
                 )
             )
@@ -634,7 +750,9 @@ class RuntimeStorageGarbageCollector:
                 _metadata_for_path(
                     RuntimeStorageArtifactKind.TRANSACTION,
                     path,
-                    status=str(quarantine.get("status") or manifest.get("status") or "stale"),
+                    status=str(
+                        quarantine.get("status") or manifest.get("status") or "stale"
+                    ),
                     developer_details=details,
                 )
             )
@@ -661,11 +779,15 @@ class RuntimeStorageGarbageCollector:
             )
         return artifacts
 
-    def _package_archive_artifacts(self, refs: dict[Path, set[str]]) -> list[RuntimeStorageArtifactMetadata]:
+    def _package_archive_artifacts(
+        self, refs: dict[Path, set[str]]
+    ) -> list[RuntimeStorageArtifactMetadata]:
         artifacts: list[RuntimeStorageArtifactMetadata] = []
         if not self.roots.workflow_packages_store_dir.exists():
             return artifacts
-        for path in sorted(self.roots.workflow_packages_store_dir.glob("*/*/*/source-archive.noofy")):
+        for path in sorted(
+            self.roots.workflow_packages_store_dir.glob("*/*/*/source-archive.noofy")
+        ):
             workflows = set(refs.get(path, set()))
             artifacts.append(
                 _metadata_for_path(
@@ -677,11 +799,17 @@ class RuntimeStorageGarbageCollector:
             )
         return artifacts
 
-    def _referenced_wheel_cache_paths(self, dependency_env_refs: dict[str, set[str]]) -> dict[Path, set[str]]:
+    def _referenced_wheel_cache_paths(
+        self, dependency_env_refs: dict[str, set[str]]
+    ) -> dict[Path, set[str]]:
         store = ResolvedDependencyLockStore(self.roots.dependency_locks_dir)
         refs: dict[Path, set[str]] = {}
         for fingerprint, workflows in dependency_env_refs.items():
-            manifest = _read_json(self.roots.dependency_envs_dir / f"dep-env-{_safe_fingerprint(fingerprint)}" / "manifest.json")
+            manifest = _read_json(
+                self.roots.dependency_envs_dir
+                / f"dep-env-{_safe_fingerprint(fingerprint)}"
+                / "manifest.json"
+            )
             lock_hash = manifest.get("dependency_lock_hash")
             if not isinstance(lock_hash, str):
                 continue
@@ -691,7 +819,9 @@ class RuntimeStorageGarbageCollector:
                 continue
             for wheel in lock.wheels:
                 if wheel.approved_cache_ref:
-                    refs.setdefault(self.roots.wheel_cache_dir / wheel.approved_cache_ref, set()).update(workflows)
+                    refs.setdefault(
+                        self.roots.wheel_cache_dir / wheel.approved_cache_ref, set()
+                    ).update(workflows)
         return refs
 
     def _referenced_package_archives(
@@ -705,7 +835,9 @@ class RuntimeStorageGarbageCollector:
             if record.source_archive_path is None:
                 continue
             if record.workflow_id in rooted_workflows:
-                refs.setdefault(record.source_archive_path, set()).add(record.workflow_id)
+                refs.setdefault(record.source_archive_path, set()).add(
+                    record.workflow_id
+                )
         return refs
 
     def _referenced_custom_node_source_cache_paths(
@@ -720,7 +852,9 @@ class RuntimeStorageGarbageCollector:
                 continue
             for source_cache_ref in record.custom_node_source_cache_refs:
                 refs.setdefault(
-                    _custom_node_source_cache_entry_path(self.roots.custom_node_cache_dir, source_cache_ref),
+                    _custom_node_source_cache_entry_path(
+                        self.roots.custom_node_cache_dir, source_cache_ref
+                    ),
                     set(),
                 ).add(
                     record.workflow_id,
@@ -760,7 +894,9 @@ def _scan_workflow_records(roots: Iterable[Path]) -> list[_WorkflowRecord]:
     for root in roots:
         if not root.exists():
             continue
-        for package_path in sorted({*root.glob("*/package.json"), *root.glob("*/*/*/package.json")}):
+        for package_path in sorted(
+            {*root.glob("*/package.json"), *root.glob("*/*/*/package.json")}
+        ):
             package_dir = package_path.parent
             if package_dir in seen_package_dirs:
                 continue
@@ -772,21 +908,29 @@ def _scan_workflow_records(roots: Iterable[Path]) -> list[_WorkflowRecord]:
             records.append(
                 _WorkflowRecord(
                     workflow_id=package.metadata.id,
-                    capsule_fingerprint=capsule.runtime.capsule_fingerprint if capsule else None,
-                    trust_level=package.identity.trust_level if package.identity else None,
+                    capsule_fingerprint=(
+                        capsule.runtime.capsule_fingerprint if capsule else None
+                    ),
+                    trust_level=(
+                        package.identity.trust_level if package.identity else None
+                    ),
                     package_dir=package_dir,
-                    source_archive_path=(package_dir / "source-archive.noofy")
-                    if (package_dir / "source-archive.noofy").exists()
-                    else None,
-                    custom_node_source_cache_refs=tuple(
-                        sorted(
-                            custom_node.source_cache_ref
-                            for custom_node in capsule.custom_nodes
-                            if custom_node.source_cache_ref is not None
+                    source_archive_path=(
+                        (package_dir / "source-archive.noofy")
+                        if (package_dir / "source-archive.noofy").exists()
+                        else None
+                    ),
+                    custom_node_source_cache_refs=(
+                        tuple(
+                            sorted(
+                                custom_node.source_cache_ref
+                                for custom_node in capsule.custom_nodes
+                                if custom_node.source_cache_ref is not None
+                            )
                         )
-                    )
-                    if capsule
-                    else (),
+                        if capsule
+                        else ()
+                    ),
                 )
             )
     return records
@@ -798,7 +942,9 @@ def _custom_node_source_cache_entry_path(root: Path, source_cache_ref: str) -> P
 
 def _read_package(path: Path) -> WorkflowPackage | None:
     try:
-        return WorkflowPackage.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        return WorkflowPackage.model_validate(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
     except Exception:
         return None
 
@@ -810,17 +956,22 @@ def _read_capsule(path: Path) -> CapsuleLock | None:
         return None
 
 
-def _workflow_id_for_state(state: InstallState, workflows_by_capsule: dict[str, _WorkflowRecord]) -> str:
+def _workflow_id_for_state(
+    state: InstallState, workflows_by_capsule: dict[str, _WorkflowRecord]
+) -> str:
     record = workflows_by_capsule.get(state.capsule_fingerprint)
     return record.workflow_id if record else state.capsule_fingerprint
 
 
-def _trust_for_workflows(workflows: set[str], workflow_trust_by_id: dict[str, str | None]) -> str | None:
+def _trust_for_workflows(
+    workflows: set[str], workflow_trust_by_id: dict[str, str | None]
+) -> str | None:
     trust = sorted(
         {
             workflow_trust_by_id[workflow_id]
             for workflow_id in workflows
-            if workflow_id in workflow_trust_by_id and workflow_trust_by_id[workflow_id] is not None
+            if workflow_id in workflow_trust_by_id
+            and workflow_trust_by_id[workflow_id] is not None
         }
     )
     return trust[0] if len(trust) == 1 else None
@@ -869,7 +1020,12 @@ def _fingerprint_from_dir(path: Path, prefix: str) -> str:
 
 
 def _safe_fingerprint(fingerprint: str) -> str:
-    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return (
+        fingerprint.replace("sha256:", "")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+    )
 
 
 def _read_json(path: Path) -> dict[str, object]:

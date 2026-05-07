@@ -20,12 +20,14 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.isolation import SHA256_PATTERN, CustomNodeLock, TrustLevel
 from app.source_policy import SourcePolicy
 
 NODE_REGISTRY_SCHEMA_VERSION = "0.1.0"
-CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME = "noofy-custom-node-source-cache-manifest.json"
+CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME = (
+    "noofy-custom-node-source-cache-manifest.json"
+)
 _BLOCKED_FLOATING_REFS = {"", "head", "latest", "main", "master", "trunk"}
 
 
@@ -101,7 +103,9 @@ class NodeRegistrySource(BaseModel):
     @model_validator(mode="after")
     def _validate_pinned_ref(self) -> NodeRegistrySource:
         if self.source_ref.strip().casefold() in _BLOCKED_FLOATING_REFS:
-            raise ValueError("source_ref must be pinned, not a floating branch or alias")
+            raise ValueError(
+                "source_ref must be pinned, not a floating branch or alias"
+            )
         return self
 
 
@@ -190,13 +194,17 @@ class ResolvedCustomNodeSource(BaseModel):
             origins.append("registry-locked")
         return sorted(set(origins))
 
-    def to_custom_node_lock(self, cached_source: CachedCustomNodeSource | None = None) -> CustomNodeLock:
+    def to_custom_node_lock(
+        self, cached_source: CachedCustomNodeSource | None = None
+    ) -> CustomNodeLock:
         return CustomNodeLock(
             package_id=self.package_id,
             source=f"{self.resolution_method}:{self.package_id}",
             source_ref=self.source.source_ref,
             source_content_hash=self.source.source_content_hash,
-            source_cache_ref=cached_source.source_cache_ref if cached_source is not None else None,
+            source_cache_ref=(
+                cached_source.source_cache_ref if cached_source is not None else None
+            ),
             trust_level=self.trust_level,
             node_types=self.node_types,
         )
@@ -207,20 +215,24 @@ class NodeRegistryResolver:
         self,
         *,
         registry: NoofyNodeRegistry,
+        log_store: DiagnosticsSink,
         mappings: NodeTypeMappingCatalog | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.registry = registry
         self.mappings = mappings or NodeTypeMappingCatalog()
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
-    def resolve(self, request: CustomNodeSourceResolutionRequest) -> ResolvedCustomNodeSource:
+    def resolve(
+        self, request: CustomNodeSourceResolutionRequest
+    ) -> ResolvedCustomNodeSource:
         try:
             self._check_opt_in(request)
             self._check_source_policy_is_preparable(request)
             if request.explicit_source is not None:
                 self._check_explicit_source_policy(request)
-                package_id = request.package_id or _package_id_from_source_url(request.explicit_source.source_url)
+                package_id = request.package_id or _package_id_from_source_url(
+                    request.explicit_source.source_url
+                )
                 resolved = ResolvedCustomNodeSource(
                     package_id=package_id,
                     trust_level=request.trust_level,
@@ -231,7 +243,9 @@ class NodeRegistryResolver:
                         NodeRegistryDiagnostic(
                             code=NodeRegistryResolutionErrorCode.SOURCE_RESOLVED,
                             message="Resolved from explicit Noofy package metadata.",
-                            developer_details={"source_url": request.explicit_source.source_url},
+                            developer_details={
+                                "source_url": request.explicit_source.source_url
+                            },
                         )
                     ],
                 )
@@ -285,7 +299,9 @@ class NodeRegistryResolver:
                 developer_details={"trust_level": request.trust_level.value},
             )
 
-    def _check_source_policy_is_preparable(self, request: CustomNodeSourceResolutionRequest) -> None:
+    def _check_source_policy_is_preparable(
+        self, request: CustomNodeSourceResolutionRequest
+    ) -> None:
         policy = request.source_policy
         if policy is None:
             return
@@ -352,7 +368,9 @@ class NodeRegistryResolver:
             )
         return next(iter(matching_entries.values())), "registry_metadata"
 
-    def _check_explicit_source_policy(self, request: CustomNodeSourceResolutionRequest) -> None:
+    def _check_explicit_source_policy(
+        self, request: CustomNodeSourceResolutionRequest
+    ) -> None:
         policy = request.source_policy
         if policy is None:
             return
@@ -363,7 +381,11 @@ class NodeRegistryResolver:
                 developer_details={
                     "source_policy": policy.source_policy,
                     "allowed_source_origins": policy.allowed_source_origins,
-                    "source_url": request.explicit_source.source_url if request.explicit_source else None,
+                    "source_url": (
+                        request.explicit_source.source_url
+                        if request.explicit_source
+                        else None
+                    ),
                 },
             )
 
@@ -423,7 +445,10 @@ class NodeRegistryResolver:
         request: CustomNodeSourceResolutionRequest,
         entry: NodeRegistryEntry,
     ) -> None:
-        if request.trust_level is TrustLevel.NOOFY_VERIFIED and entry.trust_level is not TrustLevel.NOOFY_VERIFIED:
+        if (
+            request.trust_level is TrustLevel.NOOFY_VERIFIED
+            and entry.trust_level is not TrustLevel.NOOFY_VERIFIED
+        ):
             raise NodeRegistryResolutionError(
                 NodeRegistryResolutionErrorCode.POLICY_BLOCKED_TRUST_LEVEL,
                 "This verified workflow references an extension source that is not verified.",
@@ -473,12 +498,12 @@ class CustomNodeSourceCache:
         self,
         *,
         cache_dir: Path,
+        log_store: DiagnosticsSink,
         fetcher: SourceArchiveFetcher | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.cache_dir = cache_dir
         self.fetcher = fetcher or UrlLibSourceArchiveFetcher()
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     def materialize(
         self,
@@ -555,7 +580,10 @@ class CustomNodeSourceCache:
             "info",
             "Cached custom-node source archive",
             "runtime.node_registry",
-            details={"source_ref": source.source_ref, "source_cache_ref": f"{actual_hash}/source"},
+            details={
+                "source_ref": source.source_ref,
+                "source_cache_ref": f"{actual_hash}/source",
+            },
         )
         return CachedCustomNodeSource(
             source_cache_ref=f"{actual_hash}/source",
@@ -587,22 +615,34 @@ class CustomNodeSourceCache:
             raise NodeRegistryResolutionError(
                 NodeRegistryResolutionErrorCode.HASH_MISMATCH,
                 "Noofy could not verify a cached workflow extension.",
-                developer_details={"manifest_path": str(manifest_path), "mismatches": mismatches},
+                developer_details={
+                    "manifest_path": str(manifest_path),
+                    "mismatches": mismatches,
+                },
             )
 
 
 def _validate_source_policy(source: NodeRegistrySource) -> None:
-    if not source.source_ref or source.source_ref.strip().casefold() in _BLOCKED_FLOATING_REFS:
+    if (
+        not source.source_ref
+        or source.source_ref.strip().casefold() in _BLOCKED_FLOATING_REFS
+    ):
         raise NodeRegistryResolutionError(
             NodeRegistryResolutionErrorCode.UNPINNED_SOURCE_REF,
             "Noofy cannot prepare a workflow extension without a pinned source version.",
-            developer_details={"source_ref": source.source_ref, "source_url": source.source_url},
+            developer_details={
+                "source_ref": source.source_ref,
+                "source_url": source.source_url,
+            },
         )
     if not source.source_content_hash:
         raise NodeRegistryResolutionError(
             NodeRegistryResolutionErrorCode.MISSING_SOURCE_CONTENT_HASH,
             "Noofy cannot prepare a workflow extension without a verified source hash.",
-            developer_details={"source_ref": source.source_ref, "source_url": source.source_url},
+            developer_details={
+                "source_ref": source.source_ref,
+                "source_url": source.source_url,
+            },
         )
     if not source.source_url.startswith("https://"):
         raise NodeRegistryResolutionError(
@@ -673,7 +713,10 @@ def _extract_verified_zip_archive(
                     raise NodeRegistryResolutionError(
                         NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
                         "Noofy found an unsafe path inside a workflow extension archive.",
-                        developer_details={"archive_path": member.filename, "reason": "symlink"},
+                        developer_details={
+                            "archive_path": member.filename,
+                            "reason": "symlink",
+                        },
                     )
                 safe_name = _safe_relative_posix_path(relative_name, allow_nested=True)
                 destination = target_dir / safe_name
@@ -685,7 +728,10 @@ def _extract_verified_zip_archive(
                 raise NodeRegistryResolutionError(
                     NodeRegistryResolutionErrorCode.UNSUPPORTED_ARCHIVE_FORMAT,
                     "Noofy could not read the workflow extension archive.",
-                    developer_details={"reason": "archive_subdir_not_found", "archive_subdir": archive_subdir},
+                    developer_details={
+                        "reason": "archive_subdir_not_found",
+                        "archive_subdir": archive_subdir,
+                    },
                 )
     except zipfile.BadZipFile as exc:
         raise NodeRegistryResolutionError(
@@ -707,7 +753,11 @@ def _safe_relative_posix_path(value: str, *, allow_nested: bool) -> str:
             developer_details={"path": value, "reason": "backslash"},
         )
     path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise NodeRegistryResolutionError(
             NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
             "Noofy found an unsafe path inside a workflow extension archive.",
@@ -732,5 +782,7 @@ def _normalize_package_id(value: str) -> str:
 
 def _package_id_from_source_url(source_url: str) -> str:
     stem = source_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".zip")
-    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in stem)
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "-" for char in stem
+    )
     return cleaned.strip(".-_") or "custom-node"

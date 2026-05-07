@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import httpx
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.isolation import (
     CapsuleLock,
     SmokeStageResult,
@@ -29,11 +29,19 @@ from app.runtime.isolation import (
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.workspace_preparer import PreparedRuntimeWorkspace
 
-RunnerSmokeLaunchSpecFactory = Callable[[CapsuleLock, PreparedRuntimeWorkspace], RunnerLaunchSpec]
+RunnerSmokeLaunchSpecFactory = Callable[
+    [CapsuleLock, PreparedRuntimeWorkspace], RunnerLaunchSpec
+]
 RunnerObjectInfoFetcher = Callable[[str], Awaitable[Mapping[str, object]]]
-RunnerPromptExecutor = Callable[[str, dict[str, object], float], Awaitable[Mapping[str, object] | None]]
-DependencyImportChecker = Callable[[PreparedRuntimeWorkspace], Awaitable[SmokeStageResult]]
-DependencyImportCommandRunner = Callable[[list[str], PreparedRuntimeWorkspace], Awaitable[tuple[int, str]]]
+RunnerPromptExecutor = Callable[
+    [str, dict[str, object], float], Awaitable[Mapping[str, object] | None]
+]
+DependencyImportChecker = Callable[
+    [PreparedRuntimeWorkspace], Awaitable[SmokeStageResult]
+]
+DependencyImportCommandRunner = Callable[
+    [list[str], PreparedRuntimeWorkspace], Awaitable[tuple[int, str]]
+]
 
 
 @dataclass(frozen=True)
@@ -50,7 +58,9 @@ class SmokeExecutionFixture:
 
 class SmokePromptTimeoutError(TimeoutError):
     def __init__(self, *, prompt_id: str | None, timeout_seconds: float) -> None:
-        super().__init__(f"Timed out waiting for ComfyUI smoke prompt after {timeout_seconds:g} seconds.")
+        super().__init__(
+            f"Timed out waiting for ComfyUI smoke prompt after {timeout_seconds:g} seconds."
+        )
         self.prompt_id = prompt_id
         self.timeout_seconds = timeout_seconds
 
@@ -61,7 +71,9 @@ class RunnerSmokeTestError(RuntimeError):
         self.report = report
 
 
-SmokeExecutionFixtureResolver = Callable[[CapsuleLock, PreparedRuntimeWorkspace], SmokeExecutionFixture | None]
+SmokeExecutionFixtureResolver = Callable[
+    [CapsuleLock, PreparedRuntimeWorkspace], SmokeExecutionFixture | None
+]
 
 
 class RunnerSmokeTester:
@@ -70,21 +82,23 @@ class RunnerSmokeTester:
         *,
         process_supervisor: RunnerProcessSupervisor,
         launch_spec_factory: RunnerSmokeLaunchSpecFactory,
+        log_store: DiagnosticsSink,
         execution_fixture: SmokeExecutionFixture | None = None,
         execution_fixture_resolver: SmokeExecutionFixtureResolver | None = None,
         dependency_import_checker: DependencyImportChecker | None = None,
         object_info_fetcher: RunnerObjectInfoFetcher | None = None,
         prompt_executor: RunnerPromptExecutor | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.process_supervisor = process_supervisor
         self.launch_spec_factory = launch_spec_factory
         self.execution_fixture = execution_fixture
         self.execution_fixture_resolver = execution_fixture_resolver
-        self.dependency_import_checker = dependency_import_checker or _check_dependency_imports
+        self.dependency_import_checker = (
+            dependency_import_checker or _check_dependency_imports
+        )
         self.object_info_fetcher = object_info_fetcher or _fetch_object_info
         self.prompt_executor = prompt_executor or _execute_prompt_and_wait
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     async def run(
         self,
@@ -113,7 +127,11 @@ class RunnerSmokeTester:
                 workflow_execution=SmokeStageResult(status=SmokeStageStatus.NOT_RUN),
             )
             self.log_store.add(
-                "error" if dependency_env.status is SmokeStageStatus.FAILED else "warning",
+                (
+                    "error"
+                    if dependency_env.status is SmokeStageStatus.FAILED
+                    else "warning"
+                ),
                 "Runner smoke test blocked by dependency environment",
                 "runtime.smoke_test",
                 workflow_id=capsule_lock.workflow.package_id,
@@ -151,7 +169,9 @@ class RunnerSmokeTester:
                     "smoke_report": report.model_dump(mode="json"),
                 },
             )
-            raise RunnerSmokeTestError(f"Runner smoke test failed: {exc}", report=report) from exc
+            raise RunnerSmokeTestError(
+                f"Runner smoke test failed: {exc}", report=report
+            ) from exc
         finally:
             if handle is None:
                 await self.process_supervisor.stop(spec.runner_id)
@@ -161,7 +181,9 @@ class RunnerSmokeTester:
                 capsule_lock,
                 handle.descriptor.base_url,
                 dependency_env=dependency_env,
-                execution_fixture=self._execution_fixture(capsule_lock, prepared_workspace),
+                execution_fixture=self._execution_fixture(
+                    capsule_lock, prepared_workspace
+                ),
             )
         finally:
             await self.process_supervisor.stop(spec.runner_id)
@@ -195,21 +217,27 @@ class RunnerSmokeTester:
         )
 
         object_info: Mapping[str, object] | None = None
-        required_node_types = _required_object_info_node_types(capsule_lock, execution_fixture)
+        required_node_types = _required_object_info_node_types(
+            capsule_lock, execution_fixture
+        )
         if required_node_types:
             try:
                 object_info = await self.object_info_fetcher(base_url)
             except Exception as exc:
                 return SmokeTestReport(
                     dependency_env=dependency_env,
-                    custom_node_import=_object_info_failure_stage(capsule_lock, str(exc)),
+                    custom_node_import=_object_info_failure_stage(
+                        capsule_lock, str(exc)
+                    ),
                     runner_health=runner_health,
-                    workflow_execution=SmokeStageResult(
-                        status=SmokeStageStatus.FAILED,
-                        message=f"Could not read runner node metadata: {exc}",
-                    )
-                    if execution_fixture is not None
-                    else workflow_execution,
+                    workflow_execution=(
+                        SmokeStageResult(
+                            status=SmokeStageStatus.FAILED,
+                            message=f"Could not read runner node metadata: {exc}",
+                        )
+                        if execution_fixture is not None
+                        else workflow_execution
+                    ),
                 )
 
         if capsule_lock.custom_nodes:
@@ -230,7 +258,9 @@ class RunnerSmokeTester:
                 workflow_execution=workflow_execution,
             )
 
-        missing_fixture_nodes = _missing_node_types(object_info or {}, execution_fixture.required_node_types)
+        missing_fixture_nodes = _missing_node_types(
+            object_info or {}, execution_fixture.required_node_types
+        )
         if missing_fixture_nodes:
             return SmokeTestReport(
                 dependency_env=dependency_env,
@@ -246,9 +276,11 @@ class RunnerSmokeTester:
                 ),
             )
 
-        custom_node_execution_failure, custom_node_execution_details = _custom_node_execution_details(
-            capsule_lock,
-            execution_fixture,
+        custom_node_execution_failure, custom_node_execution_details = (
+            _custom_node_execution_details(
+                capsule_lock,
+                execution_fixture,
+            )
         )
         if custom_node_execution_failure is not None:
             return SmokeTestReport(
@@ -342,7 +374,9 @@ def _custom_node_import_stage(
     )
 
 
-def _object_info_failure_stage(capsule_lock: CapsuleLock, error: str) -> SmokeStageResult:
+def _object_info_failure_stage(
+    capsule_lock: CapsuleLock, error: str
+) -> SmokeStageResult:
     if capsule_lock.custom_nodes:
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
@@ -357,7 +391,9 @@ def _required_object_info_node_types(
 ) -> list[str]:
     required = _custom_node_types(capsule_lock)
     if execution_fixture is not None:
-        required.extend(str(node_type) for node_type in execution_fixture.required_node_types)
+        required.extend(
+            str(node_type) for node_type in execution_fixture.required_node_types
+        )
     return sorted(set(required))
 
 
@@ -374,7 +410,13 @@ def _missing_node_types(
     required_node_types: Sequence[str],
 ) -> list[str]:
     available = {str(node_type) for node_type in object_info.keys()}
-    return sorted({str(node_type) for node_type in required_node_types if str(node_type) not in available})
+    return sorted(
+        {
+            str(node_type)
+            for node_type in required_node_types
+            if str(node_type) not in available
+        }
+    )
 
 
 def _custom_node_execution_details(
@@ -422,7 +464,10 @@ def _workflow_execution_stage_result(
         **dict(execution_details),
     }
     output_node_count = _optional_int(execution_details.get("output_node_count"))
-    if fixture.expected_output_node_count is not None and output_node_count != fixture.expected_output_node_count:
+    if (
+        fixture.expected_output_node_count is not None
+        and output_node_count != fixture.expected_output_node_count
+    ):
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
             message="Workflow execution smoke output count did not match fixture expectation.",
@@ -435,14 +480,19 @@ def _workflow_execution_stage_result(
 
     if fixture.expected_output_node_ids:
         actual_ids = _string_set(execution_details.get("output_node_ids"))
-        missing_ids = sorted(set(str(node_id) for node_id in fixture.expected_output_node_ids) - actual_ids)
+        missing_ids = sorted(
+            set(str(node_id) for node_id in fixture.expected_output_node_ids)
+            - actual_ids
+        )
         if missing_ids:
             return SmokeStageResult(
                 status=SmokeStageStatus.FAILED,
                 message="Workflow execution smoke outputs are missing expected node ids.",
                 details={
                     **details,
-                    "expected_output_node_ids": sorted(str(node_id) for node_id in fixture.expected_output_node_ids),
+                    "expected_output_node_ids": sorted(
+                        str(node_id) for node_id in fixture.expected_output_node_ids
+                    ),
                     "missing_output_node_ids": missing_ids,
                 },
             )
@@ -478,7 +528,9 @@ async def _fetch_object_info(base_url: str) -> Mapping[str, object]:
     return payload
 
 
-async def _check_dependency_imports(prepared_workspace: PreparedRuntimeWorkspace) -> SmokeStageResult:
+async def _check_dependency_imports(
+    prepared_workspace: PreparedRuntimeWorkspace,
+) -> SmokeStageResult:
     return await _check_dependency_imports_with_runner(
         prepared_workspace,
         command_runner=_run_dependency_import_command,
@@ -538,7 +590,9 @@ async def _check_dependency_imports_with_runner(
         "    for name in names:\n"
         "        importlib.import_module(name)\n"
     )
-    returncode, output = await command_runner([str(python_path), "-c", script], prepared_workspace)
+    returncode, output = await command_runner(
+        [str(python_path), "-c", script], prepared_workspace
+    )
     if returncode != 0:
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
@@ -571,7 +625,9 @@ async def _run_dependency_import_command(
     return process.returncode or 0, output
 
 
-def _dependency_import_targets(lock_payload: Mapping[str, object]) -> list[dict[str, object]]:
+def _dependency_import_targets(
+    lock_payload: Mapping[str, object],
+) -> list[dict[str, object]]:
     wheels = lock_payload.get("wheels", [])
     if not isinstance(wheels, list):
         return []
@@ -631,17 +687,31 @@ async def _execute_prompt_and_wait(
 
             deadline = asyncio.get_running_loop().time() + timeout_seconds
             while asyncio.get_running_loop().time() < deadline:
-                history_response = await client.get(f"{base_url.rstrip('/')}/history/{prompt_id}")
+                history_response = await client.get(
+                    f"{base_url.rstrip('/')}/history/{prompt_id}"
+                )
                 history_response.raise_for_status()
                 history = history_response.json()
                 if isinstance(history, dict) and prompt_id in history:
                     entry = history[prompt_id]
                     if isinstance(entry, dict):
                         status = entry.get("status", {})
-                        if isinstance(status, dict) and status.get("completed") is False:
-                            raise RuntimeError(str(status.get("messages") or "ComfyUI smoke prompt failed."))
+                        if (
+                            isinstance(status, dict)
+                            and status.get("completed") is False
+                        ):
+                            raise RuntimeError(
+                                str(
+                                    status.get("messages")
+                                    or "ComfyUI smoke prompt failed."
+                                )
+                            )
                         outputs = entry.get("outputs", {})
-                        output_node_ids = sorted(str(node_id) for node_id in outputs.keys()) if isinstance(outputs, dict) else []
+                        output_node_ids = (
+                            sorted(str(node_id) for node_id in outputs.keys())
+                            if isinstance(outputs, dict)
+                            else []
+                        )
                         return {
                             "prompt_id": prompt_id,
                             "output_node_count": len(output_node_ids),
@@ -649,5 +719,7 @@ async def _execute_prompt_and_wait(
                         }
                 await asyncio.sleep(0.25)
     except httpx.TimeoutException as exc:
-        raise SmokePromptTimeoutError(prompt_id=prompt_id, timeout_seconds=timeout_seconds) from exc
+        raise SmokePromptTimeoutError(
+            prompt_id=prompt_id, timeout_seconds=timeout_seconds
+        ) from exc
     raise SmokePromptTimeoutError(prompt_id=prompt_id, timeout_seconds=timeout_seconds)

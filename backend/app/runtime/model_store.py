@@ -21,7 +21,7 @@ from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.isolation import InstalledModelReference, ModelLock
 from app.source_policy import ModelSourceTrust, SourcePolicy
@@ -91,7 +91,9 @@ class ModelViewMaterialization:
 
     @property
     def is_staged(self) -> bool:
-        return self.final_view_path is not None and self.view_path != self.final_view_path
+        return (
+            self.final_view_path is not None and self.view_path != self.final_view_path
+        )
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,7 @@ class ModelStore:
         refs_dir: Path,
         materialized_dir: Path,
         transactions_dir: Path,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
         downloader: DownloadFn | None = None,
         local_model_roots: list[Path] | None = None,
         symlink_capability: bool | None = None,
@@ -168,7 +170,7 @@ class ModelStore:
         self.refs_dir = refs_dir
         self.materialized_dir = materialized_dir
         self.transactions_dir = transactions_dir
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self._downloader = downloader
         self.local_model_roots = local_model_roots or []
         self._symlink_capability = symlink_capability
@@ -186,7 +188,9 @@ class ModelStore:
         """
         sha256 = _normalize_sha256(model_lock.sha256)
         blob_path = self._blob_path(sha256)
-        self._materialized_path(model_lock)  # Validate lock-derived output path before IO.
+        self._materialized_path(
+            model_lock
+        )  # Validate lock-derived output path before IO.
 
         if blob_path.exists():
             self._verify_existing_blob(model_lock, blob_path, sha256)
@@ -216,7 +220,9 @@ class ModelStore:
         txn_dir = self._open_transaction(model_lock.id)
         download_target = txn_dir / "blob"
         try:
-            bytes_written = await self._download_with_fallback(model_lock.source_urls, download_target)
+            bytes_written = await self._download_with_fallback(
+                model_lock.source_urls, download_target
+            )
             if bytes_written != model_lock.size_bytes and model_lock.size_bytes > 0:
                 raise ModelDownloadError(
                     f"Size mismatch for {model_lock.id}: "
@@ -284,7 +290,9 @@ class ModelStore:
             model_locks=model_locks,
             local_model_requirements=local_model_requirements or [],
         )
-        resolved_local_models = self._resolve_local_models(local_model_requirements or [])
+        resolved_local_models = self._resolve_local_models(
+            local_model_requirements or []
+        )
         view_fingerprint = model_view_fingerprint(
             view_id=view_id,
             model_locks=model_locks,
@@ -293,7 +301,9 @@ class ModelStore:
         final_view_path = self._model_view_dir(view_fingerprint)
         view_path = final_view_path
         if staged_views_dir is not None:
-            view_path = staged_views_dir / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+            view_path = (
+                staged_views_dir / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+            )
             if view_path.exists():
                 shutil.rmtree(view_path)
         refs: list[InstalledModelReference] = []
@@ -303,7 +313,11 @@ class ModelStore:
             existing = seen_targets.get(key)
             sha256 = _normalize_sha256(model_lock.sha256)
             if existing is not None and existing != sha256:
-                raise ModelDownloadError(_model_view_conflict_message(model_lock.comfyui_folder, model_lock.filename))
+                raise ModelDownloadError(
+                    _model_view_conflict_message(
+                        model_lock.comfyui_folder, model_lock.filename
+                    )
+                )
             seen_targets[key] = sha256
         for local_model in resolved_local_models:
             key = (
@@ -327,7 +341,9 @@ class ModelStore:
             )
             target = self._model_view_path(view_path, model_lock)
             strategy = self._materialize_link_or_copy(blob_path, target)
-            verified = self._verify_materialized_file(target, sha256, model_lock.size_bytes)
+            verified = self._verify_materialized_file(
+                target, sha256, model_lock.size_bytes
+            )
             if not verified:
                 raise ModelDownloadError(
                     "Materialized model view file failed verification for "
@@ -371,7 +387,9 @@ class ModelStore:
                 filename=requirement.filename,
             )
             strategy = self._materialize_link_or_copy(local_model.source_path, target)
-            verified = self._verify_materialized_file(target, local_model.sha256, requirement.size_bytes)
+            verified = self._verify_materialized_file(
+                target, local_model.sha256, requirement.size_bytes
+            )
             if not verified:
                 raise ModelDownloadError(
                     "Materialized local model view file failed verification for "
@@ -415,9 +433,13 @@ class ModelStore:
             final_view_path=final_view_path,
         )
 
-    def promote_model_view(self, materialization: ModelViewMaterialization) -> ModelViewMaterialization:
+    def promote_model_view(
+        self, materialization: ModelViewMaterialization
+    ) -> ModelViewMaterialization:
         """Promote a staged model view into the canonical materialized view path."""
-        final_view_path = materialization.final_view_path or self._model_view_dir(materialization.view_fingerprint)
+        final_view_path = materialization.final_view_path or self._model_view_dir(
+            materialization.view_fingerprint
+        )
         if materialization.view_path == final_view_path:
             return ModelViewMaterialization(
                 view_fingerprint=materialization.view_fingerprint,
@@ -437,7 +459,9 @@ class ModelStore:
                 old_view_path=materialization.view_path,
                 new_view_path=final_view_path,
             )
-            self._write_model_view_manifest(final_view_path, materialization.view_fingerprint, promoted_refs)
+            self._write_model_view_manifest(
+                final_view_path, materialization.view_fingerprint, promoted_refs
+            )
 
         return ModelViewMaterialization(
             view_fingerprint=materialization.view_fingerprint,
@@ -468,11 +492,15 @@ class ModelStore:
                     continue
                 blob_path_value = reference.get("blob_path")
                 materialized_path_value = reference.get("materialized_path")
-                if not isinstance(blob_path_value, str) or not isinstance(materialized_path_value, str):
+                if not isinstance(blob_path_value, str) or not isinstance(
+                    materialized_path_value, str
+                ):
                     continue
                 blob_path = Path(blob_path_value)
                 materialized_path = Path(materialized_path_value)
-                if blob_path.exists() or not (materialized_path.exists() or materialized_path.is_symlink()):
+                if blob_path.exists() or not (
+                    materialized_path.exists() or materialized_path.is_symlink()
+                ):
                     continue
                 try:
                     materialized_path.unlink()
@@ -489,15 +517,23 @@ class ModelStore:
         return self.blobs_dir / sha256 / "blob"
 
     def _model_view_dir(self, view_fingerprint: str) -> Path:
-        return self.materialized_dir / "views" / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+        return (
+            self.materialized_dir
+            / "views"
+            / f"model-view-{_safe_fingerprint(view_fingerprint)}"
+        )
 
     def _ref_path(self, model_id: str) -> Path:
         safe = model_id.replace("/", "_").replace("\\", "_").replace(":", "_")
         return self.refs_dir / f"{safe}.json"
 
     def _materialized_path(self, model_lock: ModelLock) -> Path:
-        folder_parts = _safe_relative_parts(model_lock.comfyui_folder, field_name="comfyui_folder")
-        filename_parts = _safe_relative_parts(model_lock.filename, field_name="filename")
+        folder_parts = _safe_relative_parts(
+            model_lock.comfyui_folder, field_name="comfyui_folder"
+        )
+        filename_parts = _safe_relative_parts(
+            model_lock.filename, field_name="filename"
+        )
         return self.materialized_dir.joinpath(*folder_parts, *filename_parts)
 
     def _model_view_path(self, view_path: Path, model_lock: ModelLock) -> Path:
@@ -507,7 +543,9 @@ class ModelStore:
             filename=model_lock.filename,
         )
 
-    def _model_view_requirement_path(self, view_path: Path, *, comfyui_folder: str, filename: str) -> Path:
+    def _model_view_requirement_path(
+        self, view_path: Path, *, comfyui_folder: str, filename: str
+    ) -> Path:
         folder_parts = _safe_relative_parts(comfyui_folder, field_name="comfyui_folder")
         filename_parts = _safe_relative_parts(filename, field_name="filename")
         return view_path.joinpath(*folder_parts, *filename_parts)
@@ -516,7 +554,9 @@ class ModelStore:
     # Internal: transactions
     # ------------------------------------------------------------------
 
-    def _open_transaction(self, model_id: str, *, transactions_dir: Path | None = None) -> Path:
+    def _open_transaction(
+        self, model_id: str, *, transactions_dir: Path | None = None
+    ) -> Path:
         root_dir = transactions_dir or self.transactions_dir
         root_dir.mkdir(parents=True, exist_ok=True)
         safe_id = model_id.replace("/", "_")
@@ -533,7 +573,9 @@ class ModelStore:
         with self._lock:
             os.replace(source, blob_path)
 
-    def _verify_existing_blob(self, model_lock: ModelLock, blob_path: Path, sha256: str) -> None:
+    def _verify_existing_blob(
+        self, model_lock: ModelLock, blob_path: Path, sha256: str
+    ) -> None:
         size = blob_path.stat().st_size
         if model_lock.size_bytes > 0 and size != model_lock.size_bytes:
             raise ModelDownloadError(
@@ -599,10 +641,14 @@ class ModelStore:
                 f"No source URLs available to download model {model_lock.id}"
             )
 
-        txn_dir = self._open_transaction(model_lock.id, transactions_dir=transactions_dir)
+        txn_dir = self._open_transaction(
+            model_lock.id, transactions_dir=transactions_dir
+        )
         download_target = txn_dir / "blob"
         try:
-            bytes_written = await self._download_with_fallback(model_lock.source_urls, download_target)
+            bytes_written = await self._download_with_fallback(
+                model_lock.source_urls, download_target
+            )
             if bytes_written != model_lock.size_bytes and model_lock.size_bytes > 0:
                 raise ModelDownloadError(
                     f"Size mismatch for {model_lock.id}: "
@@ -711,16 +757,22 @@ class ModelStore:
             self._symlink_capability = (
                 True
                 if sys.platform != "win32"
-                else probe_symlink_capability(self.transactions_dir, log_store=self.log_store)
+                else probe_symlink_capability(
+                    self.transactions_dir, log_store=self.log_store
+                )
             )
         return self._symlink_capability
 
-    def _verify_materialized_file(self, path: Path, sha256: str, size_bytes: int) -> bool:
+    def _verify_materialized_file(
+        self, path: Path, sha256: str, size_bytes: int
+    ) -> bool:
         if size_bytes > 0 and path.stat().st_size != size_bytes:
             return False
         return _sha256_file(path) == sha256
 
-    def _resolve_local_models(self, requirements: list[LocalModelRequirement]) -> list[ResolvedLocalModel]:
+    def _resolve_local_models(
+        self, requirements: list[LocalModelRequirement]
+    ) -> list[ResolvedLocalModel]:
         resolved: list[ResolvedLocalModel] = []
         for requirement in requirements:
             source_path = self._find_local_candidate(requirement)
@@ -749,8 +801,12 @@ class ModelStore:
         return resolved
 
     def _find_local_candidate(self, requirement: LocalModelRequirement) -> Path:
-        folder_parts = _safe_relative_parts(requirement.comfyui_folder, field_name="comfyui_folder")
-        filename_parts = _safe_relative_parts(requirement.filename, field_name="filename")
+        folder_parts = _safe_relative_parts(
+            requirement.comfyui_folder, field_name="comfyui_folder"
+        )
+        filename_parts = _safe_relative_parts(
+            requirement.filename, field_name="filename"
+        )
         checked: list[str] = []
         for root in self.local_model_roots:
             candidate = root.joinpath(*folder_parts, *filename_parts)
@@ -778,7 +834,9 @@ class ModelStore:
         if source_policy is None:
             return
         if not source_policy.automatic_preparation_allowed:
-            raise ModelSourcePolicyError("Model preparation is blocked by the workflow source policy.")
+            raise ModelSourcePolicyError(
+                "Model preparation is blocked by the workflow source policy."
+            )
         allowed_origins = set(source_policy.allowed_model_origins)
         if model_locks and source_policy.model_source_trust not in {
             ModelSourceTrust.HASHED,
@@ -817,7 +875,9 @@ class ModelStore:
         manifest = {
             "schema_version": MODEL_VIEW_SCHEMA_VERSION,
             "view_fingerprint": view_fingerprint,
-            "model_references": [ref.model_dump(mode="json", exclude_none=True) for ref in refs],
+            "model_references": [
+                ref.model_dump(mode="json", exclude_none=True) for ref in refs
+            ],
         }
         target = view_path / "manifest.json"
         tmp = target.with_suffix(".json.tmp")
@@ -825,7 +885,9 @@ class ModelStore:
         tmp.replace(target)
 
 
-def probe_symlink_capability(probe_dir: Path, *, log_store: LogStore | None = None) -> bool:
+def probe_symlink_capability(
+    probe_dir: Path, *, log_store: DiagnosticsSink | None = None
+) -> bool:
     probe_dir.mkdir(parents=True, exist_ok=True)
     source = probe_dir / f"symlink-probe-source-{uuid.uuid4().hex}"
     link = probe_dir / f"symlink-probe-link-{uuid.uuid4().hex}"
@@ -872,7 +934,11 @@ def model_view_fingerprint(
                     }
                     for model in model_locks
                 ],
-                key=lambda item: (item["comfyui_folder"], item["filename"], item["sha256"]),
+                key=lambda item: (
+                    item["comfyui_folder"],
+                    item["filename"],
+                    item["sha256"],
+                ),
             ),
             "local_models": sorted(
                 [
@@ -886,7 +952,11 @@ def model_view_fingerprint(
                     }
                     for model in local_models
                 ],
-                key=lambda item: (item["comfyui_folder"], item["filename"], item["sha256"]),
+                key=lambda item: (
+                    item["comfyui_folder"],
+                    item["filename"],
+                    item["sha256"],
+                ),
             ),
         }
     )
@@ -910,7 +980,12 @@ def _references_for_promoted_view(
 
 
 def _safe_fingerprint(fingerprint: str) -> str:
-    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return (
+        fingerprint.replace("sha256:", "")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+    )
 
 
 def _model_view_conflict_message(comfyui_folder: str, filename: str) -> str:
@@ -929,7 +1004,10 @@ def _model_lock_origins(model_lock: ModelLock) -> set[str]:
 
 
 def _validate_materialized_target_path(target: Path) -> None:
-    if sys.platform == "win32" and len(str(target)) > WINDOWS_MAX_MATERIALIZED_PATH_CHARS:
+    if (
+        sys.platform == "win32"
+        and len(str(target)) > WINDOWS_MAX_MATERIALIZED_PATH_CHARS
+    ):
         raise ModelDownloadError(
             "Materialized model path is too long for the Windows runtime profile: "
             f"{target}"

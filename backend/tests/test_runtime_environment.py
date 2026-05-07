@@ -31,6 +31,7 @@ async def test_environment_reports_missing_python_executable(tmp_path: Path) -> 
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(tmp_path / "missing-python"),
+        log_store=LogStore(),
     )
 
     status = await environment.status()
@@ -47,6 +48,7 @@ async def test_bootstrap_reports_missing_requirements_file(tmp_path: Path) -> No
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        log_store=LogStore(),
     )
 
     result = await environment.bootstrap()
@@ -71,6 +73,7 @@ async def test_environment_reports_dependency_check_failure(tmp_path: Path) -> N
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(runtime_python),
         command_runner=command_runner,
+        log_store=LogStore(),
     )
 
     status = await environment.status()
@@ -96,6 +99,7 @@ async def test_bootstrap_reports_environment_already_prepared(tmp_path: Path) ->
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(runtime_python),
         command_runner=command_runner,
+        log_store=LogStore(),
     )
 
     result = await environment.bootstrap()
@@ -124,11 +128,16 @@ async def test_bootstrap_failure_is_logged(tmp_path: Path) -> None:
 
     assert result.status == "bootstrap_failed"
     assert log_store.latest_error() is not None
-    assert log_store.latest_error().message == "Create ComfyUI runtime virtual environment failed"
+    assert (
+        log_store.latest_error().message
+        == "Create ComfyUI runtime virtual environment failed"
+    )
 
 
 @pytest.mark.anyio
-async def test_bootstrap_installs_torch_before_comfyui_requirements(tmp_path: Path) -> None:
+async def test_bootstrap_installs_torch_before_comfyui_requirements(
+    tmp_path: Path,
+) -> None:
     repo_dir = create_repo(tmp_path)
     command_calls: list[list[str]] = []
     runtime_dir = tmp_path / "runtime"
@@ -153,12 +162,17 @@ async def test_bootstrap_installs_torch_before_comfyui_requirements(tmp_path: Pa
             accelerator="cpu",
         ),
         command_runner=command_runner,
+        log_store=LogStore(),
     )
 
     result = await environment.bootstrap()
 
-    torch_install_index = next(index for index, command in enumerate(command_calls) if "torch" in command)
-    requirements_index = next(index for index, command in enumerate(command_calls) if "-r" in command)
+    torch_install_index = next(
+        index for index, command in enumerate(command_calls) if "torch" in command
+    )
+    requirements_index = next(
+        index for index, command in enumerate(command_calls) if "-r" in command
+    )
     assert result.status == "prepared"
     assert torch_install_index < requirements_index
 

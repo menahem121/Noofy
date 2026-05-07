@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import (
     RuntimeBootstrapResult,
     RuntimeDependencyStatus,
@@ -31,13 +31,13 @@ class RuntimeEnvironment:
         *,
         repo_dir: Path,
         runtime_dir: Path,
+        log_store: DiagnosticsSink,
         bootstrap_python_executable: str = "python3",
         python_executable_override: str | None = None,
         required_imports: tuple[str, ...] = ("torch", "aiohttp"),
         torch_cuda_index_url: str | None = None,
         torch_cpu_index_url: str = "https://download.pytorch.org/whl/cpu",
         hardware_profile: RuntimeHardwareProfile | None = None,
-        log_store: LogStore | None = None,
         command_runner: CommandRunner | None = None,
         logs_dir: Path | None = None,
         cache_dir: Path | None = None,
@@ -54,7 +54,7 @@ class RuntimeEnvironment:
         self.torch_cuda_index_url = torch_cuda_index_url
         self.torch_cpu_index_url = torch_cpu_index_url
         self._hardware_profile = hardware_profile
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self._command_runner = command_runner or self._run_command
 
     @property
@@ -73,11 +73,17 @@ class RuntimeEnvironment:
 
     @property
     def log_dir(self) -> Path:
-        return self._logs_dir if self._logs_dir is not None else self.runtime_dir / "logs"
+        return (
+            self._logs_dir if self._logs_dir is not None else self.runtime_dir / "logs"
+        )
 
     @property
     def cache_dir(self) -> Path:
-        return self._cache_dir if self._cache_dir is not None else self.runtime_dir / "cache"
+        return (
+            self._cache_dir
+            if self._cache_dir is not None
+            else self.runtime_dir / "cache"
+        )
 
     @property
     def python_executable(self) -> str:
@@ -120,8 +126,14 @@ class RuntimeEnvironment:
     async def bootstrap(self) -> RuntimeBootstrapResult:
         current = await self.status()
         if current.prepared:
-            self.log_store.add("info", "ComfyUI runtime environment already prepared", "runtime.environment")
-            return RuntimeBootstrapResult(status="already_prepared", environment=current)
+            self.log_store.add(
+                "info",
+                "ComfyUI runtime environment already prepared",
+                "runtime.environment",
+            )
+            return RuntimeBootstrapResult(
+                status="already_prepared", environment=current
+            )
 
         if not current.requirements_file_exists:
             self.log_store.add(
@@ -130,16 +142,23 @@ class RuntimeEnvironment:
                 "runtime.environment",
                 details={"requirements_file": current.requirements_file},
             )
-            return RuntimeBootstrapResult(status="requirements_missing", environment=current)
+            return RuntimeBootstrapResult(
+                status="requirements_missing", environment=current
+            )
 
         if self.python_executable_override:
             self.log_store.add(
                 "error",
                 "Runtime Python override is not prepared",
                 "runtime.environment",
-                details={"python_executable": self.python_executable_override, "error": current.error},
+                details={
+                    "python_executable": self.python_executable_override,
+                    "error": current.error,
+                },
             )
-            return RuntimeBootstrapResult(status="python_not_prepared", environment=current)
+            return RuntimeBootstrapResult(
+                status="python_not_prepared", environment=current
+            )
 
         if not self._executable_exists(self.bootstrap_python_executable):
             self.log_store.add(
@@ -157,7 +176,9 @@ class RuntimeEnvironment:
             action="Create ComfyUI runtime virtual environment",
         )
         if venv_result.returncode != 0:
-            return RuntimeBootstrapResult(status="bootstrap_failed", environment=await self.status())
+            return RuntimeBootstrapResult(
+                status="bootstrap_failed", environment=await self.status()
+            )
 
         torch_plan = (await self.status()).torch_install_plan
         torch_result = await self._run_logged(
@@ -178,19 +199,32 @@ class RuntimeEnvironment:
             },
         )
         if torch_result.returncode != 0:
-            return RuntimeBootstrapResult(status="bootstrap_failed", environment=await self.status())
+            return RuntimeBootstrapResult(
+                status="bootstrap_failed", environment=await self.status()
+            )
 
         install_result = await self._run_logged(
-            [self.python_executable, "-m", "pip", "install", "-r", str(self.requirements_file)],
+            [
+                self.python_executable,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(self.requirements_file),
+            ],
             cwd=self.repo_dir,
             action="Install ComfyUI runtime requirements",
         )
         if install_result.returncode != 0:
-            return RuntimeBootstrapResult(status="bootstrap_failed", environment=await self.status())
+            return RuntimeBootstrapResult(
+                status="bootstrap_failed", environment=await self.status()
+            )
 
         prepared = await self.status()
         if prepared.prepared:
-            self.log_store.add("info", "ComfyUI runtime environment prepared", "runtime.environment")
+            self.log_store.add(
+                "info", "ComfyUI runtime environment prepared", "runtime.environment"
+            )
             return RuntimeBootstrapResult(status="prepared", environment=prepared)
 
         self.log_store.add(
@@ -199,7 +233,9 @@ class RuntimeEnvironment:
             "runtime.environment",
             details={"error": prepared.error},
         )
-        return RuntimeBootstrapResult(status="dependency_check_failed", environment=prepared)
+        return RuntimeBootstrapResult(
+            status="dependency_check_failed", environment=prepared
+        )
 
     def _status_error(
         self,
@@ -218,7 +254,9 @@ class RuntimeEnvironment:
         if not python_exists:
             return f"Runtime Python executable not found: {self.python_executable}"
 
-        missing = [dependency for dependency in dependencies if not dependency.available]
+        missing = [
+            dependency for dependency in dependencies if not dependency.available
+        ]
         if missing:
             names = ", ".join(dependency.name for dependency in missing)
             return f"Runtime Python is missing required imports: {names}"
@@ -235,7 +273,11 @@ class RuntimeEnvironment:
                 RuntimeDependencyStatus(
                     name=import_name,
                     available=result.returncode == 0,
-                    error=(result.stderr or result.stdout or None) if result.returncode != 0 else None,
+                    error=(
+                        (result.stderr or result.stdout or None)
+                        if result.returncode != 0
+                        else None
+                    ),
                 )
             )
         return dependencies

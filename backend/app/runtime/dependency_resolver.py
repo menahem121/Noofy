@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.dependency_lock import (
     DependencyDeclaration,
     DependencyPolicyError,
@@ -98,8 +98,7 @@ class _CommandRunner(Protocol):
         *,
         cwd: Path,
         env: dict[str, str],
-    ) -> subprocess.CompletedProcess[str]:
-        ...
+    ) -> subprocess.CompletedProcess[str]: ...
 
 
 class UvDependencyLockResolver:
@@ -108,11 +107,11 @@ class UvDependencyLockResolver:
         *,
         wheel_cache_dir: Path,
         work_dir: Path,
+        log_store: DiagnosticsSink,
         package_index_client: PackageIndexClient | None = None,
         uv_cache_dir: Path | None = None,
         uv_executable: str = "uv",
         command_runner: _CommandRunner | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.wheel_cache_dir = wheel_cache_dir
         self.work_dir = work_dir
@@ -120,19 +119,25 @@ class UvDependencyLockResolver:
         self.uv_cache_dir = uv_cache_dir
         self.uv_executable = uv_executable
         self.command_runner = command_runner or _run_command
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     def resolve(self, request: DependencyResolutionRequest) -> ResolvedDependencyLock:
         declarations = self._discover_declarations(request.source_dirs)
-        direct_names = {_requirement_name(declaration.requirement) for declaration in declarations}
+        direct_names = {
+            _requirement_name(declaration.requirement) for declaration in declarations
+        }
         direct_names.discard(None)
-        transaction_dir = self.work_dir / f"dep-resolve-{hashlib.sha256(os.urandom(16)).hexdigest()[:16]}"
+        transaction_dir = (
+            self.work_dir
+            / f"dep-resolve-{hashlib.sha256(os.urandom(16)).hexdigest()[:16]}"
+        )
         try:
             transaction_dir.mkdir(parents=True)
             input_path = transaction_dir / "requirements.in"
             compiled_path = transaction_dir / "requirements.lock"
             input_path.write_text(
-                "\n".join(declaration.requirement for declaration in declarations) + "\n",
+                "\n".join(declaration.requirement for declaration in declarations)
+                + "\n",
                 encoding="utf-8",
             )
             resolver = self._resolver_metadata(transaction_dir)
@@ -142,9 +147,13 @@ class UvDependencyLockResolver:
                 request=request,
                 cwd=transaction_dir,
             )
-            requirements = parse_uv_compiled_requirements(compiled_path.read_text(encoding="utf-8"))
+            requirements = parse_uv_compiled_requirements(
+                compiled_path.read_text(encoding="utf-8")
+            )
             wheels = [
-                self._wheel_from_requirement(requirement, direct_names=direct_names, resolver=resolver)
+                self._wheel_from_requirement(
+                    requirement, direct_names=direct_names, resolver=resolver
+                )
                 for requirement in requirements
             ]
             lock = with_computed_lock_hash(
@@ -158,12 +167,16 @@ class UvDependencyLockResolver:
                     wheels=wheels,
                 )
             )
-            validate_quarantined_community_lock(lock, wheel_cache_dir=self.wheel_cache_dir)
+            validate_quarantined_community_lock(
+                lock, wheel_cache_dir=self.wheel_cache_dir
+            )
             return lock
         finally:
             shutil.rmtree(transaction_dir, ignore_errors=True)
 
-    def _discover_declarations(self, source_dirs: list[Path]) -> list[DependencyDeclaration]:
+    def _discover_declarations(
+        self, source_dirs: list[Path]
+    ) -> list[DependencyDeclaration]:
         declarations: list[DependencyDeclaration] = []
         findings = []
         for source_dir in source_dirs:
@@ -177,8 +190,12 @@ class UvDependencyLockResolver:
 
     def _resolver_metadata(self, cwd: Path) -> ResolverMetadata:
         result = self._run([self.uv_executable, "--version"], cwd=cwd)
-        version = (result.stdout or "").strip().split(" ")[-1] if result.stdout else "unknown"
-        return ResolverMetadata(name="uv", version=version, command="uv pip compile --generate-hashes")
+        version = (
+            (result.stdout or "").strip().split(" ")[-1] if result.stdout else "unknown"
+        )
+        return ResolverMetadata(
+            name="uv", version=version, command="uv pip compile --generate-hashes"
+        )
 
     def _compile_requirements(
         self,
@@ -212,7 +229,10 @@ class UvDependencyLockResolver:
             "Resolving dependency lock",
             "runtime.dependency_resolver",
             workflow_id=request.workflow_id,
-            details={"source_dir_count": len(request.source_dirs), "python_version": python_version},
+            details={
+                "source_dir_count": len(request.source_dirs),
+                "python_version": python_version,
+            },
         )
         self._run(command, cwd=cwd)
 
@@ -244,16 +264,26 @@ class UvDependencyLockResolver:
             environment_marker=requirement.environment_marker,
             import_names=wheel.import_names,
             relationship=relationship,
-            requested_by=["dependency-marker"] if relationship is DependencyRelationship.DIRECT else [],
+            requested_by=(
+                ["dependency-marker"]
+                if relationship is DependencyRelationship.DIRECT
+                else []
+            ),
             resolver_name=resolver.name,
             resolver_version=resolver.version,
         )
 
-    def _run(self, command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, command: list[str], *, cwd: Path
+    ) -> subprocess.CompletedProcess[str]:
         result = self.command_runner(command, cwd=cwd, env=self._command_env())
         if result.returncode != 0:
             output = (result.stderr or result.stdout or "").strip()
-            message = output.splitlines()[0] if output else f"uv failed with exit code {result.returncode}"
+            message = (
+                output.splitlines()[0]
+                if output
+                else f"uv failed with exit code {result.returncode}"
+            )
             raise DependencyResolutionError(
                 DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION,
                 f"Dependency resolution failed: {message}",
@@ -287,7 +317,10 @@ class PyPIPackageIndexClient:
         metadata_url = f"{self.base_url}/{normalize_package_name(requirement.name)}/{requirement.version}/json"
         with urllib.request.urlopen(metadata_url, timeout=30) as response:
             metadata = json.loads(response.read().decode("utf-8"))
-        allowed_hashes = {hash_value.removeprefix("sha256:").lower() for hash_value in requirement.hashes}
+        allowed_hashes = {
+            hash_value.removeprefix("sha256:").lower()
+            for hash_value in requirement.hashes
+        }
         for file_record in metadata.get("urls", []):
             filename = file_record.get("filename", "")
             digest = file_record.get("digests", {}).get("sha256", "").lower()
@@ -296,7 +329,9 @@ class PyPIPackageIndexClient:
             wheel_cache_dir.mkdir(parents=True, exist_ok=True)
             target = wheel_cache_dir / filename
             if not target.exists():
-                with urllib.request.urlopen(file_record["url"], timeout=120) as response:
+                with urllib.request.urlopen(
+                    file_record["url"], timeout=120
+                ) as response:
                     target.write_bytes(response.read())
             actual = hashlib.sha256(target.read_bytes()).hexdigest()
             if actual.lower() != digest:
@@ -406,7 +441,9 @@ def _import_names_from_wheel(path: Path) -> list[str]:
 
 
 def _is_valid_import_name(value: str) -> bool:
-    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$", value))
+    return bool(
+        re.match(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$", value)
+    )
 
 
 def _run_command(

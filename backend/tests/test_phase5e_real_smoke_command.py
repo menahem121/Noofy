@@ -50,7 +50,9 @@ def test_prompt_load_image_paths_normalize_clipspace_suffix() -> None:
     prompt = {
         "1": {
             "class_type": "LoadImage",
-            "inputs": {"image": "clipspace/clipspace-painted-masked-1777621230412.png [input]"},
+            "inputs": {
+                "image": "clipspace/clipspace-painted-masked-1777621230412.png [input]"
+            },
         },
         "2": {
             "class_type": "LoadImage",
@@ -64,7 +66,9 @@ def test_prompt_load_image_paths_normalize_clipspace_suffix() -> None:
     ]
 
 
-def test_runner_extra_args_disable_custom_nodes_only_for_core_workflows(tmp_path: Path) -> None:
+def test_runner_extra_args_disable_custom_nodes_only_for_core_workflows(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "runner"
 
     assert "--disable-all-custom-nodes" in real_smoke._runner_extra_args(
@@ -125,7 +129,9 @@ async def test_run_validation_summarizes_selected_scenarios(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_run_smoke(config, scenario, capsule, prepared_workspace, fixture):
+    async def fake_run_smoke(
+        config, scenario, capsule, prepared_workspace, fixture, *, log_store
+    ):
         calls.append(scenario.name)
         return _passed_report(custom_nodes=bool(capsule.custom_nodes))
 
@@ -142,5 +148,7 @@ async def test_run_validation_summarizes_selected_scenarios(
     assert summary["passed_count"] == 2
     assert calls == ["core-empty", "custom-no-deps"]
     custom_result = summary["results"][1]
-    assert custom_result["copied_input_files"] == ["71clYSlmspL._AC_UF1000,1000_QL80_.jpg"]
+    assert custom_result["copied_input_files"] == [
+        "71clYSlmspL._AC_UF1000,1000_QL80_.jpg"
+    ]
     assert "Crop Image TargetSize (JPS)" in custom_result["required_node_types"]

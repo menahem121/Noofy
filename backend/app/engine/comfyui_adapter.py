@@ -11,11 +11,14 @@ import httpx
 import websockets
 
 from app.engine.job_store import JobStore
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.workflows.package import WorkflowPackage
 
-_ASSET_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif)$', re.IGNORECASE)
+_ASSET_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif)$",
+    re.IGNORECASE,
+)
 
 
 class ComfyUIEngineAdapter:
@@ -25,7 +28,8 @@ class ComfyUIEngineAdapter:
         models_dir: Path,
         ws_url: str | None = None,
         job_store: JobStore | None = None,
-        log_store: LogStore | None = None,
+        *,
+        log_store: DiagnosticsSink,
         dashboard_assets_dir: Path | None = None,
         comfyui_input_dir: Path | None = None,
     ) -> None:
@@ -33,7 +37,7 @@ class ComfyUIEngineAdapter:
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
         self.models_dir = models_dir
         self.job_store = job_store or JobStore()
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self.dashboard_assets_dir = dashboard_assets_dir
         self.comfyui_input_dir = comfyui_input_dir or self.models_dir.parent / "input"
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
@@ -53,7 +57,12 @@ class ComfyUIEngineAdapter:
     ) -> EngineJob:
         job_id = str(uuid4())
         client_id = options.get("client_id") or f"local-ai-workflow-{uuid4()}"
-        job = EngineJob(job_id=job_id, workflow_id=workflow_package.metadata.id, engine="comfyui", status="queued")
+        job = EngineJob(
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+            engine="comfyui",
+            status="queued",
+        )
         self.job_store.add_job(job)
         self.log_store.add(
             "info",
@@ -91,8 +100,12 @@ class ComfyUIEngineAdapter:
         except httpx.HTTPError as exc:
             self._stop_event_listener(job_id)
             self._cleanup_staged_files(job_id)
-            self.job_store.set_progress(JobProgress(job_id=job_id, status="failed", message=str(exc)))
-            self.job_store.set_result(JobResult(job_id=job_id, status="failed", error=str(exc)))
+            self.job_store.set_progress(
+                JobProgress(job_id=job_id, status="failed", message=str(exc))
+            )
+            self.job_store.set_result(
+                JobResult(job_id=job_id, status="failed", error=str(exc))
+            )
             self.log_store.add(
                 "error",
                 "Failed to submit workflow to ComfyUI",
@@ -124,7 +137,10 @@ class ComfyUIEngineAdapter:
         queue_status = await self._get_queue_status(job_id)
         if queue_status is not None:
             stored_progress = self.job_store.get_progress(job_id)
-            if stored_progress.status == queue_status.status and self._has_progress_detail(stored_progress):
+            if (
+                stored_progress.status == queue_status.status
+                and self._has_progress_detail(stored_progress)
+            ):
                 return stored_progress
             self.job_store.set_progress(queue_status)
             return queue_status
@@ -135,12 +151,16 @@ class ComfyUIEngineAdapter:
         async with httpx.AsyncClient(timeout=30) as client:
             await client.post(f"{self.base_url}/interrupt", json={"prompt_id": job_id})
 
-        progress = JobProgress(job_id=job_id, status="canceled", message="Cancel requested")
+        progress = JobProgress(
+            job_id=job_id, status="canceled", message="Cancel requested"
+        )
         self.job_store.set_progress(progress)
         self.job_store.set_result(JobResult(job_id=job_id, status="canceled"))
         self._stop_event_listener(job_id)
         self._cleanup_staged_files(job_id)
-        self.log_store.add("info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id)
+        self.log_store.add(
+            "info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id
+        )
         self._terminal_log_job_ids.add(job_id)
         return progress
 
@@ -181,9 +201,13 @@ class ComfyUIEngineAdapter:
 
         models: list[ModelInfo] = []
         async with httpx.AsyncClient(timeout=10) as client:
-            for folder in sorted(folder for folder in folders if isinstance(folder, str)):
+            for folder in sorted(
+                folder for folder in folders if isinstance(folder, str)
+            ):
                 try:
-                    models_response = await client.get(f"{self.base_url}/models/{folder}")
+                    models_response = await client.get(
+                        f"{self.base_url}/models/{folder}"
+                    )
                     models_response.raise_for_status()
                 except httpx.HTTPError:
                     self.log_store.add(
@@ -198,7 +222,9 @@ class ComfyUIEngineAdapter:
                 if not isinstance(filenames, list):
                     continue
 
-                for filename in sorted(item for item in filenames if isinstance(item, str)):
+                for filename in sorted(
+                    item for item in filenames if isinstance(item, str)
+                ):
                     models.append(ModelInfo(folder=folder, filename=filename))
         return models
 
@@ -207,8 +233,12 @@ class ComfyUIEngineAdapter:
         if not self.models_dir.exists():
             return models
 
-        for folder in sorted(path for path in self.models_dir.iterdir() if path.is_dir()):
-            for file_path in sorted(path for path in folder.iterdir() if path.is_file()):
+        for folder in sorted(
+            path for path in self.models_dir.iterdir() if path.is_dir()
+        ):
+            for file_path in sorted(
+                path for path in folder.iterdir() if path.is_file()
+            ):
                 if file_path.name.startswith("put_"):
                     continue
                 models.append(
@@ -220,11 +250,19 @@ class ComfyUIEngineAdapter:
                 )
         return models
 
-    async def _start_event_listener(self, job_id: str, client_id: str, connect_timeout: float) -> None:
+    async def _start_event_listener(
+        self, job_id: str, client_id: str, connect_timeout: float
+    ) -> None:
         self._stop_event_listener(job_id)
         ready_event = asyncio.Event()
-        task = asyncio.create_task(self._listen_for_job_events(job_id, client_id, ready_event))
-        task.add_done_callback(lambda completed_task: completed_task.exception() if not completed_task.cancelled() else None)
+        task = asyncio.create_task(
+            self._listen_for_job_events(job_id, client_id, ready_event)
+        )
+        task.add_done_callback(
+            lambda completed_task: (
+                completed_task.exception() if not completed_task.cancelled() else None
+            )
+        )
         self._listener_tasks[job_id] = task
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(ready_event.wait(), timeout=connect_timeout)
@@ -242,12 +280,19 @@ class ComfyUIEngineAdapter:
         if task is not None and not task.done():
             task.cancel()
 
-    async def _listen_for_job_events(self, job_id: str, client_id: str, ready_event: asyncio.Event) -> None:
+    async def _listen_for_job_events(
+        self, job_id: str, client_id: str, ready_event: asyncio.Event
+    ) -> None:
         ws_url = self._ws_url_for_client(client_id)
         try:
             async with websockets.connect(ws_url) as websocket:
                 ready_event.set()
-                self.log_store.add("debug", "Connected to ComfyUI WebSocket", "comfyui.adapter", job_id=job_id)
+                self.log_store.add(
+                    "debug",
+                    "Connected to ComfyUI WebSocket",
+                    "comfyui.adapter",
+                    job_id=job_id,
+                )
                 async for raw_message in websocket:
                     if not isinstance(raw_message, str):
                         continue
@@ -283,7 +328,11 @@ class ComfyUIEngineAdapter:
             if progress is not None:
                 self.job_store.set_progress(progress)
                 if progress.status == "failed":
-                    self.job_store.set_result(JobResult(job_id=job_id, status="failed", error=progress.message))
+                    self.job_store.set_result(
+                        JobResult(
+                            job_id=job_id, status="failed", error=progress.message
+                        )
+                    )
                 self._log_terminal_progress_once(progress)
                 if progress.status in {"completed", "failed", "canceled"}:
                     return True
@@ -301,14 +350,18 @@ class ComfyUIEngineAdapter:
                 return result.status in {"completed", "failed", "canceled"}
         return False
 
-    def _progress_from_ws_message(self, job_id: str, message: dict[str, Any]) -> JobProgress | None:
+    def _progress_from_ws_message(
+        self, job_id: str, message: dict[str, Any]
+    ) -> JobProgress | None:
         message_type = message.get("type")
         data = message.get("data", {})
         if not isinstance(data, dict) or data.get("prompt_id") != job_id:
             return None
 
         if message_type == "execution_start":
-            return JobProgress(job_id=job_id, status="running", message="Execution started")
+            return JobProgress(
+                job_id=job_id, status="running", message="Execution started"
+            )
 
         if message_type == "executing":
             node = data.get("node")
@@ -330,13 +383,25 @@ class ComfyUIEngineAdapter:
             return self._progress_from_progress_state(job_id, data)
 
         if message_type == "execution_success":
-            return JobProgress(job_id=job_id, status="completed", value=1, max=1, message="Execution completed")
+            return JobProgress(
+                job_id=job_id,
+                status="completed",
+                value=1,
+                max=1,
+                message="Execution completed",
+            )
 
         if message_type == "execution_interrupted":
-            return JobProgress(job_id=job_id, status="canceled", message="Execution interrupted")
+            return JobProgress(
+                job_id=job_id, status="canceled", message="Execution interrupted"
+            )
 
         if message_type == "execution_error":
-            error_message = data.get("exception_message") or data.get("message") or "ComfyUI execution error"
+            error_message = (
+                data.get("exception_message")
+                or data.get("message")
+                or "ComfyUI execution error"
+            )
             node = data.get("node_id") or data.get("node")
             return JobProgress(
                 job_id=job_id,
@@ -347,7 +412,9 @@ class ComfyUIEngineAdapter:
 
         return None
 
-    def _progress_from_progress_state(self, job_id: str, data: dict[str, Any]) -> JobProgress | None:
+    def _progress_from_progress_state(
+        self, job_id: str, data: dict[str, Any]
+    ) -> JobProgress | None:
         nodes = data.get("nodes", {})
         if not isinstance(nodes, dict):
             return None
@@ -364,7 +431,9 @@ class ComfyUIEngineAdapter:
             )
         return JobProgress(job_id=job_id, status="running")
 
-    def _result_from_ws_message(self, job_id: str, message: dict[str, Any]) -> JobResult | None:
+    def _result_from_ws_message(
+        self, job_id: str, message: dict[str, Any]
+    ) -> JobResult | None:
         if message.get("type") != "executed":
             return None
 
@@ -424,7 +493,12 @@ class ComfyUIEngineAdapter:
         return False
 
     def _has_progress_detail(self, progress: JobProgress) -> bool:
-        return progress.value is not None or progress.max is not None or progress.current_node is not None or progress.message is not None
+        return (
+            progress.value is not None
+            or progress.max is not None
+            or progress.current_node is not None
+            or progress.message is not None
+        )
 
     def _log_terminal_progress_once(self, progress: JobProgress) -> None:
         if progress.status not in {"completed", "failed", "canceled"}:
@@ -435,7 +509,12 @@ class ComfyUIEngineAdapter:
         self._cleanup_staged_files(progress.job_id)
 
         if progress.status == "completed":
-            self.log_store.add("info", "ComfyUI execution completed", "comfyui.adapter", job_id=progress.job_id)
+            self.log_store.add(
+                "info",
+                "ComfyUI execution completed",
+                "comfyui.adapter",
+                job_id=progress.job_id,
+            )
         elif progress.status == "failed":
             self.log_store.add(
                 "error",
@@ -445,7 +524,12 @@ class ComfyUIEngineAdapter:
                 details={"message": progress.message, "node": progress.current_node},
             )
         elif progress.status == "canceled":
-            self.log_store.add("warning", "ComfyUI execution interrupted", "comfyui.adapter", job_id=progress.job_id)
+            self.log_store.add(
+                "warning",
+                "ComfyUI execution interrupted",
+                "comfyui.adapter",
+                job_id=progress.job_id,
+            )
 
     def _cleanup_staged_files(self, job_id: str) -> None:
         for path in self._staged_files.pop(job_id, []):
@@ -454,7 +538,9 @@ class ComfyUIEngineAdapter:
             except OSError:
                 pass
 
-    def _progress_from_history(self, job_id: str, history_entry: dict[str, Any]) -> JobProgress:
+    def _progress_from_history(
+        self, job_id: str, history_entry: dict[str, Any]
+    ) -> JobProgress:
         status = history_entry.get("status", {})
         status_str = status.get("status_str") if isinstance(status, dict) else None
         completed = bool(status.get("completed")) if isinstance(status, dict) else False
@@ -462,16 +548,27 @@ class ComfyUIEngineAdapter:
         if completed:
             return JobProgress(job_id=job_id, status="completed", value=1, max=1)
         if status_str == "error":
-            return JobProgress(job_id=job_id, status="failed", message="ComfyUI reported execution error")
+            return JobProgress(
+                job_id=job_id,
+                status="failed",
+                message="ComfyUI reported execution error",
+            )
         return JobProgress(job_id=job_id, status="running")
 
-    def _result_from_history(self, job_id: str, history_entry: dict[str, Any]) -> JobResult:
+    def _result_from_history(
+        self, job_id: str, history_entry: dict[str, Any]
+    ) -> JobResult:
         status = history_entry.get("status", {})
         completed = bool(status.get("completed")) if isinstance(status, dict) else False
         status_str = status.get("status_str") if isinstance(status, dict) else None
 
         if status_str == "error":
-            return JobResult(job_id=job_id, status="failed", outputs=[], error="ComfyUI reported execution error")
+            return JobResult(
+                job_id=job_id,
+                status="failed",
+                outputs=[],
+                error="ComfyUI reported execution error",
+            )
 
         outputs = []
         for node_id, node_output in history_entry.get("outputs", {}).items():
@@ -483,7 +580,11 @@ class ComfyUIEngineAdapter:
                     }
                 )
 
-        return JobResult(job_id=job_id, status="completed" if completed else "running", outputs=outputs)
+        return JobResult(
+            job_id=job_id,
+            status="completed" if completed else "running",
+            outputs=outputs,
+        )
 
     def _add_view_urls(self, node_output: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(node_output)
@@ -492,12 +593,14 @@ class ComfyUIEngineAdapter:
             if not isinstance(items, list):
                 continue
             enriched[output_type] = [
-                {
-                    **item,
-                    "view_url": self._build_view_url(item),
-                }
-                if isinstance(item, dict)
-                else item
+                (
+                    {
+                        **item,
+                        "view_url": self._build_view_url(item),
+                    }
+                    if isinstance(item, dict)
+                    else item
+                )
                 for item in items
             ]
         return enriched
@@ -564,6 +667,7 @@ class ComfyUIEngineAdapter:
                 staged_name = f"{job_id}_{value}"
                 staged_path = comfyui_input_dir / staged_name
                 import shutil as _shutil
+
                 _shutil.copy2(asset_path, staged_path)
                 staged.append(staged_path)
                 if staged_graph is None:
@@ -583,7 +687,11 @@ class ComfyUIEngineAdapter:
                     "Staged dashboard asset for ComfyUI",
                     "comfyui.adapter",
                     job_id=job_id,
-                    details={"asset_id": value, "staged": staged_name, "node_id": node_id},
+                    details={
+                        "asset_id": value,
+                        "staged": staged_name,
+                        "node_id": node_id,
+                    },
                 )
 
         return staged_graph or graph, staged

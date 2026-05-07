@@ -17,8 +17,15 @@ from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
 from app.runtime.supervisor import RunnerKind
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
-from app.workflows.importer import ImportedWorkflowPackageStore, NoofyArchiveImporter, imported_package_capsule_lock
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    RunnerWorkspaceManifestStore,
+)
+from app.workflows.importer import (
+    ImportedWorkflowPackageStore,
+    NoofyArchiveImporter,
+    imported_package_capsule_lock,
+)
 from app.workflows.package import WorkflowPackage
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -174,6 +181,7 @@ async def run_validation(
     *,
     clean: bool = False,
 ) -> dict[str, Any]:
+    log_store = LogStore()
     _validate_config(config)
     if clean and config.work_dir.exists():
         shutil.rmtree(config.work_dir)
@@ -182,7 +190,7 @@ async def run_validation(
     results = []
     for scenario_name in scenario_names:
         scenario = SCENARIOS[scenario_name]
-        results.append(await run_scenario(config, scenario))
+        results.append(await run_scenario(config, scenario, log_store=log_store))
 
     passed = all(result["passed"] for result in results)
     return {
@@ -197,20 +205,26 @@ async def run_validation(
             "test_workflows_dir": str(config.test_workflows_dir),
             "work_dir": str(config.work_dir),
             "profile_catalog_path": str(config.profile_catalog_path),
-            "model_view_dir": str(config.model_view_dir) if config.model_view_dir else None,
+            "model_view_dir": (
+                str(config.model_view_dir) if config.model_view_dir else None
+            ),
             "input_dir": str(config.input_dir) if config.input_dir else None,
         },
         "results": results,
     }
 
 
-async def run_scenario(config: RealSmokeConfig, scenario: RealSmokeScenario) -> dict[str, Any]:
+async def run_scenario(
+    config: RealSmokeConfig, scenario: RealSmokeScenario, *, log_store: LogStore
+) -> dict[str, Any]:
     archive_path = config.test_workflows_dir / scenario.archive_name
     package = _load_package(archive_path)
     capsule = imported_package_capsule_lock(package)
-    store = _import_package(config, scenario)
+    store = _import_package(config, scenario, log_store=log_store)
     package_dir = store.package_dir(package)
-    prompt = package.comfyui_graph if scenario.use_package_graph else _core_empty_prompt()
+    prompt = (
+        package.comfyui_graph if scenario.use_package_graph else _core_empty_prompt()
+    )
     fixture = SmokeExecutionFixture(
         name=f"phase5e-{scenario.name}",
         prompt=prompt,
@@ -226,9 +240,14 @@ async def run_scenario(config: RealSmokeConfig, scenario: RealSmokeScenario) -> 
         package=package,
         package_dir=package_dir,
         needs_model_view=scenario.needs_model_view,
+        log_store=log_store,
     )
-    copied_inputs = _copy_prompt_input_files(prompt, config.input_dir, prepared.runner_workspace_path / "input")
-    report = await _run_smoke(config, scenario, capsule, prepared, fixture)
+    copied_inputs = _copy_prompt_input_files(
+        prompt, config.input_dir, prepared.runner_workspace_path / "input"
+    )
+    report = await _run_smoke(
+        config, scenario, capsule, prepared, fixture, log_store=log_store
+    )
     passed = _report_passed(report, capsule)
     return {
         "name": scenario.name,
@@ -255,7 +274,9 @@ def _validate_config(config: RealSmokeConfig) -> None:
         if not path.exists():
             raise FileNotFoundError(f"{label} does not exist: {path}")
     if config.model_view_dir is not None and not config.model_view_dir.exists():
-        raise FileNotFoundError(f"model_view_dir does not exist: {config.model_view_dir}")
+        raise FileNotFoundError(
+            f"model_view_dir does not exist: {config.model_view_dir}"
+        )
     if config.input_dir is not None and not config.input_dir.exists():
         raise FileNotFoundError(f"input_dir does not exist: {config.input_dir}")
 
@@ -267,9 +288,16 @@ def _load_package(archive_path: Path) -> WorkflowPackage:
     ).normalize()
 
 
-def _import_package(config: RealSmokeConfig, scenario: RealSmokeScenario) -> ImportedWorkflowPackageStore:
+def _import_package(
+    config: RealSmokeConfig,
+    scenario: RealSmokeScenario,
+    *,
+    log_store: LogStore,
+) -> ImportedWorkflowPackageStore:
     archive_path = config.test_workflows_dir / scenario.archive_name
-    store = ImportedWorkflowPackageStore(config.work_dir / "packages")
+    store = ImportedWorkflowPackageStore(
+        config.work_dir / "packages", log_store=log_store
+    )
     store.import_archive(
         archive_path.read_bytes(),
         original_filename=scenario.archive_name,
@@ -285,17 +313,24 @@ def _prepare_workspace(
     package: WorkflowPackage,
     package_dir: Path,
     needs_model_view: bool,
+    log_store: LogStore,
 ):
     model_view_dir = config.model_view_dir if needs_model_view else None
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(config.work_dir / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(config.work_dir / "runner-workspaces"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            config.work_dir / "runner-workspaces"
+        ),
         comfyui_source_dir=config.comfyui_source_dir,
         model_view_dir=model_view_dir,
-        runtime_profile_catalog=load_runtime_profile_catalog(config.profile_catalog_path),
-        custom_node_materializer=CustomNodeWorkspaceMaterializer() if package.custom_nodes else None,
+        runtime_profile_catalog=load_runtime_profile_catalog(
+            config.profile_catalog_path
+        ),
+        custom_node_materializer=(
+            CustomNodeWorkspaceMaterializer() if package.custom_nodes else None
+        ),
         custom_node_source_files_dir=package_dir / "source-files",
-        log_store=LogStore(),
+        log_store=log_store,
     )
     return preparer.prepare(capsule)
 
@@ -306,11 +341,13 @@ async def _run_smoke(
     capsule: CapsuleLock,
     prepared_workspace,
     fixture: SmokeExecutionFixture,
+    log_store: LogStore,
 ) -> SmokeTestReport:
     smoke_tester = RunnerSmokeTester(
         process_supervisor=RunnerProcessSupervisor(
             startup_timeout_seconds=config.startup_timeout_seconds,
             health_poll_interval_seconds=config.health_poll_interval_seconds,
+            log_store=log_store,
         ),
         launch_spec_factory=lambda capsule_lock, workspace: RunnerLaunchSpec(
             runner_id=f"phase5e-real-{scenario.name}",
@@ -320,14 +357,20 @@ async def _run_smoke(
             working_dir=workspace.runner_workspace_path,
             dependency_env_path=workspace.dependency_env_path,
             runner_workspace_path=workspace.runner_workspace_path,
-            extra_args=_runner_extra_args(workspace.runner_workspace_path, has_custom_nodes=bool(capsule.custom_nodes)),
+            extra_args=_runner_extra_args(
+                workspace.runner_workspace_path,
+                has_custom_nodes=bool(capsule.custom_nodes),
+            ),
         ),
         execution_fixture=fixture,
+        log_store=log_store,
     )
     return await smoke_tester.run(capsule, prepared_workspace)
 
 
-def _runner_extra_args(runner_workspace_path: Path, *, has_custom_nodes: bool) -> list[str]:
+def _runner_extra_args(
+    runner_workspace_path: Path, *, has_custom_nodes: bool
+) -> list[str]:
     args = [
         "--base-directory",
         str(runner_workspace_path),
@@ -347,7 +390,9 @@ def _copy_prompt_input_files(
     if not image_paths:
         return []
     if input_dir is None:
-        raise FileNotFoundError("Prompt requires input images, but no input directory was provided.")
+        raise FileNotFoundError(
+            "Prompt requires input images, but no input directory was provided."
+        )
 
     copied: list[str] = []
     for relative_name in image_paths:
@@ -414,7 +459,8 @@ def _output_node_ids(prompt: dict[str, object]) -> tuple[str, ...]:
         sorted(
             str(node_id)
             for node_id, node in prompt.items()
-            if isinstance(node, dict) and node.get("class_type") in {"PreviewImage", "SaveImage"}
+            if isinstance(node, dict)
+            and node.get("class_type") in {"PreviewImage", "SaveImage"}
         )
     )
 
@@ -433,8 +479,14 @@ def _report_passed(report: SmokeTestReport, capsule: CapsuleLock) -> bool:
 async def async_main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     comfyui_source_dir = args.comfyui_source_dir.resolve()
-    model_view_dir = args.model_view_dir.resolve() if args.model_view_dir else comfyui_source_dir / "models"
-    input_dir = args.input_dir.resolve() if args.input_dir else comfyui_source_dir / "input"
+    model_view_dir = (
+        args.model_view_dir.resolve()
+        if args.model_view_dir
+        else comfyui_source_dir / "models"
+    )
+    input_dir = (
+        args.input_dir.resolve() if args.input_dir else comfyui_source_dir / "input"
+    )
     config = RealSmokeConfig(
         comfyui_source_dir=comfyui_source_dir,
         # Keep the venv shim path intact. Resolving it can collapse

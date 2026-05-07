@@ -36,11 +36,15 @@ class FakeFetcher:
         return self.payload
 
 
-def test_registry_resolves_custom_node_by_node_type_mapping_with_pinned_source() -> None:
+def test_registry_resolves_custom_node_by_node_type_mapping_with_pinned_source() -> (
+    None
+):
     log_store = LogStore()
     resolver = NodeRegistryResolver(
         registry=_registry(),
-        mappings=NodeTypeMappingCatalog(node_type_to_package_id={"MagicSampler": "comfyui-magic"}),
+        mappings=NodeTypeMappingCatalog(
+            node_type_to_package_id={"MagicSampler": "comfyui-magic"}
+        ),
         log_store=log_store,
     )
 
@@ -63,7 +67,9 @@ def test_registry_resolves_custom_node_by_node_type_mapping_with_pinned_source()
             source_cache_ref="abc123/source",
             source_dir=Path("/tmp/source-cache/abc123/source"),
             source_content_hash="sha256:" + ("1" * 64),
-            manifest_path=Path("/tmp/source-cache/abc123/noofy-custom-node-source-cache-manifest.json"),
+            manifest_path=Path(
+                "/tmp/source-cache/abc123/noofy-custom-node-source-cache-manifest.json"
+            ),
         )
     )
     assert cached_lock.source_cache_ref == "abc123/source"
@@ -73,7 +79,7 @@ def test_registry_resolves_custom_node_by_node_type_mapping_with_pinned_source()
 
 
 def test_quarantined_registry_resolution_requires_explicit_opt_in() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -98,7 +104,7 @@ def test_registry_rejects_floating_source_refs_before_resolution() -> None:
 
 
 def test_verified_workflow_cannot_resolve_registry_locked_source() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -109,11 +115,13 @@ def test_verified_workflow_cannot_resolve_registry_locked_source() -> None:
             )
         )
 
-    assert error.value.code is NodeRegistryResolutionErrorCode.POLICY_BLOCKED_TRUST_LEVEL
+    assert (
+        error.value.code is NodeRegistryResolutionErrorCode.POLICY_BLOCKED_TRUST_LEVEL
+    )
 
 
 def test_source_policy_blocks_explicit_source_for_verified_workflow() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -143,7 +151,7 @@ def test_source_policy_blocks_explicit_source_for_verified_workflow() -> None:
 
 
 def test_source_policy_blocks_mismatched_registry_snapshot() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -165,12 +173,16 @@ def test_source_policy_blocks_mismatched_registry_snapshot() -> None:
             )
         )
 
-    assert error.value.code is NodeRegistryResolutionErrorCode.REGISTRY_SNAPSHOT_MISMATCH
-    assert error.value.developer_details["active_registry_snapshot_hash"] == "sha256:" + ("2" * 64)
+    assert (
+        error.value.code is NodeRegistryResolutionErrorCode.REGISTRY_SNAPSHOT_MISMATCH
+    )
+    assert error.value.developer_details[
+        "active_registry_snapshot_hash"
+    ] == "sha256:" + ("2" * 64)
 
 
 def test_source_policy_allows_matching_registry_locked_source() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     resolved = resolver.resolve(
         CustomNodeSourceResolutionRequest(
@@ -196,7 +208,9 @@ def test_source_policy_allows_matching_registry_locked_source() -> None:
 
 
 def test_registry_reports_ambiguous_node_type_claims_without_preemption() -> None:
-    resolver = NodeRegistryResolver(registry=_ambiguous_registry())
+    resolver = NodeRegistryResolver(
+        registry=_ambiguous_registry(), log_store=LogStore()
+    )
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -214,7 +228,10 @@ def test_registry_reports_ambiguous_node_type_claims_without_preemption() -> Non
 def test_node_type_mapping_preempts_ambiguous_registry_claims() -> None:
     resolver = NodeRegistryResolver(
         registry=_ambiguous_registry(),
-        mappings=NodeTypeMappingCatalog(node_type_to_package_id={"SharedNode": "second-pack"}),
+        mappings=NodeTypeMappingCatalog(
+            node_type_to_package_id={"SharedNode": "second-pack"}
+        ),
+        log_store=LogStore(),
     )
 
     resolved = resolver.resolve(
@@ -230,7 +247,7 @@ def test_node_type_mapping_preempts_ambiguous_registry_claims() -> None:
 
 
 def test_unknown_node_type_is_unsupported_before_download() -> None:
-    resolver = NodeRegistryResolver(registry=_registry())
+    resolver = NodeRegistryResolver(registry=_registry(), log_store=LogStore())
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         resolver.resolve(
@@ -244,14 +261,20 @@ def test_unknown_node_type_is_unsupported_before_download() -> None:
     assert error.value.code is NodeRegistryResolutionErrorCode.UNKNOWN_NODE_TYPE
 
 
-def test_source_cache_downloads_verifies_and_extracts_archive_without_mutating_core(tmp_path: Path) -> None:
-    archive_bytes = _zip_bytes({"repo/custom_nodes/magic_node.py": "NODE_CLASS_MAPPINGS = {}\n"})
+def test_source_cache_downloads_verifies_and_extracts_archive_without_mutating_core(
+    tmp_path: Path,
+) -> None:
+    archive_bytes = _zip_bytes(
+        {"repo/custom_nodes/magic_node.py": "NODE_CLASS_MAPPINGS = {}\n"}
+    )
     digest = hashlib.sha256(archive_bytes).hexdigest()
     trusted_core_file = tmp_path / "trusted-core" / "custom_nodes" / "trusted.py"
     trusted_core_file.parent.mkdir(parents=True)
     trusted_core_file.write_text("trusted\n", encoding="utf-8")
     fetcher = FakeFetcher(archive_bytes)
-    cache = CustomNodeSourceCache(cache_dir=tmp_path / "source-cache", fetcher=fetcher)
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache", fetcher=fetcher, log_store=LogStore()
+    )
 
     cached = cache.materialize(
         NodeRegistrySource(
@@ -273,6 +296,7 @@ def test_source_cache_rejects_hash_mismatch(tmp_path: Path) -> None:
     cache = CustomNodeSourceCache(
         cache_dir=tmp_path / "source-cache",
         fetcher=FakeFetcher(_zip_bytes({"repo/node.py": "x = 1\n"})),
+        log_store=LogStore(),
     )
 
     with pytest.raises(NodeRegistryResolutionError) as error:
@@ -288,9 +312,13 @@ def test_source_cache_rejects_hash_mismatch(tmp_path: Path) -> None:
     assert error.value.code is NodeRegistryResolutionErrorCode.HASH_MISMATCH
 
 
-def test_source_cache_blocks_download_when_source_policy_origin_does_not_match(tmp_path: Path) -> None:
+def test_source_cache_blocks_download_when_source_policy_origin_does_not_match(
+    tmp_path: Path,
+) -> None:
     fetcher = FakeFetcher(_zip_bytes({"node.py": "x = 1\n"}))
-    cache = CustomNodeSourceCache(cache_dir=tmp_path / "source-cache", fetcher=fetcher)
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache", fetcher=fetcher, log_store=LogStore()
+    )
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         cache.materialize(
@@ -318,7 +346,11 @@ def test_source_cache_blocks_download_when_source_policy_origin_does_not_match(t
 def test_source_cache_rejects_archive_path_traversal(tmp_path: Path) -> None:
     archive_bytes = _zip_bytes({"../evil.py": "bad\n"})
     digest = hashlib.sha256(archive_bytes).hexdigest()
-    cache = CustomNodeSourceCache(cache_dir=tmp_path / "source-cache", fetcher=FakeFetcher(archive_bytes))
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         cache.materialize(
@@ -343,7 +375,11 @@ def test_source_cache_rejects_existing_cache_metadata_mismatch(tmp_path: Path) -
         f'"source_content_hash":"sha256:{digest}","source_cache_ref":"{digest}/source"}}',
         encoding="utf-8",
     )
-    cache = CustomNodeSourceCache(cache_dir=tmp_path / "source-cache", fetcher=FakeFetcher(archive_bytes))
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
 
     with pytest.raises(NodeRegistryResolutionError) as error:
         cache.materialize(

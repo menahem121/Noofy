@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.manager import RuntimeManager
 
 
@@ -12,7 +12,7 @@ class ComfyUIProcessManager(RuntimeManager):
         python_executable: str,
         host: str,
         port: int,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
     ) -> None:
         super().__init__(
             mode="managed",

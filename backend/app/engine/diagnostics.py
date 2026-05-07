@@ -1,8 +1,36 @@
 from collections import deque
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from app.engine.models import DiagnosticEvent, DiagnosticLogResponse, LogLevel
+
+
+class DiagnosticsSink(Protocol):
+    def add(
+        self,
+        level: LogLevel,
+        message: str,
+        source: str,
+        *,
+        job_id: str | None = None,
+        workflow_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> DiagnosticEvent:
+        """Record a structured diagnostic event."""
+
+
+class DiagnosticsReader(Protocol):
+    def list_events(
+        self,
+        *,
+        job_id: str | None = None,
+        level: LogLevel | None = None,
+        limit: int = 200,
+    ) -> DiagnosticLogResponse:
+        """Return recent diagnostic events."""
+
+    def latest_error(self) -> DiagnosticEvent | None:
+        """Return the latest error event, if one exists."""
 
 
 class LogStore:

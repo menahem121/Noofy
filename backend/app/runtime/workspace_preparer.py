@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.custom_nodes import (
     CustomNodeWorkspaceManifest,
     CustomNodeWorkspaceMaterializer,
@@ -84,6 +84,7 @@ class RuntimeWorkspacePreparer:
         *,
         dependency_env_store: DependencyEnvManifestStore,
         runner_workspace_store: RunnerWorkspaceManifestStore,
+        log_store: DiagnosticsSink,
         comfyui_source_dir: Path | None = None,
         model_view_dir: Path | None = None,
         runtime_profile_catalog: RuntimeProfileCatalog | None = None,
@@ -93,11 +94,12 @@ class RuntimeWorkspacePreparer:
         dependency_lock_resolver: UvDependencyLockResolver | None = None,
         custom_node_materializer: CustomNodeWorkspaceMaterializer | None = None,
         custom_node_source_files_dir: Path | None = None,
-        custom_node_source_files_dir_resolver: Callable[[str], Path | None] | None = None,
+        custom_node_source_files_dir_resolver: (
+            Callable[[str], Path | None] | None
+        ) = None,
         custom_node_source_cache_dir: Path | None = None,
         dependency_transactions_dir: Path | None = None,
         install_transaction_store: InstallTransactionStore | None = None,
-        log_store: LogStore | None = None,
     ) -> None:
         self.dependency_env_store = dependency_env_store
         self.runner_workspace_store = runner_workspace_store
@@ -110,15 +112,20 @@ class RuntimeWorkspacePreparer:
         self.dependency_lock_resolver = dependency_lock_resolver
         self.custom_node_materializer = custom_node_materializer
         self.custom_node_source_files_dir = custom_node_source_files_dir
-        self.custom_node_source_files_dir_resolver = custom_node_source_files_dir_resolver
+        self.custom_node_source_files_dir_resolver = (
+            custom_node_source_files_dir_resolver
+        )
         self.custom_node_source_cache_dir = custom_node_source_cache_dir
         self.dependency_transactions_dir = dependency_transactions_dir or (
             dependency_env_store.root_dir.parent / "transactions"
         )
-        self.log_store = log_store or LogStore()
-        self.install_transaction_store = install_transaction_store or InstallTransactionStore(
-            self.dependency_transactions_dir,
-            log_store=self.log_store,
+        self.log_store = log_store
+        self.install_transaction_store = (
+            install_transaction_store
+            or InstallTransactionStore(
+                self.dependency_transactions_dir,
+                log_store=self.log_store,
+            )
         )
 
     def prepare(
@@ -136,9 +143,13 @@ class RuntimeWorkspacePreparer:
         try:
             source_policy = capsule_source_policy(capsule_lock)
             if not source_policy.automatic_preparation_allowed:
-                raise RuntimeError("Workflow preparation is blocked by the source policy.")
+                raise RuntimeError(
+                    "Workflow preparation is blocked by the source policy."
+                )
             profile_selection = self._resolve_runtime_profile(capsule_lock)
-            custom_node_manifest = self._custom_node_workspace_manifest(capsule_lock, profile_selection)
+            custom_node_manifest = self._custom_node_workspace_manifest(
+                capsule_lock, profile_selection
+            )
             dependency_manifest = self._dependency_env_manifest(
                 capsule_lock,
                 status=InstallStatus.CHECKING_COMPATIBILITY,
@@ -152,26 +163,36 @@ class RuntimeWorkspacePreparer:
                 capsule_lock,
                 dependency_env_fingerprint=dependency_manifest.fingerprint,
                 profile_selection=profile_selection,
-                custom_node_workspace_manifest_hash=custom_node_manifest.manifest_hash if custom_node_manifest else None,
+                custom_node_workspace_manifest_hash=(
+                    custom_node_manifest.manifest_hash if custom_node_manifest else None
+                ),
                 model_view_dir=model_view_dir,
                 model_view_fingerprint=model_view_fingerprint,
                 status=InstallStatus.CHECKING_COMPATIBILITY,
             )
 
-            dependency_manifest, dependency_env_path = self._ensure_staged_dependency_env(
-                dependency_manifest,
-                capsule_lock.workflow.package_id,
-                transaction=transaction,
-                source_policy=source_policy,
+            dependency_manifest, dependency_env_path = (
+                self._ensure_staged_dependency_env(
+                    dependency_manifest,
+                    capsule_lock.workflow.package_id,
+                    transaction=transaction,
+                    source_policy=source_policy,
+                )
             )
-            runner_manifest, runner_workspace_path = self._ensure_staged_runner_workspace(
-                runner_manifest,
-                capsule_lock.workflow.package_id,
-                transaction=transaction,
-                custom_node_manifest=custom_node_manifest,
-                source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
-                cached_source_dirs=self._custom_node_cached_source_dirs(capsule_lock),
-                model_view_dir=model_view_dir,
+            runner_manifest, runner_workspace_path = (
+                self._ensure_staged_runner_workspace(
+                    runner_manifest,
+                    capsule_lock.workflow.package_id,
+                    transaction=transaction,
+                    custom_node_manifest=custom_node_manifest,
+                    source_files_dir=self._custom_node_source_files_dir(
+                        capsule_lock.workflow.package_id
+                    ),
+                    cached_source_dirs=self._custom_node_cached_source_dirs(
+                        capsule_lock
+                    ),
+                    model_view_dir=model_view_dir,
+                )
             )
 
             return PreparedRuntimeWorkspace(
@@ -219,14 +240,22 @@ class RuntimeWorkspacePreparer:
         )
 
         if prepared_workspace.install_transaction is not None:
-            self.install_transaction_store.mark_promoted(prepared_workspace.install_transaction)
-            self.install_transaction_store.remove(prepared_workspace.install_transaction)
+            self.install_transaction_store.mark_promoted(
+                prepared_workspace.install_transaction
+            )
+            self.install_transaction_store.remove(
+                prepared_workspace.install_transaction
+            )
 
         return PreparedRuntimeWorkspace(
             dependency_env_manifest=dependency_manifest,
             runner_workspace_manifest=runner_manifest,
-            dependency_env_path=self.dependency_env_store.artifact_dir(dependency_manifest.fingerprint),
-            runner_workspace_path=self.runner_workspace_store.artifact_dir(runner_manifest.fingerprint),
+            dependency_env_path=self.dependency_env_store.artifact_dir(
+                dependency_manifest.fingerprint
+            ),
+            runner_workspace_path=self.runner_workspace_store.artifact_dir(
+                runner_manifest.fingerprint
+            ),
             install_transaction=None,
         )
 
@@ -336,7 +365,9 @@ class RuntimeWorkspacePreparer:
                         "status": existing.status.value,
                     },
                 )
-                return existing, self.dependency_env_store.artifact_dir(existing.fingerprint)
+                return existing, self.dependency_env_store.artifact_dir(
+                    existing.fingerprint
+                )
             if self.dependency_env_installer is not None:
                 return self._install_staged_dependency_env(
                     manifest,
@@ -346,7 +377,9 @@ class RuntimeWorkspacePreparer:
                 )
             if existing != manifest:
                 path = self._write_transaction_manifest(
-                    self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
+                    self.install_transaction_store.staged_dependency_env_dir(
+                        transaction, manifest.fingerprint
+                    ),
                     manifest,
                 )
                 self.log_store.add(
@@ -365,7 +398,9 @@ class RuntimeWorkspacePreparer:
                 details={"fingerprint": existing.fingerprint},
             )
             path = self._write_transaction_manifest(
-                self.install_transaction_store.staged_dependency_env_dir(transaction, existing.fingerprint),
+                self.install_transaction_store.staged_dependency_env_dir(
+                    transaction, existing.fingerprint
+                ),
                 existing,
             )
             return existing, path
@@ -377,7 +412,9 @@ class RuntimeWorkspacePreparer:
                 source_policy=source_policy,
             )
         path = self._write_transaction_manifest(
-            self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint),
+            self.install_transaction_store.staged_dependency_env_dir(
+                transaction, manifest.fingerprint
+            ),
             manifest,
         )
         self.log_store.add(
@@ -389,7 +426,9 @@ class RuntimeWorkspacePreparer:
         )
         return manifest, path
 
-    def _write_quarantine_marker(self, artifact_path: Path, payload: Mapping[str, object]) -> None:
+    def _write_quarantine_marker(
+        self, artifact_path: Path, payload: Mapping[str, object]
+    ) -> None:
         artifact_path.mkdir(parents=True, exist_ok=True)
         (artifact_path / RUNTIME_QUARANTINE_FILENAME).write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -417,8 +456,12 @@ class RuntimeWorkspacePreparer:
         source_policy: SourcePolicy | None,
     ) -> tuple[DependencyEnvManifest, Path]:
         assert self.dependency_env_installer is not None
-        lock = self._resolved_dependency_lock(manifest, workflow_id, source_policy=source_policy)
-        staging_dir = self.install_transaction_store.staged_dependency_env_dir(transaction, manifest.fingerprint)
+        lock = self._resolved_dependency_lock(
+            manifest, workflow_id, source_policy=source_policy
+        )
+        staging_dir = self.install_transaction_store.staged_dependency_env_dir(
+            transaction, manifest.fingerprint
+        )
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
         try:
@@ -474,7 +517,9 @@ class RuntimeWorkspacePreparer:
                     runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
                     install_policy_version=manifest.install_policy_version,
                     python_version=manifest.python_version,
-                    python_platform=_uv_python_platform(manifest.os, manifest.architecture),
+                    python_platform=_uv_python_platform(
+                        manifest.os, manifest.architecture
+                    ),
                     workflow_id=workflow_id,
                     source_policy=source_policy,
                 )
@@ -486,16 +531,26 @@ class RuntimeWorkspacePreparer:
                 f"{manifest.dependency_lock_hash}"
             )
         if lock.runtime_profile_id != manifest.runtime_profile_id:
-            raise RuntimeError("Resolved dependency lock runtime profile does not match dependency manifest.")
+            raise RuntimeError(
+                "Resolved dependency lock runtime profile does not match dependency manifest."
+            )
         if lock.runtime_profile_variant_id != manifest.runtime_profile_variant_id:
-            raise RuntimeError("Resolved dependency lock runtime variant does not match dependency manifest.")
+            raise RuntimeError(
+                "Resolved dependency lock runtime variant does not match dependency manifest."
+            )
         if lock.runtime_profile_manifest_hash != manifest.runtime_profile_manifest_hash:
-            raise RuntimeError("Resolved dependency lock profile hash does not match dependency manifest.")
+            raise RuntimeError(
+                "Resolved dependency lock profile hash does not match dependency manifest."
+            )
         if lock.install_policy_version != manifest.install_policy_version:
-            raise RuntimeError("Resolved dependency lock install policy does not match dependency manifest.")
+            raise RuntimeError(
+                "Resolved dependency lock install policy does not match dependency manifest."
+            )
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
         if lock_hash != manifest.dependency_lock_hash:
-            raise RuntimeError("Resolved dependency lock hash does not match dependency manifest.")
+            raise RuntimeError(
+                "Resolved dependency lock hash does not match dependency manifest."
+            )
         validate_dependency_lock_source_policy(lock, source_policy)
         return lock
 
@@ -551,7 +606,10 @@ class RuntimeWorkspacePreparer:
         lock = self.dependency_locks.get(lock_hash)
         if lock is not None:
             return lock
-        if self.dependency_lock_store is not None and self.dependency_lock_store.exists(lock_hash):
+        if (
+            self.dependency_lock_store is not None
+            and self.dependency_lock_store.exists(lock_hash)
+        ):
             lock = self.dependency_lock_store.read(lock_hash)
             self.dependency_locks[lock_hash] = lock
             return lock
@@ -577,14 +635,18 @@ class RuntimeWorkspacePreparer:
             return self.custom_node_source_files_dir_resolver(workflow_id)
         return self.custom_node_source_files_dir
 
-    def _custom_node_cached_source_dirs(self, capsule_lock: CapsuleLock) -> dict[str, Path]:
+    def _custom_node_cached_source_dirs(
+        self, capsule_lock: CapsuleLock
+    ) -> dict[str, Path]:
         if self.custom_node_source_cache_dir is None:
             return {}
         cached: dict[str, Path] = {}
         for custom_node in capsule_lock.custom_nodes:
             if custom_node.source_cache_ref is None:
                 continue
-            source_dir = self.custom_node_source_cache_dir / custom_node.source_cache_ref
+            source_dir = (
+                self.custom_node_source_cache_dir / custom_node.source_cache_ref
+            )
             self._validate_custom_node_source_cache_manifest(
                 custom_node.package_id,
                 custom_node.source_cache_ref,
@@ -605,15 +667,26 @@ class RuntimeWorkspacePreparer:
     ) -> None:
         manifest_path = source_dir.parent / CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME
         if not manifest_path.exists():
-            raise RuntimeError(f"Cached source for custom node {package_id} is missing Noofy source cache metadata.")
+            raise RuntimeError(
+                f"Cached source for custom node {package_id} is missing Noofy source cache metadata."
+            )
         with manifest_path.open("r", encoding="utf-8") as file:
             manifest = json.load(file)
         if manifest.get("source_cache_ref") != source_cache_ref:
-            raise RuntimeError(f"Cached source metadata for custom node {package_id} does not match the capsule lock.")
+            raise RuntimeError(
+                f"Cached source metadata for custom node {package_id} does not match the capsule lock."
+            )
         if source_ref is None or source_content_hash is None:
-            raise RuntimeError(f"Cached source for custom node {package_id} is missing pinned source facts.")
-        if manifest.get("source_ref") != source_ref or manifest.get("source_content_hash") != source_content_hash:
-            raise RuntimeError(f"Cached source metadata for custom node {package_id} does not match the pinned source facts.")
+            raise RuntimeError(
+                f"Cached source for custom node {package_id} is missing pinned source facts."
+            )
+        if (
+            manifest.get("source_ref") != source_ref
+            or manifest.get("source_content_hash") != source_content_hash
+        ):
+            raise RuntimeError(
+                f"Cached source metadata for custom node {package_id} does not match the pinned source facts."
+            )
 
     def _custom_node_dependency_source_dirs(
         self,
@@ -621,9 +694,15 @@ class RuntimeWorkspacePreparer:
         capsule_lock: CapsuleLock | None,
     ) -> list[Path]:
         source_files_dir = self._custom_node_source_files_dir(workflow_id)
-        source_dirs = custom_node_dependency_source_dirs(source_files_dir) if source_files_dir is not None else []
+        source_dirs = (
+            custom_node_dependency_source_dirs(source_files_dir)
+            if source_files_dir is not None
+            else []
+        )
         if capsule_lock is not None:
-            source_dirs.extend(self._custom_node_cached_source_dirs(capsule_lock).values())
+            source_dirs.extend(
+                self._custom_node_cached_source_dirs(capsule_lock).values()
+            )
         return sorted(dict.fromkeys(source_dirs), key=lambda path: path.as_posix())
 
     def _promote_dependency_env(
@@ -715,11 +794,15 @@ class RuntimeWorkspacePreparer:
         cached_source_dirs: dict[str, Path] | None = None,
         model_view_dir: Path | None = None,
     ) -> tuple[RunnerWorkspaceManifest, Path]:
-        workspace_path = self.install_transaction_store.staged_runner_workspace_dir(transaction, manifest.fingerprint)
+        workspace_path = self.install_transaction_store.staged_runner_workspace_dir(
+            transaction, manifest.fingerprint
+        )
         if self.runner_workspace_store.exists(manifest.fingerprint):
             existing = self.runner_workspace_store.read(manifest.fingerprint)
             if existing.status is InstallStatus.READY:
-                ready_path = self.runner_workspace_store.artifact_dir(existing.fingerprint)
+                ready_path = self.runner_workspace_store.artifact_dir(
+                    existing.fingerprint
+                )
                 self._validate_ready_runner_workspace(ready_path)
                 self.log_store.add(
                     "info",
@@ -833,15 +916,21 @@ class RuntimeWorkspacePreparer:
                     runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
                     install_policy_version=manifest.install_policy_version,
                     python_version=manifest.python_version,
-                    python_platform=_uv_python_platform(manifest.os, manifest.architecture),
+                    python_platform=_uv_python_platform(
+                        manifest.os, manifest.architecture
+                    ),
                     workflow_id=capsule_lock.workflow.package_id,
                     source_policy=source_policy,
                 )
             )
             if existing_core_lock is not None:
-                lock = merge_resolved_dependency_locks(existing_core_lock, [custom_node_lock])
+                lock = merge_resolved_dependency_locks(
+                    existing_core_lock, [custom_node_lock]
+                )
             elif custom_node_lock.wheels:
-                lock = merge_resolved_dependency_locks(core_dependency_lock_from_capsule(capsule_lock), [custom_node_lock])
+                lock = merge_resolved_dependency_locks(
+                    core_dependency_lock_from_capsule(capsule_lock), [custom_node_lock]
+                )
             else:
                 lock = custom_node_lock
             self._remember_dependency_lock(lock)
@@ -864,9 +953,11 @@ class RuntimeWorkspacePreparer:
             os_name=manifest.os,
             architecture=manifest.architecture,
             python_build_id=manifest.python_build_id,
-            torch_wheel_build_tag=profile_selection.variant.torch_wheel_build_tag
-            if profile_selection is not None
-            else manifest.gpu_backend,
+            torch_wheel_build_tag=(
+                profile_selection.variant.torch_wheel_build_tag
+                if profile_selection is not None
+                else manifest.gpu_backend
+            ),
             torch_backend=manifest.gpu_backend,
         )
         self.log_store.add(
@@ -887,7 +978,9 @@ class RuntimeWorkspacePreparer:
             }
         )
 
-    def _resolve_runtime_profile(self, capsule_lock: CapsuleLock) -> RuntimeProfileSelection | None:
+    def _resolve_runtime_profile(
+        self, capsule_lock: CapsuleLock
+    ) -> RuntimeProfileSelection | None:
         if self.runtime_profile_catalog is None:
             return None
         runtime = capsule_lock.runtime
@@ -899,7 +992,10 @@ class RuntimeWorkspacePreparer:
             architecture=runtime.architecture,
             gpu_backend_profile=runtime.gpu_backend,
         )
-        if selection.profile.runtime_profile_manifest_hash != runtime.runtime_profile_manifest_hash:
+        if (
+            selection.profile.runtime_profile_manifest_hash
+            != runtime.runtime_profile_manifest_hash
+        ):
             raise RuntimeProfileResolutionError(
                 RuntimeProfileErrorCode.PROFILE_MANIFEST_HASH_MISMATCH,
                 "Workflow runtime profile manifest hash does not match the installed catalog.",
@@ -919,14 +1015,22 @@ class RuntimeWorkspacePreparer:
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> RunnerWorkspaceManifest:
         runtime = capsule_lock.runtime
-        dependency_env_fingerprint = dependency_env_fingerprint or runtime.dependency_env_fingerprint
-        enabled_custom_node_hash = custom_node_workspace_manifest_hash or sha256_fingerprint(capsule_lock.custom_nodes)
-        launch_config_hash = _launch_config_hash(capsule_lock, profile_selection, enabled_custom_node_hash)
+        dependency_env_fingerprint = (
+            dependency_env_fingerprint or runtime.dependency_env_fingerprint
+        )
+        enabled_custom_node_hash = (
+            custom_node_workspace_manifest_hash
+            or sha256_fingerprint(capsule_lock.custom_nodes)
+        )
+        launch_config_hash = _launch_config_hash(
+            capsule_lock, profile_selection, enabled_custom_node_hash
+        )
         model_view_hash = sha256_fingerprint(
             {
                 "models": capsule_lock.models,
                 "model_view_fingerprint": model_view_fingerprint,
-                "has_model_view": model_view_dir is not None or model_view_fingerprint is not None,
+                "has_model_view": model_view_dir is not None
+                or model_view_fingerprint is not None,
             }
         )
         fingerprint = runtime.runner_fingerprint
@@ -940,9 +1044,11 @@ class RuntimeWorkspacePreparer:
                 runtime_profile_manifest_hash=runtime.runtime_profile_manifest_hash,
                 runtime_profile_variant_id=runtime.runtime_profile_variant_id,
                 comfyui_source_hash=capsule_lock.engine.core_source_hash,
-                comfyui_frontend_version=profile_selection.profile.comfyui_frontend_version
-                if profile_selection is not None
-                else "unknown",
+                comfyui_frontend_version=(
+                    profile_selection.profile.comfyui_frontend_version
+                    if profile_selection is not None
+                    else "unknown"
+                ),
                 enabled_custom_node_manifest_hash=enabled_custom_node_hash,
                 launch_config_hash=launch_config_hash,
                 model_view_hash=model_view_hash,
@@ -974,7 +1080,9 @@ class RuntimeWorkspacePreparer:
             return None
         return self.custom_node_materializer.build_manifest(
             capsule_lock=capsule_lock,
-            source_files_dir=self._custom_node_source_files_dir(capsule_lock.workflow.package_id),
+            source_files_dir=self._custom_node_source_files_dir(
+                capsule_lock.workflow.package_id
+            ),
             cached_source_dirs=self._custom_node_cached_source_dirs(capsule_lock),
             profile_selection=profile_selection,
         )
@@ -990,7 +1098,10 @@ class RuntimeWorkspacePreparer:
         model_view_dir: Path | None = None,
     ) -> None:
         if self.comfyui_source_dir is None:
-            if custom_node_manifest is not None and self.custom_node_materializer is not None:
+            if (
+                custom_node_manifest is not None
+                and self.custom_node_materializer is not None
+            ):
                 self.custom_node_materializer.materialize(
                     manifest=custom_node_manifest,
                     source_files_dir=source_files_dir,
@@ -1022,7 +1133,10 @@ class RuntimeWorkspacePreparer:
         else:
             models_target.mkdir(parents=True, exist_ok=True)
 
-        if custom_node_manifest is not None and self.custom_node_materializer is not None:
+        if (
+            custom_node_manifest is not None
+            and self.custom_node_materializer is not None
+        ):
             self.custom_node_materializer.materialize(
                 manifest=custom_node_manifest,
                 source_files_dir=source_files_dir,
@@ -1038,7 +1152,9 @@ class RuntimeWorkspacePreparer:
             details={
                 "workspace_path": str(workspace_path),
                 "source_dir": str(source_dir),
-                "model_view_dir": str(selected_model_view_dir) if selected_model_view_dir else None,
+                "model_view_dir": (
+                    str(selected_model_view_dir) if selected_model_view_dir else None
+                ),
             },
         )
 
@@ -1047,7 +1163,15 @@ class RuntimeWorkspacePreparer:
             return
         missing = [
             name
-            for name in ("main.py", "custom_nodes", "models", "input", "output", "temp", "user")
+            for name in (
+                "main.py",
+                "custom_nodes",
+                "models",
+                "input",
+                "output",
+                "temp",
+                "user",
+            )
             if not (workspace_path / name).exists()
         ]
         if missing:
@@ -1084,7 +1208,12 @@ _WORKSPACE_OWNED_NAMES = {
 
 
 def _safe_fingerprint(fingerprint: str) -> str:
-    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return (
+        fingerprint.replace("sha256:", "")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+    )
 
 
 def _dependency_lock_cache_key(
@@ -1139,17 +1268,41 @@ def _launch_config_hash(
     profile_selection: RuntimeProfileSelection | None,
     enabled_custom_node_hash: str,
 ) -> str:
-    launch_defaults = profile_selection.variant.launch_defaults if profile_selection is not None else None
+    launch_defaults = (
+        profile_selection.variant.launch_defaults
+        if profile_selection is not None
+        else None
+    )
     return sha256_fingerprint(
         {
             "kind": "runner_launch_config",
             "engine": capsule_lock.engine.type,
-            "preview_method": launch_defaults.preview_method if launch_defaults is not None else "auto",
-            "vram_mode": launch_defaults.vram_mode if launch_defaults is not None else "auto",
-            "attention_backend": launch_defaults.attention_backend if launch_defaults is not None else "auto",
-            "precision_policy": launch_defaults.precision_policy if launch_defaults is not None else "auto",
+            "preview_method": (
+                launch_defaults.preview_method
+                if launch_defaults is not None
+                else "auto"
+            ),
+            "vram_mode": (
+                launch_defaults.vram_mode if launch_defaults is not None else "auto"
+            ),
+            "attention_backend": (
+                launch_defaults.attention_backend
+                if launch_defaults is not None
+                else "auto"
+            ),
+            "precision_policy": (
+                launch_defaults.precision_policy
+                if launch_defaults is not None
+                else "auto"
+            ),
             "enabled_custom_node_set": enabled_custom_node_hash,
-            "extra_model_paths_mode": launch_defaults.extra_model_paths_mode if launch_defaults is not None else "noofy_managed",
-            "noofy_environment": launch_defaults.noofy_environment if launch_defaults is not None else {},
+            "extra_model_paths_mode": (
+                launch_defaults.extra_model_paths_mode
+                if launch_defaults is not None
+                else "noofy_managed"
+            ),
+            "noofy_environment": (
+                launch_defaults.noofy_environment if launch_defaults is not None else {}
+            ),
         }
     )

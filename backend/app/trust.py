@@ -17,12 +17,22 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.artifacts import ModelVerificationLevel
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.isolation import (
     CapsuleLock,
     TrustLevel,
 )
-from app.source_policy import SOURCE_POLICY_VERSION, ModelSourceTrust, PackageSourceType, SourcePolicy
-from app.workflows.package import SignedRegistryMetadata, WorkflowPackage, WorkflowPackageSignature
+from app.source_policy import (
+    SOURCE_POLICY_VERSION,
+    ModelSourceTrust,
+    PackageSourceType,
+    SourcePolicy,
+)
+from app.workflows.package import (
+    SignedRegistryMetadata,
+    WorkflowPackage,
+    WorkflowPackageSignature,
+)
 
 TRUST_SIGNATURE_PAYLOAD_SCHEMA_VERSION = "0.1.0"
 TRUST_KEYRING_SCHEMA_VERSION = "0.1.0"
@@ -85,7 +95,9 @@ def trust_level_from_string(value: str | None) -> TrustLevel:
 
 def workflow_trust_payload(package: WorkflowPackage) -> dict[str, Any]:
     identity = package.identity
-    level = trust_level_from_string(identity.trust_level if identity else "noofy_verified")
+    level = trust_level_from_string(
+        identity.trust_level if identity else "noofy_verified"
+    )
     copy = TRUST_LEVEL_COPY[level]
     signatures = list(identity.signatures if identity else [])
     signature = identity.signature if identity else None
@@ -118,11 +130,15 @@ def workflow_source_policy(
     policy_status: str = "active",
 ) -> SourcePolicy:
     identity = package.identity
-    level = trust_level_from_string(identity.trust_level if identity else "noofy_verified")
+    level = trust_level_from_string(
+        identity.trust_level if identity else "noofy_verified"
+    )
     copy = TRUST_LEVEL_COPY[level]
     signed_registry_metadata = identity.signed_registry_metadata if identity else None
     verification_status = _package_trust_verification_status(package)
-    package_source_type = _package_source_type(identity.source if identity else "bundled")
+    package_source_type = _package_source_type(
+        identity.source if identity else "bundled"
+    )
     automatic_preparation_allowed = copy.can_prepare_automatically and (
         level is not TrustLevel.QUARANTINED_COMMUNITY or community_preparation_opted_in
     )
@@ -131,13 +147,21 @@ def workflow_source_policy(
         source_policy=copy.source_policy,
         package_source_type=package_source_type,
         automatic_preparation_allowed=automatic_preparation_allowed,
-        allowed_registry_origins=_allowed_registry_origins(level, signed_registry_metadata),
+        allowed_registry_origins=_allowed_registry_origins(
+            level, signed_registry_metadata
+        ),
         allowed_source_origins=_allowed_source_origins(level, signed_registry_metadata),
         allowed_model_origins=_allowed_model_origins(level),
-        registry_id=signed_registry_metadata.registry_id if signed_registry_metadata is not None else None,
-        registry_snapshot_hash=signed_registry_metadata.snapshot_hash
-        if signed_registry_metadata is not None
-        else None,
+        registry_id=(
+            signed_registry_metadata.registry_id
+            if signed_registry_metadata is not None
+            else None
+        ),
+        registry_snapshot_hash=(
+            signed_registry_metadata.snapshot_hash
+            if signed_registry_metadata is not None
+            else None
+        ),
         model_source_trust=_model_source_trust(package),
         community_preparation_opt_in_required=copy.requires_explicit_opt_in,
         community_preparation_opted_in=community_preparation_opted_in,
@@ -160,7 +184,9 @@ def capsule_source_policy(capsule_lock: CapsuleLock) -> SourcePolicy:
         automatic_preparation_allowed=automatic_preparation_allowed,
         allowed_source_origins=_allowed_source_origins(level, None),
         allowed_model_origins=_allowed_model_origins(level),
-        model_source_trust=ModelSourceTrust.HASHED if capsule_lock.models else ModelSourceTrust.NONE,
+        model_source_trust=(
+            ModelSourceTrust.HASHED if capsule_lock.models else ModelSourceTrust.NONE
+        ),
         community_preparation_opt_in_required=copy.requires_explicit_opt_in,
         community_preparation_opted_in=automatic_preparation_allowed
         and level is TrustLevel.QUARANTINED_COMMUNITY,
@@ -283,7 +309,10 @@ class TrustVerifier:
         signatures: list[WorkflowPackageSignature],
         signed_registry_metadata: SignedRegistryMetadata | None,
     ) -> TrustVerificationResult:
-        if requested_trust_level in {TrustLevel.QUARANTINED_COMMUNITY, TrustLevel.UNSUPPORTED}:
+        if requested_trust_level in {
+            TrustLevel.QUARANTINED_COMMUNITY,
+            TrustLevel.UNSUPPORTED,
+        }:
             return TrustVerificationResult(
                 requested_trust_level=requested_trust_level,
                 effective_trust_level=requested_trust_level,
@@ -352,7 +381,10 @@ class TrustVerifier:
                 status=TrustVerificationStatus.MISSING_SIGNED_REGISTRY_METADATA,
                 evidence_type="signed_registry_metadata",
             )
-        if not signed_registry_metadata.key_id or not signed_registry_metadata.algorithm:
+        if (
+            not signed_registry_metadata.key_id
+            or not signed_registry_metadata.algorithm
+        ):
             return TrustVerificationResult(
                 requested_trust_level=requested_trust_level,
                 effective_trust_level=TrustLevel.UNSUPPORTED,
@@ -405,7 +437,10 @@ class TrustVerifier:
                 evidence_type=evidence_type,
                 developer_details=details,
             )
-        if key.algorithm != algorithm or algorithm not in SUPPORTED_SIGNATURE_ALGORITHMS:
+        if (
+            key.algorithm != algorithm
+            or algorithm not in SUPPORTED_SIGNATURE_ALGORITHMS
+        ):
             return TrustVerificationResult(
                 requested_trust_level=requested_trust_level,
                 effective_trust_level=TrustLevel.UNSUPPORTED,
@@ -450,7 +485,9 @@ class TrustVerifier:
             expected = hmac_sha256_signature(payload, key.secret)
             verified = hmac.compare_digest(_strip_hmac_prefix(signature), expected)
         elif algorithm == ED25519_ALGORITHM and key.public_key is not None:
-            verified = ed25519_verify_signature(payload, public_key=key.public_key, signature=signature)
+            verified = ed25519_verify_signature(
+                payload, public_key=key.public_key, signature=signature
+            )
         if not verified:
             return TrustVerificationResult(
                 requested_trust_level=requested_trust_level,
@@ -482,7 +519,11 @@ class TrustVerifier:
         evidence_type: str,
         details: dict[str, object],
     ) -> TrustVerificationResult | None:
-        now = _coerce_utc(self.current_time) if self.current_time is not None else datetime.now(UTC)
+        now = (
+            _coerce_utc(self.current_time)
+            if self.current_time is not None
+            else datetime.now(UTC)
+        )
         if key.revoked:
             return TrustVerificationResult(
                 requested_trust_level=requested_trust_level,
@@ -501,7 +542,10 @@ class TrustVerifier:
                 key_id=key.key_id,
                 algorithm=algorithm,
                 evidence_type=evidence_type,
-                developer_details={**details, "not_before": _datetime_payload(key.not_before)},
+                developer_details={
+                    **details,
+                    "not_before": _datetime_payload(key.not_before),
+                },
             )
         if key.expires_at is not None and now >= _coerce_utc(key.expires_at):
             return TrustVerificationResult(
@@ -511,7 +555,10 @@ class TrustVerifier:
                 key_id=key.key_id,
                 algorithm=algorithm,
                 evidence_type=evidence_type,
-                developer_details={**details, "expires_at": _datetime_payload(key.expires_at)},
+                developer_details={
+                    **details,
+                    "expires_at": _datetime_payload(key.expires_at),
+                },
             )
         policy_version = _signature_payload_policy_version(payload)
         if key.policy_versions and policy_version not in set(key.policy_versions):
@@ -581,7 +628,9 @@ def canonical_trust_payload_bytes(payload: dict[str, Any]) -> bytes:
     return _canonical_json_bytes(payload)
 
 
-def ed25519_verify_signature(payload: dict[str, Any], *, public_key: str, signature: str) -> bool:
+def ed25519_verify_signature(
+    payload: dict[str, Any], *, public_key: str, signature: str
+) -> bool:
     try:
         public_key_bytes = _decode_signature_material(
             _strip_algorithm_prefix(public_key, ED25519_ALGORITHM),
@@ -603,7 +652,7 @@ def ed25519_verify_signature(payload: dict[str, Any], *, public_key: str, signat
 def load_trust_verifier(
     path: Path,
     *,
-    log_store: Any | None = None,
+    log_store: DiagnosticsSink | None = None,
 ) -> TrustVerifier:
     if not path.exists():
         return TrustVerifier()
@@ -637,7 +686,8 @@ def load_trust_verifier(
         return TrustVerifier()
     return TrustVerifier(
         keyring.keys,
-        allow_development_hmac=keyring.allow_development_hmac or _development_hmac_enabled_from_env(),
+        allow_development_hmac=keyring.allow_development_hmac
+        or _development_hmac_enabled_from_env(),
     )
 
 
@@ -743,7 +793,11 @@ def _coerce_utc(value: datetime) -> datetime:
 
 
 def _development_hmac_enabled_from_env() -> bool:
-    return os.environ.get("NOOFY_ALLOW_HMAC_TRUST_KEYS", "").strip().lower() in {"1", "true", "yes"}
+    return os.environ.get("NOOFY_ALLOW_HMAC_TRUST_KEYS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def _package_trust_verification_status(package: WorkflowPackage) -> str | None:
@@ -787,7 +841,11 @@ def _allowed_source_origins(
     if level is TrustLevel.NOOFY_VERIFIED:
         return ["noofy-verified"]
     if level is TrustLevel.REGISTRY_LOCKED:
-        return [signed_registry_metadata.registry_id] if signed_registry_metadata is not None else ["registry-locked"]
+        return (
+            [signed_registry_metadata.registry_id]
+            if signed_registry_metadata is not None
+            else ["registry-locked"]
+        )
     if level is TrustLevel.QUARANTINED_COMMUNITY:
         return ["explicit-metadata", "registry-locked"]
     return ["explicit-metadata"]

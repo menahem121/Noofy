@@ -20,9 +20,14 @@ from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.manager import select_free_port
-from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerMemoryClass, RunnerStatus
+from app.runtime.supervisor import (
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerMemoryClass,
+    RunnerStatus,
+)
 
 RunnerProcessFactory = Callable[..., Awaitable[Any]]
 RunnerHealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
@@ -88,7 +93,7 @@ class RunnerProcessSupervisor:
     def __init__(
         self,
         *,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
         process_factory: RunnerProcessFactory | None = None,
         health_check: RunnerHealthCheck | None = None,
         process_tree_terminator: RunnerProcessTreeTerminator | None = None,
@@ -96,7 +101,7 @@ class RunnerProcessSupervisor:
         health_poll_interval_seconds: float = 0.5,
         pid_dir: Path | None = None,
     ) -> None:
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self._process_factory = process_factory or self._create_process
         self._health_check = health_check or self._default_health_check
         self._process_tree_terminator = process_tree_terminator
@@ -147,7 +152,11 @@ class RunnerProcessSupervisor:
             runtime_profile_id=spec.runtime_profile_id,
             runtime_profile_variant_id=spec.runtime_profile_variant_id,
             memory_class=spec.memory_class,
-            memory_telemetry_path=str(spec.memory_telemetry_path) if spec.memory_telemetry_path is not None else None,
+            memory_telemetry_path=(
+                str(spec.memory_telemetry_path)
+                if spec.memory_telemetry_path is not None
+                else None
+            ),
         )
 
         try:
@@ -187,14 +196,22 @@ class RunnerProcessSupervisor:
                 "runner_id": spec.runner_id,
                 "pid": process.pid,
                 "base_url": base_url,
-                "dependency_env_path": str(spec.dependency_env_path) if spec.dependency_env_path else None,
-                "runner_workspace_path": str(spec.runner_workspace_path) if spec.runner_workspace_path else None,
+                "dependency_env_path": (
+                    str(spec.dependency_env_path) if spec.dependency_env_path else None
+                ),
+                "runner_workspace_path": (
+                    str(spec.runner_workspace_path)
+                    if spec.runner_workspace_path
+                    else None
+                ),
             },
         )
 
         reachable = await self._poll_until_reachable(record)
         if reachable:
-            record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.READY})
+            record.descriptor = record.descriptor.model_copy(
+                update={"status": RunnerStatus.READY}
+            )
             record.last_error = None
             self.log_store.add(
                 "info",
@@ -205,10 +222,14 @@ class RunnerProcessSupervisor:
             return self._handle(record)
 
         if getattr(process, "returncode", None) is not None:
-            record.last_error = f"Runner exited during startup with code {process.returncode}"
+            record.last_error = (
+                f"Runner exited during startup with code {process.returncode}"
+            )
         else:
             record.last_error = f"Runner startup timed out after {self.startup_timeout_seconds:g} seconds"
-        record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.UNREACHABLE})
+        record.descriptor = record.descriptor.model_copy(
+            update={"status": RunnerStatus.UNREACHABLE}
+        )
         self.log_store.add(
             "error",
             "Runner process startup failed",
@@ -229,7 +250,9 @@ class RunnerProcessSupervisor:
             )
 
         if self._is_running(record.process):
-            record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.STOPPING})
+            record.descriptor = record.descriptor.model_copy(
+                update={"status": RunnerStatus.STOPPING}
+            )
             await self._terminate_runner_process(record)
 
         if record.log_task is not None:
@@ -238,7 +261,9 @@ class RunnerProcessSupervisor:
                 await record.log_task
             record.log_task = None
 
-        record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.STOPPED})
+        record.descriptor = record.descriptor.model_copy(
+            update={"status": RunnerStatus.STOPPED}
+        )
         self.log_store.add(
             "info",
             "Runner process stopped",
@@ -269,7 +294,9 @@ class RunnerProcessSupervisor:
         if not self._is_running(record.process):
             returncode = getattr(record.process, "returncode", None)
             record.last_error = f"Runner process exited with code {returncode}"
-            record.descriptor = record.descriptor.model_copy(update={"status": RunnerStatus.STOPPED})
+            record.descriptor = record.descriptor.model_copy(
+                update={"status": RunnerStatus.STOPPED}
+            )
             self._remove_pid_file(runner_id)
             self.log_store.add(
                 "error",
@@ -281,7 +308,9 @@ class RunnerProcessSupervisor:
 
         reachable, error = await self._health_check(record.descriptor.base_url)
         record.descriptor = record.descriptor.model_copy(
-            update={"status": RunnerStatus.READY if reachable else RunnerStatus.UNREACHABLE}
+            update={
+                "status": RunnerStatus.READY if reachable else RunnerStatus.UNREACHABLE
+            }
         )
         record.last_error = None if reachable else error
         return self._status_from_record(record)
@@ -353,7 +382,11 @@ class RunnerProcessSupervisor:
             line = await stream.readline()
             if not line:
                 return
-            text = line.decode(errors="replace").rstrip() if isinstance(line, bytes) else str(line).rstrip()
+            text = (
+                line.decode(errors="replace").rstrip()
+                if isinstance(line, bytes)
+                else str(line).rstrip()
+            )
             if text:
                 self.log_store.add(
                     "debug",
@@ -445,7 +478,9 @@ class RunnerProcessSupervisor:
             process.kill()
             await asyncio.wait_for(process.wait(), timeout=10)
 
-    async def _create_process(self, command: list[str], **kwargs: Any) -> asyncio.subprocess.Process:
+    async def _create_process(
+        self, command: list[str], **kwargs: Any
+    ) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(*command, **kwargs)
 
     async def _default_health_check(self, base_url: str) -> tuple[bool, str | None]:
@@ -494,7 +529,9 @@ def _process_tree_start_kwargs() -> dict[str, object]:
     return {"start_new_session": True}
 
 
-def _memory_probe_command(spec: RunnerLaunchSpec, target_command: list[str]) -> list[str]:
+def _memory_probe_command(
+    spec: RunnerLaunchSpec, target_command: list[str]
+) -> list[str]:
     if spec.memory_telemetry_path is None:
         return [spec.python_executable, *target_command]
     return [
@@ -514,7 +551,9 @@ def _memory_probe_command(spec: RunnerLaunchSpec, target_command: list[str]) -> 
 
 
 def _safe_runner_id(runner_id: str) -> str:
-    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in runner_id)
+    return "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_" for char in runner_id
+    )
 
 
 def _is_pid_alive(pid: int) -> bool:

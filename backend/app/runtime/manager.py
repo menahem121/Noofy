@@ -11,7 +11,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import (
     ComfyUIRuntimeStatus,
     ComfyUIVersionMetadata,
@@ -42,6 +42,7 @@ class RuntimeManager:
         external_base_url: str,
         repo_dir: Path,
         python_executable: str,
+        log_store: DiagnosticsSink,
         managed_host: str = "127.0.0.1",
         managed_port: int | None = None,
         external_ws_url: str | None = None,
@@ -49,7 +50,6 @@ class RuntimeManager:
         health_poll_interval_seconds: float = 0.5,
         max_restart_attempts: int = 3,
         restart_backoff_base_seconds: float = 2.0,
-        log_store: LogStore | None = None,
         environment: RuntimeEnvironment | None = None,
         process_factory: ProcessFactory | None = None,
         health_check: HealthCheck | None = None,
@@ -78,7 +78,7 @@ class RuntimeManager:
         self.health_poll_interval_seconds = health_poll_interval_seconds
         self.max_restart_attempts = max_restart_attempts
         self.restart_backoff_base_seconds = restart_backoff_base_seconds
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self.environment = environment
         self._process_factory = process_factory or self._create_process
         self._health_check = health_check or self._default_health_check
@@ -110,7 +110,11 @@ class RuntimeManager:
 
         self.external_base_url = external_base_url.rstrip("/")
         self.external_ws_url = external_ws_url
-        self.base_url = self.external_base_url if self.mode == "external" else self._managed_base_url()
+        self.base_url = (
+            self.external_base_url
+            if self.mode == "external"
+            else self._managed_base_url()
+        )
         self.ws_url = (
             self.external_ws_url
             if self.mode == "external" and self.external_ws_url
@@ -124,7 +128,9 @@ class RuntimeManager:
     async def status(self) -> ComfyUIRuntimeStatus:
         self._record_process_exit_if_needed()
         reachable, reachability_error = await self._health_check(self.base_url)
-        environment_status = await self.environment.status() if self.environment is not None else None
+        environment_status = (
+            await self.environment.status() if self.environment is not None else None
+        )
         error = None if reachable else self._last_error or reachability_error
 
         uptime: float | None = None
@@ -145,7 +151,9 @@ class RuntimeManager:
             restart_attempt=self._restart_attempt,
             max_restart_attempts=self.max_restart_attempts,
             uptime_seconds=uptime,
-            last_crash_at=self._last_crash_at.isoformat() if self._last_crash_at else None,
+            last_crash_at=(
+                self._last_crash_at.isoformat() if self._last_crash_at else None
+            ),
             version=self._version_metadata,
             managed_vram_mode=self.managed_vram_mode,
         )
@@ -161,7 +169,9 @@ class RuntimeManager:
         if self.mode != "managed":
             raise RuntimeError("Only managed ComfyUI runtimes can be reconfigured.")
         if self._is_managed_process_running():
-            raise RuntimeError("Cannot reconfigure ComfyUI while the managed process is running.")
+            raise RuntimeError(
+                "Cannot reconfigure ComfyUI while the managed process is running."
+            )
         self.repo_dir = repo_dir
         self.python_executable = python_executable
         self.environment = environment
@@ -213,19 +223,26 @@ class RuntimeManager:
                 "runtime.manager",
                 details={"error": repo_error},
             )
-            return ProcessActionResult(status="repo_missing", comfyui=(await self.status()))
+            return ProcessActionResult(
+                status="repo_missing", comfyui=(await self.status())
+            )
 
         if self.environment is not None:
             environment_status = await self.environment.status()
             if not environment_status.prepared:
-                self._last_error = environment_status.error or "ComfyUI runtime environment is not prepared"
+                self._last_error = (
+                    environment_status.error
+                    or "ComfyUI runtime environment is not prepared"
+                )
                 self.log_store.add(
                     "error",
                     "ComfyUI runtime environment is not prepared",
                     "runtime.manager",
                     details={"error": self._last_error},
                 )
-                return ProcessActionResult(status="environment_not_ready", comfyui=(await self.status()))
+                return ProcessActionResult(
+                    status="environment_not_ready", comfyui=(await self.status())
+                )
 
         # Clean up any orphan from a previous backend crash.
         self._cleanup_stale_pid()
@@ -250,7 +267,10 @@ class RuntimeManager:
                 )
                 return ProcessActionResult(status="started", comfyui=status)
 
-            if self._process is not None and getattr(self._process, "returncode", None) is not None:
+            if (
+                self._process is not None
+                and getattr(self._process, "returncode", None) is not None
+            ):
                 self._last_error = f"ComfyUI process exited during startup with code {self._process.returncode}"
                 self.log_store.add(
                     "error",
@@ -258,7 +278,9 @@ class RuntimeManager:
                     "runtime.manager",
                     details={"error": self._last_error},
                 )
-                return ProcessActionResult(status="startup_failed", comfyui=(await self.status()))
+                return ProcessActionResult(
+                    status="startup_failed", comfyui=(await self.status())
+                )
 
             self._last_error = f"ComfyUI startup timed out after {self.startup_timeout_seconds:g} seconds"
             self.log_store.add(
@@ -268,14 +290,22 @@ class RuntimeManager:
                 details={"error": self._last_error},
             )
             await self._stop_managed_process()
-            return ProcessActionResult(status="startup_timeout", comfyui=(await self.status()))
+            return ProcessActionResult(
+                status="startup_timeout", comfyui=(await self.status())
+            )
         finally:
             self._sidecar_starting = False
 
     async def stop(self) -> ProcessActionResult:
         if self.mode == "external":
-            self.log_store.add("warning", "ComfyUI stop requested in external runtime mode", "runtime.manager")
-            return ProcessActionResult(status="not_managed", comfyui=await self.status())
+            self.log_store.add(
+                "warning",
+                "ComfyUI stop requested in external runtime mode",
+                "runtime.manager",
+            )
+            return ProcessActionResult(
+                status="not_managed", comfyui=await self.status()
+            )
 
         if not self._is_managed_process_running():
             self.log_store.add(
@@ -283,7 +313,9 @@ class RuntimeManager:
                 "ComfyUI stop requested but no managed process is running",
                 "runtime.manager",
             )
-            return ProcessActionResult(status="not_running", comfyui=await self.status())
+            return ProcessActionResult(
+                status="not_running", comfyui=await self.status()
+            )
 
         self._stopping = True
         await self._stop_managed_process()
@@ -295,7 +327,11 @@ class RuntimeManager:
     async def bootstrap_environment(self) -> RuntimeBootstrapResult:
         if self.environment is None:
             status = await self.status()
-            self.log_store.add("warning", "No managed runtime environment is configured", "runtime.manager")
+            self.log_store.add(
+                "warning",
+                "No managed runtime environment is configured",
+                "runtime.manager",
+            )
             return RuntimeBootstrapResult(
                 status="not_configured",
                 environment=status.environment,
@@ -340,10 +376,16 @@ class RuntimeManager:
             "info",
             "Managed ComfyUI process started",
             "runtime.manager",
-            details={"pid": self._process.pid, "host": self.managed_host, "port": self.managed_port},
+            details={
+                "pid": self._process.pid,
+                "host": self.managed_host,
+                "port": self.managed_port,
+            },
         )
         self._write_pid_file(self._process.pid)
-        self._log_task = asyncio.create_task(self._capture_process_output(self._process))
+        self._log_task = asyncio.create_task(
+            self._capture_process_output(self._process)
+        )
         if start_watchdog:
             self._start_watchdog()
 
@@ -424,7 +466,9 @@ class RuntimeManager:
         # Attempt controlled restart.
         while self._restart_attempt < self.max_restart_attempts and not self._stopping:
             self._restart_attempt += 1
-            delay = self.restart_backoff_base_seconds * (2 ** (self._restart_attempt - 1))
+            delay = self.restart_backoff_base_seconds * (
+                2 ** (self._restart_attempt - 1)
+            )
             self.log_store.add(
                 "info",
                 f"Scheduling ComfyUI restart (attempt {self._restart_attempt}/{self.max_restart_attempts})",
@@ -451,7 +495,10 @@ class RuntimeManager:
                     "error",
                     "ComfyUI restart process spawn failed",
                     "runtime.manager",
-                    details={"error": str(exc), "restart_attempt": self._restart_attempt},
+                    details={
+                        "error": str(exc),
+                        "restart_attempt": self._restart_attempt,
+                    },
                 )
                 continue
 
@@ -488,9 +535,7 @@ class RuntimeManager:
 
         # Exhausted all restart attempts.
         if not self._stopping:
-            self._last_error = (
-                f"ComfyUI crashed and exhausted {self.max_restart_attempts} restart attempts"
-            )
+            self._last_error = f"ComfyUI crashed and exhausted {self.max_restart_attempts} restart attempts"
             self.log_store.add(
                 "error",
                 "ComfyUI restart attempts exhausted",
@@ -577,7 +622,11 @@ class RuntimeManager:
             line = await stream.readline()
             if not line:
                 return
-            text = line.decode(errors="replace").rstrip() if isinstance(line, bytes) else str(line).rstrip()
+            text = (
+                line.decode(errors="replace").rstrip()
+                if isinstance(line, bytes)
+                else str(line).rstrip()
+            )
             if text:
                 self.log_store.add("debug", text, "comfyui.stdout")
 
@@ -585,7 +634,10 @@ class RuntimeManager:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while asyncio.get_running_loop().time() < deadline:
             self._record_process_exit_if_needed()
-            if self._process is not None and getattr(self._process, "returncode", None) is not None:
+            if (
+                self._process is not None
+                and getattr(self._process, "returncode", None) is not None
+            ):
                 return False
 
             reachable, _ = await self._health_check(self.base_url)
@@ -658,7 +710,9 @@ class RuntimeManager:
             env["PYTHONPYCACHEPREFIX"] = str(self._python_cache_dir)
         return env
 
-    async def _create_process(self, command: list[str], **kwargs: Any) -> asyncio.subprocess.Process:
+    async def _create_process(
+        self, command: list[str], **kwargs: Any
+    ) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(*command, **kwargs)
 
     async def _default_health_check(self, base_url: str) -> tuple[bool, str | None]:

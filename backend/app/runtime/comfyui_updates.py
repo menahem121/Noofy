@@ -20,7 +20,7 @@ import websockets
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.paths import NoofyPaths
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import ComfyUIVersionMetadata, ProcessActionResult
 from app.runtime.environment import CommandRunner, RuntimeEnvironment
 from app.runtime.manager import RuntimeManager
@@ -193,7 +193,9 @@ def resolve_active_runtime_selection(
                 active_tag=active.tag,
                 source_hash=active.source_hash,
                 source_kind="installed",
-                local_validation_status="locally_verified" if active.locally_verified else "installed",
+                local_validation_status=(
+                    "locally_verified" if active.locally_verified else "installed"
+                ),
             ),
         )
 
@@ -216,9 +218,9 @@ class ComfyUIUpdateService:
         bootstrap_python_executable: str,
         torch_cuda_index_url: str | None,
         torch_cpu_index_url: str,
+        log_store: DiagnosticsSink,
         bundled_repo_dir: Path | None = None,
         bundled_python_executable: str | None = None,
-        log_store: LogStore | None = None,
         release_fetcher: ReleaseFetcher | None = None,
         archive_downloader: ArchiveDownloader | None = None,
         command_runner: CommandRunner | None = None,
@@ -233,7 +235,7 @@ class ComfyUIUpdateService:
         self.torch_cpu_index_url = torch_cpu_index_url
         self.bundled_repo_dir = bundled_repo_dir
         self.bundled_python_executable = bundled_python_executable
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self.release_fetcher = release_fetcher or self._fetch_upstream_releases
         self.archive_downloader = archive_downloader or self._download_archive
         self.command_runner = command_runner
@@ -248,7 +250,9 @@ class ComfyUIUpdateService:
         fetch_error: str | None = None
         try:
             releases = _stable_sorted_releases(await self.release_fetcher())
-        except Exception as exc:  # pragma: no cover - exercised through API behavior tests.
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - exercised through API behavior tests.
             fetch_error = str(exc)
 
         records = self._read_records()
@@ -260,12 +264,20 @@ class ComfyUIUpdateService:
         seen: set[str] = set()
         for release in releases:
             record = records.get(release.tag_name)
-            options.append(_version_option(release, record, active_tag=active.tag if active else None))
+            options.append(
+                _version_option(
+                    release, record, active_tag=active.tag if active else None
+                )
+            )
             seen.add(release.tag_name)
-        for tag, record in sorted(records.items(), key=lambda item: _version_sort_key(item[0]), reverse=True):
+        for tag, record in sorted(
+            records.items(), key=lambda item: _version_sort_key(item[0]), reverse=True
+        ):
             if tag in seen:
                 continue
-            options.append(_version_option(None, record, active_tag=active.tag if active else None))
+            options.append(
+                _version_option(None, record, active_tag=active.tag if active else None)
+            )
 
         return ComfyUIVersionsResponse(
             updates_allowed=allowed,
@@ -276,10 +288,14 @@ class ComfyUIUpdateService:
             release_fetch_error=fetch_error,
         )
 
-    async def start_update(self, request: ComfyUIUpdateRequest) -> ComfyUIUpdateJobStatus:
+    async def start_update(
+        self, request: ComfyUIUpdateRequest
+    ) -> ComfyUIUpdateJobStatus:
         allowed, reason = self._updates_allowed()
         if not allowed:
-            self._job = ComfyUIUpdateJobStatus(status="blocked", phase="blocked", error=reason)
+            self._job = ComfyUIUpdateJobStatus(
+                status="blocked", phase="blocked", error=reason
+            )
             return self._job
         if self._task is not None and not self._task.done():
             return self._job
@@ -296,10 +312,14 @@ class ComfyUIUpdateService:
         self._task = asyncio.create_task(self._run_update(request.version, job_id))
         return self._job
 
-    async def start_rebuild(self, request: ComfyUIRebuildRequest) -> ComfyUIUpdateJobStatus:
+    async def start_rebuild(
+        self, request: ComfyUIRebuildRequest
+    ) -> ComfyUIUpdateJobStatus:
         allowed, reason = self._updates_allowed()
         if not allowed:
-            self._job = ComfyUIUpdateJobStatus(operation="rebuild", status="blocked", phase="blocked", error=reason)
+            self._job = ComfyUIUpdateJobStatus(
+                operation="rebuild", status="blocked", phase="blocked", error=reason
+            )
             return self._job
         if self._task is not None and not self._task.done():
             return self._job
@@ -329,7 +349,9 @@ class ComfyUIUpdateService:
         allowed, reason = self._updates_allowed()
         if not allowed:
             return failed_result
-        if not _start_failure_is_repairable(failed_result.status, failed_result.comfyui.error):
+        if not _start_failure_is_repairable(
+            failed_result.status, failed_result.comfyui.error
+        ):
             return failed_result
         active = self._active_record()
         if active is None or not active.installed:
@@ -339,7 +361,12 @@ class ComfyUIUpdateService:
 
         blocked_until = _repair_blocked_until(active)
         if blocked_until is not None:
-            active = active.model_copy(update={"repair_status": "repair_blocked", "repair_blocked_until": blocked_until})
+            active = active.model_copy(
+                update={
+                    "repair_status": "repair_blocked",
+                    "repair_blocked_until": blocked_until,
+                }
+            )
             self._upsert_record(active)
             self._job = ComfyUIUpdateJobStatus(
                 operation="repair",
@@ -357,9 +384,15 @@ class ComfyUIUpdateService:
                 "warning",
                 "Automatic ComfyUI repair blocked by retry policy",
                 "runtime.comfyui_repair",
-                details={"tag": active.tag, "blocked_until": blocked_until, "reason": repair_reason},
+                details={
+                    "tag": active.tag,
+                    "blocked_until": blocked_until,
+                    "reason": repair_reason,
+                },
             )
-            return ProcessActionResult(status="repair_blocked", comfyui=await self.runtime_manager.status())
+            return ProcessActionResult(
+                status="repair_blocked", comfyui=await self.runtime_manager.status()
+            )
 
         job_id = f"comfyui-repair-{uuid4().hex}"
         attempt = active.repair_attempt_count + 1
@@ -393,7 +426,9 @@ class ComfyUIUpdateService:
 
         try:
             async with self._lock:
-                repaired = await self._repair_record(active, job_id=job_id, repair_reason=repair_reason)
+                repaired = await self._repair_record(
+                    active, job_id=job_id, repair_reason=repair_reason
+                )
                 self._set_job(
                     job_id,
                     "activating",
@@ -409,7 +444,9 @@ class ComfyUIUpdateService:
                 if started.status in {"started", "already_running"}:
                     current = self._active_record() or repaired
                     current = _clear_repair_state(
-                        current.model_copy(update={"last_successfully_started_at": _now_iso()})
+                        current.model_copy(
+                            update={"last_successfully_started_at": _now_iso()}
+                        )
                     )
                     self._upsert_record(current)
                     self._write_active_record(current)
@@ -426,9 +463,14 @@ class ComfyUIUpdateService:
                         repair_reason=repair_reason,
                         repair_attempt_count=attempt,
                     )
-                    return ProcessActionResult(status="repair_completed_started", comfyui=started.comfyui)
+                    return ProcessActionResult(
+                        status="repair_completed_started", comfyui=started.comfyui
+                    )
 
-                message = started.comfyui.error or f"Managed ComfyUI start returned {started.status}"
+                message = (
+                    started.comfyui.error
+                    or f"Managed ComfyUI start returned {started.status}"
+                )
                 failed = repaired.model_copy(
                     update={
                         "repair_status": "startup_failed",
@@ -439,7 +481,9 @@ class ComfyUIUpdateService:
                 if blocked is not None:
                     failed = failed.model_copy(update={"repair_blocked_until": blocked})
                 self._upsert_record(failed)
-                fallback = await self._fallback_after_repair_failure(job_id, active, message, repair_reason)
+                fallback = await self._fallback_after_repair_failure(
+                    job_id, active, message, repair_reason
+                )
                 return fallback
         except ComfyUIRepairError as exc:
             latest = self._read_records().get(active.tag) or active
@@ -460,30 +504,51 @@ class ComfyUIUpdateService:
             failed_record = latest.model_copy(update=updates)
             blocked = _repair_blocked_until(failed_record)
             if blocked is not None:
-                failed_record = failed_record.model_copy(update={"repair_blocked_until": blocked})
+                failed_record = failed_record.model_copy(
+                    update={"repair_blocked_until": blocked}
+                )
             self._upsert_record(failed_record)
-            fallback = await self._fallback_after_repair_failure(job_id, active, str(exc), repair_reason)
+            fallback = await self._fallback_after_repair_failure(
+                job_id, active, str(exc), repair_reason
+            )
             if exc.category == "incompatible":
-                self._job = self._job.model_copy(update={"incompatible_version": active.tag})
+                self._job = self._job.model_copy(
+                    update={"incompatible_version": active.tag}
+                )
             return fallback
         except Exception as exc:
             latest = self._read_records().get(active.tag) or active
-            failed_record = latest.model_copy(update={"repair_status": "repair_failed", "last_repair_error": str(exc)})
+            failed_record = latest.model_copy(
+                update={"repair_status": "repair_failed", "last_repair_error": str(exc)}
+            )
             blocked = _repair_blocked_until(failed_record)
             if blocked is not None:
-                failed_record = failed_record.model_copy(update={"repair_blocked_until": blocked})
+                failed_record = failed_record.model_copy(
+                    update={"repair_blocked_until": blocked}
+                )
             self._upsert_record(failed_record)
-            return await self._fallback_after_repair_failure(job_id, active, str(exc), repair_reason)
+            return await self._fallback_after_repair_failure(
+                job_id, active, str(exc), repair_reason
+            )
 
     async def _run_update(self, selected_version: str, job_id: str) -> None:
         async with self._lock:
-            transaction_dir = self.paths.install_transactions_dir / f"install-comfyui-update-{uuid4().hex}"
+            transaction_dir = (
+                self.paths.install_transactions_dir
+                / f"install-comfyui-update-{uuid4().hex}"
+            )
             try:
-                self._set_job(job_id, "resolving", selected_version, "Resolving ComfyUI release.")
+                self._set_job(
+                    job_id, "resolving", selected_version, "Resolving ComfyUI release."
+                )
                 releases = await self.release_fetcher()
                 release = _resolve_release(selected_version, releases)
                 existing = self._read_records().get(release.tag_name)
-                if _record_paths_ready(existing) and existing and existing.locally_verified:
+                if (
+                    _record_paths_ready(existing)
+                    and existing
+                    and existing.locally_verified
+                ):
                     existing = _clear_repair_state(existing)
                     self._upsert_record(existing)
                     await self._activate(existing)
@@ -508,10 +573,15 @@ class ComfyUIUpdateService:
                     f"Downloading ComfyUI {release.tag_name}.",
                     resolved_tag=release.tag_name,
                 )
-                archive_url = release.zipball_url or f"https://github.com/{UPSTREAM_REPO}/archive/refs/tags/{release.tag_name}.zip"
+                archive_url = (
+                    release.zipball_url
+                    or f"https://github.com/{UPSTREAM_REPO}/archive/refs/tags/{release.tag_name}.zip"
+                )
                 await self.archive_downloader(archive_url, archive_path)
 
-                self._set_job(job_id, "extracting", selected_version, "Extracting ComfyUI source.")
+                self._set_job(
+                    job_id, "extracting", selected_version, "Extracting ComfyUI source."
+                )
                 extracted_source = transaction_dir / "source"
                 _extract_github_zip(archive_path, extracted_source)
                 source_manifest = build_comfyui_source_manifest(
@@ -525,14 +595,23 @@ class ComfyUIUpdateService:
                 final_source = self.paths.core_engines_dir / engine_id
                 final_env = self.paths.core_envs_dir / engine_id / "venv"
                 active = self._active_record()
-                if final_source.exists() and (active is None or active.source_path != str(final_source)):
+                if final_source.exists() and (
+                    active is None or active.source_path != str(final_source)
+                ):
                     shutil.rmtree(final_source)
-                if final_env.exists() and (active is None or active.env_path != str(final_env)):
+                if final_env.exists() and (
+                    active is None or active.env_path != str(final_env)
+                ):
                     shutil.rmtree(final_env)
                 final_source.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(extracted_source, final_source)
 
-                self._set_job(job_id, "installing_dependencies", selected_version, "Preparing a fresh ComfyUI environment.")
+                self._set_job(
+                    job_id,
+                    "installing_dependencies",
+                    selected_version,
+                    "Preparing a fresh ComfyUI environment.",
+                )
                 environment = RuntimeEnvironment(
                     repo_dir=final_source,
                     runtime_dir=self.paths.core_envs_dir / engine_id,
@@ -547,7 +626,11 @@ class ComfyUIUpdateService:
                 )
                 bootstrap = await environment.bootstrap()
                 if bootstrap.status not in {"prepared", "already_prepared"}:
-                    raise RuntimeError(bootstrap.environment.error if bootstrap.environment else bootstrap.status)
+                    raise RuntimeError(
+                        bootstrap.environment.error
+                        if bootstrap.environment
+                        else bootstrap.status
+                    )
 
                 record = LocalComfyUIVersionRecord(
                     tag=release.tag_name,
@@ -564,12 +647,26 @@ class ComfyUIUpdateService:
                 )
                 self._upsert_record(record)
 
-                self._set_job(job_id, "smoke_testing", selected_version, "Validating ComfyUI before activation.")
+                self._set_job(
+                    job_id,
+                    "smoke_testing",
+                    selected_version,
+                    "Validating ComfyUI before activation.",
+                )
                 await self.smoke_tester(final_source, final_env, record)
-                record = _clear_repair_state(record.model_copy(update={"locally_verified": True, "validated_at": _now_iso()}))
+                record = _clear_repair_state(
+                    record.model_copy(
+                        update={"locally_verified": True, "validated_at": _now_iso()}
+                    )
+                )
                 self._upsert_record(record)
 
-                self._set_job(job_id, "activating", selected_version, "Activating validated ComfyUI version.")
+                self._set_job(
+                    job_id,
+                    "activating",
+                    selected_version,
+                    "Activating validated ComfyUI version.",
+                )
                 await self._activate(record)
                 self._set_job(
                     job_id,
@@ -595,7 +692,9 @@ class ComfyUIUpdateService:
                     )
                 tag = self._job.resolved_tag
                 if tag:
-                    existing = self._read_records().get(tag) or LocalComfyUIVersionRecord(tag=tag)
+                    existing = self._read_records().get(
+                        tag
+                    ) or LocalComfyUIVersionRecord(tag=tag)
                     self._upsert_record(
                         existing.model_copy(
                             update={
@@ -671,9 +770,15 @@ class ComfyUIUpdateService:
                     repair_reason="manual_rebuild",
                 )
             except ComfyUIRepairError as exc:
-                tag = self._job.resolved_tag or (None if selected_version in {"current", "latest"} else selected_version)
+                tag = self._job.resolved_tag or (
+                    None
+                    if selected_version in {"current", "latest"}
+                    else selected_version
+                )
                 if tag:
-                    existing = self._read_records().get(tag) or LocalComfyUIVersionRecord(tag=tag)
+                    existing = self._read_records().get(
+                        tag
+                    ) or LocalComfyUIVersionRecord(tag=tag)
                     updates: dict[str, object] = {
                         "repair_status": exc.category,
                         "last_repair_error": str(exc),
@@ -697,14 +802,27 @@ class ComfyUIUpdateService:
                     operation="rebuild",
                     status="failed",
                     error=str(exc),
-                    incompatible_version=tag if exc.category == "incompatible" else None,
+                    incompatible_version=(
+                        tag if exc.category == "incompatible" else None
+                    ),
                 )
             except Exception as exc:
-                tag = self._job.resolved_tag or (None if selected_version in {"current", "latest"} else selected_version)
+                tag = self._job.resolved_tag or (
+                    None
+                    if selected_version in {"current", "latest"}
+                    else selected_version
+                )
                 if tag:
-                    existing = self._read_records().get(tag) or LocalComfyUIVersionRecord(tag=tag)
+                    existing = self._read_records().get(
+                        tag
+                    ) or LocalComfyUIVersionRecord(tag=tag)
                     self._upsert_record(
-                        existing.model_copy(update={"repair_status": "repair_failed", "last_repair_error": str(exc)})
+                        existing.model_copy(
+                            update={
+                                "repair_status": "repair_failed",
+                                "last_repair_error": str(exc),
+                            }
+                        )
                     )
                 self._set_job(
                     job_id,
@@ -716,16 +834,24 @@ class ComfyUIUpdateService:
                     error=str(exc),
                 )
 
-    def _resolve_rebuild_record(self, selected_version: str) -> LocalComfyUIVersionRecord:
+    def _resolve_rebuild_record(
+        self, selected_version: str
+    ) -> LocalComfyUIVersionRecord:
         active = self._active_record()
-        tag = active.tag if selected_version in {"current", "latest"} and active is not None else selected_version
+        tag = (
+            active.tag
+            if selected_version in {"current", "latest"} and active is not None
+            else selected_version
+        )
         if not tag:
             raise RuntimeError("No active ComfyUI version is available to rebuild.")
         record = self._read_records().get(tag)
         if record is None and active is not None and active.tag == tag:
             record = active
         if record is None or not record.installed:
-            raise RuntimeError(f"ComfyUI version is not installed and cannot be rebuilt: {tag}")
+            raise RuntimeError(
+                f"ComfyUI version is not installed and cannot be rebuilt: {tag}"
+            )
         if not record.source_path:
             raise RuntimeError(f"ComfyUI version has no recorded source path: {tag}")
         return record
@@ -738,12 +864,21 @@ class ComfyUIUpdateService:
         repair_reason: str,
         materialization_suffix: str | None = None,
     ) -> LocalComfyUIVersionRecord:
-        transaction_dir = self.paths.install_transactions_dir / f"repair-comfyui-{_safe_tag(record.tag)}-{uuid4().hex}"
+        transaction_dir = (
+            self.paths.install_transactions_dir
+            / f"repair-comfyui-{_safe_tag(record.tag)}-{uuid4().hex}"
+        )
         transaction_dir.mkdir(parents=True, exist_ok=False)
         try:
-            source_dir, source_hash, source_reference = await self._repair_source(record, transaction_dir, job_id, repair_reason)
+            source_dir, source_hash, source_reference = await self._repair_source(
+                record, transaction_dir, job_id, repair_reason
+            )
             engine_id = f"comfyui-core-{_safe_tag(record.tag)}-{source_hash.removeprefix('sha256:')[:16]}"
-            env_id = f"{engine_id}-{materialization_suffix}" if materialization_suffix else engine_id
+            env_id = (
+                f"{engine_id}-{materialization_suffix}"
+                if materialization_suffix
+                else engine_id
+            )
             final_source = self.paths.core_engines_dir / engine_id
             final_env = self.paths.core_envs_dir / env_id / "venv"
             staged_env = transaction_dir / "env" / "venv"
@@ -773,7 +908,11 @@ class ComfyUIUpdateService:
             bootstrap = await environment.bootstrap()
             if bootstrap.status not in {"prepared", "already_prepared"}:
                 raise ComfyUIRepairError(
-                    bootstrap.environment.error if bootstrap.environment and bootstrap.environment.error else bootstrap.status,
+                    (
+                        bootstrap.environment.error
+                        if bootstrap.environment and bootstrap.environment.error
+                        else bootstrap.status
+                    ),
                     category="repair_failed",
                 )
 
@@ -804,7 +943,9 @@ class ComfyUIUpdateService:
             except Exception as exc:
                 if _smoke_failure_is_compatibility(str(exc)):
                     raise ComfyUIRepairError(str(exc), category="incompatible") from exc
-                raise ComfyUIRepairError(str(exc), category="validation_failed") from exc
+                raise ComfyUIRepairError(
+                    str(exc), category="validation_failed"
+                ) from exc
 
             if final_source.exists() and final_source != source_dir:
                 shutil.rmtree(final_source)
@@ -853,8 +994,14 @@ class ComfyUIUpdateService:
         repair_reason: str,
     ) -> tuple[Path, str, str | None]:
         local_source = Path(record.source_path) if record.source_path else None
-        if local_source is not None and self._source_matches_record(local_source, record):
-            return local_source, record.source_hash or self._source_hash(local_source, record), record.archive_url
+        if local_source is not None and self._source_matches_record(
+            local_source, record
+        ):
+            return (
+                local_source,
+                record.source_hash or self._source_hash(local_source, record),
+                record.archive_url,
+            )
 
         self._set_job(
             job_id,
@@ -868,7 +1015,9 @@ class ComfyUIUpdateService:
         )
         last_error: Exception | None = None
         for archive_url in _archive_recovery_candidates(record):
-            archive_path = transaction_dir / f"{_safe_tag(record.tag)}-{uuid4().hex}.zip"
+            archive_path = (
+                transaction_dir / f"{_safe_tag(record.tag)}-{uuid4().hex}.zip"
+            )
             extracted_source = transaction_dir / f"source-{uuid4().hex}"
             try:
                 await self.archive_downloader(archive_url, archive_path)
@@ -891,9 +1040,14 @@ class ComfyUIUpdateService:
             except Exception as exc:
                 last_error = exc
                 shutil.rmtree(extracted_source, ignore_errors=True)
-        raise ComfyUIRepairError(str(last_error or "Could not recover ComfyUI source."), category="repair_failed")
+        raise ComfyUIRepairError(
+            str(last_error or "Could not recover ComfyUI source."),
+            category="repair_failed",
+        )
 
-    def _source_matches_record(self, source_dir: Path, record: LocalComfyUIVersionRecord) -> bool:
+    def _source_matches_record(
+        self, source_dir: Path, record: LocalComfyUIVersionRecord
+    ) -> bool:
         if not source_dir.exists() or not (source_dir / "main.py").exists():
             return False
         if not record.source_hash:
@@ -921,7 +1075,12 @@ class ComfyUIUpdateService:
         repair_reason: str,
     ) -> ProcessActionResult:
         previous = self._previous_active_record()
-        if previous is not None and previous.tag != failed_record.tag and _record_paths_ready(previous) and previous.locally_verified:
+        if (
+            previous is not None
+            and previous.tag != failed_record.tag
+            and _record_paths_ready(previous)
+            and previous.locally_verified
+        ):
             try:
                 await self._activate(previous)
                 started = await self.runtime_manager.start()
@@ -939,16 +1098,25 @@ class ComfyUIUpdateService:
                         repair_attempt_count=failed_record.repair_attempt_count,
                         fallback_version=previous.tag,
                     )
-                    return ProcessActionResult(status="repair_failed_fallback_active", comfyui=started.comfyui)
+                    return ProcessActionResult(
+                        status="repair_failed_fallback_active", comfyui=started.comfyui
+                    )
             except Exception as fallback_exc:
                 self.log_store.add(
                     "error",
                     "Previous ComfyUI fallback failed after repair failure",
                     "runtime.comfyui_repair",
-                    details={"failed_tag": failed_record.tag, "fallback_tag": previous.tag, "error": str(fallback_exc)},
+                    details={
+                        "failed_tag": failed_record.tag,
+                        "fallback_tag": previous.tag,
+                        "error": str(fallback_exc),
+                    },
                 )
 
-        if self.bundled_repo_dir is not None and self.bundled_python_executable is not None:
+        if (
+            self.bundled_repo_dir is not None
+            and self.bundled_python_executable is not None
+        ):
             try:
                 environment = RuntimeEnvironment(
                     repo_dir=self.bundled_repo_dir,
@@ -983,13 +1151,18 @@ class ComfyUIUpdateService:
                         repair_attempt_count=failed_record.repair_attempt_count,
                         fallback_version="bundled",
                     )
-                    return ProcessActionResult(status="repair_failed_fallback_active", comfyui=started.comfyui)
+                    return ProcessActionResult(
+                        status="repair_failed_fallback_active", comfyui=started.comfyui
+                    )
             except Exception as fallback_exc:
                 self.log_store.add(
                     "error",
                     "Bundled ComfyUI fallback failed after repair failure",
                     "runtime.comfyui_repair",
-                    details={"failed_tag": failed_record.tag, "error": str(fallback_exc)},
+                    details={
+                        "failed_tag": failed_record.tag,
+                        "error": str(fallback_exc),
+                    },
                 )
 
         self._set_job(
@@ -1004,13 +1177,20 @@ class ComfyUIUpdateService:
             repair_reason=repair_reason,
             repair_attempt_count=failed_record.repair_attempt_count,
         )
-        return ProcessActionResult(status="repair_failed_no_fallback", comfyui=await self.runtime_manager.status())
+        return ProcessActionResult(
+            status="repair_failed_no_fallback",
+            comfyui=await self.runtime_manager.status(),
+        )
 
     async def _activate(self, record: LocalComfyUIVersionRecord) -> None:
         if not record.source_path or not record.env_path:
-            raise RuntimeError("Cannot activate ComfyUI version without source/env paths.")
+            raise RuntimeError(
+                "Cannot activate ComfyUI version without source/env paths."
+            )
         if not record.locally_verified:
-            raise RuntimeError("Cannot activate a ComfyUI version before local validation passes.")
+            raise RuntimeError(
+                "Cannot activate a ComfyUI version before local validation passes."
+            )
         source_path = Path(record.source_path)
         env_path = Path(record.env_path)
         python = _venv_python(env_path)
@@ -1022,9 +1202,13 @@ class ComfyUIUpdateService:
         if self.runtime_manager.is_managed_process_running():
             stopped = await self.runtime_manager.stop()
             if stopped.status not in {"stopped", "not_running"}:
-                raise RuntimeError(f"Could not stop active ComfyUI before activation: {stopped.status}")
+                raise RuntimeError(
+                    f"Could not stop active ComfyUI before activation: {stopped.status}"
+                )
 
-        activated = record.model_copy(update={"active": True, "activated_at": _now_iso()})
+        activated = record.model_copy(
+            update={"active": True, "activated_at": _now_iso()}
+        )
         self._write_active_record(activated)
         self._mark_active(activated.tag)
         environment = RuntimeEnvironment(
@@ -1082,8 +1266,14 @@ class ComfyUIUpdateService:
                         bytes_written += len(chunk)
         return bytes_written
 
-    async def _default_smoke_test(self, source_dir: Path, env_dir: Path, record: LocalComfyUIVersionRecord) -> None:
-        smoke_root = self.paths.temp_dir / "comfyui-update-smoke" / f"{_safe_tag(record.tag)}-{uuid4().hex}"
+    async def _default_smoke_test(
+        self, source_dir: Path, env_dir: Path, record: LocalComfyUIVersionRecord
+    ) -> None:
+        smoke_root = (
+            self.paths.temp_dir
+            / "comfyui-update-smoke"
+            / f"{_safe_tag(record.tag)}-{uuid4().hex}"
+        )
         smoke_root.mkdir(parents=True, exist_ok=False)
         manager = RuntimeManager(
             mode="managed",
@@ -1116,7 +1306,10 @@ class ComfyUIUpdateService:
         if self.mode != "managed":
             return False, "ComfyUI updates are available only in managed mode."
         if self.developer_override:
-            return False, "ComfyUI updates are disabled while developer path or Python overrides are active."
+            return (
+                False,
+                "ComfyUI updates are disabled while developer path or Python overrides are active.",
+            )
         return True, None
 
     def _active_record(self) -> LocalComfyUIVersionRecord | None:
@@ -1134,7 +1327,10 @@ class ComfyUIUpdateService:
         records = payload.get("records", {})
         if not isinstance(records, dict):
             return {}
-        return {tag: LocalComfyUIVersionRecord.model_validate(record) for tag, record in records.items()}
+        return {
+            tag: LocalComfyUIVersionRecord.model_validate(record)
+            for tag, record in records.items()
+        }
 
     def _write_records(self, records: dict[str, LocalComfyUIVersionRecord]) -> None:
         _write_json(
@@ -1142,7 +1338,10 @@ class ComfyUIUpdateService:
             {
                 "schema_version": UPDATE_METADATA_SCHEMA_VERSION,
                 "updated_at": _now_iso(),
-                "records": {tag: record.model_dump(mode="json") for tag, record in sorted(records.items())},
+                "records": {
+                    tag: record.model_dump(mode="json")
+                    for tag, record in sorted(records.items())
+                },
             },
         )
 
@@ -1155,7 +1354,9 @@ class ComfyUIUpdateService:
         active_payload = _read_active_payload(self.paths) or {}
         previous = self._active_record()
         existing_previous = active_payload.get("previous_active")
-        previous_payload = existing_previous if isinstance(existing_previous, dict) else None
+        previous_payload = (
+            existing_previous if isinstance(existing_previous, dict) else None
+        )
         if previous is not None and previous.tag != record.tag:
             previous_payload = previous.model_dump(mode="json")
         _write_json(
@@ -1204,7 +1405,11 @@ class ComfyUIUpdateService:
             installed_path=installed_path,
             activated_version=activated_version,
             repair_reason=repair_reason or self._job.repair_reason,
-            repair_attempt_count=repair_attempt_count if repair_attempt_count is not None else self._job.repair_attempt_count,
+            repair_attempt_count=(
+                repair_attempt_count
+                if repair_attempt_count is not None
+                else self._job.repair_attempt_count
+            ),
             repair_blocked_until=repair_blocked_until or self._job.repair_blocked_until,
             fallback_version=fallback_version or self._job.fallback_version,
             incompatible_version=incompatible_version or self._job.incompatible_version,
@@ -1242,12 +1447,20 @@ def _read_active_payload(paths: NoofyPaths) -> dict[str, object] | None:
     return payload
 
 
-def _stable_sorted_releases(releases: list[UpstreamComfyUIRelease]) -> list[UpstreamComfyUIRelease]:
-    stable = [release for release in releases if not release.draft and not release.prerelease]
-    return sorted(stable, key=lambda release: _version_sort_key(release.tag_name), reverse=True)
+def _stable_sorted_releases(
+    releases: list[UpstreamComfyUIRelease],
+) -> list[UpstreamComfyUIRelease]:
+    stable = [
+        release for release in releases if not release.draft and not release.prerelease
+    ]
+    return sorted(
+        stable, key=lambda release: _version_sort_key(release.tag_name), reverse=True
+    )
 
 
-def _resolve_release(selected_version: str, releases: list[UpstreamComfyUIRelease]) -> UpstreamComfyUIRelease:
+def _resolve_release(
+    selected_version: str, releases: list[UpstreamComfyUIRelease]
+) -> UpstreamComfyUIRelease:
     stable = _stable_sorted_releases(releases)
     if not stable:
         raise RuntimeError("No stable ComfyUI releases were found upstream.")
@@ -1350,10 +1563,14 @@ def _parse_iso(value: str | None) -> datetime | None:
 def _archive_recovery_candidates(record: LocalComfyUIVersionRecord) -> list[str]:
     candidates: list[str] = []
     if record.commit_sha and re.fullmatch(r"[0-9a-fA-F]{7,40}", record.commit_sha):
-        candidates.append(f"https://github.com/{UPSTREAM_REPO}/archive/{record.commit_sha}.zip")
+        candidates.append(
+            f"https://github.com/{UPSTREAM_REPO}/archive/{record.commit_sha}.zip"
+        )
     if record.archive_url:
         candidates.append(record.archive_url)
-    candidates.append(f"https://github.com/{UPSTREAM_REPO}/archive/refs/tags/{record.tag}.zip")
+    candidates.append(
+        f"https://github.com/{UPSTREAM_REPO}/archive/refs/tags/{record.tag}.zip"
+    )
     deduped: list[str] = []
     for candidate in candidates:
         if candidate not in deduped:
@@ -1419,14 +1636,16 @@ def _version_option(
         tag=tag,
         label=f"{tag} ({status})",
         status=status,
-        available_upstream=release is not None or bool(record and record.available_upstream),
+        available_upstream=release is not None
+        or bool(record and record.available_upstream),
         installed=installed,
         active=active,
         locally_verified=locally_verified,
         failed_validation=failed,
         failed_reason=record.failed_reason if record else None,
         source_hash=record.source_hash if record else None,
-        commit_sha=(record.commit_sha if record else None) or (release.target_commitish if release else None),
+        commit_sha=(record.commit_sha if record else None)
+        or (release.target_commitish if release else None),
         published_at=release.published_at if release else None,
         repair_status=record.repair_status if record else None,
         repair_attempt_count=record.repair_attempt_count if record else 0,
@@ -1456,7 +1675,10 @@ def _venv_python(env_path: Path) -> str:
 def _record_paths_ready(record: LocalComfyUIVersionRecord | None) -> bool:
     if record is None or not record.source_path or not record.env_path:
         return False
-    return Path(record.source_path).exists() and Path(_venv_python(Path(record.env_path))).exists()
+    return (
+        Path(record.source_path).exists()
+        and Path(_venv_python(Path(record.env_path))).exists()
+    )
 
 
 def _extract_github_zip(archive_path: Path, dest: Path) -> None:
@@ -1468,7 +1690,9 @@ def _extract_github_zip(archive_path: Path, dest: Path) -> None:
             _validate_zip_member(member)
             archive.extract(member, raw_dest)
     roots = [path for path in raw_dest.iterdir() if path.is_dir()]
-    source_root = roots[0] if len(roots) == 1 and (roots[0] / "main.py").exists() else raw_dest
+    source_root = (
+        roots[0] if len(roots) == 1 and (roots[0] / "main.py").exists() else raw_dest
+    )
     if not (source_root / "main.py").exists():
         raise RuntimeError("Downloaded ComfyUI archive did not contain main.py.")
     shutil.rmtree(dest, ignore_errors=True)
@@ -1490,10 +1714,17 @@ async def _smoke_required_routes(base_url: str) -> None:
         for path in ("/system_stats", "/object_info", "/models", "/queue", "/history"):
             response = await client.get(f"{base_url}{path}")
             if not _required_route_status_usable(path, response.status_code):
-                raise RuntimeError(f"ComfyUI smoke route failed: {path} -> {response.status_code}")
-        view_response = await client.get(f"{base_url}/view", params={"filename": "__noofy_missing__.png", "type": "output"})
+                raise RuntimeError(
+                    f"ComfyUI smoke route failed: {path} -> {response.status_code}"
+                )
+        view_response = await client.get(
+            f"{base_url}/view",
+            params={"filename": "__noofy_missing__.png", "type": "output"},
+        )
         if not _required_route_status_usable("/view", view_response.status_code):
-            raise RuntimeError(f"ComfyUI smoke route failed: /view -> {view_response.status_code}")
+            raise RuntimeError(
+                f"ComfyUI smoke route failed: /view -> {view_response.status_code}"
+            )
 
 
 def _required_route_status_usable(path: str, status_code: int) -> bool:
@@ -1513,9 +1744,13 @@ async def _smoke_prompt_and_websocket(base_url: str, ws_url: str) -> None:
     }
     async with websockets.connect(f"{ws_url}?clientId={client_id}") as websocket:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(f"{base_url}/prompt", json={"prompt": prompt, "client_id": client_id})
+            response = await client.post(
+                f"{base_url}/prompt", json={"prompt": prompt, "client_id": client_id}
+            )
             if response.status_code >= 400:
-                raise RuntimeError(f"ComfyUI smoke prompt failed: {response.status_code} {response.text[:200]}")
+                raise RuntimeError(
+                    f"ComfyUI smoke prompt failed: {response.status_code} {response.text[:200]}"
+                )
         deadline = asyncio.get_running_loop().time() + 30
         while asyncio.get_running_loop().time() < deadline:
             message = await asyncio.wait_for(websocket.recv(), timeout=5)
@@ -1526,14 +1761,28 @@ async def _smoke_prompt_and_websocket(base_url: str, ws_url: str) -> None:
                 data = payload.get("data")
                 if isinstance(data, dict) and data.get("node") is None:
                     return
-        raise RuntimeError("ComfyUI smoke WebSocket did not report workflow completion.")
+        raise RuntimeError(
+            "ComfyUI smoke WebSocket did not report workflow completion."
+        )
 
 
 def _assert_no_runtime_dirs_in_source(source_dir: Path) -> None:
-    forbidden = {"models", "input", "output", "temp", "custom_nodes", "user", "__pycache__"}
-    present = sorted(path.name for path in source_dir.iterdir() if path.name in forbidden)
+    forbidden = {
+        "models",
+        "input",
+        "output",
+        "temp",
+        "custom_nodes",
+        "user",
+        "__pycache__",
+    }
+    present = sorted(
+        path.name for path in source_dir.iterdir() if path.name in forbidden
+    )
     if present:
-        raise RuntimeError(f"ComfyUI source contains runtime directories after smoke test: {', '.join(present)}")
+        raise RuntimeError(
+            f"ComfyUI source contains runtime directories after smoke test: {', '.join(present)}"
+        )
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

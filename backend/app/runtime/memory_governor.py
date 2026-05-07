@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.supervisor import (
     RunnerDescriptor,
     RunnerMemoryClass,
@@ -161,7 +162,11 @@ class MachineMemorySnapshot(BaseModel):
             and self.free_vram_mb > self.total_vram_mb
         ):
             raise ValueError("free_vram_mb cannot exceed total_vram_mb")
-        if self.total_ram_mb is not None and self.free_ram_mb is not None and self.free_ram_mb > self.total_ram_mb:
+        if (
+            self.total_ram_mb is not None
+            and self.free_ram_mb is not None
+            and self.free_ram_mb > self.total_ram_mb
+        ):
             raise ValueError("free_ram_mb cannot exceed total_ram_mb")
         return self
 
@@ -174,8 +179,12 @@ class RunnerMemorySnapshot(BaseModel):
     runner_id: str = Field(min_length=1)
     runner_process_compatibility_key: str | None = None
     memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN
-    memory_estimate_confidence: RunnerMemoryEstimateConfidence = RunnerMemoryEstimateConfidence.UNKNOWN
-    memory_estimate_source: RunnerMemoryEstimateSource = RunnerMemoryEstimateSource.UNKNOWN
+    memory_estimate_confidence: RunnerMemoryEstimateConfidence = (
+        RunnerMemoryEstimateConfidence.UNKNOWN
+    )
+    memory_estimate_source: RunnerMemoryEstimateSource = (
+        RunnerMemoryEstimateSource.UNKNOWN
+    )
     status: RunnerStatus = RunnerStatus.UNKNOWN
     current_job_id: str | None = None
     open_workflow_lease_count: int = Field(default=0, ge=0)
@@ -240,7 +249,11 @@ class LocalMemoryEvidenceSummary(BaseModel):
 
     @property
     def has_local_evidence(self) -> bool:
-        return self.successful_runs > 0 or self.memory_error_runs > 0 or self.other_failed_runs > 0
+        return (
+            self.successful_runs > 0
+            or self.memory_error_runs > 0
+            or self.other_failed_runs > 0
+        )
 
     @property
     def has_repeated_success(self) -> bool:
@@ -308,7 +321,9 @@ class WorkflowMemoryEstimate(BaseModel):
 
     @property
     def has_local_evidence(self) -> bool:
-        return self.local_evidence is not None and self.local_evidence.has_local_evidence
+        return (
+            self.local_evidence is not None and self.local_evidence.has_local_evidence
+        )
 
     @property
     def effective_source(self) -> RunnerMemoryEstimateSource:
@@ -347,7 +362,9 @@ class MemoryGovernorDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    decision_id: str = Field(default_factory=lambda: f"mg-{uuid.uuid4().hex}", min_length=1)
+    decision_id: str = Field(
+        default_factory=lambda: f"mg-{uuid.uuid4().hex}", min_length=1
+    )
     action: MemoryDecisionAction
     risk_level: MemoryRiskLevel = MemoryRiskLevel.UNKNOWN
     confidence: RunnerMemoryEstimateConfidence = RunnerMemoryEstimateConfidence.UNKNOWN
@@ -534,7 +551,9 @@ class SystemMemoryObserver:
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
             memory_pressure=pressure,
-            signal_quality=_system_signal_quality(has_ram=has_ram, has_psi="linux_psi" in sources),
+            signal_quality=_system_signal_quality(
+                has_ram=has_ram, has_psi="linux_psi" in sources
+            ),
             signal_sources=sources,
             pressure_reasons=reasons,
             observed_at=_now_iso(),
@@ -561,19 +580,42 @@ class ProcessTreeMemoryObserver:
             return _unavailable_process_tree_sample(None, "runner_pid_unavailable")
         try:
             if self._platform_name == "Windows":
-                result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_PROCESS_TREE_SCRIPT])
-                rows = _parse_windows_process_rows(result.stdout) if result.returncode == 0 else None
+                result = self._command_runner(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        _WINDOWS_PROCESS_TREE_SCRIPT,
+                    ]
+                )
+                rows = (
+                    _parse_windows_process_rows(result.stdout)
+                    if result.returncode == 0
+                    else None
+                )
             else:
                 result = self._command_runner(["ps", "-axo", "pid=,ppid=,rss="])
-                rows = _parse_posix_process_rows(result.stdout) if result.returncode == 0 else None
+                rows = (
+                    _parse_posix_process_rows(result.stdout)
+                    if result.returncode == 0
+                    else None
+                )
         except FileNotFoundError:
-            return _unavailable_process_tree_sample(root_pid, "process_observer_command_not_found")
+            return _unavailable_process_tree_sample(
+                root_pid, "process_observer_command_not_found"
+            )
         except subprocess.TimeoutExpired:
-            return _unavailable_process_tree_sample(root_pid, "process_observer_timeout")
+            return _unavailable_process_tree_sample(
+                root_pid, "process_observer_timeout"
+            )
         except OSError as exc:
-            return _unavailable_process_tree_sample(root_pid, f"process_observer_error:{exc}")
+            return _unavailable_process_tree_sample(
+                root_pid, f"process_observer_error:{exc}"
+            )
         if rows is None:
-            error = (result.stderr or result.stdout or "process_observer_failed").strip()
+            error = (
+                result.stderr or result.stdout or "process_observer_failed"
+            ).strip()
             return _unavailable_process_tree_sample(root_pid, error)
         return _process_tree_sample_from_rows(root_pid, rows)
 
@@ -605,7 +647,9 @@ class NvmlMemoryObserver:
         except Exception as exc:
             return _unavailable_cuda_snapshot(f"nvml_error:{exc}", source="nvml")
 
-        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = (
+            _system_ram_signals()
+        )
         vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
         available = total_vram_mb is not None or free_vram_mb is not None
         return MachineMemorySnapshot(
@@ -617,9 +661,14 @@ class NvmlMemoryObserver:
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
             memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
-            signal_quality=MemorySignalQuality.BACKEND_API if available else MemorySignalQuality.UNAVAILABLE,
+            signal_quality=(
+                MemorySignalQuality.BACKEND_API
+                if available
+                else MemorySignalQuality.UNAVAILABLE
+            ),
             signal_sources=(["nvml"] if available else []) + ram_sources,
-            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure)
+            + ram_reasons,
             observed_at=_now_iso(),
             error=None if available else "nvml_memory_unavailable",
         )
@@ -637,11 +686,17 @@ class NvmlMemoryObserver:
         except FileNotFoundError:
             return _unavailable_gpu_process_sample(requested, "nvml_not_found")
         except NvmlError as exc:
-            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+            return _unavailable_gpu_process_sample(
+                requested, f"nvml_process_error:{exc}"
+            )
         except OSError as exc:
-            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+            return _unavailable_gpu_process_sample(
+                requested, f"nvml_process_error:{exc}"
+            )
         except Exception as exc:
-            return _unavailable_gpu_process_sample(requested, f"nvml_process_error:{exc}")
+            return _unavailable_gpu_process_sample(
+                requested, f"nvml_process_error:{exc}"
+            )
         matched = [usage for usage in usages if usage.pid in requested]
         if not matched:
             return GpuProcessMemorySample(
@@ -686,18 +741,26 @@ class NvidiaSmiMemoryObserver:
         try:
             result = self._command_runner(command)
         except FileNotFoundError:
-            return _unavailable_cuda_snapshot("nvidia_smi_not_found", source="nvidia_smi")
+            return _unavailable_cuda_snapshot(
+                "nvidia_smi_not_found", source="nvidia_smi"
+            )
         except subprocess.TimeoutExpired:
             return _unavailable_cuda_snapshot("nvidia_smi_timeout", source="nvidia_smi")
         except OSError as exc:
-            return _unavailable_cuda_snapshot(f"nvidia_smi_error:{exc}", source="nvidia_smi")
+            return _unavailable_cuda_snapshot(
+                f"nvidia_smi_error:{exc}", source="nvidia_smi"
+            )
 
         if result.returncode != 0:
             error = (result.stderr or result.stdout or "nvidia_smi_failed").strip()
             return _unavailable_cuda_snapshot(error, source="nvidia_smi")
 
-        device_name, total_vram_mb, free_vram_mb = _parse_nvidia_smi_memory_row(result.stdout)
-        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
+        device_name, total_vram_mb, free_vram_mb = _parse_nvidia_smi_memory_row(
+            result.stdout
+        )
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = (
+            _system_ram_signals()
+        )
         vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
         available = total_vram_mb is not None or free_vram_mb is not None
         return MachineMemorySnapshot(
@@ -709,9 +772,14 @@ class NvidiaSmiMemoryObserver:
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
             memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
-            signal_quality=MemorySignalQuality.BACKEND_API if available else MemorySignalQuality.UNAVAILABLE,
+            signal_quality=(
+                MemorySignalQuality.BACKEND_API
+                if available
+                else MemorySignalQuality.UNAVAILABLE
+            ),
             signal_sources=(["nvidia_smi"] if available else []) + ram_sources,
-            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure)
+            + ram_reasons,
             observed_at=_now_iso(),
             error=None if available else "nvidia_smi_parse_failed",
         )
@@ -746,7 +814,9 @@ class WindowsGpuMemoryObserver:
 
     def snapshot(self) -> MachineMemorySnapshot:
         try:
-            result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_GPU_MEMORY_SCRIPT])
+            result = self._command_runner(
+                ["powershell", "-NoProfile", "-Command", _WINDOWS_GPU_MEMORY_SCRIPT]
+            )
         except FileNotFoundError:
             return _unavailable_directml_snapshot("powershell_not_found")
         except subprocess.TimeoutExpired:
@@ -755,15 +825,28 @@ class WindowsGpuMemoryObserver:
             return _unavailable_directml_snapshot(f"windows_gpu_observer_error:{exc}")
 
         if result.returncode != 0:
-            error = (result.stderr or result.stdout or "windows_gpu_observer_failed").strip()
+            error = (
+                result.stderr or result.stdout or "windows_gpu_observer_failed"
+            ).strip()
             return _unavailable_directml_snapshot(error)
 
-        device_name, total_vram_mb, free_vram_mb, error = _parse_windows_gpu_memory_json(result.stdout)
-        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = _system_ram_signals()
-        available = any(value is not None for value in (total_vram_mb, free_vram_mb, total_ram_mb, free_ram_mb))
+        device_name, total_vram_mb, free_vram_mb, error = (
+            _parse_windows_gpu_memory_json(result.stdout)
+        )
+        total_ram_mb, free_ram_mb, ram_pressure, ram_sources, ram_reasons = (
+            _system_ram_signals()
+        )
+        available = any(
+            value is not None
+            for value in (total_vram_mb, free_vram_mb, total_ram_mb, free_ram_mb)
+        )
         vram_pressure = memory_pressure_from_free_ratio(total_vram_mb, free_vram_mb)
         gpu_sources = []
-        if device_name is not None or total_vram_mb is not None or free_vram_mb is not None:
+        if (
+            device_name is not None
+            or total_vram_mb is not None
+            or free_vram_mb is not None
+        ):
             gpu_sources.extend(["windows_gpu_counters", "win32_video_controller"])
         return MachineMemorySnapshot(
             available=available,
@@ -774,9 +857,14 @@ class WindowsGpuMemoryObserver:
             total_ram_mb=total_ram_mb,
             free_ram_mb=free_ram_mb,
             memory_pressure=_max_pressure_level(vram_pressure, ram_pressure),
-            signal_quality=MemorySignalQuality.SYSTEM_SAMPLE if available else MemorySignalQuality.UNAVAILABLE,
+            signal_quality=(
+                MemorySignalQuality.SYSTEM_SAMPLE
+                if available
+                else MemorySignalQuality.UNAVAILABLE
+            ),
             signal_sources=gpu_sources + ram_sources,
-            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure) + ram_reasons,
+            pressure_reasons=_free_ratio_pressure_reasons("vram", vram_pressure)
+            + ram_reasons,
             observed_at=_now_iso(),
             error=error,
         )
@@ -790,16 +878,29 @@ class WindowsGpuMemoryObserver:
                 error="no_process_pids",
             )
         try:
-            result = self._command_runner(["powershell", "-NoProfile", "-Command", _WINDOWS_GPU_PROCESS_MEMORY_SCRIPT])
+            result = self._command_runner(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    _WINDOWS_GPU_PROCESS_MEMORY_SCRIPT,
+                ]
+            )
         except FileNotFoundError:
             return _unavailable_gpu_process_sample(requested, "powershell_not_found")
         except subprocess.TimeoutExpired:
-            return _unavailable_gpu_process_sample(requested, "windows_gpu_process_observer_timeout")
+            return _unavailable_gpu_process_sample(
+                requested, "windows_gpu_process_observer_timeout"
+            )
         except OSError as exc:
-            return _unavailable_gpu_process_sample(requested, f"windows_gpu_process_observer_error:{exc}")
+            return _unavailable_gpu_process_sample(
+                requested, f"windows_gpu_process_observer_error:{exc}"
+            )
 
         if result.returncode != 0:
-            error = (result.stderr or result.stdout or "windows_gpu_process_observer_failed").strip()
+            error = (
+                result.stderr or result.stdout or "windows_gpu_process_observer_failed"
+            ).strip()
             return _unavailable_gpu_process_sample(requested, error)
 
         usages, error = _parse_windows_gpu_process_memory_json(result.stdout)
@@ -836,7 +937,9 @@ class WindowsGpuMemoryObserver:
 class FallbackMemoryObserver:
     """Use a precise backend observer when available, otherwise fall back to RAM."""
 
-    def __init__(self, primary: MachineMemoryObserver, fallback: MachineMemoryObserver) -> None:
+    def __init__(
+        self, primary: MachineMemoryObserver, fallback: MachineMemoryObserver
+    ) -> None:
         self.primary = primary
         self.fallback = fallback
 
@@ -883,14 +986,20 @@ class RunnerMemoryTelemetryReader:
         observed_after: str | None = None,
     ) -> BackendAllocatorMemorySample:
         if telemetry_path is None:
-            return BackendAllocatorMemorySample(error="runner_memory_telemetry_path_unavailable")
+            return BackendAllocatorMemorySample(
+                error="runner_memory_telemetry_path_unavailable"
+            )
         path = Path(telemetry_path)
         try:
             text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return BackendAllocatorMemorySample(error="runner_memory_telemetry_file_missing")
+            return BackendAllocatorMemorySample(
+                error="runner_memory_telemetry_file_missing"
+            )
         except OSError as exc:
-            return BackendAllocatorMemorySample(error=f"runner_memory_telemetry_read_error:{exc}")
+            return BackendAllocatorMemorySample(
+                error=f"runner_memory_telemetry_read_error:{exc}"
+            )
         payloads: list[dict[str, Any]] = []
         for line in text.splitlines():
             if not line.strip():
@@ -901,7 +1010,10 @@ class RunnerMemoryTelemetryReader:
                 continue
             if not isinstance(parsed, dict):
                 continue
-            if runner_id is not None and parsed.get("runner_id") not in {None, runner_id}:
+            if runner_id is not None and parsed.get("runner_id") not in {
+                None,
+                runner_id,
+            }:
                 continue
             if job_id is not None and parsed.get("job_id") not in {None, job_id}:
                 continue
@@ -929,7 +1041,9 @@ def default_memory_observer() -> MachineMemoryObserver:
     """Return the product default best-effort memory observer for this host."""
     if platform.system() == "Darwin":
         machine = platform.machine().lower()
-        backend = MemoryBackend.MPS if machine in {"arm64", "aarch64"} else MemoryBackend.CPU
+        backend = (
+            MemoryBackend.MPS if machine in {"arm64", "aarch64"} else MemoryBackend.CPU
+        )
         return SystemMemoryObserver(backend=backend)
     if platform.system() == "Windows":
         return FallbackMemoryObserver(
@@ -1018,20 +1132,29 @@ class LocalMemoryLearningStore:
             return []
         with path.open("r", encoding="utf-8") as file:
             data = json.load(file)
-        return [LocalMemoryObservation.model_validate(item) for item in data.get("observations", [])]
+        return [
+            LocalMemoryObservation.model_validate(item)
+            for item in data.get("observations", [])
+        ]
 
-    def _write_observations(self, path: Path, observations: list[LocalMemoryObservation]) -> None:
+    def _write_observations(
+        self, path: Path, observations: list[LocalMemoryObservation]
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": MEMORY_LEARNING_SCHEMA_VERSION,
-            "observations": [observation.model_dump(mode="json") for observation in observations],
+            "observations": [
+                observation.model_dump(mode="json") for observation in observations
+            ],
         }
         tmp_path = path.with_suffix(".json.tmp")
         tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp_path.replace(path)
 
 
-def memory_pressure_from_free_ratio(total_mb: int | None, free_mb: int | None) -> MemoryPressureLevel:
+def memory_pressure_from_free_ratio(
+    total_mb: int | None, free_mb: int | None
+) -> MemoryPressureLevel:
     if total_mb is None or free_mb is None or total_mb <= 0:
         return MemoryPressureLevel.UNKNOWN
     ratio = free_mb / total_mb
@@ -1048,7 +1171,9 @@ def _system_ram_signals(
 ) -> tuple[int | None, int | None, MemoryPressureLevel, list[str], list[str]]:
     total_ram_mb, free_ram_mb = _system_ram_mb()
     ram_pressure = memory_pressure_from_free_ratio(total_ram_mb, free_ram_mb)
-    sources = ["system_ram"] if total_ram_mb is not None or free_ram_mb is not None else []
+    sources = (
+        ["system_ram"] if total_ram_mb is not None or free_ram_mb is not None else []
+    )
     reasons = _free_ratio_pressure_reasons("ram", ram_pressure)
     psi_text = _read_linux_memory_psi(linux_psi_reader)
     if psi_text is not None:
@@ -1101,7 +1226,10 @@ def conservative_memory_class(memory_class: RunnerMemoryClass) -> RunnerMemoryCl
 
 def estimate_evidence_rank(estimate: WorkflowMemoryEstimate) -> int:
     """Rank estimate sources for deterministic v1 confidence decisions."""
-    if estimate.has_local_evidence or estimate.source is RunnerMemoryEstimateSource.LOCAL_OBSERVED:
+    if (
+        estimate.has_local_evidence
+        or estimate.source is RunnerMemoryEstimateSource.LOCAL_OBSERVED
+    ):
         return 4
     if estimate.source is RunnerMemoryEstimateSource.CREATOR_OBSERVED:
         return 3
@@ -1112,7 +1240,9 @@ def estimate_evidence_rank(estimate: WorkflowMemoryEstimate) -> int:
     return 0
 
 
-def preferred_memory_estimate(estimates: list[WorkflowMemoryEstimate]) -> WorkflowMemoryEstimate | None:
+def preferred_memory_estimate(
+    estimates: list[WorkflowMemoryEstimate],
+) -> WorkflowMemoryEstimate | None:
     if not estimates:
         return None
     return sorted(
@@ -1127,7 +1257,9 @@ def preferred_memory_estimate(estimates: list[WorkflowMemoryEstimate]) -> Workfl
     )[0]
 
 
-def build_workflow_memory_estimate(request: WorkflowMemoryEstimateRequest) -> WorkflowMemoryEstimate:
+def build_workflow_memory_estimate(
+    request: WorkflowMemoryEstimateRequest,
+) -> WorkflowMemoryEstimate:
     """Build the best available v1 estimate from ordered evidence.
 
     Local observations are preferred when they match the current request shape,
@@ -1153,7 +1285,9 @@ def build_workflow_memory_estimate(request: WorkflowMemoryEstimateRequest) -> Wo
         return WorkflowMemoryEstimate(
             workflow_id=request.workflow_id,
             runner_process_compatibility_key=request.runner_process_compatibility_key,
-            memory_class=_estimate_memory_class(request.declared_memory_class, local.observed_peak_vram_mb),
+            memory_class=_estimate_memory_class(
+                request.declared_memory_class, local.observed_peak_vram_mb
+            ),
             confidence=confidence,
             source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
             estimated_peak_vram_mb=local.observed_peak_vram_mb,
@@ -1165,11 +1299,16 @@ def build_workflow_memory_estimate(request: WorkflowMemoryEstimateRequest) -> Wo
             reasons=reasons,
         )
 
-    if request.creator_observed_peak_vram_mb is not None or request.creator_observed_peak_ram_mb is not None:
+    if (
+        request.creator_observed_peak_vram_mb is not None
+        or request.creator_observed_peak_ram_mb is not None
+    ):
         return WorkflowMemoryEstimate(
             workflow_id=request.workflow_id,
             runner_process_compatibility_key=request.runner_process_compatibility_key,
-            memory_class=_estimate_memory_class(request.declared_memory_class, request.creator_observed_peak_vram_mb),
+            memory_class=_estimate_memory_class(
+                request.declared_memory_class, request.creator_observed_peak_vram_mb
+            ),
             confidence=RunnerMemoryEstimateConfidence.MEDIUM,
             source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
             estimated_peak_vram_mb=request.creator_observed_peak_vram_mb,
@@ -1179,11 +1318,16 @@ def build_workflow_memory_estimate(request: WorkflowMemoryEstimateRequest) -> Wo
             reasons=["creator_observed_memory_hint"],
         )
 
-    if request.declared_peak_vram_mb is not None or request.declared_peak_ram_mb is not None:
+    if (
+        request.declared_peak_vram_mb is not None
+        or request.declared_peak_ram_mb is not None
+    ):
         return WorkflowMemoryEstimate(
             workflow_id=request.workflow_id,
             runner_process_compatibility_key=request.runner_process_compatibility_key,
-            memory_class=_estimate_memory_class(request.declared_memory_class, request.declared_peak_vram_mb),
+            memory_class=_estimate_memory_class(
+                request.declared_memory_class, request.declared_peak_vram_mb
+            ),
             confidence=RunnerMemoryEstimateConfidence.MEDIUM,
             source=RunnerMemoryEstimateSource.DECLARED,
             estimated_peak_vram_mb=request.declared_peak_vram_mb,
@@ -1196,7 +1340,9 @@ def build_workflow_memory_estimate(request: WorkflowMemoryEstimateRequest) -> Wo
         return WorkflowMemoryEstimate(
             workflow_id=request.workflow_id,
             runner_process_compatibility_key=request.runner_process_compatibility_key,
-            memory_class=_estimate_memory_class(request.declared_memory_class, heuristic_peak_vram_mb),
+            memory_class=_estimate_memory_class(
+                request.declared_memory_class, heuristic_peak_vram_mb
+            ),
             confidence=RunnerMemoryEstimateConfidence.LOW,
             source=RunnerMemoryEstimateSource.HEURISTIC,
             estimated_peak_vram_mb=heuristic_peak_vram_mb,
@@ -1219,8 +1365,16 @@ def summarize_local_memory_observations(
     if not observations:
         raise ValueError("Cannot summarize an empty local memory observation set")
     first = observations[0]
-    successful_runs = sum(1 for observation in observations if observation.outcome is MemoryObservationOutcome.SUCCESS)
-    memory_error_runs = sum(1 for observation in observations if observation.outcome is MemoryObservationOutcome.MEMORY_ERROR)
+    successful_runs = sum(
+        1
+        for observation in observations
+        if observation.outcome is MemoryObservationOutcome.SUCCESS
+    )
+    memory_error_runs = sum(
+        1
+        for observation in observations
+        if observation.outcome is MemoryObservationOutcome.MEMORY_ERROR
+    )
     other_failed_runs = sum(
         1
         for observation in observations
@@ -1232,10 +1386,14 @@ def summarize_local_memory_observations(
         }
     )
     successful_observations = [
-        observation for observation in observations if observation.outcome is MemoryObservationOutcome.SUCCESS
+        observation
+        for observation in observations
+        if observation.outcome is MemoryObservationOutcome.SUCCESS
     ]
     memory_error_observations = [
-        observation for observation in observations if observation.outcome is MemoryObservationOutcome.MEMORY_ERROR
+        observation
+        for observation in observations
+        if observation.outcome is MemoryObservationOutcome.MEMORY_ERROR
     ]
     return LocalMemoryEvidenceSummary(
         workflow_id=first.workflow_id,
@@ -1246,10 +1404,18 @@ def summarize_local_memory_observations(
         successful_runs=successful_runs,
         memory_error_runs=memory_error_runs,
         other_failed_runs=other_failed_runs,
-        evictions_required=sum(1 for observation in observations if observation.eviction_required),
-        retries_required=sum(1 for observation in observations if observation.retry_required),
-        observed_peak_vram_mb=_max_optional(observation.peak_vram_mb for observation in observations),
-        observed_peak_ram_mb=_max_optional(observation.peak_ram_mb for observation in observations),
+        evictions_required=sum(
+            1 for observation in observations if observation.eviction_required
+        ),
+        retries_required=sum(
+            1 for observation in observations if observation.retry_required
+        ),
+        observed_peak_vram_mb=_max_optional(
+            observation.peak_vram_mb for observation in observations
+        ),
+        observed_peak_ram_mb=_max_optional(
+            observation.peak_ram_mb for observation in observations
+        ),
         process_tree_observed_peak_vram_mb=_max_optional(
             observation.process_tree_peak_vram_mb for observation in observations
         ),
@@ -1294,8 +1460,12 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
     estimate = request.workflow_estimate
     machine = request.machine_snapshot
     runners = list(request.resident_runners)
-    active_runners = [runner for runner in runners if _runner_snapshot_is_active(runner)]
-    idle_runners = [runner for runner in runners if not _runner_snapshot_is_active(runner)]
+    active_runners = [
+        runner for runner in runners if _runner_snapshot_is_active(runner)
+    ]
+    idle_runners = [
+        runner for runner in runners if not _runner_snapshot_is_active(runner)
+    ]
     required_vram_margin_mb = required_vram_margin(machine, estimate)
     required_ram_margin_mb = required_ram_margin(machine, estimate)
     predicted_free_vram_after_mb = _subtract_optional(
@@ -1479,7 +1649,10 @@ def memory_release_satisfied(
     if snapshot.memory_pressure is MemoryPressureLevel.HIGH:
         return False
     if required_free_vram_mb is not None:
-        if snapshot.free_vram_mb is None or snapshot.free_vram_mb < required_free_vram_mb:
+        if (
+            snapshot.free_vram_mb is None
+            or snapshot.free_vram_mb < required_free_vram_mb
+        ):
             return False
     if required_free_ram_mb is not None:
         if snapshot.free_ram_mb is None or snapshot.free_ram_mb < required_free_ram_mb:
@@ -1521,8 +1694,12 @@ def retry_after_memory_cleanup_decision(
             [],
             required_vram_margin(machine_snapshot, workflow_estimate),
             required_ram_margin(machine_snapshot, workflow_estimate),
-            _subtract_optional(machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb),
-            _subtract_optional(machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb),
+            _subtract_optional(
+                machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb
+            ),
+            _subtract_optional(
+                machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb
+            ),
         )
     if not likely_memory_error(error_message):
         return _decision(
@@ -1535,8 +1712,12 @@ def retry_after_memory_cleanup_decision(
             [],
             required_vram_margin(machine_snapshot, workflow_estimate),
             required_ram_margin(machine_snapshot, workflow_estimate),
-            _subtract_optional(machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb),
-            _subtract_optional(machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb),
+            _subtract_optional(
+                machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb
+            ),
+            _subtract_optional(
+                machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb
+            ),
         )
     return _decision(
         MemoryDecisionAction.RETRY_AFTER_MEMORY_CLEANUP,
@@ -1548,20 +1729,28 @@ def retry_after_memory_cleanup_decision(
         [],
         required_vram_margin(machine_snapshot, workflow_estimate),
         required_ram_margin(machine_snapshot, workflow_estimate),
-        _subtract_optional(machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb),
-        _subtract_optional(machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb),
+        _subtract_optional(
+            machine_snapshot.free_vram_mb, workflow_estimate.estimated_peak_vram_mb
+        ),
+        _subtract_optional(
+            machine_snapshot.free_ram_mb, workflow_estimate.estimated_peak_ram_mb
+        ),
         can_retry_after_cleanup=True,
     )
 
 
 def record_memory_governor_decision(
-    log_store: Any,
+    log_store: DiagnosticsSink,
     decision: MemoryGovernorDecision,
     *,
     level: str = "info",
 ) -> Any:
     """Persist a decision in the existing diagnostic event stream."""
-    message = decision.user_message or decision.reason_summary or f"Memory Governor decision: {decision.action}"
+    message = (
+        decision.user_message
+        or decision.reason_summary
+        or f"Memory Governor decision: {decision.action}"
+    )
     return log_store.add(
         level,
         message,
@@ -1580,7 +1769,8 @@ def memory_user_status_for_decision(
         if decision.risk_level is MemoryRiskLevel.HIGH:
             return MemoryUserStatus(
                 state="memory_warning",
-                message=decision.user_message or "Noofy will try this workflow and watch memory closely.",
+                message=decision.user_message
+                or "Noofy will try this workflow and watch memory closely.",
                 risk_level=decision.risk_level,
                 queue_id=queue_id,
                 can_retry_after_cleanup=decision.can_retry_after_cleanup,
@@ -1638,7 +1828,8 @@ def memory_user_status_for_decision(
     if decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
         return MemoryUserStatus(
             state="blocked_by_memory",
-            message=decision.user_message or "This workflow needs more memory than Noofy can safely use right now.",
+            message=decision.user_message
+            or "This workflow needs more memory than Noofy can safely use right now.",
             risk_level=decision.risk_level,
             queue_id=queue_id,
             can_retry_after_cleanup=False,
@@ -1666,12 +1857,17 @@ def _local_evidence_matches_request(
     request: WorkflowMemoryEstimateRequest,
     local_evidence: LocalMemoryEvidenceSummary,
 ) -> bool:
-    if request.input_profile_fingerprint is None or local_evidence.input_profile_fingerprint is None:
+    if (
+        request.input_profile_fingerprint is None
+        or local_evidence.input_profile_fingerprint is None
+    ):
         return True
     return request.input_profile_fingerprint == local_evidence.input_profile_fingerprint
 
 
-def required_vram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int:
+def required_vram_margin(
+    machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate
+) -> int:
     if _request_is_cpu_only(estimate):
         return 0
     if _accelerator_memory_uses_system_ram(machine):
@@ -1688,7 +1884,9 @@ def required_vram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemor
     return max(4096, int(total * 0.12))
 
 
-def required_ram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int:
+def required_ram_margin(
+    machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate
+) -> int:
     del estimate
     if machine.backend is MemoryBackend.MPS:
         if machine.total_ram_mb is None:
@@ -1699,12 +1897,18 @@ def required_ram_margin(machine: MachineMemorySnapshot, estimate: WorkflowMemory
     return max(2048, int(machine.total_ram_mb * 0.10))
 
 
-def eviction_candidates(runners: list[RunnerMemorySnapshot]) -> list[RunnerMemorySnapshot]:
+def eviction_candidates(
+    runners: list[RunnerMemorySnapshot],
+) -> list[RunnerMemorySnapshot]:
     return sorted(
         [runner for runner in runners if not _runner_snapshot_is_active(runner)],
         key=lambda runner: (
             runner.open_workflow_lease_count,
-            -(runner.observed_idle_vram_mb or runner.observed_execution_peak_vram_mb or 0),
+            -(
+                runner.observed_idle_vram_mb
+                or runner.observed_execution_peak_vram_mb
+                or 0
+            ),
             runner.runner_id,
         ),
     )
@@ -1953,16 +2157,35 @@ def _co_residence_compatibility(
             continue
         if RunnerMemoryClass.UNKNOWN in {estimate.memory_class, runner.memory_class}:
             return "unknown_memory_class_denies_co_residence", MemoryRiskLevel.HIGH
-        if requested is RunnerMemoryClass.GPU_HEAVY and existing is RunnerMemoryClass.GPU_HEAVY:
+        if (
+            requested is RunnerMemoryClass.GPU_HEAVY
+            and existing is RunnerMemoryClass.GPU_HEAVY
+        ):
             if _large_gpu_high_confidence_heavy_pair_allowed(estimate, runner, machine):
                 continue
-            return "heavy_heavy_requires_large_gpu_and_high_confidence", MemoryRiskLevel.HIGH
-        if requested is RunnerMemoryClass.GPU_HEAVY and existing is RunnerMemoryClass.GPU_MEDIUM:
+            return (
+                "heavy_heavy_requires_large_gpu_and_high_confidence",
+                MemoryRiskLevel.HIGH,
+            )
+        if (
+            requested is RunnerMemoryClass.GPU_HEAVY
+            and existing is RunnerMemoryClass.GPU_MEDIUM
+        ):
             return "heavy_medium_requires_eviction_in_v1", MemoryRiskLevel.MEDIUM
-        if requested is RunnerMemoryClass.GPU_MEDIUM and existing is RunnerMemoryClass.GPU_HEAVY:
+        if (
+            requested is RunnerMemoryClass.GPU_MEDIUM
+            and existing is RunnerMemoryClass.GPU_HEAVY
+        ):
             return "heavy_medium_requires_eviction_in_v1", MemoryRiskLevel.MEDIUM
-        if requested is RunnerMemoryClass.GPU_MEDIUM and existing is RunnerMemoryClass.GPU_MEDIUM:
-            if estimate.confidence is RunnerMemoryEstimateConfidence.HIGH and runner.memory_estimate_confidence is RunnerMemoryEstimateConfidence.HIGH:
+        if (
+            requested is RunnerMemoryClass.GPU_MEDIUM
+            and existing is RunnerMemoryClass.GPU_MEDIUM
+        ):
+            if (
+                estimate.confidence is RunnerMemoryEstimateConfidence.HIGH
+                and runner.memory_estimate_confidence
+                is RunnerMemoryEstimateConfidence.HIGH
+            ):
                 continue
             return "medium_medium_requires_high_confidence", MemoryRiskLevel.MEDIUM
     return None
@@ -2013,13 +2236,17 @@ def _accelerator_memory_uses_system_ram(machine: MachineMemorySnapshot) -> bool:
     return machine.backend in {MemoryBackend.MPS, MemoryBackend.CPU}
 
 
-def _estimated_vram_pressure_mb(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int | None:
+def _estimated_vram_pressure_mb(
+    machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate
+) -> int | None:
     if _accelerator_memory_uses_system_ram(machine):
         return None
     return estimate.estimated_peak_vram_mb
 
 
-def _estimated_ram_pressure_mb(machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate) -> int | None:
+def _estimated_ram_pressure_mb(
+    machine: MachineMemorySnapshot, estimate: WorkflowMemoryEstimate
+) -> int | None:
     if estimate.estimated_peak_ram_mb is not None:
         return estimate.estimated_peak_ram_mb
     if _accelerator_memory_uses_system_ram(machine):
@@ -2031,7 +2258,10 @@ def _co_residence_risk_level(
     estimate: WorkflowMemoryEstimate,
     runners: list[RunnerMemorySnapshot],
 ) -> MemoryRiskLevel:
-    if not runners or estimate.memory_class in {RunnerMemoryClass.CPU_ONLY, RunnerMemoryClass.GPU_LIGHT}:
+    if not runners or estimate.memory_class in {
+        RunnerMemoryClass.CPU_ONLY,
+        RunnerMemoryClass.GPU_LIGHT,
+    }:
         return MemoryRiskLevel.LOW
     if estimate.memory_class is RunnerMemoryClass.GPU_HEAVY:
         return MemoryRiskLevel.MEDIUM
@@ -2049,11 +2279,16 @@ def _heuristic_peak_vram_mb(request: WorkflowMemoryEstimateRequest) -> int | Non
     if request.required_model_size_mb is not None:
         components.append(int(request.required_model_size_mb * 1.35))
     if request.resolution_width is not None and request.resolution_height is not None:
-        megapixels = (request.resolution_width * request.resolution_height * request.batch_size) / 1_000_000
+        megapixels = (
+            request.resolution_width * request.resolution_height * request.batch_size
+        ) / 1_000_000
         components.append(int(megapixels * 900))
     if not components:
         return None
-    return max(int(sum(components) * _workflow_type_heuristic_factor(request.workflow_type)), 512)
+    return max(
+        int(sum(components) * _workflow_type_heuristic_factor(request.workflow_type)),
+        512,
+    )
 
 
 def _workflow_type_heuristic_factor(workflow_type: str | None) -> float:
@@ -2072,7 +2307,9 @@ def _max_optional(values: Iterable[int | None]) -> int | None:
     return max(present) if present else None
 
 
-def _best_attribution_quality(values: Iterable[MemoryAttributionQuality]) -> MemoryAttributionQuality:
+def _best_attribution_quality(
+    values: Iterable[MemoryAttributionQuality],
+) -> MemoryAttributionQuality:
     present = list(values)
     if not present:
         return MemoryAttributionQuality.UNKNOWN
@@ -2107,7 +2344,11 @@ def _unique_preserving_order(values: Iterable[str]) -> list[str]:
 
 
 def _latest_observed_at(observations: list[LocalMemoryObservation]) -> str | None:
-    values = [observation.observed_at for observation in observations if observation.observed_at]
+    values = [
+        observation.observed_at
+        for observation in observations
+        if observation.observed_at
+    ]
     return max(values) if values else None
 
 
@@ -2168,11 +2409,21 @@ class _CtypesNvmlApi:
             library.nvmlShutdown.restype = ctypes.c_int
             library.nvmlDeviceGetCount_v2.argtypes = [ctypes.POINTER(ctypes.c_uint)]
             library.nvmlDeviceGetCount_v2.restype = ctypes.c_int
-            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [
+                ctypes.c_uint,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
             library.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_int
-            library.nvmlDeviceGetMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(NvmlMemoryInfo)]
+            library.nvmlDeviceGetMemoryInfo.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(NvmlMemoryInfo),
+            ]
             library.nvmlDeviceGetMemoryInfo.restype = ctypes.c_int
-            library.nvmlDeviceGetName.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+            library.nvmlDeviceGetName.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
             library.nvmlDeviceGetName.restype = ctypes.c_int
         except AttributeError as exc:
             raise NvmlError("missing_symbol") from exc
@@ -2182,16 +2433,30 @@ class _CtypesNvmlApi:
             _check_nvml(library.nvmlInit_v2(), "init")
             initialized = True
             count = ctypes.c_uint()
-            _check_nvml(library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count")
+            _check_nvml(
+                library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count"
+            )
             if count.value <= 0:
                 raise NvmlError("no_devices")
             handle = ctypes.c_void_p()
-            _check_nvml(library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)), "device_handle")
+            _check_nvml(
+                library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)),
+                "device_handle",
+            )
             memory = NvmlMemoryInfo()
-            _check_nvml(library.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(memory)), "memory_info")
+            _check_nvml(
+                library.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(memory)),
+                "memory_info",
+            )
             name_buffer = ctypes.create_string_buffer(96)
-            name_result = library.nvmlDeviceGetName(handle, name_buffer, len(name_buffer))
-            device_name = name_buffer.value.decode("utf-8", errors="replace") if name_result == 0 else None
+            name_result = library.nvmlDeviceGetName(
+                handle, name_buffer, len(name_buffer)
+            )
+            device_name = (
+                name_buffer.value.decode("utf-8", errors="replace")
+                if name_result == 0
+                else None
+            )
             return (
                 device_name,
                 max(0, int(memory.total / (1024 * 1024))),
@@ -2226,7 +2491,10 @@ class _CtypesNvmlApi:
             library.nvmlShutdown.restype = ctypes.c_int
             library.nvmlDeviceGetCount_v2.argtypes = [ctypes.POINTER(ctypes.c_uint)]
             library.nvmlDeviceGetCount_v2.restype = ctypes.c_int
-            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+            library.nvmlDeviceGetHandleByIndex_v2.argtypes = [
+                ctypes.c_uint,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
             library.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_int
             library.nvmlDeviceGetComputeRunningProcesses_v3.argtypes = [
                 ctypes.c_void_p,
@@ -2242,20 +2510,29 @@ class _CtypesNvmlApi:
             _check_nvml(library.nvmlInit_v2(), "init")
             initialized = True
             count = ctypes.c_uint()
-            _check_nvml(library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count")
+            _check_nvml(
+                library.nvmlDeviceGetCount_v2(ctypes.byref(count)), "device_count"
+            )
             if count.value <= 0:
                 raise NvmlError("no_devices")
             handle = ctypes.c_void_p()
-            _check_nvml(library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)), "device_handle")
+            _check_nvml(
+                library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)),
+                "device_handle",
+            )
             process_count = ctypes.c_uint(0)
-            first_result = library.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(process_count), None)
+            first_result = library.nvmlDeviceGetComputeRunningProcesses_v3(
+                handle, ctypes.byref(process_count), None
+            )
             if first_result not in {0, 7}:  # 7 is NVML_ERROR_INSUFFICIENT_SIZE.
                 _check_nvml(first_result, "process_memory_count")
             if process_count.value <= 0:
                 return []
             infos = (NvmlProcessInfoV3 * process_count.value)()
             _check_nvml(
-                library.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(process_count), infos),
+                library.nvmlDeviceGetComputeRunningProcesses_v3(
+                    handle, ctypes.byref(process_count), infos
+                ),
                 "process_memory",
             )
             return [
@@ -2276,7 +2553,9 @@ def _check_nvml(return_code: int, operation: str) -> None:
         raise NvmlError(f"{operation}_failed:{return_code}")
 
 
-def _read_linux_memory_psi(reader: Callable[[], str | None] | None = None) -> str | None:
+def _read_linux_memory_psi(
+    reader: Callable[[], str | None] | None = None,
+) -> str | None:
     if reader is not None:
         try:
             return reader()
@@ -2290,7 +2569,9 @@ def _read_linux_memory_psi(reader: Callable[[], str | None] | None = None) -> st
         return None
 
 
-def _parse_linux_psi_memory_pressure(text: str) -> tuple[MemoryPressureLevel, list[str]]:
+def _parse_linux_psi_memory_pressure(
+    text: str,
+) -> tuple[MemoryPressureLevel, list[str]]:
     metrics: dict[str, dict[str, float]] = {}
     for raw_line in text.splitlines():
         parts = raw_line.strip().split()
@@ -2366,7 +2647,9 @@ def _parse_windows_process_rows(output: str) -> dict[int, tuple[int, int]]:
     return rows
 
 
-def _process_tree_sample_from_rows(root_pid: int, rows: dict[int, tuple[int, int]]) -> ProcessTreeMemorySample:
+def _process_tree_sample_from_rows(
+    root_pid: int, rows: dict[int, tuple[int, int]]
+) -> ProcessTreeMemorySample:
     if root_pid not in rows:
         return _unavailable_process_tree_sample(root_pid, "runner_process_not_found")
     children_by_parent: dict[int, list[int]] = {}
@@ -2392,7 +2675,9 @@ def _process_tree_sample_from_rows(root_pid: int, rows: dict[int, tuple[int, int
     )
 
 
-def _unavailable_process_tree_sample(root_pid: int | None, error: str) -> ProcessTreeMemorySample:
+def _unavailable_process_tree_sample(
+    root_pid: int | None, error: str
+) -> ProcessTreeMemorySample:
     return ProcessTreeMemorySample(
         root_pid=root_pid,
         attribution_sources=["process_tree_rss"],
@@ -2401,7 +2686,9 @@ def _unavailable_process_tree_sample(root_pid: int | None, error: str) -> Proces
     )
 
 
-def _unavailable_gpu_process_sample(requested_pids: list[int], error: str) -> GpuProcessMemorySample:
+def _unavailable_gpu_process_sample(
+    requested_pids: list[int], error: str
+) -> GpuProcessMemorySample:
     return GpuProcessMemorySample(
         requested_pids=requested_pids,
         attribution_sources=["nvml_process"],
@@ -2410,8 +2697,13 @@ def _unavailable_gpu_process_sample(requested_pids: list[int], error: str) -> Gp
     )
 
 
-def _parse_nvidia_smi_memory_row(output: str) -> tuple[str | None, int | None, int | None]:
-    line = next((candidate.strip() for candidate in output.splitlines() if candidate.strip()), "")
+def _parse_nvidia_smi_memory_row(
+    output: str,
+) -> tuple[str | None, int | None, int | None]:
+    line = next(
+        (candidate.strip() for candidate in output.splitlines() if candidate.strip()),
+        "",
+    )
     if not line:
         return None, None, None
     parts = [part.strip() for part in line.split(",")]
@@ -2421,7 +2713,9 @@ def _parse_nvidia_smi_memory_row(output: str) -> tuple[str | None, int | None, i
     return device_name, total_vram_mb, free_vram_mb
 
 
-def _parse_windows_gpu_memory_json(output: str) -> tuple[str | None, int | None, int | None, str | None]:
+def _parse_windows_gpu_memory_json(
+    output: str,
+) -> tuple[str | None, int | None, int | None, str | None]:
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
@@ -2431,17 +2725,31 @@ def _parse_windows_gpu_memory_json(output: str) -> tuple[str | None, int | None,
     if not isinstance(payload, dict):
         return None, None, None, "windows_gpu_observer_payload_invalid"
 
-    device_name = payload.get("device_name") if isinstance(payload.get("device_name"), str) else None
-    total_vram_mb = _coerce_memory_mb(payload.get("total_vram_mb"), payload.get("total_vram_bytes"))
-    dedicated_used_mb = _coerce_memory_mb(payload.get("dedicated_used_mb"), payload.get("dedicated_used_bytes"))
+    device_name = (
+        payload.get("device_name")
+        if isinstance(payload.get("device_name"), str)
+        else None
+    )
+    total_vram_mb = _coerce_memory_mb(
+        payload.get("total_vram_mb"), payload.get("total_vram_bytes")
+    )
+    dedicated_used_mb = _coerce_memory_mb(
+        payload.get("dedicated_used_mb"), payload.get("dedicated_used_bytes")
+    )
     free_vram_mb = None
     if total_vram_mb is not None and dedicated_used_mb is not None:
         free_vram_mb = max(0, total_vram_mb - dedicated_used_mb)
-    error = None if total_vram_mb is not None or free_vram_mb is not None else "windows_gpu_observer_partial_data"
+    error = (
+        None
+        if total_vram_mb is not None or free_vram_mb is not None
+        else "windows_gpu_observer_partial_data"
+    )
     return device_name, total_vram_mb, free_vram_mb, error
 
 
-def _parse_windows_gpu_process_memory_json(output: str) -> tuple[list[GpuProcessMemoryUsage], str | None]:
+def _parse_windows_gpu_process_memory_json(
+    output: str,
+) -> tuple[list[GpuProcessMemoryUsage], str | None]:
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
@@ -2457,8 +2765,16 @@ def _parse_windows_gpu_process_memory_json(output: str) -> tuple[list[GpuProcess
         pid = _coerce_int(item.get("pid"))
         if pid is None:
             continue
-        dedicated_mb = _coerce_memory_mb(item.get("dedicated_used_mb"), item.get("dedicated_used_bytes")) or 0
-        shared_mb = _coerce_memory_mb(item.get("shared_used_mb"), item.get("shared_used_bytes")) or 0
+        dedicated_mb = (
+            _coerce_memory_mb(
+                item.get("dedicated_used_mb"), item.get("dedicated_used_bytes")
+            )
+            or 0
+        )
+        shared_mb = (
+            _coerce_memory_mb(item.get("shared_used_mb"), item.get("shared_used_bytes"))
+            or 0
+        )
         used_mb = dedicated_mb + shared_mb
         if used_mb <= 0:
             continue
@@ -2499,36 +2815,89 @@ def _backend_allocator_sample_from_payloads(
             has_allocator_signal = True
             sources.append("pytorch_cuda_allocator")
             reasons.append("runner_side_cuda_allocator_stats")
-            _append_memory_candidate(current_candidates, cuda.get("reserved_current_mb"), cuda.get("reserved_current_bytes"))
-            _append_memory_candidate(current_candidates, cuda.get("allocated_current_mb"), cuda.get("allocated_current_bytes"))
-            _append_memory_candidate(peak_candidates, cuda.get("reserved_peak_mb"), cuda.get("reserved_peak_bytes"))
-            _append_memory_candidate(peak_candidates, cuda.get("allocated_peak_mb"), cuda.get("allocated_peak_bytes"))
+            _append_memory_candidate(
+                current_candidates,
+                cuda.get("reserved_current_mb"),
+                cuda.get("reserved_current_bytes"),
+            )
+            _append_memory_candidate(
+                current_candidates,
+                cuda.get("allocated_current_mb"),
+                cuda.get("allocated_current_bytes"),
+            )
+            _append_memory_candidate(
+                peak_candidates,
+                cuda.get("reserved_peak_mb"),
+                cuda.get("reserved_peak_bytes"),
+            )
+            _append_memory_candidate(
+                peak_candidates,
+                cuda.get("allocated_peak_mb"),
+                cuda.get("allocated_peak_bytes"),
+            )
             details["cuda"] = _merge_dict(details.get("cuda"), cuda)
         mps = payload.get("mps") if isinstance(payload.get("mps"), dict) else {}
         if mps:
             has_allocator_signal = True
             sources.append("pytorch_mps_allocator")
             reasons.append("runner_side_mps_allocator_stats")
-            _append_memory_candidate(current_candidates, mps.get("current_allocated_mb"), mps.get("current_allocated_bytes"))
-            _append_memory_candidate(current_candidates, mps.get("driver_allocated_mb"), mps.get("driver_allocated_bytes"))
-            _append_memory_candidate(peak_candidates, mps.get("driver_allocated_mb"), mps.get("driver_allocated_bytes"))
-            _append_memory_candidate(budget_candidates, mps.get("recommended_max_mb"), mps.get("recommended_max_bytes"))
+            _append_memory_candidate(
+                current_candidates,
+                mps.get("current_allocated_mb"),
+                mps.get("current_allocated_bytes"),
+            )
+            _append_memory_candidate(
+                current_candidates,
+                mps.get("driver_allocated_mb"),
+                mps.get("driver_allocated_bytes"),
+            )
+            _append_memory_candidate(
+                peak_candidates,
+                mps.get("driver_allocated_mb"),
+                mps.get("driver_allocated_bytes"),
+            )
+            _append_memory_candidate(
+                budget_candidates,
+                mps.get("recommended_max_mb"),
+                mps.get("recommended_max_bytes"),
+            )
             details["mps"] = _merge_dict(details.get("mps"), mps)
         dxgi = payload.get("dxgi") if isinstance(payload.get("dxgi"), dict) else {}
         if dxgi:
             has_budget_signal = True
             sources.append("dxgi_query_video_memory_info")
             reasons.append("runner_side_dxgi_video_memory_info")
-            _append_memory_candidate(current_candidates, dxgi.get("current_usage_mb"), dxgi.get("current_usage_bytes"))
-            _append_memory_candidate(peak_candidates, dxgi.get("current_usage_mb"), dxgi.get("current_usage_bytes"))
-            _append_memory_candidate(budget_candidates, dxgi.get("budget_mb"), dxgi.get("budget_bytes"))
+            _append_memory_candidate(
+                current_candidates,
+                dxgi.get("current_usage_mb"),
+                dxgi.get("current_usage_bytes"),
+            )
+            _append_memory_candidate(
+                peak_candidates,
+                dxgi.get("current_usage_mb"),
+                dxgi.get("current_usage_bytes"),
+            )
+            _append_memory_candidate(
+                budget_candidates, dxgi.get("budget_mb"), dxgi.get("budget_bytes")
+            )
             details["dxgi"] = _merge_dict(details.get("dxgi"), dxgi)
 
     current_vram_mb = max(current_candidates) if current_candidates else None
-    peak_vram_mb = max(peak_candidates or current_candidates) if peak_candidates or current_candidates else None
+    peak_vram_mb = (
+        max(peak_candidates or current_candidates)
+        if peak_candidates or current_candidates
+        else None
+    )
     budget_vram_mb = max(budget_candidates) if budget_candidates else None
-    sample_window = _memory_sample_window_from_value(latest.get("sample_window")) or fallback_sample_window
-    available = peak_vram_mb is not None or current_vram_mb is not None or budget_vram_mb is not None
+    sample_window = (
+        _memory_sample_window_from_value(latest.get("sample_window"))
+        or fallback_sample_window
+    )
+    available = (
+        peak_vram_mb is not None
+        or current_vram_mb is not None
+        or budget_vram_mb is not None
+    )
     return BackendAllocatorMemorySample(
         available=available,
         runner_id=runner_id or _string_or_none(latest.get("runner_id")),
@@ -2539,14 +2908,20 @@ def _backend_allocator_sample_from_payloads(
         current_vram_mb=current_vram_mb,
         peak_vram_mb=peak_vram_mb,
         budget_vram_mb=budget_vram_mb,
-        signal_quality=MemorySignalQuality.ALLOCATOR
-        if has_allocator_signal
-        else MemorySignalQuality.BACKEND_BUDGET
-        if has_budget_signal
-        else MemorySignalQuality.UNAVAILABLE,
-        attribution_quality=MemoryAttributionQuality.BACKEND_ALLOCATOR
-        if available
-        else MemoryAttributionQuality.UNAVAILABLE,
+        signal_quality=(
+            MemorySignalQuality.ALLOCATOR
+            if has_allocator_signal
+            else (
+                MemorySignalQuality.BACKEND_BUDGET
+                if has_budget_signal
+                else MemorySignalQuality.UNAVAILABLE
+            )
+        ),
+        attribution_quality=(
+            MemoryAttributionQuality.BACKEND_ALLOCATOR
+            if available
+            else MemoryAttributionQuality.UNAVAILABLE
+        ),
         attribution_sources=_unique_preserving_order(sources),
         attribution_reasons=_unique_preserving_order(reasons),
         details=details,
@@ -2554,7 +2929,9 @@ def _backend_allocator_sample_from_payloads(
     )
 
 
-def _append_memory_candidate(candidates: list[int], mb_value: Any, bytes_value: Any = None) -> None:
+def _append_memory_candidate(
+    candidates: list[int], mb_value: Any, bytes_value: Any = None
+) -> None:
     value = _coerce_memory_mb(mb_value, bytes_value)
     if value is not None:
         candidates.append(value)
@@ -2635,7 +3012,11 @@ def _unavailable_directml_snapshot(error: str) -> MachineMemorySnapshot:
         total_ram_mb=total_ram_mb,
         free_ram_mb=free_ram_mb,
         memory_pressure=pressure,
-        signal_quality=MemorySignalQuality.SYSTEM_SAMPLE if available else MemorySignalQuality.UNAVAILABLE,
+        signal_quality=(
+            MemorySignalQuality.SYSTEM_SAMPLE
+            if available
+            else MemorySignalQuality.UNAVAILABLE
+        ),
         signal_sources=sources or ["windows_gpu_counters"],
         pressure_reasons=reasons,
         observed_at=_now_iso(),
@@ -2716,9 +3097,15 @@ def _system_ram_mb() -> tuple[int | None, int | None]:
     return total_ram_mb, free_ram_mb
 
 
-def _linux_system_ram_mb(reader: Callable[[], str] | None = None) -> tuple[int | None, int | None]:
+def _linux_system_ram_mb(
+    reader: Callable[[], str] | None = None,
+) -> tuple[int | None, int | None]:
     try:
-        text = reader() if reader is not None else Path("/proc/meminfo").read_text(encoding="utf-8")
+        text = (
+            reader()
+            if reader is not None
+            else Path("/proc/meminfo").read_text(encoding="utf-8")
+        )
     except OSError:
         return None, None
     values_kb: dict[str, int] = {}
@@ -2738,7 +3125,9 @@ def _linux_system_ram_mb(reader: Callable[[], str] | None = None) -> tuple[int |
     if available_kb is None:
         free_kb = values_kb.get("MemFree")
         if free_kb is not None:
-            available_kb = free_kb + values_kb.get("Buffers", 0) + values_kb.get("Cached", 0)
+            available_kb = (
+                free_kb + values_kb.get("Buffers", 0) + values_kb.get("Cached", 0)
+            )
     return (
         int(total_kb / 1024) if total_kb is not None else None,
         int(available_kb / 1024) if available_kb is not None else None,
@@ -2780,7 +3169,9 @@ def _parse_darwin_available_memory_bytes(vm_stat_output: str) -> int | None:
     for raw_line in vm_stat_output.splitlines():
         line = raw_line.strip()
         if "page size of" in line:
-            tokens = [token for token in line.replace(")", "").split() if token.isdigit()]
+            tokens = [
+                token for token in line.replace(")", "").split() if token.isdigit()
+            ]
             page_size = _coerce_int(tokens[-1]) if tokens else None
             continue
         label, separator, value = line.partition(":")

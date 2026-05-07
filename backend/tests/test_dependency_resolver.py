@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.diagnostics import LogStore
 from app.runtime.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DependencyPolicyErrorCode,
@@ -23,7 +24,10 @@ from app.runtime.dependency_resolver import (
     parse_uv_compiled_requirements,
 )
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    RunnerWorkspaceManifestStore,
+)
 from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
 from app.runtime.isolation import CapsuleLock, InstallStatus
 from app.source_policy import SourcePolicy
@@ -65,20 +69,20 @@ class _FakeDependencyEnvInstaller:
     def install(self, request: DependencyEnvironmentInstallRequest) -> None:
         self.requests.append(request)
         request.target_dir.mkdir(parents=True)
-        (request.target_dir / "install.marker").write_text("installed", encoding="utf-8")
+        (request.target_dir / "install.marker").write_text(
+            "installed", encoding="utf-8"
+        )
 
 
 def test_parse_uv_compiled_requirements_handles_hash_continuations() -> None:
-    parsed = parse_uv_compiled_requirements(
-        """
+    parsed = parse_uv_compiled_requirements("""
 # generated
 demo==1.0.0 \\
     --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \\
     --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 transitive==2.0.0 ; python_version >= "3.12" \\
     --hash=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-"""
-    )
+""")
 
     assert parsed[0].name == "demo"
     assert parsed[0].hashes == [
@@ -88,7 +92,9 @@ transitive==2.0.0 ; python_version >= "3.12" \\
     assert parsed[1].environment_marker == 'python_version >= "3.12"'
 
 
-def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path) -> None:
+def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(
+    tmp_path: Path,
+) -> None:
     wheel_bytes = b"wheel bytes"
     digest = hashlib.sha256(wheel_bytes).hexdigest()
     custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
@@ -98,10 +104,14 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path
     (custom_node / "setup.py").unlink()
     commands: list[list[str]] = []
 
-    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         commands.append(command)
         if command == ["uv", "--version"]:
-            return subprocess.CompletedProcess(command, 0, stdout="uv 0.9.0\n", stderr="")
+            return subprocess.CompletedProcess(
+                command, 0, stdout="uv 0.9.0\n", stderr=""
+            )
         assert command[:3] == ["uv", "pip", "compile"]
         output_path = Path(command[command.index("--output-file") + 1])
         output_path.write_text(
@@ -116,6 +126,7 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path
         work_dir=tmp_path / "transactions",
         package_index_client=_FakePackageIndexClient(wheel_bytes),
         command_runner=runner,
+        log_store=LogStore(),
     )
 
     lock = resolver.resolve(
@@ -158,9 +169,13 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(tmp_path: Path
 def test_uv_resolver_blocks_setup_py_marker_before_running_uv(tmp_path: Path) -> None:
     custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
     custom_node.mkdir(parents=True)
-    (custom_node / "setup.py").write_text("from setuptools import setup\n", encoding="utf-8")
+    (custom_node / "setup.py").write_text(
+        "from setuptools import setup\n", encoding="utf-8"
+    )
 
-    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         raise AssertionError("uv must not run for setup.py dependency extraction")
 
     resolver = UvDependencyLockResolver(
@@ -168,12 +183,15 @@ def test_uv_resolver_blocks_setup_py_marker_before_running_uv(tmp_path: Path) ->
         work_dir=tmp_path / "transactions",
         package_index_client=_FakePackageIndexClient(b"wheel bytes"),
         command_runner=runner,
+        log_store=LogStore(),
     )
 
     with pytest.raises(DependencyResolutionError) as error:
         resolver.resolve(
             DependencyResolutionRequest(
-                source_dirs=custom_node_dependency_source_dirs(tmp_path / "source-files"),
+                source_dirs=custom_node_dependency_source_dirs(
+                    tmp_path / "source-files"
+                ),
                 runtime_profile_id="noofy-comfyui-v1-default",
                 runtime_profile_variant_id="darwin-arm64-mps",
                 runtime_profile_manifest_hash="sha256:" + ("9" * 64),
@@ -187,7 +205,9 @@ def test_uv_resolver_blocks_setup_py_marker_before_running_uv(tmp_path: Path) ->
     assert error.value.code is DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED
 
 
-def test_workspace_preparer_can_resolve_missing_lock_from_custom_node_sources(tmp_path: Path) -> None:
+def test_workspace_preparer_can_resolve_missing_lock_from_custom_node_sources(
+    tmp_path: Path,
+) -> None:
     lock = with_computed_lock_hash(
         ResolvedDependencyLock(
             runtime_profile_id="noofy-comfyui-v1-default",
@@ -205,23 +225,30 @@ def test_workspace_preparer_can_resolve_missing_lock_from_custom_node_sources(tm
     (custom_node / "requirements.txt").write_text("demo>=1\n", encoding="utf-8")
 
     class FakeResolver:
-        def resolve(self, request: DependencyResolutionRequest) -> ResolvedDependencyLock:
+        def resolve(
+            self, request: DependencyResolutionRequest
+        ) -> ResolvedDependencyLock:
             assert request.source_dirs == [custom_node]
             return lock
 
     installer = _FakeDependencyEnvInstaller()
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
         dependency_env_installer=installer,
         dependency_lock_resolver=FakeResolver(),
         custom_node_source_files_dir=tmp_path / "source-files",
         dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
     )
 
     prepared = preparer.prepare(capsule)
 
-    assert prepared.dependency_env_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
+    assert (
+        prepared.dependency_env_manifest.status is InstallStatus.CHECKING_COMPATIBILITY
+    )
     assert installer.requests[0].lock == lock
     assert (prepared.dependency_env_path / "install.marker").exists()
 
@@ -259,7 +286,10 @@ def _capsule_data(dependency_lock_hash: str) -> dict:
             "runner_workspace_hash": "sha256:" + ("f" * 64),
         },
         "custom_nodes": [],
-        "dependencies": {"lock_file": "phase5b", "install_policy": "core_only_no_community"},
+        "dependencies": {
+            "lock_file": "phase5b",
+            "install_policy": "core_only_no_community",
+        },
         "models": [],
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }

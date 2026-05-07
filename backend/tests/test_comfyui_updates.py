@@ -20,7 +20,11 @@ from app.runtime.comfyui_updates import (
 from app.runtime.environment import CommandResult
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
 from app.runtime.manager import RuntimeManager
-from app.runtime.profiles import RuntimeSourceOriginKind, RuntimeSourceStatus, build_comfyui_source_manifest
+from app.runtime.profiles import (
+    RuntimeSourceOriginKind,
+    RuntimeSourceStatus,
+    build_comfyui_source_manifest,
+)
 
 
 def _release(tag: str, *, prerelease: bool = False) -> UpstreamComfyUIRelease:
@@ -50,6 +54,7 @@ def _manager(tmp_path: Path) -> RuntimeManager:
         repo_dir=repo,
         python_executable="python3",
         health_check=lambda _: _async_health(),
+        log_store=LogStore(),
     )
 
 
@@ -101,7 +106,9 @@ class FakeRepairManager:
 
     async def start(self) -> ProcessActionResult:
         self.start_calls += 1
-        return ProcessActionResult(status=self.next_start_status, comfyui=await self.status())
+        return ProcessActionResult(
+            status=self.next_start_status, comfyui=await self.status()
+        )
 
     async def stop(self) -> ProcessActionResult:
         return ProcessActionResult(status="not_running", comfyui=await self.status())
@@ -109,7 +116,9 @@ class FakeRepairManager:
     def is_managed_process_running(self) -> bool:
         return False
 
-    def reconfigure_managed_runtime(self, *, repo_dir, python_executable, environment, version_metadata) -> None:
+    def reconfigure_managed_runtime(
+        self, *, repo_dir, python_executable, environment, version_metadata
+    ) -> None:
         self.repo_dir = repo_dir
         self.python_executable = python_executable
         self.environment = environment
@@ -120,12 +129,16 @@ def _write_active(paths, record: LocalComfyUIVersionRecord) -> None:
     import json
 
     (paths.core_engines_dir / "active-comfyui.json").write_text(
-        json.dumps({"schema_version": "0.1.0", "active": record.model_dump(mode="json")}),
+        json.dumps(
+            {"schema_version": "0.1.0", "active": record.model_dump(mode="json")}
+        ),
         encoding="utf-8",
     )
 
 
-def _write_active_with_previous(paths, active: LocalComfyUIVersionRecord, previous: LocalComfyUIVersionRecord) -> None:
+def _write_active_with_previous(
+    paths, active: LocalComfyUIVersionRecord, previous: LocalComfyUIVersionRecord
+) -> None:
     import json
 
     (paths.core_engines_dir / "active-comfyui.json").write_text(
@@ -140,7 +153,9 @@ def _write_active_with_previous(paths, active: LocalComfyUIVersionRecord, previo
     )
 
 
-def _source_hash_for_zip(source_archive: Path, tmp_path: Path, tag: str = "v0.20.1") -> str:
+def _source_hash_for_zip(
+    source_archive: Path, tmp_path: Path, tag: str = "v0.20.1"
+) -> str:
     from app.runtime.comfyui_updates import _extract_github_zip
 
     extracted = tmp_path / f"extracted-{tag}"
@@ -156,7 +171,9 @@ def _source_hash_for_zip(source_archive: Path, tmp_path: Path, tag: str = "v0.20
 
 
 @pytest.mark.anyio
-async def test_versions_lists_upstream_releases_and_local_status(tmp_path: Path) -> None:
+async def test_versions_lists_upstream_releases_and_local_status(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     service = ComfyUIUpdateService(
@@ -167,7 +184,14 @@ async def test_versions_lists_upstream_releases_and_local_status(tmp_path: Path)
         bootstrap_python_executable="python3",
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
-        release_fetcher=lambda: _async_releases([_release("v0.20.1"), _release("v0.21.0-rc1", prerelease=True), _release("v0.19.0")]),
+        release_fetcher=lambda: _async_releases(
+            [
+                _release("v0.20.1"),
+                _release("v0.21.0-rc1", prerelease=True),
+                _release("v0.19.0"),
+            ]
+        ),
+        log_store=LogStore(),
     )
 
     versions = await service.versions()
@@ -178,12 +202,16 @@ async def test_versions_lists_upstream_releases_and_local_status(tmp_path: Path)
     assert all(option.status == "Available upstream" for option in versions.options)
 
 
-async def _async_releases(releases: list[UpstreamComfyUIRelease]) -> list[UpstreamComfyUIRelease]:
+async def _async_releases(
+    releases: list[UpstreamComfyUIRelease],
+) -> list[UpstreamComfyUIRelease]:
     return releases
 
 
 @pytest.mark.anyio
-async def test_successful_update_installs_fresh_env_and_activates(tmp_path: Path) -> None:
+async def test_successful_update_installs_fresh_env_and_activates(
+    tmp_path: Path,
+) -> None:
     source_archive = tmp_path / "source.zip"
     _source_zip(source_archive)
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
@@ -210,6 +238,7 @@ async def test_successful_update_installs_fresh_env_and_activates(tmp_path: Path
         archive_downloader=downloader,
         command_runner=_fake_command,
         smoke_tester=smoke,
+        log_store=LogStore(),
     )
 
     await service._run_update("latest", "job-1")
@@ -256,6 +285,7 @@ async def test_failed_smoke_does_not_change_active_runtime(tmp_path: Path) -> No
         archive_downloader=downloader,
         command_runner=_fake_command,
         smoke_tester=smoke,
+        log_store=LogStore(),
     )
 
     await service._run_update("v0.20.1", "job-1")
@@ -272,7 +302,9 @@ async def test_failed_smoke_does_not_change_active_runtime(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
-async def test_missing_managed_env_triggers_staged_repair_on_start_failure(tmp_path: Path) -> None:
+async def test_missing_managed_env_triggers_staged_repair_on_start_failure(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -306,10 +338,15 @@ async def test_missing_managed_env_triggers_staged_repair_on_start_failure(tmp_p
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_fake_command,
         smoke_tester=smoke,
+        log_store=LogStore(),
     )
 
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="Runtime Python executable not found")
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="Runtime Python executable not found"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_completed_started"
@@ -323,7 +360,9 @@ async def test_missing_managed_env_triggers_staged_repair_on_start_failure(tmp_p
 
 
 @pytest.mark.anyio
-async def test_missing_required_import_triggers_staged_env_rebuild(tmp_path: Path) -> None:
+async def test_missing_required_import_triggers_staged_env_rebuild(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -368,10 +407,15 @@ async def test_missing_required_import_triggers_staged_env_rebuild(tmp_path: Pat
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
 
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="Runtime Python is missing required imports: torch")
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="Runtime Python is missing required imports: torch"
+    )
 
     assert result.status == "repair_completed_started"
     current = (await service.versions()).current
@@ -381,7 +425,9 @@ async def test_missing_required_import_triggers_staged_env_rebuild(tmp_path: Pat
 
 
 @pytest.mark.anyio
-async def test_successful_redownload_repair_validates_and_activates(tmp_path: Path) -> None:
+async def test_successful_redownload_repair_validates_and_activates(
+    tmp_path: Path,
+) -> None:
     source_archive = tmp_path / "source.zip"
     _source_zip(source_archive)
     expected_hash = _source_hash_for_zip(source_archive, tmp_path)
@@ -417,21 +463,30 @@ async def test_successful_redownload_repair_validates_and_activates(tmp_path: Pa
         archive_downloader=downloader,
         command_runner=_fake_command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
 
     failed = ProcessActionResult(status="repo_missing", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="repo missing")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="repo missing"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_completed_started"
     assert current is not None
     assert current.source_hash == expected_hash
-    assert current.source_path is not None and Path(current.source_path).is_relative_to(paths.core_engines_dir)
-    assert current.env_path is not None and Path(current.env_path).is_relative_to(paths.core_envs_dir)
+    assert current.source_path is not None and Path(current.source_path).is_relative_to(
+        paths.core_engines_dir
+    )
+    assert current.env_path is not None and Path(current.env_path).is_relative_to(
+        paths.core_envs_dir
+    )
 
 
 @pytest.mark.anyio
-async def test_repair_retry_policy_blocks_repeated_automatic_attempts(tmp_path: Path) -> None:
+async def test_repair_retry_policy_blocks_repeated_automatic_attempts(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -445,7 +500,9 @@ async def test_repair_retry_policy_blocks_repeated_automatic_attempts(tmp_path: 
         source_path=str(source),
         env_path=str(paths.core_envs_dir / "missing" / "venv"),
         repair_attempt_count=2,
-        last_repair_attempt_at=__import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        last_repair_attempt_at=__import__("datetime")
+        .datetime.now(__import__("datetime").UTC)
+        .isoformat(),
     )
     _write_active(paths, record)
     manager = FakeRepairManager(source)
@@ -459,10 +516,15 @@ async def test_repair_retry_policy_blocks_repeated_automatic_attempts(tmp_path: 
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_fake_command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
 
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="missing env")
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="missing env"
+    )
 
     assert result.status == "repair_blocked"
     assert manager.start_calls == 0
@@ -471,7 +533,9 @@ async def test_repair_retry_policy_blocks_repeated_automatic_attempts(tmp_path: 
 
 
 @pytest.mark.anyio
-async def test_repair_source_hash_mismatch_is_repair_failed_not_incompatible(tmp_path: Path) -> None:
+async def test_repair_source_hash_mismatch_is_repair_failed_not_incompatible(
+    tmp_path: Path,
+) -> None:
     source_archive = tmp_path / "source.zip"
     _source_zip(source_archive)
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
@@ -505,10 +569,13 @@ async def test_repair_source_hash_mismatch_is_repair_failed_not_incompatible(tmp
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         archive_downloader=downloader,
         command_runner=_fake_command,
+        log_store=LogStore(),
     )
 
     failed = ProcessActionResult(status="repo_missing", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="repo missing")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="repo missing"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_failed_no_fallback"
@@ -519,7 +586,9 @@ async def test_repair_source_hash_mismatch_is_repair_failed_not_incompatible(tmp
 
 
 @pytest.mark.anyio
-async def test_dependency_install_failure_is_repair_failed_not_incompatible(tmp_path: Path) -> None:
+async def test_dependency_install_failure_is_repair_failed_not_incompatible(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -548,10 +617,15 @@ async def test_dependency_install_failure_is_repair_failed_not_incompatible(tmp_
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_failing_pip_command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
 
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="missing env")
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="missing env"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_failed_no_fallback"
@@ -562,7 +636,9 @@ async def test_dependency_install_failure_is_repair_failed_not_incompatible(tmp_
 
 
 @pytest.mark.anyio
-async def test_extraction_failure_is_repair_failed_not_incompatible(tmp_path: Path) -> None:
+async def test_extraction_failure_is_repair_failed_not_incompatible(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     _write_active(
@@ -593,10 +669,13 @@ async def test_extraction_failure_is_repair_failed_not_incompatible(tmp_path: Pa
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         archive_downloader=downloader,
         command_runner=_fake_command,
+        log_store=LogStore(),
     )
 
     failed = ProcessActionResult(status="repo_missing", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="repo missing")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="repo missing"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_failed_no_fallback"
@@ -606,7 +685,9 @@ async def test_extraction_failure_is_repair_failed_not_incompatible(tmp_path: Pa
 
 
 @pytest.mark.anyio
-async def test_repair_failure_uses_bundled_fallback_when_previous_unavailable(tmp_path: Path) -> None:
+async def test_repair_failure_uses_bundled_fallback_when_previous_unavailable(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     bundled_source = tmp_path / "bundled-comfyui"
@@ -640,10 +721,13 @@ async def test_repair_failure_uses_bundled_fallback_when_previous_unavailable(tm
         bundled_python_executable=str(bundled_python),
         archive_downloader=lambda *_: _raise_download_failure(),
         command_runner=_fake_command,
+        log_store=LogStore(),
     )
 
     failed = ProcessActionResult(status="repo_missing", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="repo missing")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="repo missing"
+    )
 
     assert result.status == "repair_failed_fallback_active"
     assert service.update_status().fallback_version == "bundled"
@@ -651,7 +735,9 @@ async def test_repair_failure_uses_bundled_fallback_when_previous_unavailable(tm
 
 
 @pytest.mark.anyio
-async def test_startup_failed_repairs_only_when_error_looks_environment_related(tmp_path: Path) -> None:
+async def test_startup_failed_repairs_only_when_error_looks_environment_related(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -679,6 +765,7 @@ async def test_startup_failed_repairs_only_when_error_looks_environment_related(
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_fake_command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
     generic = ProcessActionResult(
         status="startup_failed",
@@ -692,16 +779,24 @@ async def test_startup_failed_repairs_only_when_error_looks_environment_related(
         ),
     )
 
-    result = await service.repair_after_start_failure(generic, repair_reason=generic.comfyui.error or "")
+    result = await service.repair_after_start_failure(
+        generic, repair_reason=generic.comfyui.error or ""
+    )
 
     assert result is generic
     assert manager.start_calls == 0
-    assert _start_failure_is_repairable("startup_failed", "ModuleNotFoundError: No module named 'torch'")
-    assert not _start_failure_is_repairable("startup_failed", "ComfyUI process exited during startup with code 1")
+    assert _start_failure_is_repairable(
+        "startup_failed", "ModuleNotFoundError: No module named 'torch'"
+    )
+    assert not _start_failure_is_repairable(
+        "startup_failed", "ComfyUI process exited during startup with code 1"
+    )
 
 
 @pytest.mark.anyio
-async def test_smoke_behavior_failure_after_repair_marks_incompatible(tmp_path: Path) -> None:
+async def test_smoke_behavior_failure_after_repair_marks_incompatible(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -734,10 +829,15 @@ async def test_smoke_behavior_failure_after_repair_marks_incompatible(tmp_path: 
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_fake_command,
         smoke_tester=smoke,
+        log_store=LogStore(),
     )
 
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="missing env")
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="missing env"
+    )
     current = (await service.versions()).current
 
     assert result.status == "repair_failed_no_fallback"
@@ -789,10 +889,13 @@ async def test_repair_failure_uses_previous_active_fallback(tmp_path: Path) -> N
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         archive_downloader=lambda *_: _raise_download_failure(),
         command_runner=_fake_command,
+        log_store=LogStore(),
     )
 
     failed = ProcessActionResult(status="repo_missing", comfyui=await manager.status())
-    result = await service.repair_after_start_failure(failed, repair_reason="repo missing")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="repo missing"
+    )
 
     assert result.status == "repair_failed_fallback_active"
     assert service.update_status().fallback_version == "v0.19.0"
@@ -800,7 +903,9 @@ async def test_repair_failure_uses_previous_active_fallback(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
-async def test_manual_rebuild_resets_repair_block_and_uses_fresh_env_path(tmp_path: Path) -> None:
+async def test_manual_rebuild_resets_repair_block_and_uses_fresh_env_path(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-test"
@@ -836,6 +941,7 @@ async def test_manual_rebuild_resets_repair_block_and_uses_fresh_env_path(tmp_pa
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         command_runner=_fake_command,
         smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
     )
 
     status = await service.start_rebuild(ComfyUIRebuildRequest(version="current"))
@@ -865,10 +971,15 @@ async def test_external_mode_never_auto_repairs(tmp_path: Path) -> None:
         bootstrap_python_executable="python3",
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        log_store=LogStore(),
     )
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
 
-    result = await service.repair_after_start_failure(failed, repair_reason="missing env")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="missing env"
+    )
 
     assert result is failed
     assert manager.start_calls == 0
@@ -887,10 +998,15 @@ async def test_developer_override_never_auto_repairs(tmp_path: Path) -> None:
         bootstrap_python_executable="python3",
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        log_store=LogStore(),
     )
-    failed = ProcessActionResult(status="environment_not_ready", comfyui=await manager.status())
+    failed = ProcessActionResult(
+        status="environment_not_ready", comfyui=await manager.status()
+    )
 
-    result = await service.repair_after_start_failure(failed, repair_reason="missing env")
+    result = await service.repair_after_start_failure(
+        failed, repair_reason="missing env"
+    )
 
     assert result is failed
     assert manager.start_calls == 0
@@ -905,7 +1021,9 @@ async def _raise_download_failure(*args) -> int:
 
 
 @pytest.mark.anyio
-async def test_updates_disabled_for_external_mode_and_developer_override(tmp_path: Path) -> None:
+async def test_updates_disabled_for_external_mode_and_developer_override(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     external = ComfyUIUpdateService(
@@ -917,6 +1035,7 @@ async def test_updates_disabled_for_external_mode_and_developer_override(tmp_pat
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         release_fetcher=lambda: _async_releases([]),
+        log_store=LogStore(),
     )
     override = ComfyUIUpdateService(
         paths=paths,
@@ -927,14 +1046,19 @@ async def test_updates_disabled_for_external_mode_and_developer_override(tmp_pat
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
         release_fetcher=lambda: _async_releases([]),
+        log_store=LogStore(),
     )
 
     assert not (await external.versions()).updates_allowed
-    assert (await external.start_update(ComfyUIUpdateRequest(version="latest"))).status == "blocked"
+    assert (
+        await external.start_update(ComfyUIUpdateRequest(version="latest"))
+    ).status == "blocked"
     assert not (await override.versions()).updates_allowed
 
 
-def test_resolve_active_runtime_selection_uses_installed_metadata(tmp_path: Path) -> None:
+def test_resolve_active_runtime_selection_uses_installed_metadata(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "comfyui-core-v0.20.1-hash"
@@ -964,7 +1088,9 @@ def test_resolve_active_runtime_selection_uses_installed_metadata(tmp_path: Path
             "validated_at": None,
         },
     }
-    (paths.core_engines_dir / "active-comfyui.json").write_text(__import__("json").dumps(active), encoding="utf-8")
+    (paths.core_engines_dir / "active-comfyui.json").write_text(
+        __import__("json").dumps(active), encoding="utf-8"
+    )
 
     selection = resolve_active_runtime_selection(
         paths,
@@ -979,7 +1105,9 @@ def test_resolve_active_runtime_selection_uses_installed_metadata(tmp_path: Path
     assert selection.version_metadata.active_tag == "v0.20.1"
 
 
-def test_resolve_active_runtime_selection_keeps_broken_installed_runtime_for_repair(tmp_path: Path) -> None:
+def test_resolve_active_runtime_selection_keeps_broken_installed_runtime_for_repair(
+    tmp_path: Path,
+) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
     source = paths.core_engines_dir / "missing-source"

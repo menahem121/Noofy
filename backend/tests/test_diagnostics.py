@@ -1,6 +1,26 @@
+import inspect
+
 from app.engine.diagnostics import LogStore
+from app.engine.process_manager import ComfyUIProcessManager
 from app.engine.service import _diagnostic_event_payload, _install_developer_details
+from app.engine.comfyui_adapter import ComfyUIEngineAdapter
+from app.runtime.capsule_installer import CapsuleInstaller
+from app.runtime.comfyui_updates import ComfyUIUpdateService
+from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
+from app.runtime.dependency_resolver import UvDependencyLockResolver
+from app.runtime.environment import RuntimeEnvironment
+from app.runtime.install_transactions import InstallTransactionStore
 from app.runtime.isolation import InstallState, InstallStatus, SmokeTestStatus
+from app.runtime.manager import RuntimeManager
+from app.runtime.model_store import ModelStore
+from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver
+from app.runtime.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runner_process import RunnerProcessSupervisor
+from app.runtime.smoke_test import RunnerSmokeTester
+from app.runtime.storage_gc import RuntimeStorageGarbageCollector
+from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
+from app.workflows.authoring import DashboardAuthoringService
+from app.workflows.importer import ImportedWorkflowPackageStore
 
 
 def test_log_store_filters_by_job_and_latest_error() -> None:
@@ -17,7 +37,9 @@ def test_log_store_filters_by_job_and_latest_error() -> None:
     assert store.latest_error().job_id == "job-1"
 
 
-def test_diagnostic_payload_redacts_secrets_and_hides_developer_details_by_default() -> None:
+def test_diagnostic_payload_redacts_secrets_and_hides_developer_details_by_default() -> (
+    None
+):
     store = LogStore()
     event = store.add(
         "error",
@@ -43,7 +65,9 @@ def test_diagnostic_payload_redacts_secrets_and_hides_developer_details_by_defau
     }
     assert "developer_details" not in default_payload
     assert developer_payload["developer_details"]["authorization"] == "[redacted]"
-    assert developer_payload["developer_details"]["nested"]["signed_url"] == "[redacted]"
+    assert (
+        developer_payload["developer_details"]["nested"]["signed_url"] == "[redacted]"
+    )
     assert developer_payload["developer_details"]["path"] == "[local-path-redacted]"
 
 
@@ -76,3 +100,31 @@ def test_install_developer_details_redacts_private_paths() -> None:
 
     assert "/Users/alice" not in details["last_error"]
     assert details["dependency_env_path"] == "[local-path-redacted]"
+
+
+def test_diagnostic_emitters_require_explicit_sink() -> None:
+    emitters = [
+        CapsuleInstaller,
+        ComfyUIProcessManager,
+        ComfyUIEngineAdapter,
+        ComfyUIUpdateService,
+        CustomNodeSourceCache,
+        DashboardAuthoringService,
+        ImportedWorkflowPackageStore,
+        InstallTransactionStore,
+        ModelStore,
+        NodeRegistryResolver,
+        RunnerProcessCoordinator,
+        RunnerProcessSupervisor,
+        RunnerSmokeTester,
+        RuntimeEnvironment,
+        RuntimeManager,
+        RuntimeStorageGarbageCollector,
+        RuntimeWorkspacePreparer,
+        UvDependencyEnvironmentInstaller,
+        UvDependencyLockResolver,
+    ]
+
+    for emitter in emitters:
+        parameter = inspect.signature(emitter).parameters["log_store"]
+        assert parameter.default is inspect.Signature.empty, emitter

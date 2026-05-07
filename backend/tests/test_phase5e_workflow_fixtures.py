@@ -12,14 +12,16 @@ from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
 from app.runtime.supervisor import RunnerKind
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    RunnerWorkspaceManifestStore,
+)
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.importer import (
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
     imported_package_capsule_lock,
 )
-
 
 TEST_WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / "test_workflows"
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -45,7 +47,9 @@ def _archive_bytes(name: str) -> bytes:
 
 
 def _normalize_fixture(name: str):
-    return NoofyArchiveImporter(_archive_bytes(name), original_filename=name).normalize()
+    return NoofyArchiveImporter(
+        _archive_bytes(name), original_filename=name
+    ).normalize()
 
 
 def _node_types(prompt: dict[str, object]) -> list[str]:
@@ -62,7 +66,8 @@ def _output_node_ids(prompt: dict[str, object]) -> list[str]:
     return sorted(
         str(node_id)
         for node_id, node in prompt.items()
-        if isinstance(node, dict) and node.get("class_type") in {"PreviewImage", "SaveImage"}
+        if isinstance(node, dict)
+        and node.get("class_type") in {"PreviewImage", "SaveImage"}
     )
 
 
@@ -146,8 +151,10 @@ def test_phase5e_noofy_fixtures_normalize_expected_metadata(
     assert package.import_metadata.status == "needs_input_setup"
 
 
-def test_phase5e_wrapped_noofy_archive_imports_without_macos_metadata(tmp_path: Path) -> None:
-    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+def test_phase5e_wrapped_noofy_archive_imports_without_macos_metadata(
+    tmp_path: Path,
+) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
 
     package = store.import_archive(
         _archive_bytes("core_missing_model.noofy"),
@@ -157,7 +164,9 @@ def test_phase5e_wrapped_noofy_archive_imports_without_macos_metadata(tmp_path: 
     package_dir = tmp_path / "packages" / "unknown" / "core_missing_model" / "0.1.0"
     assert package.metadata.id == "unknown__core_missing_model__0.1.0"
     assert (package_dir / "source-files" / "package.json").exists()
-    assert not (package_dir / "source-files" / "core_missing_model" / "package.json").exists()
+    assert not (
+        package_dir / "source-files" / "core_missing_model" / "package.json"
+    ).exists()
     assert not (package_dir / "source-files" / "__MACOSX").exists()
 
 
@@ -166,13 +175,16 @@ def test_phase5e_wrapped_noofy_archive_imports_without_macos_metadata(tmp_path: 
     [
         ("custom_node_no_deps_success.noofy", {"ComfyUI_JPS-Nodes"}),
         ("custom_node_with_pypi_dep_success.noofy", {"comfyui-kjnodes"}),
-        ("exported-workflow-for-testing.noofy", {
-            "ComfyUI_JPS-Nodes",
-            "comfyui-image-blender",
-            "comfyui-inpaint-nodes",
-            "comfyui-kjnodes",
-            "comfyui_controlnet_aux",
-        }),
+        (
+            "exported-workflow-for-testing.noofy",
+            {
+                "ComfyUI_JPS-Nodes",
+                "comfyui-image-blender",
+                "comfyui-inpaint-nodes",
+                "comfyui-kjnodes",
+                "comfyui_controlnet_aux",
+            },
+        ),
     ],
 )
 def test_phase5e_custom_node_fixtures_materialize_only_into_runner_workspace(
@@ -180,7 +192,7 @@ def test_phase5e_custom_node_fixtures_materialize_only_into_runner_workspace(
     archive_name: str,
     expected_folders: set[str],
 ) -> None:
-    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
     package = store.import_archive(
         _archive_bytes(archive_name),
         original_filename=archive_name,
@@ -200,9 +212,13 @@ def test_phase5e_custom_node_fixtures_materialize_only_into_runner_workspace(
 
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
         comfyui_source_dir=trusted_core,
-        runtime_profile_catalog=load_runtime_profile_catalog(BACKEND_DIR / "app/runtime/profile_catalog.json"),
+        runtime_profile_catalog=load_runtime_profile_catalog(
+            BACKEND_DIR / "app/runtime/profile_catalog.json"
+        ),
         custom_node_materializer=CustomNodeWorkspaceMaterializer(),
         custom_node_source_files_dir=package_dir / "source-files",
         log_store=LogStore(),
@@ -211,16 +227,21 @@ def test_phase5e_custom_node_fixtures_materialize_only_into_runner_workspace(
     prepared = preparer.prepare(capsule)
 
     materialized = {
-        path.name for path in (prepared.runner_workspace_path / "custom_nodes").iterdir()
+        path.name
+        for path in (prepared.runner_workspace_path / "custom_nodes").iterdir()
     }
     assert expected_folders <= materialized
     assert (trusted_core_custom_nodes / "trusted.py").exists()
 
 
 @pytest.mark.anyio
-async def test_phase5e_core_empty_image_smoke_fixture_passes_minimal_execution(tmp_path: Path) -> None:
+async def test_phase5e_core_empty_image_smoke_fixture_passes_minimal_execution(
+    tmp_path: Path,
+) -> None:
     report = await _run_fake_smoke(
-        imported_package_capsule_lock(_normalize_fixture("core_empty_image_smoke.noofy")),
+        imported_package_capsule_lock(
+            _normalize_fixture("core_empty_image_smoke.noofy")
+        ),
         tmp_path,
         execution_fixture=_core_empty_image_fixture(),
         registered_node_types={"EmptyImage", "PreviewImage"},
@@ -232,7 +253,9 @@ async def test_phase5e_core_empty_image_smoke_fixture_passes_minimal_execution(t
 
 
 @pytest.mark.anyio
-async def test_phase5e_custom_node_fixture_exercises_declared_node(tmp_path: Path) -> None:
+async def test_phase5e_custom_node_fixture_exercises_declared_node(
+    tmp_path: Path,
+) -> None:
     package = _normalize_fixture("custom_node_no_deps_success.noofy")
     capsule = imported_package_capsule_lock(package)
     fixture = _fixture_from_prompt("custom-node-no-deps", package.comfyui_graph)
@@ -261,7 +284,9 @@ async def test_phase5e_custom_node_fixture_missing_registration_fails_before_exe
     report = await _run_fake_smoke(
         imported_package_capsule_lock(package),
         tmp_path,
-        execution_fixture=_fixture_from_prompt("missing-registration", package.comfyui_graph),
+        execution_fixture=_fixture_from_prompt(
+            "missing-registration", package.comfyui_graph
+        ),
         registered_node_types={"LoadImage", "Crop Image TargetSize (JPS)", "SaveImage"},
         output_node_ids=["3"],
     )
@@ -275,7 +300,9 @@ async def test_phase5e_custom_node_fixture_missing_registration_fails_before_exe
 async def test_phase5e_custom_node_fixture_that_skips_declared_node_fails_depth_check(
     tmp_path: Path,
 ) -> None:
-    package = _normalize_fixture("custom_node_fixture_does_not_exercise_node_failure.noofy")
+    package = _normalize_fixture(
+        "custom_node_fixture_does_not_exercise_node_failure.noofy"
+    )
     fixture = SmokeExecutionFixture(
         name="does-not-exercise-custom-node",
         prompt={
@@ -294,7 +321,11 @@ async def test_phase5e_custom_node_fixture_that_skips_declared_node_fails_depth_
         imported_package_capsule_lock(package),
         tmp_path,
         execution_fixture=fixture,
-        registered_node_types={"EmptyImage", "PreviewImage", "Crop Image TargetSize (JPS)"},
+        registered_node_types={
+            "EmptyImage",
+            "PreviewImage",
+            "Crop Image TargetSize (JPS)",
+        },
         output_node_ids=["2"],
     )
 
@@ -338,17 +369,22 @@ async def _run_fake_smoke(
     async def object_info(base_url: str):
         return {node_type: {} for node_type in registered_node_types}
 
-    async def prompt_executor(base_url: str, prompt: dict[str, object], timeout_seconds: float):
+    async def prompt_executor(
+        base_url: str, prompt: dict[str, object], timeout_seconds: float
+    ):
         return {
             "prompt_id": "phase5e-fixture",
             "output_node_count": len(output_node_ids),
             "output_node_ids": output_node_ids,
         }
 
+    log_store = LogStore()
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
-        log_store=LogStore(),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
+        log_store=log_store,
     )
     prepared = preparer.prepare(capsule)
     smoke_tester = RunnerSmokeTester(
@@ -357,6 +393,7 @@ async def _run_fake_smoke(
             health_check=healthy,
             startup_timeout_seconds=0.1,
             health_poll_interval_seconds=0.001,
+            log_store=log_store,
         ),
         launch_spec_factory=lambda capsule_lock, prepared_workspace: RunnerLaunchSpec(
             runner_id="phase5e-fixture",
@@ -371,6 +408,7 @@ async def _run_fake_smoke(
         execution_fixture=execution_fixture,
         object_info_fetcher=object_info,
         prompt_executor=prompt_executor,
+        log_store=log_store,
     )
 
     return await smoke_tester.run(capsule, prepared)

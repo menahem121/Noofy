@@ -12,9 +12,19 @@ from pathlib import Path
 
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.diagnostics import LogStore
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessSupervisor, RunnerProcessStatus
-from app.runtime.supervisor import RunnerDescriptor, RunnerNotFoundError, RunnerStatus, RunnerSupervisor
+from app.engine.diagnostics import DiagnosticsSink
+from app.runtime.runner_process import (
+    RunnerLaunchSpec,
+    RunnerProcessHandle,
+    RunnerProcessSupervisor,
+    RunnerProcessStatus,
+)
+from app.runtime.supervisor import (
+    RunnerDescriptor,
+    RunnerNotFoundError,
+    RunnerStatus,
+    RunnerSupervisor,
+)
 
 AdapterFactory = Callable[[RunnerDescriptor], EngineAdapter]
 
@@ -26,12 +36,12 @@ class RunnerProcessCoordinator:
         runner_supervisor: RunnerSupervisor,
         process_supervisor: RunnerProcessSupervisor,
         adapter_factory: AdapterFactory,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
     ) -> None:
         self.runner_supervisor = runner_supervisor
         self.process_supervisor = process_supervisor
         self.adapter_factory = adapter_factory
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
 
     async def start_runner(
         self,
@@ -97,7 +107,7 @@ class RunnerProcessCoordinator:
 def comfyui_adapter_factory(
     *,
     models_dir: Path,
-    log_store: LogStore | None = None,
+    log_store: DiagnosticsSink,
 ) -> AdapterFactory:
     def factory(descriptor: RunnerDescriptor) -> EngineAdapter:
         return ComfyUIEngineAdapter(

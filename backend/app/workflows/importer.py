@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.dependency_lock import DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
 from app.runtime.fingerprints import (
     FINGERPRINT_SCHEMA_VERSION,
@@ -103,13 +103,13 @@ class ImportedWorkflowPackageStore:
         self,
         root_dir: Path,
         *,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
         node_registry_resolver: NodeRegistryResolver | None = None,
         custom_node_source_cache: CustomNodeSourceCache | None = None,
         trust_verifier: TrustVerifier | None = None,
     ) -> None:
         self.root_dir = root_dir
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self.node_registry_resolver = node_registry_resolver
         self.custom_node_source_cache = custom_node_source_cache
         self.trust_verifier = trust_verifier or TrustVerifier()
@@ -125,7 +125,9 @@ class ImportedWorkflowPackageStore:
         try:
             importer = NoofyArchiveImporter(data, original_filename=original_filename)
             package = importer.normalize()
-            package = self._with_verified_import_trust(package, importer.trust_payload())
+            package = self._with_verified_import_trust(
+                package, importer.trust_payload()
+            )
             package = _package_with_source_policy(
                 package,
                 community_preparation_opted_in=allow_unverified_community_preparation,
@@ -136,7 +138,9 @@ class ImportedWorkflowPackageStore:
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
             )
             target_dir = self.package_dir(package)
-            transaction_dir = self.root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
+            transaction_dir = (
+                self.root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
+            )
             source_files_dir = transaction_dir / "source-files"
 
             transaction_dir.mkdir(parents=True, exist_ok=False)
@@ -146,8 +150,12 @@ class ImportedWorkflowPackageStore:
             # Write dashboard.json as a separate file (canonical M2 format).
             # inputs[] and outputs[] live in dashboard.json, not in package.json.
             dashboard_payload = package.dashboard.model_dump(mode="json")
-            dashboard_payload["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
-            dashboard_payload["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
+            dashboard_payload["inputs"] = [
+                i.model_dump(mode="json") for i in package.inputs
+            ]
+            dashboard_payload["outputs"] = [
+                o.model_dump(mode="json") for o in package.outputs
+            ]
             (transaction_dir / "dashboard.json").write_text(
                 json.dumps(dashboard_payload, indent=2, sort_keys=True),
                 encoding="utf-8",
@@ -176,26 +184,40 @@ class ImportedWorkflowPackageStore:
                     {
                         "schema_version": NOOFY_ARCHIVE_SCHEMA_VERSION,
                         "workflow_id": package.metadata.id,
-                        "identity": package.identity.model_dump() if package.identity else None,
+                        "identity": (
+                            package.identity.model_dump() if package.identity else None
+                        ),
                         "original_filename": original_filename,
-                        "status": package.import_metadata.status
-                        if package.import_metadata
-                        else "imported",
+                        "status": (
+                            package.import_metadata.status
+                            if package.import_metadata
+                            else "imported"
+                        ),
                         "runtime_resolution": {
                             "runtime_profile_id": app_capsule_lock.runtime.runtime_profile_id,
                             "runtime_profile_variant_id": app_capsule_lock.runtime.runtime_profile_variant_id,
                             "runtime_profile_manifest_hash": app_capsule_lock.runtime.runtime_profile_manifest_hash,
                             "selection_stage": "import_time_phase5c",
                         },
-                        "source_resolution": package.import_metadata.developer_details.get("source_resolution", {})
-                        if package.import_metadata
-                        else {},
-                        "trust_verification": package.import_metadata.developer_details.get("trust_verification", {})
-                        if package.import_metadata
-                        else {},
-                        "source_policy": package.source_policy.model_dump(mode="json")
-                        if package.source_policy
-                        else None,
+                        "source_resolution": (
+                            package.import_metadata.developer_details.get(
+                                "source_resolution", {}
+                            )
+                            if package.import_metadata
+                            else {}
+                        ),
+                        "trust_verification": (
+                            package.import_metadata.developer_details.get(
+                                "trust_verification", {}
+                            )
+                            if package.import_metadata
+                            else {}
+                        ),
+                        "source_policy": (
+                            package.source_policy.model_dump(mode="json")
+                            if package.source_policy
+                            else None
+                        ),
                     },
                     indent=2,
                     sort_keys=True,
@@ -227,7 +249,9 @@ class ImportedWorkflowPackageStore:
             "workflow.import",
             workflow_id=package.metadata.id,
             details={
-                "publisher_id": package.identity.publisher_id if package.identity else None,
+                "publisher_id": (
+                    package.identity.publisher_id if package.identity else None
+                ),
                 "package_id": package.identity.package_id if package.identity else None,
                 "version": package.identity.version if package.identity else None,
                 "custom_node_count": len(package.custom_nodes),
@@ -270,7 +294,10 @@ class ImportedWorkflowPackageStore:
         trust_level = _trust_level_from_string(package.identity.trust_level)
         if trust_level is TrustLevel.UNSUPPORTED:
             return package
-        if trust_level is TrustLevel.QUARANTINED_COMMUNITY and not allow_unverified_community_preparation:
+        if (
+            trust_level is TrustLevel.QUARANTINED_COMMUNITY
+            and not allow_unverified_community_preparation
+        ):
             return _package_with_import_resolution_status(
                 package,
                 status="blocked_by_policy",
@@ -278,7 +305,9 @@ class ImportedWorkflowPackageStore:
                 source_resolution={
                     "status": "blocked_by_policy",
                     "reason": "community_opt_in_required",
-                    "unresolved_custom_nodes": [record.id for record in required_records],
+                    "unresolved_custom_nodes": [
+                        record.id for record in required_records
+                    ],
                 },
             )
         if self.node_registry_resolver is None or self.custom_node_source_cache is None:
@@ -289,7 +318,9 @@ class ImportedWorkflowPackageStore:
                 source_resolution={
                     "status": "failed",
                     "reason": "source_resolution_not_configured",
-                    "unresolved_custom_nodes": [record.id for record in required_records],
+                    "unresolved_custom_nodes": [
+                        record.id for record in required_records
+                    ],
                 },
             )
 
@@ -357,8 +388,12 @@ class ImportedWorkflowPackageStore:
                 }
             )
 
-        updated_package = package.model_copy(update={"custom_nodes": list(records_by_id.values())})
-        _status = _import_status(updated_package.unresolved_runtime_inputs, updated_package.dashboard)
+        updated_package = package.model_copy(
+            update={"custom_nodes": list(records_by_id.values())}
+        )
+        _status = _import_status(
+            updated_package.unresolved_runtime_inputs, updated_package.dashboard
+        )
         return _package_with_import_resolution_status(
             updated_package,
             status=_status,
@@ -413,19 +448,27 @@ class NoofyArchiveImporter:
 
     def __init__(self, data: bytes, *, original_filename: str | None = None) -> None:
         if len(data) > MAX_ARCHIVE_BYTES:
-            raise NoofyImportError("Workflow package is too large to import automatically.")
+            raise NoofyImportError(
+                "Workflow package is too large to import automatically."
+            )
         self.data = data
         self.original_filename = original_filename
         try:
             self.archive = zipfile.ZipFile(io.BytesIO(data))
         except zipfile.BadZipFile as exc:
-            raise NoofyImportError("Workflow package is not a valid .noofy archive.") from exc
+            raise NoofyImportError(
+                "Workflow package is not a valid .noofy archive."
+            ) from exc
         self.members = self._validated_members()
 
     def normalize(self) -> WorkflowPackage:
         package_json = self._read_json("package.json")
         graph = self._read_json("comfyui_graph.json")
-        dashboard_json = self._read_json("dashboard.json") if "dashboard.json" in self.members else {}
+        dashboard_json = (
+            self._read_json("dashboard.json")
+            if "dashboard.json" in self.members
+            else {}
+        )
         capsule_json = self._read_json("capsule.lock.json")
         export_report = self._read_json("export-report.json")
 
@@ -458,13 +501,18 @@ class NoofyArchiveImporter:
         # Validate configured dashboards — an invalid one routes to needs_input_setup.
         dashboard_valid = True
         if dashboard.status == "configured":
-            from app.workflows.validator import WorkflowPackageValidator  # local to avoid circular import
+            from app.workflows.validator import (
+                WorkflowPackageValidator,
+            )  # local to avoid circular import
 
             _validator = WorkflowPackageValidator()
             _candidate = WorkflowPackage(
                 metadata=WorkflowMetadata(
-                    id=workflow_id, name=display_name, version=version,
-                    description="", author=publisher_id,
+                    id=workflow_id,
+                    name=display_name,
+                    version=version,
+                    description="",
+                    author=publisher_id,
                 ),
                 identity=None,
                 engine="comfyui",
@@ -480,7 +528,9 @@ class NoofyArchiveImporter:
             _result = _validator.validate_structure(_candidate)
             dashboard_valid = _result.valid
 
-        import_status = _import_status(unresolved_inputs, dashboard, dashboard_valid=dashboard_valid)
+        import_status = _import_status(
+            unresolved_inputs, dashboard, dashboard_valid=dashboard_valid
+        )
 
         try:
             return WorkflowPackage(
@@ -512,15 +562,19 @@ class NoofyArchiveImporter:
                 custom_nodes=custom_nodes,
                 unresolved_runtime_inputs=unresolved_inputs,
                 assets=WorkflowAssetMetadata(
-                    thumbnail="source-files/assets/thumbnail.png"
-                    if "assets/thumbnail.png" in self.members
-                    else None
+                    thumbnail=(
+                        "source-files/assets/thumbnail.png"
+                        if "assets/thumbnail.png" in self.members
+                        else None
+                    )
                 ),
                 export_report=export_report,
                 exported_package=package_json,
                 exported_capsule=capsule_json,
                 observed_hardware=observed_hardware,
-                smoke_tests=WorkflowSmokeTests.model_validate(package_json.get("smoke_tests") or {}),
+                smoke_tests=WorkflowSmokeTests.model_validate(
+                    package_json.get("smoke_tests") or {}
+                ),
                 import_metadata=WorkflowImportMetadata(
                     original_filename=self.original_filename,
                     imported_at=datetime.now(UTC).isoformat(),
@@ -530,7 +584,9 @@ class NoofyArchiveImporter:
                 ),
             )
         except ValidationError as exc:
-            raise NoofyImportError("Workflow package metadata could not be normalized.") from exc
+            raise NoofyImportError(
+                "Workflow package metadata could not be normalized."
+            ) from exc
 
     def trust_payload(self) -> dict[str, Any]:
         return imported_archive_trust_payload(
@@ -575,7 +631,9 @@ class NoofyArchiveImporter:
         for info in infos:
             name = _safe_archive_name(info.filename)
             if _zip_member_is_symlink(info):
-                raise NoofyImportError(f"Workflow package contains an unsupported symlink: {name}")
+                raise NoofyImportError(
+                    f"Workflow package contains an unsupported symlink: {name}"
+                )
             total_uncompressed += info.file_size
             if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
                 raise NoofyImportError("Workflow package expands to too much data.")
@@ -584,7 +642,9 @@ class NoofyArchiveImporter:
             if _ignored_archive_member(name):
                 continue
             if name in raw_members:
-                raise NoofyImportError(f"Workflow package contains duplicate file path: {name}")
+                raise NoofyImportError(
+                    f"Workflow package contains duplicate file path: {name}"
+                )
             raw_members[name] = info
 
         root_prefix = _single_wrapper_root(raw_members)
@@ -594,12 +654,16 @@ class NoofyArchiveImporter:
             if normalized_name is None or _ignored_archive_member(normalized_name):
                 continue
             if normalized_name in members:
-                raise NoofyImportError(f"Workflow package contains duplicate file path: {normalized_name}")
+                raise NoofyImportError(
+                    f"Workflow package contains duplicate file path: {normalized_name}"
+                )
             members[normalized_name] = info
 
         missing = sorted(REQUIRED_FILES - set(members))
         if missing:
-            raise NoofyImportError("Workflow package is missing required files: " + ", ".join(missing))
+            raise NoofyImportError(
+                "Workflow package is missing required files: " + ", ".join(missing)
+            )
         return members
 
 
@@ -653,7 +717,9 @@ def _package_with_import_resolution_status(
     developer_details["source_resolution"] = source_resolution
     updated_identity = package.identity
     if status in {"blocked_by_policy", "unsupported"} and package.identity is not None:
-        updated_identity = package.identity.model_copy(update={"trust_level": TrustLevel.UNSUPPORTED.value})
+        updated_identity = package.identity.model_copy(
+            update={"trust_level": TrustLevel.UNSUPPORTED.value}
+        )
     updated = package.model_copy(
         update={
             "identity": updated_identity,
@@ -673,7 +739,9 @@ def _package_with_import_resolution_status(
             if package.source_policy is not None
             else False
         ),
-        policy_status=status if status in {"blocked_by_policy", "unsupported"} else "active",
+        policy_status=(
+            status if status in {"blocked_by_policy", "unsupported"} else "active"
+        ),
     )
 
 
@@ -713,19 +781,27 @@ def _package_with_source_policy(
 
 
 def _source_policy_status_for_import(package: WorkflowPackage) -> str:
-    status = package.import_metadata.status if package.import_metadata is not None else "active"
+    status = (
+        package.import_metadata.status
+        if package.import_metadata is not None
+        else "active"
+    )
     if status in {"blocked_by_policy", "unsupported"}:
         return status
     return "active"
 
 
-def _non_bundled_required_custom_node_records(package: WorkflowPackage) -> list[WorkflowCustomNodeRecord]:
+def _non_bundled_required_custom_node_records(
+    package: WorkflowPackage,
+) -> list[WorkflowCustomNodeRecord]:
     graph_node_types = _graph_node_types(package.comfyui_graph)
     required: list[WorkflowCustomNodeRecord] = []
     for record in package.custom_nodes:
         if record.included:
             continue
-        if record.node_types and not any(node_type in graph_node_types for node_type in record.node_types):
+        if record.node_types and not any(
+            node_type in graph_node_types for node_type in record.node_types
+        ):
             continue
         required.append(record)
     return required
@@ -738,7 +814,9 @@ def _graph_node_types(graph: dict[str, Any]) -> set[str]:
         if not isinstance(node, dict):
             return
         class_type = node.get("class_type") or node.get("type")
-        if isinstance(class_type, str) and _is_resolvable_workflow_node_type(class_type):
+        if isinstance(class_type, str) and _is_resolvable_workflow_node_type(
+            class_type
+        ):
             node_types.add(class_type)
         group_nodes = node.get("nodes") or node.get("groupNodes")
         if isinstance(group_nodes, list):
@@ -759,7 +837,9 @@ def _is_resolvable_workflow_node_type(node_type: str) -> bool:
     return not (node_type.startswith("workflow/") or node_type.startswith("workflow>"))
 
 
-def _explicit_node_registry_source(record: WorkflowCustomNodeRecord) -> NodeRegistrySource | None:
+def _explicit_node_registry_source(
+    record: WorkflowCustomNodeRecord,
+) -> NodeRegistrySource | None:
     if not record.source.startswith("https://"):
         return None
     if record.source_ref is None:
@@ -786,7 +866,11 @@ def _explicit_node_registry_source(record: WorkflowCustomNodeRecord) -> NodeRegi
         raise NodeRegistryResolutionError(
             NodeRegistryResolutionErrorCode.UNPINNED_SOURCE_REF,
             "Noofy cannot prepare a workflow extension without pinned and verified source facts.",
-            developer_details={"package_id": record.id, "source_url": record.source, "validation_error": str(exc)},
+            developer_details={
+                "package_id": record.id,
+                "source_url": record.source,
+                "validation_error": str(exc),
+            },
         ) from exc
 
 
@@ -825,7 +909,8 @@ def _single_wrapper_root(members: dict[str, zipfile.ZipInfo]) -> str | None:
         root_files = {
             str(PurePosixPath(*PurePosixPath(name).parts[1:]))
             for name in members
-            if PurePosixPath(name).parts[:1] == (root,) and len(PurePosixPath(name).parts) > 1
+            if PurePosixPath(name).parts[:1] == (root,)
+            and len(PurePosixPath(name).parts) > 1
         }
         if REQUIRED_FILES <= root_files:
             return root
@@ -844,7 +929,10 @@ def _strip_wrapper_root(name: str, root_prefix: str | None) -> str | None:
 
 
 def _safe_store_segment(value: str) -> str:
-    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value.strip())
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "-"
+        for char in value.strip()
+    )
     cleaned = cleaned.strip(".-_")
     return cleaned or "unknown"
 
@@ -895,7 +983,10 @@ def _normalize_signatures(value: Any) -> list[WorkflowPackageSignature]:
         key_id = item.get("key_id")
         algorithm = item.get("algorithm")
         signature_value = item.get("value")
-        if not all(isinstance(field, str) and field.strip() for field in (key_id, algorithm, signature_value)):
+        if not all(
+            isinstance(field, str) and field.strip()
+            for field in (key_id, algorithm, signature_value)
+        ):
             continue
         signatures.append(
             WorkflowPackageSignature(
@@ -913,7 +1004,10 @@ def _normalize_signed_registry_metadata(value: Any) -> SignedRegistryMetadata | 
     registry_id = value.get("registry_id")
     snapshot_hash = value.get("snapshot_hash")
     signature = value.get("signature")
-    if not all(isinstance(field, str) and field.strip() for field in (registry_id, snapshot_hash, signature)):
+    if not all(
+        isinstance(field, str) and field.strip()
+        for field in (registry_id, snapshot_hash, signature)
+    ):
         return None
     return SignedRegistryMetadata(
         registry_id=registry_id.strip(),
@@ -937,7 +1031,9 @@ def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
         filename = _string_field(model, "filename", fallback="")
         if not folder or not filename:
             continue
-        source_urls = [url for url in model.get("source_urls", []) if isinstance(url, str)]
+        source_urls = [
+            url for url in model.get("source_urls", []) if isinstance(url, str)
+        ]
         sha256 = model.get("sha256")
         checksum = None
         if isinstance(sha256, str) and sha256:
@@ -965,14 +1061,20 @@ def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
                     checksum=checksum,
                     size_bytes=size_bytes,
                 ),
-                identity_verified_by_exporter=identity_verified
-                if isinstance(identity_verified, bool)
-                else checksum is not None and size_bytes is not None,
-                local_file_available_at_export=local_file_available
-                if isinstance(local_file_available, bool)
-                else None,
+                identity_verified_by_exporter=(
+                    identity_verified
+                    if isinstance(identity_verified, bool)
+                    else checksum is not None and size_bytes is not None
+                ),
+                local_file_available_at_export=(
+                    local_file_available
+                    if isinstance(local_file_available, bool)
+                    else None
+                ),
                 bundled=bundled if isinstance(bundled, bool) else False,
-                asset_ownership=_normalize_asset_ownership(model.get("asset_ownership")),
+                asset_ownership=_normalize_asset_ownership(
+                    model.get("asset_ownership")
+                ),
                 identity_warnings=identity_warnings,
             )
         )
@@ -1001,7 +1103,9 @@ def _normalize_asset_ownership(value: Any) -> str:
     return AssetOwnership.EXTERNAL_REFERENCE.value
 
 
-def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustomNodeRecord]:
+def _normalize_custom_nodes(
+    capsule_json: dict[str, Any],
+) -> list[WorkflowCustomNodeRecord]:
     nodes = capsule_json.get("custom_nodes", [])
     if not isinstance(nodes, list):
         return []
@@ -1010,12 +1114,18 @@ def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustom
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        folder_name = _string_field(node, "folder_name", fallback=_string_field(node, "id", fallback="custom-node"))
+        folder_name = _string_field(
+            node,
+            "folder_name",
+            fallback=_string_field(node, "id", fallback="custom-node"),
+        )
         node_id = _string_field(node, "id", fallback=folder_name)
         requirements_files = [
             item for item in node.get("requirements_files", []) if isinstance(item, str)
         ]
-        node_types = [item for item in node.get("node_types", []) if isinstance(item, str)]
+        node_types = [
+            item for item in node.get("node_types", []) if isinstance(item, str)
+        ]
         normalized.append(
             WorkflowCustomNodeRecord(
                 id=node_id,
@@ -1025,21 +1135,35 @@ def _normalize_custom_nodes(capsule_json: dict[str, Any]) -> list[WorkflowCustom
                 node_types=node_types,
                 requirements_files=requirements_files,
                 has_install_py=bool(node.get("has_install_py")),
-                sha256_manifest=node.get("sha256_manifest")
-                if isinstance(node.get("sha256_manifest"), str)
-                else None,
-                source_ref=node.get("source_ref") if isinstance(node.get("source_ref"), str) else None,
-                source_content_hash=node.get("source_content_hash")
-                if isinstance(node.get("source_content_hash"), str)
-                else None,
-                source_cache_ref=node.get("source_cache_ref")
-                if isinstance(node.get("source_cache_ref"), str)
-                else None,
-                source_archive_subdir=_optional_string_field(node, "source_archive_subdir")
+                sha256_manifest=(
+                    node.get("sha256_manifest")
+                    if isinstance(node.get("sha256_manifest"), str)
+                    else None
+                ),
+                source_ref=(
+                    node.get("source_ref")
+                    if isinstance(node.get("source_ref"), str)
+                    else None
+                ),
+                source_content_hash=(
+                    node.get("source_content_hash")
+                    if isinstance(node.get("source_content_hash"), str)
+                    else None
+                ),
+                source_cache_ref=(
+                    node.get("source_cache_ref")
+                    if isinstance(node.get("source_cache_ref"), str)
+                    else None
+                ),
+                source_archive_subdir=_optional_string_field(
+                    node, "source_archive_subdir"
+                )
                 or _optional_string_field(node, "archive_subdir"),
-                resolution_method=node.get("resolution_method")
-                if isinstance(node.get("resolution_method"), str)
-                else None,
+                resolution_method=(
+                    node.get("resolution_method")
+                    if isinstance(node.get("resolution_method"), str)
+                    else None
+                ),
             )
         )
     return normalized
@@ -1050,7 +1174,9 @@ def _normalize_dashboard(
 ) -> DashboardSchema:
     # Archive dashboard.json may have various shapes. Normalize to M2 DashboardSchema.
     # inputs/outputs are stripped here — they are populated on WorkflowPackage directly.
-    stripped = {k: v for k, v in dashboard_json.items() if k not in ("inputs", "outputs")}
+    stripped = {
+        k: v for k, v in dashboard_json.items() if k not in ("inputs", "outputs")
+    }
 
     # Accept explicit status from the archive.
     archive_status = stripped.get("status")
@@ -1075,7 +1201,9 @@ def _normalize_dashboard(
     )
 
 
-def _detect_unresolved_runtime_inputs(graph: dict[str, Any]) -> list[UnresolvedRuntimeInput]:
+def _detect_unresolved_runtime_inputs(
+    graph: dict[str, Any],
+) -> list[UnresolvedRuntimeInput]:
     unresolved: list[UnresolvedRuntimeInput] = []
     for node_id, node in graph.items():
         if not isinstance(node, dict):
@@ -1098,7 +1226,9 @@ def _detect_unresolved_runtime_inputs(graph: dict[str, Any]) -> list[UnresolvedR
     return unresolved
 
 
-def _observed_hardware(capsule_json: dict[str, Any], export_report: dict[str, Any]) -> dict[str, Any]:
+def _observed_hardware(
+    capsule_json: dict[str, Any], export_report: dict[str, Any]
+) -> dict[str, Any]:
     observed: dict[str, Any] = {}
     capsule_observations = capsule_json.get("hardware_observations")
     if isinstance(capsule_observations, dict):
@@ -1170,7 +1300,9 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
         comfyui_source_hash=profile.comfyui_core_source_hash,
         comfyui_frontend_version=profile.comfyui_frontend_version,
         enabled_custom_node_manifest_hash=sha256_fingerprint(custom_nodes),
-        launch_config_hash=_launch_config_hash(package.engine, variant, sha256_fingerprint(custom_nodes)),
+        launch_config_hash=_launch_config_hash(
+            package.engine, variant, sha256_fingerprint(custom_nodes)
+        ),
         model_view_hash=sha256_fingerprint(models),
     )
     package_json = package.model_dump(mode="json", exclude_none=True)
@@ -1217,20 +1349,28 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
                 "dependency_lock_hash": dependency_lock_hash,
                 "runner_workspace_hash": runner_fingerprint,
             },
-            "custom_nodes": [node.model_dump(mode="json", exclude_none=True) for node in custom_nodes],
+            "custom_nodes": [
+                node.model_dump(mode="json", exclude_none=True) for node in custom_nodes
+            ],
             "dependencies": {
                 "lock_file": "community-runtime.lock",
                 "install_policy": DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
             },
-            "models": [model.model_dump(mode="json", exclude_none=True) for model in models],
-            "hardware_observations": _hardware_observations_from_package(package).model_dump(mode="json", exclude_none=True),
+            "models": [
+                model.model_dump(mode="json", exclude_none=True) for model in models
+            ],
+            "hardware_observations": _hardware_observations_from_package(
+                package
+            ).model_dump(mode="json", exclude_none=True),
             "trust": trust.model_dump(mode="json", exclude_none=True),
             "source_policy": source_policy.model_dump(mode="json", exclude_none=True),
         }
     )
 
 
-def _select_import_runtime_profile(profiles: list[RuntimeProfile]) -> tuple[RuntimeProfile, RuntimeProfileVariant]:
+def _select_import_runtime_profile(
+    profiles: list[RuntimeProfile],
+) -> tuple[RuntimeProfile, RuntimeProfileVariant]:
     """Select the local v1 runtime variant for imported package preparation.
 
     This is a Phase 5c bridge: imported app-owned capsule locks need concrete
@@ -1244,16 +1384,28 @@ def _select_import_runtime_profile(profiles: list[RuntimeProfile]) -> tuple[Runt
     architecture = _current_architecture()
     preferred_gpu = _preferred_gpu_backend(os_name, architecture)
     for variant in profile.variants:
-        if variant.os == os_name and variant.architecture == architecture and variant.gpu_backend_profile == preferred_gpu:
+        if (
+            variant.os == os_name
+            and variant.architecture == architecture
+            and variant.gpu_backend_profile == preferred_gpu
+        ):
             return profile, variant
     for variant in profile.variants:
-        if variant.os == os_name and variant.architecture == architecture and variant.gpu_backend_profile == "cpu":
+        if (
+            variant.os == os_name
+            and variant.architecture == architecture
+            and variant.gpu_backend_profile == "cpu"
+        ):
             return profile, variant
     return profile, profile.variants[0]
 
 
 def _reject_unsupported_exported_launch_options(data: dict[str, Any]) -> None:
-    launch_keys = sorted(key for key in UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS if _has_nonempty_launch_option(data, key))
+    launch_keys = sorted(
+        key
+        for key in UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS
+        if _has_nonempty_launch_option(data, key)
+    )
     runtime = data.get("runtime")
     if isinstance(runtime, dict):
         launch_keys.extend(
@@ -1331,7 +1483,8 @@ def _model_locks_from_package(package: WorkflowPackage) -> list[ModelLock]:
                 id=_model_id(model),
                 sha256=model.checksum,
                 size_bytes=model.size_bytes,
-                source_urls=model.source_urls or ([model.source_url] if model.source_url else []),
+                source_urls=model.source_urls
+                or ([model.source_url] if model.source_url else []),
                 comfyui_folder=model.folder,
                 filename=model.filename,
             )
@@ -1347,35 +1500,63 @@ def _model_id(model: RequiredModel) -> str:
     return f"{model.folder}/{model.filename}"
 
 
-def _hardware_observations_from_package(package: WorkflowPackage) -> HardwareObservations:
+def _hardware_observations_from_package(
+    package: WorkflowPackage,
+) -> HardwareObservations:
     observed = package.observed_hardware
     return HardwareObservations(
-        observed_peak_vram_mb=observed.get("observed_peak_vram_mb")
-        if isinstance(observed.get("observed_peak_vram_mb"), int)
-        else None,
-        observed_peak_ram_mb=observed.get("observed_peak_ram_mb")
-        if isinstance(observed.get("observed_peak_ram_mb"), int)
-        else None,
-        tested_resolution=observed.get("tested_resolution")
-        if isinstance(observed.get("tested_resolution"), str)
-        else None,
-        tested_batch_size=observed.get("tested_batch_size")
-        if isinstance(observed.get("tested_batch_size"), int)
-        else None,
-        gpu_name=observed.get("gpu_name") if isinstance(observed.get("gpu_name"), str) else None,
+        observed_peak_vram_mb=(
+            observed.get("observed_peak_vram_mb")
+            if isinstance(observed.get("observed_peak_vram_mb"), int)
+            else None
+        ),
+        observed_peak_ram_mb=(
+            observed.get("observed_peak_ram_mb")
+            if isinstance(observed.get("observed_peak_ram_mb"), int)
+            else None
+        ),
+        tested_resolution=(
+            observed.get("tested_resolution")
+            if isinstance(observed.get("tested_resolution"), str)
+            else None
+        ),
+        tested_batch_size=(
+            observed.get("tested_batch_size")
+            if isinstance(observed.get("tested_batch_size"), int)
+            else None
+        ),
+        gpu_name=(
+            observed.get("gpu_name")
+            if isinstance(observed.get("gpu_name"), str)
+            else None
+        ),
         os=observed.get("os") if isinstance(observed.get("os"), str) else None,
-        backend=observed.get("backend") if isinstance(observed.get("backend"), str) else None,
-        precision=observed.get("precision") if isinstance(observed.get("precision"), str) else None,
-        recommended_vram_mb=observed.get("recommended_vram_mb")
-        if isinstance(observed.get("recommended_vram_mb"), int)
-        else None,
-        recommended_ram_mb=observed.get("recommended_ram_mb")
-        if isinstance(observed.get("recommended_ram_mb"), int)
-        else None,
+        backend=(
+            observed.get("backend")
+            if isinstance(observed.get("backend"), str)
+            else None
+        ),
+        precision=(
+            observed.get("precision")
+            if isinstance(observed.get("precision"), str)
+            else None
+        ),
+        recommended_vram_mb=(
+            observed.get("recommended_vram_mb")
+            if isinstance(observed.get("recommended_vram_mb"), int)
+            else None
+        ),
+        recommended_ram_mb=(
+            observed.get("recommended_ram_mb")
+            if isinstance(observed.get("recommended_ram_mb"), int)
+            else None
+        ),
     )
 
 
-def _launch_config_hash(engine: str, variant: RuntimeProfileVariant, enabled_custom_node_hash: str) -> str:
+def _launch_config_hash(
+    engine: str, variant: RuntimeProfileVariant, enabled_custom_node_hash: str
+) -> str:
     launch_defaults = variant.launch_defaults
     return sha256_fingerprint(
         {

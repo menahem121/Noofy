@@ -5,6 +5,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.engine.diagnostics import LogStore
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.runtime.dependency_lock import (
     DependencyRelationship,
@@ -15,7 +16,12 @@ from app.runtime.dependency_lock import (
     with_computed_lock_hash,
 )
 from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.isolation import InstallState, InstallStatus, InstalledModelReference, SmokeTestStatus
+from app.runtime.isolation import (
+    InstallState,
+    InstallStatus,
+    InstalledModelReference,
+    SmokeTestStatus,
+)
 from app.runtime.storage_gc import (
     RuntimeStorageArtifactKind,
     RuntimeStorageGarbageCollector,
@@ -76,7 +82,9 @@ def _state(
     )
 
 
-def _write_dependency_env(roots: RuntimeStorageRoots, fingerprint: str, *, lock_hash: str = "sha256:lock") -> Path:
+def _write_dependency_env(
+    roots: RuntimeStorageRoots, fingerprint: str, *, lock_hash: str = "sha256:lock"
+) -> Path:
     path = roots.dependency_envs_dir / f"dep-env-{fingerprint.removeprefix('sha256:')}"
     path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.json").write_text(
@@ -93,7 +101,10 @@ def _write_dependency_env(roots: RuntimeStorageRoots, fingerprint: str, *, lock_
 
 
 def _write_runner_workspace(roots: RuntimeStorageRoots, fingerprint: str) -> Path:
-    path = roots.runner_workspaces_dir / f"runner-workspace-{fingerprint.removeprefix('sha256:')}"
+    path = (
+        roots.runner_workspaces_dir
+        / f"runner-workspace-{fingerprint.removeprefix('sha256:')}"
+    )
     path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.json").write_text(
         json.dumps({"fingerprint": fingerprint, "status": "ready"}),
@@ -109,8 +120,14 @@ def _write_model_blob(roots: RuntimeStorageRoots, sha: str, content: bytes) -> P
     return path
 
 
-def _write_model_view(roots: RuntimeStorageRoots, fingerprint: str, content: bytes = b"view") -> Path:
-    path = roots.model_materialized_dir / "views" / f"model-view-{fingerprint.removeprefix('sha256:')}"
+def _write_model_view(
+    roots: RuntimeStorageRoots, fingerprint: str, content: bytes = b"view"
+) -> Path:
+    path = (
+        roots.model_materialized_dir
+        / "views"
+        / f"model-view-{fingerprint.removeprefix('sha256:')}"
+    )
     path.mkdir(parents=True, exist_ok=True)
     (path / "checkpoints").mkdir()
     (path / "checkpoints" / "model.safetensors").write_bytes(content)
@@ -140,7 +157,9 @@ def _old(path: Path, *, days: int = 30) -> None:
             os.utime(child, (timestamp, timestamp), follow_symlinks=False)
 
 
-def test_reference_index_keeps_shared_artifacts_after_one_workflow_is_removed(tmp_path: Path) -> None:
+def test_reference_index_keeps_shared_artifacts_after_one_workflow_is_removed(
+    tmp_path: Path,
+) -> None:
     roots = _roots(tmp_path)
     dep_fp = "sha256:" + ("d" * 64)
     runner_fp = "sha256:" + ("r" * 64)
@@ -152,19 +171,43 @@ def test_reference_index_keeps_shared_artifacts_after_one_workflow_is_removed(tm
     _old(runner_path)
 
     states = [
-        _state("capsule-a", dependency_env_fingerprint=dep_fp, runner_workspace_fingerprint=runner_fp, model_references=[_model_ref(blob, view / "checkpoints" / "model.safetensors")]),
-        _state("capsule-b", dependency_env_fingerprint=dep_fp, runner_workspace_fingerprint=runner_fp, model_references=[_model_ref(blob, view / "checkpoints" / "model.safetensors")]),
+        _state(
+            "capsule-a",
+            dependency_env_fingerprint=dep_fp,
+            runner_workspace_fingerprint=runner_fp,
+            model_references=[
+                _model_ref(blob, view / "checkpoints" / "model.safetensors")
+            ],
+        ),
+        _state(
+            "capsule-b",
+            dependency_env_fingerprint=dep_fp,
+            runner_workspace_fingerprint=runner_fp,
+            model_references=[
+                _model_ref(blob, view / "checkpoints" / "model.safetensors")
+            ],
+        ),
     ]
-    index = RuntimeStorageGarbageCollector(roots=roots, install_states=states).build_reference_index()
-    dep_artifact = next(artifact for artifact in index.artifacts if artifact.path == dep_path)
+    index = RuntimeStorageGarbageCollector(
+        roots=roots, install_states=states, log_store=LogStore()
+    ).build_reference_index()
+    dep_artifact = next(
+        artifact for artifact in index.artifacts if artifact.path == dep_path
+    )
     assert dep_artifact.referenced_workflows == {"capsule-a", "capsule-b"}
 
-    result = RuntimeStorageGarbageCollector(roots=roots, install_states=states[1:]).collect_garbage()
+    result = RuntimeStorageGarbageCollector(
+        roots=roots, install_states=states[1:], log_store=LogStore()
+    ).collect_garbage()
 
     assert dep_path.exists()
     assert runner_path.exists()
     assert blob.exists()
-    assert all(decision.action is not RuntimeStorageGcAction.DELETE for decision in result.decisions if decision.path in {dep_path, runner_path, blob})
+    assert all(
+        decision.action is not RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+        if decision.path in {dep_path, runner_path, blob}
+    )
 
 
 def test_gc_skips_artifacts_for_active_or_idle_warm_runners(tmp_path: Path) -> None:
@@ -191,11 +234,15 @@ def test_gc_skips_artifacts_for_active_or_idle_warm_runners(tmp_path: Path) -> N
         roots=roots,
         install_states=[],
         runner_descriptors=[runner],
+        log_store=LogStore(),
     ).collect_garbage()
 
     assert dep_path.exists()
     assert runner_path.exists()
-    assert any(decision.action is RuntimeStorageGcAction.SKIP_ACTIVE_RUNNER for decision in result.decisions)
+    assert any(
+        decision.action is RuntimeStorageGcAction.SKIP_ACTIVE_RUNNER
+        for decision in result.decisions
+    )
 
 
 def test_gc_never_deletes_user_local_model_sources(tmp_path: Path) -> None:
@@ -216,16 +263,20 @@ def test_gc_never_deletes_user_local_model_sources(tmp_path: Path) -> None:
     result = RuntimeStorageGarbageCollector(
         roots=roots,
         install_states=[_state("capsule-local", model_references=[ref])],
+        log_store=LogStore(),
     ).collect_garbage(confirm_large_model_deletion=True)
 
     assert source.exists()
     assert any(
-        decision.path == source and decision.action is RuntimeStorageGcAction.SKIP_USER_LOCAL_SOURCE
+        decision.path == source
+        and decision.action is RuntimeStorageGcAction.SKIP_USER_LOCAL_SOURCE
         for decision in result.decisions
     )
 
 
-def test_gc_removes_expired_quarantine_but_keeps_recent_transaction(tmp_path: Path) -> None:
+def test_gc_removes_expired_quarantine_but_keeps_recent_transaction(
+    tmp_path: Path,
+) -> None:
     roots = _roots(tmp_path)
     expired = roots.install_transactions_dir / "install-expired"
     recent = roots.install_transactions_dir / "install-recent"
@@ -233,20 +284,39 @@ def test_gc_removes_expired_quarantine_but_keeps_recent_transaction(tmp_path: Pa
     recent.mkdir()
     now = datetime.now(UTC)
     (expired / "quarantine.json").write_text(
-        json.dumps({"status": "quarantined", "retain_until": (now - timedelta(seconds=1)).isoformat()}),
+        json.dumps(
+            {
+                "status": "quarantined",
+                "retain_until": (now - timedelta(seconds=1)).isoformat(),
+            }
+        ),
         encoding="utf-8",
     )
     (recent / "quarantine.json").write_text(
-        json.dumps({"status": "quarantined", "retain_until": (now + timedelta(days=1)).isoformat()}),
+        json.dumps(
+            {
+                "status": "quarantined",
+                "retain_until": (now + timedelta(days=1)).isoformat(),
+            }
+        ),
         encoding="utf-8",
     )
 
-    result = RuntimeStorageGarbageCollector(roots=roots, install_states=[]).collect_garbage(now=now)
+    result = RuntimeStorageGarbageCollector(
+        roots=roots, install_states=[], log_store=LogStore()
+    ).collect_garbage(now=now)
 
     assert not expired.exists()
     assert recent.exists()
-    assert any(decision.path == expired and decision.action is RuntimeStorageGcAction.DELETE for decision in result.decisions)
-    assert any(decision.path == recent and decision.action is RuntimeStorageGcAction.SKIP_RETENTION_WINDOW for decision in result.decisions)
+    assert any(
+        decision.path == expired and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
+    assert any(
+        decision.path == recent
+        and decision.action is RuntimeStorageGcAction.SKIP_RETENTION_WINDOW
+        for decision in result.decisions
+    )
 
 
 def test_gc_applies_lru_cap_without_deleting_referenced_wheel(tmp_path: Path) -> None:
@@ -289,23 +359,34 @@ def test_gc_applies_lru_cap_without_deleting_referenced_wheel(tmp_path: Path) ->
         roots=roots,
         install_states=[_state("capsule-wheel", dependency_env_fingerprint=dep_fp)],
         config=RuntimeStorageGcConfig(wheel_cache_cap_bytes=8),
+        log_store=LogStore(),
     ).collect_garbage()
 
     assert keep.exists()
     assert not old.exists()
     assert new.exists()
-    assert any(decision.path == old and decision.reason == "cache LRU cap exceeded" for decision in result.decisions)
+    assert any(
+        decision.path == old and decision.reason == "cache LRU cap exceeded"
+        for decision in result.decisions
+    )
 
 
-def test_gc_removes_orphan_materialized_model_view_after_retention(tmp_path: Path) -> None:
+def test_gc_removes_orphan_materialized_model_view_after_retention(
+    tmp_path: Path,
+) -> None:
     roots = _roots(tmp_path)
     view = _write_model_view(roots, "0" * 64)
     _old(view)
 
-    result = RuntimeStorageGarbageCollector(roots=roots, install_states=[]).collect_garbage()
+    result = RuntimeStorageGarbageCollector(
+        roots=roots, install_states=[], log_store=LogStore()
+    ).collect_garbage()
 
     assert not view.exists()
-    assert any(decision.path == view and decision.action is RuntimeStorageGcAction.DELETE for decision in result.decisions)
+    assert any(
+        decision.path == view and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
 
 
 def test_large_model_blob_requires_confirmation_before_deletion(tmp_path: Path) -> None:
@@ -317,44 +398,65 @@ def test_large_model_blob_requires_confirmation_before_deletion(tmp_path: Path) 
         roots=roots,
         install_states=[],
         config=config,
+        log_store=LogStore(),
     ).collect_garbage(confirm_large_model_deletion=False)
 
     assert blob.exists()
-    assert any(decision.path == blob and decision.action is RuntimeStorageGcAction.SKIP_LARGE_MODEL_CONFIRMATION for decision in skipped.decisions)
+    assert any(
+        decision.path == blob
+        and decision.action is RuntimeStorageGcAction.SKIP_LARGE_MODEL_CONFIRMATION
+        for decision in skipped.decisions
+    )
 
     deleted = RuntimeStorageGarbageCollector(
         roots=roots,
         install_states=[],
         config=config,
+        log_store=LogStore(),
     ).collect_garbage(confirm_large_model_deletion=True)
 
     assert not blob.exists()
-    assert any(decision.path == blob and decision.action is RuntimeStorageGcAction.DELETE for decision in deleted.decisions)
+    assert any(
+        decision.path == blob and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in deleted.decisions
+    )
 
 
-def test_reference_index_tracks_cache_and_package_archive_metadata(tmp_path: Path) -> None:
+def test_reference_index_tracks_cache_and_package_archive_metadata(
+    tmp_path: Path,
+) -> None:
     roots = _roots(tmp_path)
     (roots.custom_node_cache_dir / "custom-node-a").mkdir()
-    (roots.custom_node_cache_dir / "custom-node-a" / "file.py").write_text("x = 1\n", encoding="utf-8")
+    (roots.custom_node_cache_dir / "custom-node-a" / "file.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
     package_dir = roots.workflow_packages_store_dir / "publisher" / "package" / "0.1.0"
     package_dir.mkdir(parents=True)
     (package_dir / "source-archive.noofy").write_bytes(b"archive")
 
-    index = RuntimeStorageGarbageCollector(roots=roots, install_states=[]).build_reference_index()
+    index = RuntimeStorageGarbageCollector(
+        roots=roots, install_states=[], log_store=LogStore()
+    ).build_reference_index()
 
     kinds = {artifact.kind for artifact in index.artifacts}
     assert RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY in kinds
     assert RuntimeStorageArtifactKind.PACKAGE_ARCHIVE in kinds
 
 
-def test_gc_keeps_custom_node_source_cache_referenced_by_installed_workflow(tmp_path: Path) -> None:
+def test_gc_keeps_custom_node_source_cache_referenced_by_installed_workflow(
+    tmp_path: Path,
+) -> None:
     roots = _roots(tmp_path)
     referenced_cache_entry = roots.custom_node_cache_dir / "abc123"
     orphan_cache_entry = roots.custom_node_cache_dir / "orphan"
     (referenced_cache_entry / "source").mkdir(parents=True)
-    (referenced_cache_entry / "source" / "node.py").write_text("x = 1\n", encoding="utf-8")
+    (referenced_cache_entry / "source" / "node.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
     (orphan_cache_entry / "source").mkdir(parents=True)
-    (orphan_cache_entry / "source" / "node.py").write_text("x = 'orphan' * 100\n", encoding="utf-8")
+    (orphan_cache_entry / "source" / "node.py").write_text(
+        "x = 'orphan' * 100\n", encoding="utf-8"
+    )
     _write_workflow_with_cached_custom_node(
         roots,
         workflow_id="publisher__cached-workflow__0.1.0",
@@ -366,6 +468,7 @@ def test_gc_keeps_custom_node_source_cache_referenced_by_installed_workflow(tmp_
         roots=roots,
         install_states=[_state("capsule-cached")],
         config=RuntimeStorageGcConfig(custom_node_source_cache_cap_bytes=1),
+        log_store=LogStore(),
     ).collect_garbage()
 
     assert referenced_cache_entry.exists()
@@ -385,12 +488,18 @@ def _write_workflow_with_cached_custom_node(
     capsule_fingerprint: str,
     source_cache_ref: str,
 ) -> None:
-    package_dir = roots.workflow_packages_store_dir / "publisher" / "cached-workflow" / "0.1.0"
+    package_dir = (
+        roots.workflow_packages_store_dir / "publisher" / "cached-workflow" / "0.1.0"
+    )
     package_dir.mkdir(parents=True)
     (package_dir / "package.json").write_text(
         json.dumps(
             {
-                "metadata": {"id": workflow_id, "name": "Cached Workflow", "version": "0.1.0"},
+                "metadata": {
+                    "id": workflow_id,
+                    "name": "Cached Workflow",
+                    "version": "0.1.0",
+                },
                 "identity": {
                     "publisher_id": "publisher",
                     "package_id": "cached-workflow",
@@ -449,7 +558,10 @@ def _write_workflow_with_cached_custom_node(
                         "node_types": ["CachedNode"],
                     }
                 ],
-                "dependencies": {"lock_file": "lock", "install_policy": "quarantined-community-v1"},
+                "dependencies": {
+                    "lock_file": "lock",
+                    "install_policy": "quarantined-community-v1",
+                },
                 "trust": {"level": "quarantined_community", "publisher": "publisher"},
             }
         ),

@@ -21,11 +21,26 @@ from app.runtime.custom_nodes import (
     CustomNodeWorkspaceMaterializer,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import InstallStatus, SmokeStageResult, SmokeStageStatus, SmokeTestReport
+from app.runtime.isolation import (
+    InstallStatus,
+    SmokeStageResult,
+    SmokeStageStatus,
+    SmokeTestReport,
+)
 from app.runtime.model_store import ModelStore
-from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver, NoofyNodeRegistry
+from app.runtime.node_registry import (
+    CustomNodeSourceCache,
+    NodeRegistryResolver,
+    NoofyNodeRegistry,
+)
 from app.runtime.profiles import load_runtime_profile_catalog
-from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerSupervisor
+from app.runtime.supervisor import (
+    CORE_RUNNER_FINGERPRINT,
+    CORE_RUNNER_ID,
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerSupervisor,
+)
 from app.trust import (
     TrustedSignatureKey,
     TrustKeyring,
@@ -37,7 +52,10 @@ from app.trust import (
     registry_signature_payload,
 )
 from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.workspace_store import (
+    DependencyEnvManifestStore,
+    RunnerWorkspaceManifestStore,
+)
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows import importer as importer_module
 from app.workflows.importer import (
@@ -75,7 +93,9 @@ class FakeSourceFetcher:
 
 def _archive_bytes() -> bytes:
     root = Path(__file__).resolve().parents[2]
-    return (root / "test_workflows" / "exported-workflow-for-testing.noofy").read_bytes()
+    return (
+        root / "test_workflows" / "exported-workflow-for-testing.noofy"
+    ).read_bytes()
 
 
 def _test_workflow_archive_bytes(filename: str) -> bytes:
@@ -98,20 +118,27 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert package.identity.package_id == "controlnet_two_model_workflow"
     assert package.identity.trust_level == "quarantined_community"
     assert len(package.custom_nodes) == 5
-    assert {model.folder for model in package.required_models} == {"checkpoints", "controlnet"}
-    assert {
-        model.filename for model in package.required_models
-    } == {
+    assert {model.folder for model in package.required_models} == {
+        "checkpoints",
+        "controlnet",
+    }
+    assert {model.filename for model in package.required_models} == {
         "DreamShaperXL_Lightning.safetensors",
         "diffusion_pytorch_model_promax.safetensors",
     }
-    assert {model.verification_level for model in package.required_models} == {"sha256_size"}
+    assert {model.verification_level for model in package.required_models} == {
+        "sha256_size"
+    }
     assert all(model.identity_verified_by_exporter for model in package.required_models)
     assert all(model.bundled is False for model in package.required_models)
-    assert {model.asset_ownership for model in package.required_models} == {"external_reference"}
+    assert {model.asset_ownership for model in package.required_models} == {
+        "external_reference"
+    }
     assert package.unresolved_runtime_inputs
     assert package.unresolved_runtime_inputs[0].node_type == "LoadImage"
-    assert package.unresolved_runtime_inputs[0].reason == "creator_local_image_not_bundled"
+    assert (
+        package.unresolved_runtime_inputs[0].reason == "creator_local_image_not_bundled"
+    )
     assert package.dashboard.status == "not_configured"
     assert package.assets.thumbnail == "source-files/assets/thumbnail.png"
     assert package.observed_hardware["observed_peak_ram_mb"] == 6657
@@ -142,17 +169,24 @@ def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
         }
     )
 
-    package = NoofyArchiveImporter(archive, original_filename="signed.noofy").normalize()
+    package = NoofyArchiveImporter(
+        archive, original_filename="signed.noofy"
+    ).normalize()
 
     assert package.identity is not None
     assert package.identity.trust_level == "registry_locked"
     assert package.identity.signature == "sig:package"
     assert package.identity.signatures[0].key_id == "noofy-registry-2026"
     assert package.identity.signed_registry_metadata is not None
-    assert package.identity.signed_registry_metadata.registry_id == "noofy-community-registry"
+    assert (
+        package.identity.signed_registry_metadata.registry_id
+        == "noofy-community-registry"
+    )
 
 
-def test_import_store_rejects_imported_noofy_verified_without_valid_signature(tmp_path: Path) -> None:
+def test_import_store_rejects_imported_noofy_verified_without_valid_signature(
+    tmp_path: Path,
+) -> None:
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
 
     package = store.import_archive(
@@ -170,7 +204,9 @@ def test_import_store_rejects_imported_noofy_verified_without_valid_signature(tm
     assert trust_verification["effective_trust_level"] == "unsupported"
 
 
-def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(tmp_path: Path) -> None:
+def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(
+    tmp_path: Path,
+) -> None:
     secret = "test-noofy-verified-secret"
     unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
     signature = hmac_sha256_signature(
@@ -210,10 +246,15 @@ def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(tmp
     assert package.import_metadata.status == "needs_input_setup"
     assert package.identity is not None
     assert package.identity.trust_level == "noofy_verified"
-    assert package.import_metadata.developer_details["trust_verification"]["status"] == "verified"
+    assert (
+        package.import_metadata.developer_details["trust_verification"]["status"]
+        == "verified"
+    )
 
 
-def test_import_store_accepts_registry_locked_with_signed_registry_metadata(tmp_path: Path) -> None:
+def test_import_store_accepts_registry_locked_with_signed_registry_metadata(
+    tmp_path: Path,
+) -> None:
     secret = "test-registry-secret"
     unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
@@ -260,7 +301,9 @@ def test_import_store_accepts_registry_locked_with_signed_registry_metadata(tmp_
     assert trust_verification["evidence_type"] == "signed_registry_metadata"
 
 
-def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(tmp_path: Path) -> None:
+def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(
+    tmp_path: Path,
+) -> None:
     private_key, public_key = _ed25519_keypair()
     unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
@@ -302,7 +345,9 @@ def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(tmp
     assert trust_verification["algorithm"] == "ed25519"
 
 
-def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(tmp_path: Path) -> None:
+def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(
+    tmp_path: Path,
+) -> None:
     private_key, public_key = _ed25519_keypair()
     snapshot_hash = "sha256:" + "b" * 64
     unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
@@ -350,7 +395,9 @@ def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(tmp
     assert trust_verification["evidence_type"] == "signed_registry_metadata"
 
 
-def test_import_store_rejects_ed25519_signature_after_payload_tampering(tmp_path: Path) -> None:
+def test_import_store_rejects_ed25519_signature_after_payload_tampering(
+    tmp_path: Path,
+) -> None:
     private_key, public_key = _ed25519_keypair()
     unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
@@ -388,10 +435,15 @@ def test_import_store_rejects_ed25519_signature_after_payload_tampering(tmp_path
     assert package.import_metadata.status == "unsupported"
     assert package.identity is not None
     assert package.identity.trust_level == "unsupported"
-    assert package.import_metadata.developer_details["trust_verification"]["status"] == "invalid_signature"
+    assert (
+        package.import_metadata.developer_details["trust_verification"]["status"]
+        == "invalid_signature"
+    )
 
 
-def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys(tmp_path: Path) -> None:
+def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys(
+    tmp_path: Path,
+) -> None:
     private_key, public_key = _ed25519_keypair()
     unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
@@ -432,14 +484,21 @@ def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys
             ),
         )
 
-        package = store.import_archive(signed, original_filename=f"{expected_status}.noofy")
+        package = store.import_archive(
+            signed, original_filename=f"{expected_status}.noofy"
+        )
 
         assert package.import_metadata is not None
         assert package.import_metadata.status == "unsupported"
-        assert package.import_metadata.developer_details["trust_verification"]["status"] == expected_status
+        assert (
+            package.import_metadata.developer_details["trust_verification"]["status"]
+            == expected_status
+        )
 
 
-def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_match_metadata(tmp_path: Path) -> None:
+def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_match_metadata(
+    tmp_path: Path,
+) -> None:
     private_key, public_key = _ed25519_keypair()
     unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
@@ -475,16 +534,22 @@ def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_matc
         ),
     )
 
-    package = store.import_archive(mismatched, original_filename="registry-mismatch.noofy")
+    package = store.import_archive(
+        mismatched, original_filename="registry-mismatch.noofy"
+    )
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "unsupported"
     trust_verification = package.import_metadata.developer_details["trust_verification"]
     assert trust_verification["status"] == "invalid_signature"
-    assert trust_verification["developer_details"]["snapshot_hash"] == "sha256:" + "c" * 64
+    assert (
+        trust_verification["developer_details"]["snapshot_hash"] == "sha256:" + "c" * 64
+    )
 
 
-def test_import_store_rejects_hmac_signature_without_development_policy(tmp_path: Path) -> None:
+def test_import_store_rejects_hmac_signature_without_development_policy(
+    tmp_path: Path,
+) -> None:
     secret = "test-noofy-verified-secret"
     unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
     signature = hmac_sha256_signature(
@@ -517,17 +582,23 @@ def test_import_store_rejects_hmac_signature_without_development_policy(tmp_path
         ),
     )
 
-    package = store.import_archive(signed, original_filename="hmac-without-dev-policy.noofy")
+    package = store.import_archive(
+        signed, original_filename="hmac-without-dev-policy.noofy"
+    )
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "unsupported"
     trust_verification = package.import_metadata.developer_details["trust_verification"]
     assert trust_verification["status"] == "unsupported_algorithm"
-    assert trust_verification["developer_details"]["reason"] == "development_hmac_disabled"
+    assert (
+        trust_verification["developer_details"]["reason"] == "development_hmac_disabled"
+    )
 
 
 @pytest.mark.anyio
-async def test_signed_marketplace_archives_import_and_prepare_through_policy_gate(tmp_path: Path) -> None:
+async def test_signed_marketplace_archives_import_and_prepare_through_policy_gate(
+    tmp_path: Path,
+) -> None:
     for trust_level, evidence_type in (
         ("noofy_verified", "package_signature"),
         ("registry_locked", "signed_registry_metadata"),
@@ -550,7 +621,9 @@ async def test_signed_marketplace_archives_import_and_prepare_through_policy_gat
                         }
                     ],
                 },
-                archive_bytes=_test_workflow_archive_bytes("core_empty_image_smoke.noofy"),
+                archive_bytes=_test_workflow_archive_bytes(
+                    "core_empty_image_smoke.noofy"
+                ),
             )
             purpose = TrustSignaturePurpose.PACKAGE
         else:
@@ -571,7 +644,9 @@ async def test_signed_marketplace_archives_import_and_prepare_through_policy_gat
                         "signature": _ed25519_signature(private_key, registry_payload),
                     },
                 },
-                archive_bytes=_test_workflow_archive_bytes("core_empty_image_smoke.noofy"),
+                archive_bytes=_test_workflow_archive_bytes(
+                    "core_empty_image_smoke.noofy"
+                ),
             )
             purpose = TrustSignaturePurpose.REGISTRY
 
@@ -592,9 +667,9 @@ async def test_signed_marketplace_archives_import_and_prepare_through_policy_gat
         )
 
         package = store.import_archive(signed, original_filename=f"{trust_level}.noofy")
-        capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=store_dir).get_capsule_lock(
-            package.metadata.id
-        )
+        capsule = CapsuleLockLoader(
+            Path("missing-bundled"), imported_packages_dir=store_dir
+        ).get_capsule_lock(package.metadata.id)
         installer = _installer_for_imported_prepare(tmp_path / trust_level / "runtime")
 
         state = await installer.prepare(capsule)
@@ -602,13 +677,20 @@ async def test_signed_marketplace_archives_import_and_prepare_through_policy_gat
         assert package.identity is not None
         assert package.identity.trust_level == trust_level
         assert package.import_metadata is not None
-        assert package.import_metadata.developer_details["trust_verification"]["evidence_type"] == evidence_type
+        assert (
+            package.import_metadata.developer_details["trust_verification"][
+                "evidence_type"
+            ]
+            == evidence_type
+        )
         assert capsule.source_policy is not None
         assert capsule.source_policy.automatic_preparation_allowed is True
         assert state.status is InstallStatus.READY
 
 
-def test_trust_keyring_loader_uses_file_without_exposing_secrets(tmp_path: Path) -> None:
+def test_trust_keyring_loader_uses_file_without_exposing_secrets(
+    tmp_path: Path,
+) -> None:
     keyring_path = tmp_path / "trusted-keys.json"
     keyring_path.write_text(
         TrustKeyring(
@@ -619,7 +701,7 @@ def test_trust_keyring_loader_uses_file_without_exposing_secrets(tmp_path: Path)
                     secret="local-secret",
                     purpose=TrustSignaturePurpose.PACKAGE,
                 )
-            ]
+            ],
         ).model_dump_json(indent=2),
         encoding="utf-8",
     )
@@ -643,7 +725,9 @@ def test_trust_keyring_loader_uses_file_without_exposing_secrets(tmp_path: Path)
     assert "local-secret" not in json.dumps(payload)
 
 
-def test_malformed_trust_keyring_logs_warning_and_disables_trusted_claims(tmp_path: Path) -> None:
+def test_malformed_trust_keyring_logs_warning_and_disables_trusted_claims(
+    tmp_path: Path,
+) -> None:
     log_store = LogStore()
     keyring_path = tmp_path / "trusted-keys.json"
     keyring_path.write_text("{not-json", encoding="utf-8")
@@ -656,7 +740,9 @@ def test_malformed_trust_keyring_logs_warning_and_disables_trusted_claims(tmp_pa
     assert latest.details["path"] == str(keyring_path)
 
 
-def test_import_store_persists_normalized_package_and_original_source_files(tmp_path: Path) -> None:
+def test_import_store_persists_normalized_package_and_original_source_files(
+    tmp_path: Path,
+) -> None:
     log_store = LogStore()
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
 
@@ -665,18 +751,32 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
         original_filename="exported-workflow-for-testing.noofy",
     )
 
-    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    package_dir = (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    )
     assert (package_dir / "package.json").exists()
     assert (package_dir / "capsule.lock.json").exists()
     assert (package_dir / "exported-capsule.lock.json").exists()
     assert (package_dir / "source-archive.noofy").exists()
     assert (package_dir / "source-files" / "package.json").exists()
-    assert (package_dir / "source-files" / "custom_nodes" / "comfyui-kjnodes" / "requirements.txt").exists()
-    import_report = json.loads((package_dir / "import-report.json").read_text(encoding="utf-8"))
-    assert import_report["runtime_resolution"]["selection_stage"] == "import_time_phase5c"
+    assert (
+        package_dir
+        / "source-files"
+        / "custom_nodes"
+        / "comfyui-kjnodes"
+        / "requirements.txt"
+    ).exists()
+    import_report = json.loads(
+        (package_dir / "import-report.json").read_text(encoding="utf-8")
+    )
+    assert (
+        import_report["runtime_resolution"]["selection_stage"] == "import_time_phase5c"
+    )
     assert import_report["runtime_resolution"]["runtime_profile_variant_id"]
 
-    loader = WorkflowPackageLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
+    )
     loaded = loader.get_package(package.metadata.id)
     assert loaded.metadata.name == "controlnet_two_model_workflow"
     assert loaded.custom_nodes[0].included is True
@@ -685,15 +785,17 @@ def test_import_store_persists_normalized_package_and_original_source_files(tmp_
     assert loaded.import_metadata.status == "needs_input_setup"
     assert log_store.list_events().events[-1].message == "Imported workflow package"
 
-    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
-        package.metadata.id
-    )
+    capsule = CapsuleLockLoader(
+        Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
+    ).get_capsule_lock(package.metadata.id)
     assert capsule.workflow.package_id == "controlnet_two_model_workflow"
     assert len(capsule.custom_nodes) == 5
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
 
 
-def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(tmp_path: Path) -> None:
+def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(
+    tmp_path: Path,
+) -> None:
     source_archive = _source_archive_bytes({"node.py": "NODE_CLASS_MAPPINGS = {}\n"})
     archive = _archive_bytes_with_custom_node_update(
         0,
@@ -710,27 +812,36 @@ def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(tm
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "blocked_by_policy"
-    assert package.import_metadata.developer_details["source_resolution"]["reason"] == "community_opt_in_required"
+    assert (
+        package.import_metadata.developer_details["source_resolution"]["reason"]
+        == "community_opt_in_required"
+    )
     assert package.identity is not None
     assert package.identity.trust_level == "unsupported"
     assert package.source_policy is not None
     assert package.source_policy.policy_status == "blocked_by_policy"
     assert package.source_policy.automatic_preparation_allowed is False
     assert package.source_policy.community_preparation_opted_in is False
-    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
-    import_report = json.loads((package_dir / "import-report.json").read_text(encoding="utf-8"))
+    package_dir = (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    )
+    import_report = json.loads(
+        (package_dir / "import-report.json").read_text(encoding="utf-8")
+    )
     assert import_report["source_resolution"]["status"] == "blocked_by_policy"
     assert import_report["source_policy"]["policy_status"] == "blocked_by_policy"
-    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
-        package.metadata.id
-    )
+    capsule = CapsuleLockLoader(
+        Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
+    ).get_capsule_lock(package.metadata.id)
     assert capsule.workflow.trust_level == "unsupported"
     assert capsule.trust.level.value == "unsupported"
     assert capsule.source_policy is not None
     assert capsule.source_policy.automatic_preparation_allowed is False
 
 
-def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(tmp_path: Path) -> None:
+def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
+    tmp_path: Path,
+) -> None:
     source_archive = _source_archive_bytes(
         {
             "repo-root/node.py": "NODE_CLASS_MAPPINGS = {}\n",
@@ -751,13 +862,18 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(t
         },
     )
     source_cache_dir = tmp_path / "custom-node-cache"
+    log_store = LogStore()
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
-        log_store=LogStore(),
-        node_registry_resolver=NodeRegistryResolver(registry=NoofyNodeRegistry(registry_id="empty-test-registry")),
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=log_store,
+        ),
         custom_node_source_cache=CustomNodeSourceCache(
             cache_dir=source_cache_dir,
             fetcher=fetcher,
+            log_store=log_store,
         ),
     )
 
@@ -767,11 +883,16 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(t
         allow_unverified_community_preparation=True,
     )
 
-    resolved_node = next(node for node in package.custom_nodes if node.id == "comfyui_jps-nodes")
+    resolved_node = next(
+        node for node in package.custom_nodes if node.id == "comfyui_jps-nodes"
+    )
     assert fetcher.urls == ["https://example.test/comfyui-jps/archive/pinned.zip"]
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
-    assert package.import_metadata.developer_details["source_resolution"]["status"] == "resolved"
+    assert (
+        package.import_metadata.developer_details["source_resolution"]["status"]
+        == "resolved"
+    )
     assert package.source_policy is not None
     assert package.source_policy.policy_status == "active"
     assert package.source_policy.automatic_preparation_allowed is True
@@ -782,11 +903,15 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(t
     assert resolved_node.source_content_hash == f"sha256:{source_digest}"
     assert resolved_node.source_archive_subdir == "repo-root"
 
-    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
-    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
-        package.metadata.id
+    package_dir = (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
     )
-    cached_lock = next(node for node in capsule.custom_nodes if node.package_id == "comfyui_jps-nodes")
+    capsule = CapsuleLockLoader(
+        Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
+    ).get_capsule_lock(package.metadata.id)
+    cached_lock = next(
+        node for node in capsule.custom_nodes if node.package_id == "comfyui_jps-nodes"
+    )
     assert capsule.source_policy is not None
     assert capsule.source_policy.automatic_preparation_allowed is True
     assert cached_lock.source_cache_ref == f"{source_digest}/source"
@@ -795,24 +920,42 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(t
 
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
-        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
+        runtime_profile_catalog=load_runtime_profile_catalog(
+            Path("app/runtime/profile_catalog.json")
+        ),
         custom_node_materializer=CustomNodeWorkspaceMaterializer(),
         custom_node_source_files_dir=package_dir / "source-files",
         custom_node_source_cache_dir=source_cache_dir,
+        log_store=LogStore(),
     )
     prepared = preparer.prepare(capsule)
-    cached_node_path = prepared.runner_workspace_path / "custom_nodes" / "comfyui_jps-nodes" / "node.py"
+    cached_node_path = (
+        prepared.runner_workspace_path
+        / "custom_nodes"
+        / "comfyui_jps-nodes"
+        / "node.py"
+    )
     assert cached_node_path.exists()
     assert "NODE_CLASS_MAPPINGS" in cached_node_path.read_text(encoding="utf-8")
     manifest = json.loads(
-        (prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME).read_text(encoding="utf-8")
+        (
+            prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+        ).read_text(encoding="utf-8")
     )
-    cached_entry = next(entry for entry in manifest["entries"] if entry["custom_node_package_id"] == "comfyui_jps-nodes")
+    cached_entry = next(
+        entry
+        for entry in manifest["entries"]
+        if entry["custom_node_package_id"] == "comfyui_jps-nodes"
+    )
     assert cached_entry["source_kind"] == "noofy_cached_archive"
 
 
-def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
     monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
     monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
@@ -823,7 +966,9 @@ def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(monk
     assert variant.runtime_profile_variant_id == "linux-x64-cuda130"
 
 
-def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
     monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
     monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
@@ -834,45 +979,70 @@ def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(monkeypat
     assert variant.runtime_profile_variant_id == "linux-x64-cpu"
 
 
-def test_imported_real_archive_can_materialize_custom_node_workspace(tmp_path: Path) -> None:
-    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+def test_imported_real_archive_can_materialize_custom_node_workspace(
+    tmp_path: Path,
+) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
     package = store.import_archive(
         _archive_bytes(),
         original_filename="exported-workflow-for-testing.noofy",
         allow_unverified_community_preparation=True,
     )
-    package_dir = tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
-    capsule = CapsuleLockLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages").get_capsule_lock(
-        package.metadata.id
+    package_dir = (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
     )
+    capsule = CapsuleLockLoader(
+        Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
+    ).get_capsule_lock(package.metadata.id)
     preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
-        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
-        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
+        runtime_profile_catalog=load_runtime_profile_catalog(
+            Path("app/runtime/profile_catalog.json")
+        ),
         custom_node_materializer=CustomNodeWorkspaceMaterializer(),
         custom_node_source_files_dir=package_dir / "source-files",
+        log_store=LogStore(),
     )
 
     prepared = preparer.prepare(capsule)
 
-    assert (prepared.runner_workspace_path / "custom_nodes" / "comfyui-kjnodes" / "requirements.txt").exists()
-    assert (prepared.runner_workspace_path / "custom_nodes" / "comfyui_controlnet_aux" / "requirements.txt").exists()
-    manifest_path = prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    assert (
+        prepared.runner_workspace_path
+        / "custom_nodes"
+        / "comfyui-kjnodes"
+        / "requirements.txt"
+    ).exists()
+    assert (
+        prepared.runner_workspace_path
+        / "custom_nodes"
+        / "comfyui_controlnet_aux"
+        / "requirements.txt"
+    ).exists()
+    manifest_path = (
+        prepared.runner_workspace_path / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    )
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert len(manifest["entries"]) == 5
 
 
 def test_import_store_rejects_exported_launch_options(tmp_path: Path) -> None:
-    store = ImportedWorkflowPackageStore(tmp_path / "packages")
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
 
     with pytest.raises(NoofyImportError, match="unsupported launch options"):
         store.import_archive(
-            _archive_bytes_with_capsule_update({"launch_options": {"vram_mode": "highvram"}}),
+            _archive_bytes_with_capsule_update(
+                {"launch_options": {"vram_mode": "highvram"}}
+            ),
             original_filename="launch-options.noofy",
         )
 
-    assert not (tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0").exists()
+    assert not (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    ).exists()
 
 
 def test_importer_normalizes_untrusted_model_identity_and_ownership_values() -> None:
@@ -915,8 +1085,12 @@ def test_imported_package_cannot_shadow_bundled_workflow_by_id(tmp_path: Path) -
             )
         }
     )
-    (bundled_dir / "package.json").write_text(bundled_package.model_dump_json(), encoding="utf-8")
-    (imported_dir / "package.json").write_text(imported_package.model_dump_json(), encoding="utf-8")
+    (bundled_dir / "package.json").write_text(
+        bundled_package.model_dump_json(), encoding="utf-8"
+    )
+    (imported_dir / "package.json").write_text(
+        imported_package.model_dump_json(), encoding="utf-8"
+    )
 
     loaded = WorkflowPackageLoader(
         tmp_path / "bundled",
@@ -935,7 +1109,9 @@ def test_noofy_importer_rejects_zip_path_traversal() -> None:
         NoofyArchiveImporter(payload.getvalue()).normalize()
 
 
-def test_import_store_logs_failed_import_without_persisting_package(tmp_path: Path) -> None:
+def test_import_store_logs_failed_import_without_persisting_package(
+    tmp_path: Path,
+) -> None:
     log_store = LogStore()
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
 
@@ -949,7 +1125,9 @@ def test_import_store_logs_failed_import_without_persisting_package(tmp_path: Pa
     assert latest.details["original_filename"] == "bad.noofy"
 
 
-def test_engine_service_imports_real_archive_and_exposes_normalized_package(tmp_path: Path) -> None:
+def test_engine_service_imports_real_archive_and_exposes_normalized_package(
+    tmp_path: Path,
+) -> None:
     log_store = LogStore()
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(
@@ -971,7 +1149,9 @@ def test_engine_service_imports_real_archive_and_exposes_normalized_package(tmp_
         runner_supervisor=supervisor,
         runtime_manager=StubRuntimeManager(),
         log_store=log_store,
-        imported_package_store=ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store),
+        imported_package_store=ImportedWorkflowPackageStore(
+            tmp_path / "packages", log_store=log_store
+        ),
     )
 
     result = service.import_workflow_archive(
@@ -983,7 +1163,10 @@ def test_engine_service_imports_real_archive_and_exposes_normalized_package(tmp_
 
     assert result["status"] == "needs_input_setup"
     assert package["metadata"]["name"] == "controlnet_two_model_workflow"
-    assert package["unresolved_runtime_inputs"][0]["reason"] == "creator_local_image_not_bundled"
+    assert (
+        package["unresolved_runtime_inputs"][0]["reason"]
+        == "creator_local_image_not_bundled"
+    )
     assert summaries[0]["status"] == "needs_input_setup"
     assert summaries[0]["status_label"] == "Needs input setup"
     assert summaries[0]["unresolved_input_count"] == 1
@@ -1001,7 +1184,9 @@ def _unsafe_zip_bytes() -> bytes:
 def _archive_bytes_with_capsule_update(update: dict) -> bytes:
     source = io.BytesIO(_archive_bytes())
     payload = io.BytesIO()
-    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(payload, "w") as rewritten:
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
         for info in original.infolist():
             contents = original.read(info)
             if info.filename == "capsule.lock.json":
@@ -1012,10 +1197,14 @@ def _archive_bytes_with_capsule_update(update: dict) -> bytes:
     return payload.getvalue()
 
 
-def _archive_bytes_with_package_update(update: dict, *, archive_bytes: bytes | None = None) -> bytes:
+def _archive_bytes_with_package_update(
+    update: dict, *, archive_bytes: bytes | None = None
+) -> bytes:
     source = io.BytesIO(archive_bytes or _archive_bytes())
     payload = io.BytesIO()
-    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(payload, "w") as rewritten:
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
         for info in original.infolist():
             contents = original.read(info)
             if info.filename == "package.json":
@@ -1029,7 +1218,9 @@ def _archive_bytes_with_package_update(update: dict, *, archive_bytes: bytes | N
 def _archive_bytes_with_custom_node_update(index: int, update: dict) -> bytes:
     source = io.BytesIO(_archive_bytes())
     payload = io.BytesIO()
-    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(payload, "w") as rewritten:
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
         for info in original.infolist():
             contents = original.read(info)
             if info.filename == "capsule.lock.json":
@@ -1057,8 +1248,12 @@ def _ed25519_signature(private_key: Ed25519PrivateKey, payload: dict) -> str:
 
 
 def _installer_for_imported_prepare(root: Path) -> CapsuleInstaller:
+    log_store = LogStore()
+
     async def downloader(url: str, dest: Path) -> int:
-        raise AssertionError(f"model downloads are not expected for this fixture: {url}")
+        raise AssertionError(
+            f"model downloads are not expected for this fixture: {url}"
+        )
 
     source_dir = root / "ComfyUI-source"
     source_dir.mkdir(parents=True)
@@ -1082,13 +1277,18 @@ def _installer_for_imported_prepare(root: Path) -> CapsuleInstaller:
             materialized_dir=root / "materialized",
             transactions_dir=root / "transactions",
             downloader=downloader,
+            log_store=log_store,
         ),
         workspace_preparer=RuntimeWorkspacePreparer(
             dependency_env_store=DependencyEnvManifestStore(root / "envs"),
-            runner_workspace_store=RunnerWorkspaceManifestStore(root / "runner-workspaces"),
+            runner_workspace_store=RunnerWorkspaceManifestStore(
+                root / "runner-workspaces"
+            ),
             comfyui_source_dir=source_dir,
+            log_store=log_store,
         ),
         workspace_smoke_test=smoke_test,
+        log_store=log_store,
     )
 
 

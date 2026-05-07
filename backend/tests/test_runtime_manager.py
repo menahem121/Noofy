@@ -51,6 +51,7 @@ def test_managed_runtime_selects_free_port_when_unconfigured(tmp_path: Path) -> 
         external_base_url="http://127.0.0.1:8188",
         repo_dir=tmp_path,
         python_executable="python3",
+        log_store=LogStore(),
     )
 
     parsed = urlparse(manager.base_url)
@@ -86,7 +87,9 @@ async def test_managed_start_reports_missing_comfyui_repo(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
-async def test_managed_start_checks_environment_before_process_start(tmp_path: Path) -> None:
+async def test_managed_start_checks_environment_before_process_start(
+    tmp_path: Path,
+) -> None:
     repo_dir = tmp_path / "ComfyUI"
     repo_dir.mkdir()
     (repo_dir / "main.py").write_text("", encoding="utf-8")
@@ -102,6 +105,7 @@ async def test_managed_start_checks_environment_before_process_start(tmp_path: P
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(tmp_path / "missing-python"),
+        log_store=LogStore(),
     )
     manager = RuntimeManager(
         mode="managed",
@@ -111,6 +115,7 @@ async def test_managed_start_checks_environment_before_process_start(tmp_path: P
         environment=environment,
         process_factory=fail_if_called,
         health_check=unreachable,
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -142,6 +147,7 @@ async def test_managed_startup_timeout_stops_process(tmp_path: Path) -> None:
         health_poll_interval_seconds=0.001,
         process_factory=create_process,
         health_check=unreachable,
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -171,6 +177,7 @@ async def test_external_start_reports_already_running(tmp_path: Path) -> None:
         python_executable="python3",
         process_factory=create_process,
         health_check=reachable,
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -182,7 +189,9 @@ async def test_external_start_reports_already_running(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_managed_start_command_uses_hidden_runtime_data_paths(tmp_path: Path) -> None:
+async def test_managed_start_command_uses_hidden_runtime_data_paths(
+    tmp_path: Path,
+) -> None:
     repo_dir = tmp_path / "third_party" / "comfyui"
     repo_dir.mkdir(parents=True)
     (repo_dir / "main.py").write_text("", encoding="utf-8")
@@ -216,6 +225,7 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(tmp_path: Pa
         managed_user_directory=data_dir / "user-state" / "comfyui",
         managed_database_url=f"sqlite:///{(data_dir / 'user-state' / 'comfyui' / 'comfyui.db').as_posix()}",
         python_cache_dir=data_dir / "cache" / "python",
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -224,17 +234,29 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(tmp_path: Pa
     assert "--disable-auto-launch" in captured_command
     assert "--dont-print-server" in captured_command
     assert _arg_value(captured_command, "--base-directory") == str(data_dir)
-    assert _arg_value(captured_command, "--output-directory") == str(data_dir / "outputs")
+    assert _arg_value(captured_command, "--output-directory") == str(
+        data_dir / "outputs"
+    )
     assert _arg_value(captured_command, "--input-directory") == str(data_dir / "input")
     assert _arg_value(captured_command, "--temp-directory") == str(data_dir)
-    assert _arg_value(captured_command, "--user-directory") == str(data_dir / "user-state" / "comfyui")
-    assert _arg_value(captured_command, "--database-url").endswith("/data/user-state/comfyui/comfyui.db")
+    assert _arg_value(captured_command, "--user-directory") == str(
+        data_dir / "user-state" / "comfyui"
+    )
+    assert _arg_value(captured_command, "--database-url").endswith(
+        "/data/user-state/comfyui/comfyui.db"
+    )
     assert captured_env["PYTHONPYCACHEPREFIX"] == str(data_dir / "cache" / "python")
-    assert all(str(repo_dir) not in value for value in captured_command if value.startswith(str(data_dir)))
+    assert all(
+        str(repo_dir) not in value
+        for value in captured_command
+        if value.startswith(str(data_dir))
+    )
 
 
 @pytest.mark.anyio
-async def test_managed_start_command_omits_vram_flag_for_normal_mode(tmp_path: Path) -> None:
+async def test_managed_start_command_omits_vram_flag_for_normal_mode(
+    tmp_path: Path,
+) -> None:
     repo_dir = tmp_path / "ComfyUI"
     repo_dir.mkdir()
     (repo_dir / "main.py").write_text("", encoding="utf-8")
@@ -258,6 +280,7 @@ async def test_managed_start_command_omits_vram_flag_for_normal_mode(tmp_path: P
         process_factory=create_process,
         health_check=health_check,
         managed_vram_mode="normal",
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -310,6 +333,7 @@ async def test_managed_start_command_includes_selected_vram_flag(
         process_factory=create_process,
         health_check=health_check,
         managed_vram_mode=mode,
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -317,7 +341,14 @@ async def test_managed_start_command_includes_selected_vram_flag(
     assert result.status == "started"
     assert result.comfyui.managed_vram_mode == mode
     assert captured_command.count(flag) == 1
-    assert sum(1 for item in captured_command if item in {"--gpu-only", "--highvram", "--lowvram", "--novram", "--cpu"}) == 1
+    assert (
+        sum(
+            1
+            for item in captured_command
+            if item in {"--gpu-only", "--highvram", "--lowvram", "--novram", "--cpu"}
+        )
+        == 1
+    )
 
 
 @pytest.mark.anyio
@@ -331,6 +362,7 @@ async def test_managed_stop_terminates_process(tmp_path: Path) -> None:
         repo_dir=tmp_path,
         python_executable="python3",
         health_check=unreachable,
+        log_store=LogStore(),
     )
     fake_process = FakeProcess()
     manager._process = fake_process
@@ -343,7 +375,9 @@ async def test_managed_stop_terminates_process(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_managed_runtime_smoke_starts_health_checks_and_stops_fake_comfyui(tmp_path: Path) -> None:
+async def test_managed_runtime_smoke_starts_health_checks_and_stops_fake_comfyui(
+    tmp_path: Path,
+) -> None:
     repo_dir = tmp_path / "ComfyUI"
     repo_dir.mkdir()
     (repo_dir / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
@@ -393,6 +427,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
             architecture="x86_64",
             accelerator="cpu",
         ),
+        log_store=LogStore(),
     )
     manager = RuntimeManager(
         mode="managed",
@@ -402,6 +437,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
         startup_timeout_seconds=5,
         health_poll_interval_seconds=0.05,
         environment=environment,
+        log_store=LogStore(),
     )
 
     start_result = await manager.start()
@@ -460,6 +496,7 @@ async def test_sidecar_starting_is_true_while_polling(tmp_path: Path) -> None:
         health_poll_interval_seconds=0.001,
         process_factory=create_process,
         health_check=health_after_spawn,
+        log_store=LogStore(),
     )
 
     # Before start() is called, sidecar_starting must be False.
@@ -494,6 +531,7 @@ async def test_sidecar_starting_cleared_on_timeout(tmp_path: Path) -> None:
         health_poll_interval_seconds=0.001,
         process_factory=create_process,
         health_check=unreachable,
+        log_store=LogStore(),
     )
 
     result = await manager.start()
@@ -539,6 +577,7 @@ async def test_concurrent_start_calls_are_serialised(tmp_path: Path) -> None:
         health_poll_interval_seconds=0.001,
         process_factory=create_process,
         health_check=health,
+        log_store=LogStore(),
     )
 
     r1, r2 = await asyncio.gather(manager.start(), manager.start())

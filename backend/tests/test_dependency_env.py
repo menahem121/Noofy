@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.diagnostics import LogStore
 from app.runtime.dependency_env import (
     DependencyEnvironmentInstallError,
     DependencyEnvironmentInstallRequest,
@@ -53,13 +54,17 @@ def _lock_for_cached_wheel(cache_dir: Path) -> ResolvedDependencyLock:
     )
 
 
-def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(tmp_path: Path) -> None:
+def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(
+    tmp_path: Path,
+) -> None:
     cache_dir = tmp_path / "wheel-cache"
     cache_dir.mkdir()
     lock = _lock_for_cached_wheel(cache_dir)
     commands: list[list[str]] = []
 
-    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         commands.append(command)
         assert cwd == tmp_path / "stage"
         assert env["UV_NO_PROGRESS"] == "1"
@@ -70,6 +75,7 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(tmp_path: 
         wheel_cache_dir=cache_dir,
         uv_cache_dir=tmp_path / "uv-cache",
         command_runner=runner,
+        log_store=LogStore(),
     )
 
     installer.install(
@@ -81,7 +87,9 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(tmp_path: 
         )
     )
 
-    requirements = (tmp_path / "stage" / "requirements.hashes.txt").read_text(encoding="utf-8")
+    requirements = (tmp_path / "stage" / "requirements.hashes.txt").read_text(
+        encoding="utf-8"
+    )
     assert "demo==1.0.0 --hash=sha256:" in requirements
     assert (tmp_path / "stage" / "noofy-dependency-lock.json").exists()
     assert commands[0][:4] == ["uv", "venv", "--python", "3.13"]
@@ -95,14 +103,19 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(tmp_path: 
 def test_uv_dependency_installer_preserves_explicit_lock_hash(tmp_path: Path) -> None:
     cache_dir = tmp_path / "wheel-cache"
     cache_dir.mkdir()
-    lock = _lock_for_cached_wheel(cache_dir).model_copy(update={"lock_hash": "sha256:" + ("1" * 64)})
+    lock = _lock_for_cached_wheel(cache_dir).model_copy(
+        update={"lock_hash": "sha256:" + ("1" * 64)}
+    )
 
-    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     installer = UvDependencyEnvironmentInstaller(
         wheel_cache_dir=cache_dir,
         command_runner=runner,
+        log_store=LogStore(),
     )
 
     installer.install(
@@ -116,10 +129,14 @@ def test_uv_dependency_installer_preserves_explicit_lock_hash(tmp_path: Path) ->
 
     assert '"lock_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"' in (
         tmp_path / "stage" / "noofy-dependency-lock.json"
-    ).read_text(encoding="utf-8")
+    ).read_text(
+        encoding="utf-8"
+    )
 
 
-def test_uv_dependency_installer_rejects_unmaterialized_index_wheel(tmp_path: Path) -> None:
+def test_uv_dependency_installer_rejects_unmaterialized_index_wheel(
+    tmp_path: Path,
+) -> None:
     resolver = ResolverMetadata(name="uv", version="0.9.0")
     lock = with_computed_lock_hash(
         ResolvedDependencyLock(
@@ -144,7 +161,9 @@ def test_uv_dependency_installer_rejects_unmaterialized_index_wheel(tmp_path: Pa
             ],
         )
     )
-    installer = UvDependencyEnvironmentInstaller(wheel_cache_dir=tmp_path / "wheel-cache")
+    installer = UvDependencyEnvironmentInstaller(
+        wheel_cache_dir=tmp_path / "wheel-cache", log_store=LogStore()
+    )
 
     with pytest.raises(DependencyEnvironmentInstallError) as error:
         installer.install(
@@ -160,17 +179,24 @@ def test_uv_dependency_installer_rejects_unmaterialized_index_wheel(tmp_path: Pa
     assert not (tmp_path / "stage").exists()
 
 
-def test_uv_dependency_installer_reports_command_failure_without_traceback(tmp_path: Path) -> None:
+def test_uv_dependency_installer_reports_command_failure_without_traceback(
+    tmp_path: Path,
+) -> None:
     cache_dir = tmp_path / "wheel-cache"
     cache_dir.mkdir()
     lock = _lock_for_cached_wheel(cache_dir)
 
-    def runner(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(command, 2, stdout="", stderr="resolver failed\nTraceback should not leak")
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command, 2, stdout="", stderr="resolver failed\nTraceback should not leak"
+        )
 
     installer = UvDependencyEnvironmentInstaller(
         wheel_cache_dir=cache_dir,
         command_runner=runner,
+        log_store=LogStore(),
     )
 
     with pytest.raises(DependencyEnvironmentInstallError) as error:
@@ -183,4 +209,6 @@ def test_uv_dependency_installer_reports_command_failure_without_traceback(tmp_p
             )
         )
 
-    assert str(error.value) == "Dependency environment installer failed: resolver failed"
+    assert (
+        str(error.value) == "Dependency environment installer failed: resolver failed"
+    )

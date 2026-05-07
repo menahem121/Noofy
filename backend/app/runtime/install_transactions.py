@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsSink
 
 INSTALL_TRANSACTION_SCHEMA_VERSION = "0.1.0"
 INSTALL_TRANSACTION_FILENAME = "transaction.json"
@@ -73,12 +73,12 @@ class InstallTransactionStore:
         self,
         root_dir: Path,
         *,
-        log_store: LogStore | None = None,
+        log_store: DiagnosticsSink,
         lock_timeout_seconds: float = DEFAULT_TRANSACTION_LOCK_TIMEOUT_SECONDS,
     ) -> None:
         self.root_dir = root_dir
         self.lock_dir = root_dir / "_locks"
-        self.log_store = log_store or LogStore()
+        self.log_store = log_store
         self.lock_timeout_seconds = lock_timeout_seconds
         self._thread_locks: dict[str, threading.Lock] = {}
         self._thread_locks_guard = threading.Lock()
@@ -123,11 +123,21 @@ class InstallTransactionStore:
         )
         return transaction
 
-    def staged_dependency_env_dir(self, transaction: InstallTransaction, fingerprint: str) -> Path:
-        return transaction.dependency_envs_dir / f"dep-env-{_safe_fingerprint(fingerprint)}"
+    def staged_dependency_env_dir(
+        self, transaction: InstallTransaction, fingerprint: str
+    ) -> Path:
+        return (
+            transaction.dependency_envs_dir
+            / f"dep-env-{_safe_fingerprint(fingerprint)}"
+        )
 
-    def staged_runner_workspace_dir(self, transaction: InstallTransaction, fingerprint: str) -> Path:
-        return transaction.runner_workspaces_dir / f"runner-workspace-{_safe_fingerprint(fingerprint)}"
+    def staged_runner_workspace_dir(
+        self, transaction: InstallTransaction, fingerprint: str
+    ) -> Path:
+        return (
+            transaction.runner_workspaces_dir
+            / f"runner-workspace-{_safe_fingerprint(fingerprint)}"
+        )
 
     def write_smoke_report(
         self,
@@ -211,7 +221,9 @@ class InstallTransactionStore:
             },
         )
 
-    def sweep_startup(self, *, retention_days: int = DEFAULT_QUARANTINE_RETENTION_DAYS) -> StartupSweepReport:
+    def sweep_startup(
+        self, *, retention_days: int = DEFAULT_QUARANTINE_RETENTION_DAYS
+    ) -> StartupSweepReport:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         stale_transactions = 0
         expired_quarantines = 0
@@ -233,7 +245,11 @@ class InstallTransactionStore:
                 stale_tmp_files += 1
 
         for path in sorted(self.root_dir.iterdir()):
-            if not path.is_dir() or path.name == "_locks" or path.name.startswith("install-"):
+            if (
+                not path.is_dir()
+                or path.name == "_locks"
+                or path.name.startswith("install-")
+            ):
                 continue
             if _is_legacy_unscoped_transaction_dir(path):
                 shutil.rmtree(path, ignore_errors=True)
@@ -255,7 +271,9 @@ class InstallTransactionStore:
                 "schema_version": INSTALL_TRANSACTION_SCHEMA_VERSION,
                 "transaction_id": path.name,
                 "workflow_id": transaction.get("workflow_id", "unknown"),
-                "capsule_fingerprint": transaction.get("capsule_fingerprint", "unknown"),
+                "capsule_fingerprint": transaction.get(
+                    "capsule_fingerprint", "unknown"
+                ),
                 "reason": "Backend stopped before install preparation completed.",
                 "status": "quarantined",
                 "quarantined_at": now.isoformat(),
@@ -294,13 +312,17 @@ class InstallTransactionStore:
                 return lock_file
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out waiting for runtime artifact lock: {lock_key}")
+                    raise TimeoutError(
+                        f"Timed out waiting for runtime artifact lock: {lock_key}"
+                    )
                 time.sleep(0.05)
 
     def _write_json(self, path: Path, payload: dict[str, object]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         tmp_path.replace(path)
 
 
@@ -347,4 +369,9 @@ def _now_iso() -> str:
 
 
 def _safe_fingerprint(fingerprint: str) -> str:
-    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+    return (
+        fingerprint.replace("sha256:", "")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+    )

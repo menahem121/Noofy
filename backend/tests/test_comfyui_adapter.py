@@ -9,7 +9,9 @@ from app.engine.models import JobProgress
 
 
 def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
 
     result = adapter._result_from_history(
         "job-1",
@@ -36,7 +38,9 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
 
 def test_terminal_progress_logs_once(tmp_path: Path) -> None:
     log_store = LogStore()
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path, log_store=log_store)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=log_store
+    )
     progress = adapter._progress_from_history("job-1", {"status": {"completed": True}})
 
     adapter._log_terminal_progress_once(progress)
@@ -48,7 +52,9 @@ def test_terminal_progress_logs_once(tmp_path: Path) -> None:
 
 
 def test_progress_from_failed_history(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
 
     progress = adapter._progress_from_history(
         "job-1",
@@ -59,7 +65,9 @@ def test_progress_from_failed_history(tmp_path: Path) -> None:
 
 
 def test_progress_from_comfyui_progress_ws_message(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
 
     progress = adapter._progress_from_ws_message(
         "job-1",
@@ -82,7 +90,9 @@ def test_progress_from_comfyui_progress_ws_message(tmp_path: Path) -> None:
 
 
 def test_progress_from_comfyui_error_ws_message(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
 
     progress = adapter._progress_from_ws_message(
         "job-1",
@@ -104,7 +114,9 @@ def test_progress_from_comfyui_error_ws_message(tmp_path: Path) -> None:
 
 def test_handle_ws_error_message_logs_failure(tmp_path: Path) -> None:
     log_store = LogStore()
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path, log_store=log_store)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=log_store
+    )
 
     should_stop = adapter._handle_ws_message(
         "job-1",
@@ -126,7 +138,9 @@ def test_handle_ws_error_message_logs_failure(tmp_path: Path) -> None:
 
 
 def test_result_from_comfyui_executed_ws_message(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
 
     result = adapter._result_from_ws_message(
         "job-1",
@@ -157,9 +171,17 @@ def test_result_from_comfyui_executed_ws_message(tmp_path: Path) -> None:
 
 
 def test_ws_url_for_client_uses_configured_ws_url(tmp_path: Path) -> None:
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", tmp_path, "ws://remote.test:9000/ws")
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path,
+        "ws://remote.test:9000/ws",
+        log_store=LogStore(),
+    )
 
-    assert adapter._ws_url_for_client("abc 123") == "ws://remote.test:9000/ws?clientId=abc+123"
+    assert (
+        adapter._ws_url_for_client("abc 123")
+        == "ws://remote.test:9000/ws?clientId=abc+123"
+    )
 
 
 def test_stage_assets_copies_file_and_rewrites_graph(tmp_path: Path) -> None:
@@ -176,6 +198,7 @@ def test_stage_assets_copies_file_and_rewrites_graph(tmp_path: Path) -> None:
         "http://127.0.0.1:8188",
         models_dir,
         dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
     )
 
     graph = {
@@ -210,6 +233,7 @@ def test_stage_assets_uses_explicit_comfyui_input_dir(tmp_path: Path) -> None:
         tmp_path / "external-models",
         dashboard_assets_dir=assets_dir,
         comfyui_input_dir=tmp_path / "noofy-input",
+        log_store=LogStore(),
     )
 
     _new_graph, staged = adapter._stage_assets(
@@ -230,11 +254,20 @@ def test_stage_assets_skips_missing_asset(tmp_path: Path) -> None:
         "http://127.0.0.1:8188",
         models_dir,
         dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
     )
-    graph = {"10": {"class_type": "LoadImage", "inputs": {"image": "missing-00000000-0000-0000-0000-000000000000.png"}}}
+    graph = {
+        "10": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "missing-00000000-0000-0000-0000-000000000000.png"},
+        }
+    }
     new_graph, staged = adapter._stage_assets(graph, "job-1")
     assert staged == []
-    assert new_graph["10"]["inputs"]["image"] == "missing-00000000-0000-0000-0000-000000000000.png"
+    assert (
+        new_graph["10"]["inputs"]["image"]
+        == "missing-00000000-0000-0000-0000-000000000000.png"
+    )
 
 
 def test_stage_assets_ignores_non_asset_values(tmp_path: Path) -> None:
@@ -247,8 +280,14 @@ def test_stage_assets_ignores_non_asset_values(tmp_path: Path) -> None:
         "http://127.0.0.1:8188",
         models_dir,
         dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
     )
-    graph = {"5": {"class_type": "KSampler", "inputs": {"seed": 42, "model": "v1-5.safetensors"}}}
+    graph = {
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 42, "model": "v1-5.safetensors"},
+        }
+    }
     new_graph, staged = adapter._stage_assets(graph, "job-1")
     assert staged == []
     assert new_graph["5"]["inputs"]["seed"] == 42
@@ -257,7 +296,9 @@ def test_stage_assets_ignores_non_asset_values(tmp_path: Path) -> None:
 def test_cleanup_staged_files_removes_files(tmp_path: Path) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", models_dir)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", models_dir, log_store=LogStore()
+    )
 
     staged_file = tmp_path / "staged.png"
     staged_file.write_bytes(b"data")
@@ -270,23 +311,31 @@ def test_cleanup_staged_files_removes_files(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "canceled"])
-def test_terminal_progress_cleans_staged_files_for_terminal_statuses(tmp_path: Path, status: str) -> None:
+def test_terminal_progress_cleans_staged_files_for_terminal_statuses(
+    tmp_path: Path, status: str
+) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    adapter = ComfyUIEngineAdapter("http://127.0.0.1:8188", models_dir)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", models_dir, log_store=LogStore()
+    )
 
     staged_file = tmp_path / f"{status}.png"
     staged_file.write_bytes(b"data")
     adapter._staged_files["job-terminal"] = [staged_file]
 
-    adapter._log_terminal_progress_once(JobProgress(job_id="job-terminal", status=status))
+    adapter._log_terminal_progress_once(
+        JobProgress(job_id="job-terminal", status=status)
+    )
 
     assert not staged_file.exists()
     assert "job-terminal" not in adapter._staged_files
 
 
 @pytest.mark.anyio
-async def test_cancel_job_cleans_staged_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_job_cleans_staged_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/interrupt"
         return httpx.Response(200, json={})
@@ -302,7 +351,9 @@ async def test_cancel_job_cleans_staged_files(tmp_path: Path, monkeypatch: pytes
 
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    adapter = ComfyUIEngineAdapter("http://comfyui.test", models_dir)
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", models_dir, log_store=LogStore()
+    )
     staged_file = tmp_path / "canceled.png"
     staged_file.write_bytes(b"data")
     adapter._staged_files["job-cancel"] = [staged_file]
@@ -314,7 +365,9 @@ async def test_cancel_job_cleans_staged_files(tmp_path: Path, monkeypatch: pytes
 
 
 @pytest.mark.anyio
-async def test_list_available_models_uses_comfyui_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_available_models_uses_comfyui_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/models":
             return httpx.Response(200, json=["checkpoints"])
@@ -331,7 +384,11 @@ async def test_list_available_models_uses_comfyui_api(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(httpx, "AsyncClient", mock_client)
 
-    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path)
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
     models = await adapter.list_available_models()
 
-    assert [(model.folder, model.filename) for model in models] == [("checkpoints", "remote-model.safetensors")]
+    assert [(model.folder, model.filename) for model in models] == [
+        ("checkpoints", "remote-model.safetensors")
+    ]

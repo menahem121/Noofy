@@ -24,7 +24,6 @@ from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,9 +36,18 @@ def _make_minimal_archive(
     """Build a minimal .noofy archive suitable for import."""
     if graph is None:
         graph = {
-            "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello", "clip": ["4", 0]}},
-            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1.safetensors"}},
-            "9": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": "out"}},
+            "1": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "hello", "clip": ["4", 0]},
+            },
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "v1.safetensors"},
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {"images": ["5", 0], "filename_prefix": "out"},
+            },
         }
 
     package_data: dict[str, Any] = {
@@ -69,13 +77,17 @@ def _make_minimal_archive(
         "comfyui_version": "0.0.1",
     }
 
-    stub_dashboard: dict[str, Any] = dashboard if dashboard is not None else {
-        "version": "0.1.0",
-        "status": "not_configured",
-        "inputs": [],
-        "outputs": [],
-        "sections": [],
-    }
+    stub_dashboard: dict[str, Any] = (
+        dashboard
+        if dashboard is not None
+        else {
+            "version": "0.1.0",
+            "status": "not_configured",
+            "inputs": [],
+            "outputs": [],
+            "sections": [],
+        }
+    )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -182,9 +194,9 @@ def test_save_dashboard_writes_only_dashboard_json(tmp_path: Path) -> None:
 
     # package.json import_metadata.status must be promoted to "imported".
     package_after = json.loads(package_json_path.read_text())
-    assert package_after.get("import_metadata", {}).get("status") == "imported", (
-        "save_dashboard must promote import_metadata.status to 'imported'"
-    )
+    assert (
+        package_after.get("import_metadata", {}).get("status") == "imported"
+    ), "save_dashboard must promote import_metadata.status to 'imported'"
     # All other package.json fields must remain structurally unchanged.
     before = json.loads(package_json_bytes_before)
     assert package_after.get("engine") == before.get("engine")
@@ -272,9 +284,9 @@ def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
 
     # No new files should have been written by validate.
     dashboard_files_after = set(packages_root.rglob("dashboard.json"))
-    assert dashboard_files_after == dashboard_files_before, (
-        "validate_dashboard must not write any files"
-    )
+    assert (
+        dashboard_files_after == dashboard_files_before
+    ), "validate_dashboard must not write any files"
 
 
 def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
@@ -290,7 +302,9 @@ def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     assert isinstance(nodes, list)
     clip_nodes = [n for n in nodes if n["node_type"] == "CLIPTextEncode"]
     assert clip_nodes, "CLIPTextEncode should appear in bindable inputs"
-    text_inputs = [inp for inp in clip_nodes[0]["inputs"] if inp["input_name"] == "text"]
+    text_inputs = [
+        inp for inp in clip_nodes[0]["inputs"] if inp["input_name"] == "text"
+    ]
     assert text_inputs, "text input should be classified"
 
 
@@ -302,7 +316,9 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
 
     output_nodes = [n for n in result["nodes"] if n["node_type"] == "SaveImage"]
     assert output_nodes, "SaveImage should appear as an output-capable dashboard node"
-    output_values = [inp for inp in output_nodes[0]["inputs"] if inp["kind"] == "image_output"]
+    output_values = [
+        inp for inp in output_nodes[0]["inputs"] if inp["kind"] == "image_output"
+    ]
     assert output_values == [
         {
             "input_name": "output_image",
@@ -320,6 +336,7 @@ def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
     service = DashboardAuthoringService(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=loader,
+        log_store=LogStore(),
     )
 
     # Build a valid payload against text_to_image_v0's actual graph nodes.
@@ -329,7 +346,8 @@ def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
     first_node = graph_node_ids[0]
     first_node_data = pkg.comfyui_graph[first_node]
     scalar_inputs = [
-        k for k, v in first_node_data.get("inputs", {}).items()
+        k
+        for k, v in first_node_data.get("inputs", {}).items()
         if not isinstance(v, list)
     ]
     input_name = scalar_inputs[0] if scalar_inputs else "text"
@@ -353,7 +371,12 @@ def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
                 "id": "main",
                 "title": "Controls",
                 "controls": [
-                    {"id": "c1", "type": "textarea", "label": "P", "input_id": "prompt"},
+                    {
+                        "id": "c1",
+                        "type": "textarea",
+                        "label": "P",
+                        "input_id": "prompt",
+                    },
                 ],
             }
         ],

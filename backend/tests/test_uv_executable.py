@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from app.engine.diagnostics import LogStore
 from app.runtime.uv_executable import _venv_uv_path, resolve_noofy_uv_executable
-
 
 # ---------------------------------------------------------------------------
 # _venv_uv_path — cross-platform path construction
@@ -17,7 +17,11 @@ from app.runtime.uv_executable import _venv_uv_path, resolve_noofy_uv_executable
 
 def test_venv_uv_path_unix(tmp_path: Path) -> None:
     python = tmp_path / "bin" / "python"
-    result = _venv_uv_path.__wrapped__(python) if hasattr(_venv_uv_path, "__wrapped__") else None
+    result = (
+        _venv_uv_path.__wrapped__(python)
+        if hasattr(_venv_uv_path, "__wrapped__")
+        else None
+    )
     with patch("app.runtime.uv_executable.os.name", "posix"):
         result = _venv_uv_path(python)
     assert result == tmp_path / "bin" / "uv"
@@ -41,8 +45,9 @@ def test_resolve_returns_absolute_path_when_uv_present(tmp_path: Path) -> None:
     fake_uv.touch()
     fake_python = tmp_path / "bin" / "python"
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, \
-         patch("app.runtime.uv_executable.os.name", "posix"):
+    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
+        "app.runtime.uv_executable.os.name", "posix"
+    ):
         mock_sys.executable = str(fake_python)
         result = resolve_noofy_uv_executable()
 
@@ -51,7 +56,16 @@ def test_resolve_returns_absolute_path_when_uv_present(tmp_path: Path) -> None:
 
 
 def test_resolve_uses_noofy_uv_executable_override(tmp_path: Path) -> None:
-    bundled_uv = tmp_path / "Noofy.app" / "Contents" / "Resources" / "noofy-runtime" / "python" / "bin" / "uv"
+    bundled_uv = (
+        tmp_path
+        / "Noofy.app"
+        / "Contents"
+        / "Resources"
+        / "noofy-runtime"
+        / "python"
+        / "bin"
+        / "uv"
+    )
     bundled_uv.parent.mkdir(parents=True)
     bundled_uv.touch()
 
@@ -74,8 +88,9 @@ def test_resolve_raises_file_not_found_when_uv_missing(tmp_path: Path) -> None:
     fake_python.parent.mkdir(parents=True)
     # Do NOT create uv alongside it.
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, \
-         patch("app.runtime.uv_executable.os.name", "posix"):
+    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
+        "app.runtime.uv_executable.os.name", "posix"
+    ):
         mock_sys.executable = str(fake_python)
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_noofy_uv_executable()
@@ -89,8 +104,9 @@ def test_resolve_error_message_names_expected_path(tmp_path: Path) -> None:
     fake_python = tmp_path / "bin" / "python"
     fake_python.parent.mkdir(parents=True)
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, \
-         patch("app.runtime.uv_executable.os.name", "posix"):
+    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
+        "app.runtime.uv_executable.os.name", "posix"
+    ):
         mock_sys.executable = str(fake_python)
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_noofy_uv_executable()
@@ -111,12 +127,15 @@ def test_resolve_does_not_fall_back_to_global_path(tmp_path: Path) -> None:
     global_uv.chmod(0o755)
 
     import os
-    env_with_global_uv = os.environ.copy()
-    env_with_global_uv["PATH"] = str(global_uv.parent) + os.pathsep + env_with_global_uv.get("PATH", "")
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, \
-         patch("app.runtime.uv_executable.os.name", "posix"), \
-         patch.dict("os.environ", env_with_global_uv):
+    env_with_global_uv = os.environ.copy()
+    env_with_global_uv["PATH"] = (
+        str(global_uv.parent) + os.pathsep + env_with_global_uv.get("PATH", "")
+    )
+
+    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
+        "app.runtime.uv_executable.os.name", "posix"
+    ), patch.dict("os.environ", env_with_global_uv):
         mock_sys.executable = str(fake_python)
         # Must still fail — it should look in the venv, not on PATH.
         with pytest.raises(FileNotFoundError):
@@ -172,6 +191,7 @@ def test_dependency_env_installer_uses_provided_uv_executable(tmp_path: Path) ->
         wheel_cache_dir=cache_dir,
         uv_executable=controlled_uv,
         command_runner=runner,
+        log_store=LogStore(),
     )
     installer.install(
         DependencyEnvironmentInstallRequest(
@@ -182,9 +202,9 @@ def test_dependency_env_installer_uses_provided_uv_executable(tmp_path: Path) ->
         )
     )
 
-    assert all(exe == controlled_uv for exe in seen_executables), (
-        f"Expected all commands to use {controlled_uv!r}, got: {seen_executables}"
-    )
+    assert all(
+        exe == controlled_uv for exe in seen_executables
+    ), f"Expected all commands to use {controlled_uv!r}, got: {seen_executables}"
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +222,15 @@ def test_dependency_lock_resolver_stores_provided_uv_executable(tmp_path: Path) 
         wheel_cache_dir=tmp_path / "wheels",
         work_dir=tmp_path / "work",
         uv_executable=controlled_uv,
+        log_store=LogStore(),
     )
 
     assert resolver.uv_executable == controlled_uv
 
 
-def test_dependency_lock_resolver_uses_uv_executable_in_commands(tmp_path: Path) -> None:
+def test_dependency_lock_resolver_uses_uv_executable_in_commands(
+    tmp_path: Path,
+) -> None:
     """Resolver must pass uv_executable as command[0] when it invokes uv."""
     from app.runtime.dependency_resolver import UvDependencyLockResolver
 
@@ -217,7 +240,9 @@ def test_dependency_lock_resolver_uses_uv_executable_in_commands(tmp_path: Path)
     def runner(command, *, cwd, env):
         seen_executables.append(command[0])
         if command[1:2] == ["--version"]:
-            return subprocess.CompletedProcess(command, 0, stdout="uv 0.9.0\n", stderr="")
+            return subprocess.CompletedProcess(
+                command, 0, stdout="uv 0.9.0\n", stderr=""
+            )
         output_flag_index = command.index("--output-file")
         Path(command[output_flag_index + 1]).write_text("", encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -227,6 +252,7 @@ def test_dependency_lock_resolver_uses_uv_executable_in_commands(tmp_path: Path)
         work_dir=tmp_path / "work",
         uv_executable=controlled_uv,
         command_runner=runner,
+        log_store=LogStore(),
     )
     (tmp_path / "wheels").mkdir()
 

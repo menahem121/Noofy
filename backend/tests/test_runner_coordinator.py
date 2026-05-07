@@ -4,9 +4,17 @@ import pytest
 
 from app.engine.diagnostics import LogStore
 from app.engine.models import ModelInfo
-from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
+from app.runtime.runner_coordinator import (
+    RunnerProcessCoordinator,
+    comfyui_adapter_factory,
+)
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
+from app.runtime.supervisor import (
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerStatus,
+    RunnerSupervisor,
+)
 
 
 class FakeProcess:
@@ -52,7 +60,9 @@ def _spec(tmp_path: Path) -> RunnerLaunchSpec:
 
 
 @pytest.mark.anyio
-async def test_coordinator_registers_started_runner_endpoint_and_adapter(tmp_path: Path) -> None:
+async def test_coordinator_registers_started_runner_endpoint_and_adapter(
+    tmp_path: Path,
+) -> None:
     async def process_factory(command: list[str], **kwargs):
         return FakeProcess()
 
@@ -65,14 +75,20 @@ async def test_coordinator_registers_started_runner_endpoint_and_adapter(tmp_pat
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     coordinator = RunnerProcessCoordinator(
         runner_supervisor=runner_supervisor,
         process_supervisor=process_supervisor,
-        adapter_factory=lambda descriptor: RecordingAdapter(descriptor.base_url, descriptor.ws_url),
+        adapter_factory=lambda descriptor: RecordingAdapter(
+            descriptor.base_url, descriptor.ws_url
+        ),
+        log_store=LogStore(),
     )
 
-    handle = await coordinator.start_runner(_spec(tmp_path), workflow_id="text_to_image_v0")
+    handle = await coordinator.start_runner(
+        _spec(tmp_path), workflow_id="text_to_image_v0"
+    )
 
     registered = runner_supervisor.get_runner("isolated-1")
     adapter = runner_supervisor.get_adapter("isolated-1")
@@ -80,11 +96,16 @@ async def test_coordinator_registers_started_runner_endpoint_and_adapter(tmp_pat
     assert registered.status is RunnerStatus.READY
     assert adapter.base_url == "http://127.0.0.1:9001"
     assert adapter.ws_url == "ws://127.0.0.1:9001/ws"
-    assert runner_supervisor.runner_for_workflow("text_to_image_v0").runner_id == "isolated-1"
+    assert (
+        runner_supervisor.runner_for_workflow("text_to_image_v0").runner_id
+        == "isolated-1"
+    )
 
 
 @pytest.mark.anyio
-async def test_coordinator_refresh_and_stop_update_registry_status(tmp_path: Path) -> None:
+async def test_coordinator_refresh_and_stop_update_registry_status(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     healthy = {"value": True}
 
@@ -102,11 +123,15 @@ async def test_coordinator_refresh_and_stop_update_registry_status(tmp_path: Pat
         health_check=health_check,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     coordinator = RunnerProcessCoordinator(
         runner_supervisor=runner_supervisor,
         process_supervisor=process_supervisor,
-        adapter_factory=lambda descriptor: RecordingAdapter(descriptor.base_url, descriptor.ws_url),
+        adapter_factory=lambda descriptor: RecordingAdapter(
+            descriptor.base_url, descriptor.ws_url
+        ),
+        log_store=LogStore(),
     )
     await coordinator.start_runner(_spec(tmp_path))
 
@@ -120,7 +145,9 @@ async def test_coordinator_refresh_and_stop_update_registry_status(tmp_path: Pat
 
 
 @pytest.mark.anyio
-async def test_coordinator_stop_all_updates_status_and_unbinds_workflows(tmp_path: Path) -> None:
+async def test_coordinator_stop_all_updates_status_and_unbinds_workflows(
+    tmp_path: Path,
+) -> None:
     async def process_factory(command: list[str], **kwargs):
         return FakeProcess()
 
@@ -133,11 +160,15 @@ async def test_coordinator_stop_all_updates_status_and_unbinds_workflows(tmp_pat
         health_check=healthy,
         startup_timeout_seconds=0.1,
         health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
     )
     coordinator = RunnerProcessCoordinator(
         runner_supervisor=runner_supervisor,
         process_supervisor=process_supervisor,
-        adapter_factory=lambda descriptor: RecordingAdapter(descriptor.base_url, descriptor.ws_url),
+        adapter_factory=lambda descriptor: RecordingAdapter(
+            descriptor.base_url, descriptor.ws_url
+        ),
+        log_store=LogStore(),
     )
     await coordinator.start_runner(_spec(tmp_path), workflow_id="text_to_image_v0")
 
@@ -157,7 +188,9 @@ def test_comfyui_adapter_factory_configures_endpoint(tmp_path: Path) -> None:
         fingerprint="sha256:" + ("a" * 64),
         status=RunnerStatus.READY,
     )
-    factory = comfyui_adapter_factory(models_dir=tmp_path / "models", log_store=LogStore())
+    factory = comfyui_adapter_factory(
+        models_dir=tmp_path / "models", log_store=LogStore()
+    )
 
     adapter = factory(descriptor)
 
