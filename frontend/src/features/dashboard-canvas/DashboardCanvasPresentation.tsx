@@ -114,6 +114,35 @@ export function resizeLayoutFromPointerDelta({
   };
 }
 
+export function moveLayoutFromPointerDelta({
+  startLayout,
+  startClientX,
+  startClientY,
+  clientX,
+  clientY,
+  canvas,
+  columns = DASHBOARD_CANVAS_COLUMNS,
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+}: {
+  startLayout: GridItemLayout;
+  startClientX: number;
+  startClientY: number;
+  clientX: number;
+  clientY: number;
+  canvas: HTMLElement | null;
+} & DashboardCanvasMetrics): GridItemLayout {
+  const rect = canvas?.getBoundingClientRect();
+  const columnWidth = rect ? rect.width / columns : 1;
+  const deltaColumns = Math.round((clientX - startClientX) / columnWidth);
+  const deltaRows = Math.round((clientY - startClientY) / rowHeight);
+
+  return {
+    ...startLayout,
+    x: clamp(startLayout.x + deltaColumns, 0, columns - startLayout.w),
+    y: Math.max(0, startLayout.y + deltaRows),
+  };
+}
+
 export function DashboardCanvasFrame({
   children,
   className = "",

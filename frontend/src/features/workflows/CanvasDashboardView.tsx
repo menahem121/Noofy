@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
   type PointerEvent,
 } from "react";
 import {
@@ -13,7 +12,6 @@ import {
   Image as ImageIcon,
   ImagePlus,
   Loader2,
-  Move,
   Play,
   Shuffle,
   SlidersHorizontal,
@@ -30,7 +28,7 @@ import {
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
-import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
@@ -42,13 +40,9 @@ import {
   DashboardCanvasWidgetShell,
   type DashboardResizeHandle,
   canvasRowsForItems,
-  layoutFromCanvasPointer,
   resizeLayoutFromPointerDelta,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
-
-const DRAG_MIME_TYPE = "application/noofy-dashboard-widget";
-const DRAG_TEXT_PREFIX = "noofy-widget:";
 
 export interface CanvasRunState {
   isRunning: boolean;
@@ -101,8 +95,8 @@ export function CanvasDashboardView({
   onEditWidgets,
   onLayoutOverride,
 }: CanvasDashboardViewProps) {
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
-  const [dragPreview, setDragPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
+  const [movingControlId, setMovingControlId] = useState<string | null>(null);
+  const [movePreview, setMovePreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
@@ -112,6 +106,14 @@ export function CanvasDashboardView({
     startLayout: GridItemLayout;
     startClientX: number;
     startClientY: number;
+  } | null>(null);
+  const moveStateRef = useRef<{
+    controlId: string;
+    startLayout: GridItemLayout;
+    startClientX: number;
+    startClientY: number;
+    columnWidth: number;
+    lastLayout: GridItemLayout;
   } | null>(null);
   const canvasItems = useMemo(
     () => controls.map((control) => ({ id: control.id, layout: effectiveLayout(control) })),
@@ -145,72 +147,6 @@ export function CanvasDashboardView({
     return defaultLayoutForWidgetType(control.type);
   }
 
-  function handleDragStart(event: DragEvent, controlId: string) {
-    setActiveDragId(controlId);
-    setDragPreview(null);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(DRAG_MIME_TYPE, JSON.stringify({ controlId }));
-    event.dataTransfer.setData("text/plain", `${DRAG_TEXT_PREFIX}${controlId}`);
-  }
-
-  function handleDragOver(event: DragEvent) {
-    if (!isEditingLayout) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const controlId = activeDragId ?? readDragControlId(event);
-    if (!controlId) return;
-
-    const control = controls.find((c) => c.id === controlId);
-    if (!control) return;
-
-    const layout = effectiveLayout(control);
-    const desired = layoutFromPointer(event, layout);
-    if (!desired) return;
-
-    const preview = findAvailableLayout(controlId, desired, canvasItems, DASHBOARD_CANVAS_COLUMNS);
-    setDragPreview((cur) => {
-      if (
-        cur?.controlId === controlId &&
-        cur.layout.x === preview.x &&
-        cur.layout.y === preview.y
-      )
-        return cur;
-      return { controlId, layout: preview };
-    });
-  }
-
-  function handleDrop(event: DragEvent) {
-    if (!isEditingLayout) return;
-    event.preventDefault();
-    const controlId = dragPreview?.controlId ?? activeDragId ?? readDragControlId(event);
-    if (!controlId) { clearDrag(); return; }
-
-    const control = controls.find((c) => c.id === controlId);
-    if (!control) { clearDrag(); return; }
-
-    const newLayout = dragPreview?.layout ?? layoutFromPointer(event, effectiveLayout(control));
-    if (!newLayout) { clearDrag(); return; }
-
-    const resolved = findAvailableLayout(
-      controlId,
-      fitLayout(newLayout, DASHBOARD_CANVAS_COLUMNS),
-      canvasItems,
-      DASHBOARD_CANVAS_COLUMNS,
-    );
-    onLayoutOverride(controlId, resolved);
-    clearDrag();
-  }
-
-  function handleDragLeave(event: DragEvent) {
-    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
-    setDragPreview(null);
-  }
-
-  function clearDrag() {
-    setActiveDragId(null);
-    setDragPreview(null);
-  }
-
   function resolveLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS);
     const collides = canvasItems.some((item) => {
@@ -218,6 +154,70 @@ export function CanvasDashboardView({
       return layoutsOverlap(fitted, item.layout);
     });
     return collides ? effectiveLayout(controls.find((control) => control.id === controlId)!) : fitted;
+  }
+
+  function handleMoveStart(
+    event: PointerEvent<HTMLElement>,
+    controlId: string,
+    layout: GridItemLayout,
+  ) {
+    if (!isEditingLayout || shouldIgnoreWidgetMove(event.target)) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const columnWidth = rect.width / DASHBOARD_CANVAS_COLUMNS;
+    moveStateRef.current = {
+      controlId,
+      startLayout: layout,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      columnWidth,
+      lastLayout: layout,
+    };
+    setMovingControlId(controlId);
+    setMovePreview({ controlId, layout });
+
+    function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
+      const moveState = moveStateRef.current;
+      if (!moveState) return;
+      const deltaColumns = Math.round((pointerEvent.clientX - moveState.startClientX) / moveState.columnWidth);
+      const deltaRows = Math.round((pointerEvent.clientY - moveState.startClientY) / DASHBOARD_CANVAS_ROW_HEIGHT);
+      const candidate = fitLayout(
+        {
+          ...moveState.startLayout,
+          x: Math.max(0, Math.min(moveState.startLayout.x + deltaColumns, DASHBOARD_CANVAS_COLUMNS - moveState.startLayout.w)),
+          y: Math.max(0, moveState.startLayout.y + deltaRows),
+        },
+        DASHBOARD_CANVAS_COLUMNS,
+      );
+      if (
+        candidate.x === moveState.lastLayout.x &&
+        candidate.y === moveState.lastLayout.y &&
+        candidate.w === moveState.lastLayout.w &&
+        candidate.h === moveState.lastLayout.h
+      ) {
+        return;
+      }
+      const resolved = resolveLayout(moveState.controlId, candidate);
+      if (resolved.x !== candidate.x || resolved.y !== candidate.y) return;
+      moveState.lastLayout = resolved;
+      setMovePreview({ controlId: moveState.controlId, layout: resolved });
+    }
+
+    function handlePointerUp() {
+      const finalLayout = moveStateRef.current?.lastLayout;
+      if (finalLayout) onLayoutOverride(controlId, finalLayout);
+      moveStateRef.current = null;
+      setMovingControlId(null);
+      setMovePreview(null);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
   }
 
   function handleResizeStart(
@@ -261,10 +261,6 @@ export function CanvasDashboardView({
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
-  }
-
-  function layoutFromPointer(event: DragEvent, currentLayout: GridItemLayout): GridItemLayout | null {
-    return layoutFromCanvasPointer(event, currentLayout, canvasRef.current);
   }
 
   const canvasRows = canvasRowsForItems(canvasItems);
@@ -392,15 +388,12 @@ export function CanvasDashboardView({
           ref={canvasRef}
           className={isEditingLayout ? "canvas-dashboard__surface--editing" : ""}
           rows={canvasRows}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onDragLeave={handleDragLeave}
         >
           {controls.map((control) => {
             const layout = effectiveLayout(control);
-            const isPreview = dragPreview?.controlId === control.id;
-            const previewLayout = isPreview ? dragPreview!.layout : null;
+            const previewLayout = movePreview?.controlId === control.id ? movePreview.layout : null;
             const displayLayout = previewLayout ?? layout;
+            const isPreview = movingControlId === control.id;
 
             return (
               <CanvasWidgetCell
@@ -415,8 +408,7 @@ export function CanvasDashboardView({
                 inputValues={inputValues}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
-                onDragStart={handleDragStart}
-                onDragEnd={clearDrag}
+                onMoveStart={(event) => handleMoveStart(event, control.id, displayLayout)}
                 onResizeStart={(event, handle) => handleResizeStart(event, control.id, displayLayout, handle)}
               />
             );
@@ -440,8 +432,7 @@ function CanvasWidgetCell({
   inputValues,
   onChange,
   onImageUpload,
-  onDragStart,
-  onDragEnd,
+  onMoveStart,
   onResizeStart,
 }: {
   control: DashboardControlDef;
@@ -454,8 +445,7 @@ function CanvasWidgetCell({
   inputValues: Record<string, unknown>;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
-  onDragStart: (event: DragEvent, controlId: string) => void;
-  onDragEnd: () => void;
+  onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
   const isOutput = control.type === "display_image" || control.type === "result_image";
@@ -471,9 +461,7 @@ function CanvasWidgetCell({
       style={
         { height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT - DASHBOARD_CANVAS_GRID_GAP}px` } as CSSProperties
       }
-      draggable={isEditingLayout}
-      onDragStart={isEditingLayout ? (e) => onDragStart(e, control.id) : undefined}
-      onDragEnd={isEditingLayout ? onDragEnd : undefined}
+      onPointerDown={isEditingLayout ? onMoveStart : undefined}
     >
       <header className="layout-canvas-widget__header">
         <div className="layout-canvas-widget__title">
@@ -485,18 +473,6 @@ function CanvasWidgetCell({
             {control.description ? <p>{control.description}</p> : null}
           </div>
         </div>
-        {isEditingLayout ? (
-          <div className="layout-canvas-widget__actions">
-            <button
-              className="icon-button icon-button--card"
-              type="button"
-              aria-label={`Move ${control.label}`}
-              title="Drag to move"
-            >
-              <Move size={14} aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
       </header>
 
       <div className="widget-canvas-cell__content">
@@ -532,6 +508,15 @@ function iconForControlType(type: string): typeof Type {
   if (type === "lora_loader") return Sparkles;
   if (type === "select") return ChevronDown;
   return Type;
+}
+
+function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
+    ),
+  );
 }
 
 // ─── Output widget ────────────────────────────────────────────────────────────
@@ -611,21 +596,6 @@ function InputWidgetContent({
       onImageUpload={(file) => onImageUpload(input.id, file)}
     />
   );
-}
-
-// ─── Drag payload helper ──────────────────────────────────────────────────────
-
-function readDragControlId(event: DragEvent): string | null {
-  const raw = event.dataTransfer.getData(DRAG_MIME_TYPE);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as { controlId?: unknown };
-      if (typeof parsed.controlId === "string") return parsed.controlId;
-    } catch { /* ignore */ }
-  }
-  const text = event.dataTransfer.getData("text/plain");
-  if (text.startsWith(DRAG_TEXT_PREFIX)) return text.slice(DRAG_TEXT_PREFIX.length);
-  return null;
 }
 
 function fromBackendLayout(control: DashboardControlDef): GridItemLayout {

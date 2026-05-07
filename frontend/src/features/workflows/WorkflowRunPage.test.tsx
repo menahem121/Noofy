@@ -703,6 +703,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: /save dashboard/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /resize prompt/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(promptInput).toBeDisabled();
   });
 
@@ -782,6 +783,81 @@ describe("WorkflowRunPage", () => {
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
       expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 6, h: 4 });
     });
+  });
+
+  it("moves widgets by snapped grid cells and saves the exact previewed placement", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
+    dispatchPointer(promptCell, "pointerdown", {
+      clientX: 300,
+      clientY: 96,
+    });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
+
+    expect(promptCell).toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).toHaveStyle({ top: "71px" });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
+
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 1, w: 6, h: 3 });
+    });
+  });
+
+  it("blocks snapped widget moves into occupied grid cells", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", {
+      clientX: 300,
+      clientY: 96,
+    });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
+
+    expect(promptCell).toHaveStyle({ top: "7px" });
   });
 
   it("opens the dashboard builder widget step from the canvas options menu", async () => {

@@ -11,6 +11,16 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+function dispatchPointer(target: Window | Node, type: string, init: { pointerId?: number; clientX: number; clientY: number }) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { value: init.pointerId ?? 1 },
+    clientX: { value: init.clientX },
+    clientY: { value: init.clientY },
+  });
+  fireEvent(target, event);
+}
+
 const readyRuntime = {
   mode: "managed",
   reachable: true,
@@ -137,7 +147,52 @@ describe("DashboardBuilderLayoutPage", () => {
     );
 
     expect(await screen.findByRole("button", { name: /^resize prompt$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
+  });
+
+  it("moves placed widgets by dragging the card body on snapped grid cells", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /^resize prompt$/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
+
+    expect(promptCell).toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).toHaveStyle({ top: "71px" });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
+
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).toHaveStyle({ top: "71px" });
   });
 });

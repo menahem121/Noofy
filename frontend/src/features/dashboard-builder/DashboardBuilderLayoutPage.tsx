@@ -7,7 +7,6 @@ import {
   GripVertical,
   ImagePlus,
   LayoutGrid,
-  Move,
   Save,
   Shuffle,
   SlidersHorizontal,
@@ -30,6 +29,7 @@ import {
   type DashboardResizeHandle,
   canvasRowsForItems,
   layoutFromCanvasPointer,
+  moveLayoutFromPointerDelta,
   resizeLayoutFromPointerDelta,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -129,6 +129,13 @@ export function DashboardBuilderLayoutPage({
     startLayout: DashboardWidgetLayout;
     startClientX: number;
     startClientY: number;
+  } | null>(null);
+  const moveStateRef = useRef<{
+    widgetId: string;
+    startLayout: DashboardWidgetLayout;
+    startClientX: number;
+    startClientY: number;
+    lastLayout: DashboardWidgetLayout;
   } | null>(null);
 
   useEffect(() => {
@@ -266,6 +273,76 @@ export function DashboardBuilderLayoutPage({
       }),
     }));
     setSelectedWidgetId((current) => (current === widgetId ? null : current));
+  }
+
+  function handleMoveStart(
+    event: PointerEvent<HTMLElement>,
+    widgetId: string,
+    layout: DashboardWidgetLayout,
+  ) {
+    if (shouldIgnoreWidgetMove(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setSelectedWidgetId(widgetId);
+    setActiveDragWidgetId(widgetId);
+    moveStateRef.current = {
+      widgetId,
+      startLayout: layout,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      lastLayout: layout,
+    };
+
+    function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
+      const moveState = moveStateRef.current;
+      if (!moveState) return;
+      setSchema((current) => {
+        const candidate = fitLayout(
+          moveLayoutFromPointerDelta({
+            startLayout: moveState.startLayout,
+            startClientX: moveState.startClientX,
+            startClientY: moveState.startClientY,
+            clientX: pointerEvent.clientX,
+            clientY: pointerEvent.clientY,
+            canvas: canvasRef.current,
+            columns: current.layout.gridColumns,
+            rowHeight: current.layout.rowHeight,
+          }),
+          current.layout.gridColumns,
+        );
+        if (
+          candidate.x === moveState.lastLayout.x &&
+          candidate.y === moveState.lastLayout.y &&
+          candidate.w === moveState.lastLayout.w &&
+          candidate.h === moveState.lastLayout.h
+        ) {
+          return current;
+        }
+        const collides = current.widgets.some((widget) => {
+          if (widget.id === moveState.widgetId || !widget.layout) return false;
+          return layoutsOverlap(candidate, widget.layout);
+        });
+        if (collides) return current;
+        moveState.lastLayout = candidate;
+        return {
+          ...current,
+          widgets: current.widgets.map((widget) =>
+            widget.id === moveState.widgetId ? { ...widget, layout: candidate } : widget,
+          ),
+        };
+      });
+    }
+
+    function handlePointerUp() {
+      moveStateRef.current = null;
+      setActiveDragWidgetId(null);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
   }
 
   function handleResizeStart(
@@ -468,10 +545,10 @@ export function DashboardBuilderLayoutPage({
                     gridGap={schema.layout.gridGap}
                     rowHeight={schema.layout.rowHeight}
                     selected={selectedWidgetId === widget.id}
+                    dragging={activeDragWidgetId === widget.id}
                     onSelect={() => setSelectedWidgetId(widget.id)}
                     onRemove={() => removeWidget(widget.id)}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
+                    onMoveStart={(event) => handleMoveStart(event, widget.id, widget.layout!)}
                     onResizeStart={(event, handle) => handleResizeStart(event, widget.id, widget.layout!, handle)}
                   />
                 ) : null,
@@ -534,9 +611,9 @@ function PlacedDashboardWidget({
   selected,
   onSelect,
   onRemove,
-  onDragStart,
-  onDragEnd,
+  onMoveStart,
   onResizeStart,
+  dragging = false,
   preview = false,
 }: {
   widget: DashboardWidget;
@@ -545,10 +622,10 @@ function PlacedDashboardWidget({
   gridGap: number;
   rowHeight: number;
   selected: boolean;
+  dragging?: boolean;
   onSelect: () => void;
   onRemove: () => void;
-  onDragStart: (event: DragEvent, widgetId: string) => void;
-  onDragEnd: () => void;
+  onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
   preview?: boolean;
 }) {
@@ -561,11 +638,9 @@ function PlacedDashboardWidget({
       gridGap={gridGap}
       rowHeight={rowHeight}
       selected={selected}
-      preview={preview}
-      draggable={!preview}
+      preview={preview || dragging}
       onClick={onSelect}
-      onDragStart={preview ? undefined : (event) => onDragStart(event, widget.id)}
-      onDragEnd={preview ? undefined : onDragEnd}
+      onPointerDown={!preview ? onMoveStart : undefined}
     >
       <header className="layout-canvas-widget__header">
         <div className="layout-canvas-widget__title">
@@ -579,9 +654,6 @@ function PlacedDashboardWidget({
         </div>
         {!preview ? (
           <div className="layout-canvas-widget__actions" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button icon-button--card" type="button" aria-label={`Move ${widget.title}`} title="Drag to move">
-              <Move size={14} aria-hidden="true" />
-            </button>
             <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${widget.title}`} title="Remove from canvas" onClick={onRemove}>
               <Trash2 size={14} aria-hidden="true" />
             </button>
@@ -618,13 +690,22 @@ function DragPreviewWidget({
       gridGap={gridGap}
       rowHeight={rowHeight}
       selected
+      dragging={false}
       onSelect={() => undefined}
       onRemove={() => undefined}
-      onDragStart={() => undefined}
-      onDragEnd={() => undefined}
+      onMoveStart={() => undefined}
       onResizeStart={() => undefined}
       preview
     />
+  );
+}
+
+function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
+    ),
   );
 }
 
