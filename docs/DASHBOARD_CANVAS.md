@@ -40,21 +40,22 @@ The Dashboard Builder already saves `layout` data into `dashboard.json` and the 
 | 3.8 | User-entered widget values persist across sessions per workflow |
 | 3.9 | User values are stored in Noofy-managed local app data, separate from creator defaults |
 | 3.10 | Image uploads are stored in a Noofy-managed asset store; ComfyUI `input/` is staging-only |
-| 3.11 | A "Restore Default Values" button resets widget values to creator defaults |
-| 3.12 | User can reposition existing widgets in "Edit Dashboard" mode |
-| 3.13 | "Edit Dashboard" mode does not allow changing widget bindings or exposing new workflow variables |
+| 3.11 | Restore Default Values resets widget values to creator defaults |
+| 3.12 | User can reposition and resize existing widgets in "Edit Dashboard Layout" mode |
+| 3.13 | "Edit Dashboard Layout" mode does not allow changing widget bindings or exposing new workflow variables |
 | 3.14 | User layout overrides persist in Noofy-managed local app data |
-| 3.15 | A "Reset Layout" button reverts user layout to creator layout |
+| 3.15 | Reset Layout reverts user layout overrides to the creator layout |
 | 3.16 | Widget placement uses a structured 12-column grid with named size presets |
-| 3.17 | Canvas toolbar shows: Restore Default Values, Edit Dashboard / Edit Variables, Reset Layout |
+| 3.17 | Canvas top-right action group shows: Run Workflow, Cancel Run, and a square workflow customization button. The workflow customization dropdown contains: Restore Default Values, Edit Dashboard Layout, Edit Widgets, Reset Layout, Export as JSON, Export as Noofy |
 
 ---
 
 ## 4. Non-Goals (Milestone 2)
 
 - Multi-output-node dashboards (M2 supports single-output-node only; see §11)
-- Resize handles on widgets in the run view
-- Named widget size changes by normal users (size is set by creator/importer in the builder)
+- Free-pixel (non-grid) resize or drag of widgets
+- Size-preset chip buttons visible on widgets in the run view
+- Moving or resizing widgets outside of Edit Dashboard Layout mode
 - Cross-device sync of user state
 - The original imported `.noofy` archive is never silently mutated
 
@@ -70,24 +71,26 @@ When `dashboard.status === "configured"` and controls have `layout` data:
 - Each widget is a card at `grid-column: x+1 / span w`, `grid-row: y+1 / span h`.
 - Widgets feel like independent dashboard blocks, not graph nodes.
 - Output image widgets show the result for their bound `output_id` inside their canvas cell.
-- A sticky canvas toolbar sits above the grid with: **Restore Default Values**, **Edit Dashboard**, and **Reset Layout** (visible only when user layout overrides exist).
-- A sticky canvas footer holds Run / Cancel / progress bar.
+- A canvas action group sits at the **top-right of the canvas**. Left to right: **Run Workflow** → **Cancel Run** → square workflow customization button (▼). Progress is shown inline in the canvas (e.g., a progress bar below the action group or overlaid on the canvas), not in a separate sticky footer.
+- In normal viewing mode the grid is fully locked: no drag handles, no resize handles, no widget selection, no preset chips.
 
-### 5.2 Canvas toolbar button behavior
+### 5.2 Workflow customization dropdown
 
-**Restore Default Values**  
-Resets all input widget values to creator defaults. No confirmation dialog in M2. Does not affect layout.
+The square workflow customization button at the top-right of the canvas opens a dropdown containing all workflow-scoped actions. It must use a customization/controls icon, not the same gear icon as the global app settings button.
 
-**Edit Dashboard / Edit Variables**  
-Two-state toggle:
-- Default label: **Edit Dashboard** — clicking enters layout editing mode.
-- In layout editing mode: widgets become draggable; the label changes to **Edit Variables** — clicking exits layout editing mode back to normal value-editing mode.
-- Layout editing mode does **not** allow changing widget bindings, adding hidden inputs, or exposing new ComfyUI parameters. Only repositioning existing widgets on the grid is possible.
-- While in layout editing mode, widget value inputs are disabled (read-only) to prevent accidental changes.
-- When the user drops a widget onto a new position, the layout override is saved immediately via `PUT /workflows/{id}/user-state`.
+| Menu item | Behavior |
+|---|---|
+| **Restore Default Values** | Resets all input widget values to creator defaults. No confirmation dialog. Does not affect layout. Calls `DELETE /workflows/{id}/user-state/values`. |
+| **Edit Dashboard Layout** | Enters layout editing mode (see §17.3). Widget value inputs become read-only; drag and resize handles appear on widget cells. |
+| **Edit Widgets** | Returns the user to the widget configuration/builder step for this workflow. |
+| **Reset Layout** | Visible only when `GET /workflows/{id}/user-state` returns a non-empty `layout_overrides` map. Calls `DELETE /workflows/{id}/user-state/layout`. Reverts canvas to creator layout. |
+| **Export as JSON** | Exports the workflow graph as a raw ComfyUI-compatible JSON file. |
+| **Export as Noofy** | Exports the workflow as a `.noofy` package archive. |
 
-**Reset Layout**  
-Appears only when `GET /workflows/{id}/user-state` returns a non-empty `layout_overrides` map. Calls `DELETE /workflows/{id}/user-state/layout`. Reverts canvas to creator layout.
+Constraints:
+- Layout editing mode does **not** allow changing widget bindings, adding hidden inputs, or exposing new ComfyUI parameters.
+- When the user finishes repositioning or resizing a widget, the resulting grid position is saved immediately via `PUT /workflows/{id}/user-state`.
+- Exiting Edit Dashboard Layout mode (via a **Done** button or menu item) returns to normal viewing mode.
 
 ### 5.3 Classic mode
 
@@ -123,7 +126,7 @@ Selected in Settings → Dashboard View → "Simple list". Renders the existing 
 
 ## 6. Widget Size System
 
-Widgets have five named size presets. The creator/importer selects a preset in the builder layout step. Normal users cannot change widget sizes (only reposition).
+Widgets have five named size presets. The creator/importer selects a preset in the builder layout step.
 
 | Preset | Grid columns (w) | Grid rows (h) | Use case |
 |---|---|---|---|
@@ -136,9 +139,12 @@ Widgets have five named size presets. The creator/importer selects a preset in t
 Rules:
 - Sizes align to the 12-column grid. A row of three Standard widgets fills 12 columns exactly.
 - Two Compact widgets equal one Standard widget in width.
-- Min widths / heights are enforced: min_w = w, min_h = h (no shrinking below preset).
+- Named presets define `min_w` and `min_h` for each widget type. A widget cannot be resized smaller than its minimum.
 - The builder `defaultLayoutForWidget` function maps each widget type to a default preset.
-- The creator may override the preset in the builder layout step by choosing from the preset list (no freeform pixel resize).
+- The creator may override the preset in the builder layout step (no freeform pixel resize in the builder either).
+- In normal workflow viewing mode, users cannot move or resize widgets.
+- In Edit Dashboard Layout mode, users can move and resize widgets using grid-snapped handles. The minimum size enforced during resize is the widget's `min_w` / `min_h`.
+- **No size-preset chip/button UI is rendered on widget cards in the run view.** Presets exist as internal schema defaults and minimums only; they are not exposed as selectable UI elements.
 
 Widget type → default preset mapping:
 
@@ -323,8 +329,8 @@ The `noofyApi.ts` helper `fetchAssetBlobUrl(assetId)` encapsulates this pattern 
 | `WorkflowRunPage.tsx` | Integrate canvas view; use `useWorkflowUserState`; branch on `viewMode` |
 | `EngineSettingsPage.tsx` | Add "Dashboard View" panel with canvas/classic toggle |
 | `DashboardBuilderLayoutPage.tsx` | Import grid helpers from `gridLayout.ts`; rename localStorage draft key |
-| `noofyApi.ts` | Add `layout` field to `DashboardControlDef`; add new asset and user-state API calls |
-| `global.css` | Add `.dashboard-canvas`, `.canvas-toolbar`, `.canvas-run-footer`, `.widget-canvas-cell`, `.widget-canvas-cell--editing` |
+| `noofyApi.ts` | Add `layout` field to `DashboardControlDef`; add new asset, user-state, and export API calls |
+| `global.css` | Add `.dashboard-canvas`, `.canvas-action-group`, `.canvas-progress`, `.widget-canvas-cell`, `.widget-canvas-cell--editing` |
 
 ### Reused unchanged
 
@@ -333,18 +339,25 @@ The `noofyApi.ts` helper `fetchAssetBlobUrl(assetId)` encapsulates this pattern 
 - `FallbackInputs` component — kept for no-dashboard workflows
 - Two-panel layout in `WorkflowRunPage` — becomes the "classic" branch
 
-### Canvas drag-reposition behavior
+### Canvas edit-mode behavior
 
-In "Edit Dashboard" mode:
-- Widget cells get a drag handle affordance.
-- Uses HTML5 drag-and-drop (same API already used in the builder).
-- MIME type: `application/noofy-dashboard-widget` (same as builder).
-- On drop: compute target grid position; check collision using `layoutsOverlap` from `gridLayout.ts`; if collision, find nearest available position via `findAvailableLayout`; save override immediately via `PUT /workflows/{id}/user-state`.
+In Edit Dashboard Layout mode:
+- Widget cells show a drag handle. The user can drag to reposition.
+- Widget cells show grid-snapped edge/corner resize handles. Resize snaps to grid cells; `min_w` / `min_h` are enforced.
+- On move or resize: compute target grid cell; check collision using `layoutsOverlap` from `gridLayout.ts`; snap to nearest valid position; save override immediately via `PUT /workflows/{id}/user-state`.
+- Widget value inputs are disabled (read-only) during edit mode.
 - Canvas renders `effectiveLayout = userLayoutOverride ?? creatorLayout` per control.
+
+In normal viewing mode:
+- No drag handles, no resize handles, no selection outlines are rendered.
+- No preset chips or size buttons are rendered.
+- Widget value inputs are fully interactive.
 
 ---
 
 ## 11. Settings Work
+
+> **Note:** The workflow-specific actions button described in §17 is separate from this app-global setting. The "Dashboard View" panel below controls the global canvas-vs-classic preference only.
 
 `EngineSettingsPage.tsx` gains a "Dashboard View" panel:
 
@@ -370,8 +383,15 @@ Reads/writes `localStorage["noofy.prefs"].viewMode`. No page reload required.
 | Fallback for missing layout | `WorkflowRunPage.test.tsx` | Controls without layout render in auto-flow |
 | Output image in correct cell | `WorkflowRunPage.test.tsx` | `display_image` widget shows result via `output_id` |
 | Classic mode renders flat list | `WorkflowRunPage.test.tsx` | `viewMode=classic` → two-panel layout |
-| Toolbar buttons present | `WorkflowRunPage.test.tsx` | Restore Defaults, Edit Dashboard, Reset Layout (conditional) visible |
-| Edit Dashboard mode disables inputs | `WorkflowRunPage.test.tsx` | Widget inputs are read-only in layout editing mode |
+| Canvas action group present | `WorkflowRunPage.test.tsx` | Run Workflow and Cancel Run buttons visible at top-right of canvas |
+| Workflow customization button present | `WorkflowRunPage.test.tsx` | Square customization button visible at top-right, to the right of Cancel Run |
+| Customization dropdown opens/closes | `WorkflowRunPage.test.tsx` | Clicking the button opens dropdown; clicking outside closes it |
+| Dropdown contains all items | `WorkflowRunPage.test.tsx` | Dropdown shows: Restore Default Values, Edit Dashboard Layout, Edit Widgets, Reset Layout, Export as JSON, Export as Noofy |
+| Reset Layout hidden when no overrides | `WorkflowRunPage.test.tsx` | Reset Layout item is absent/disabled when `layout_overrides` is empty |
+| Normal mode: no layout affordances | `WorkflowRunPage.test.tsx` | No drag handles, resize handles, preset chips, or selection outlines rendered in normal mode |
+| Edit Dashboard Layout mode disables inputs | `WorkflowRunPage.test.tsx` | Widget inputs are read-only in layout editing mode |
+| Edit mode: resize handles visible | `WorkflowRunPage.test.tsx` | Grid-snapped resize handles appear on widget cells in edit mode |
+| Edit mode: min size enforced | `WorkflowRunPage.test.tsx` | Widget cannot be resized below `min_w` / `min_h` |
 | App preferences default | `useAppPreferences.test.ts` | Default is "canvas"; `setViewMode` updates localStorage |
 | User state: load defaults | `useWorkflowUserState.test.ts` | First load uses creator defaults when no user state exists |
 | User state: persist values | `useWorkflowUserState.test.ts` | `setValue` calls `PUT /user-state`; stored value returned on reload |
@@ -403,7 +423,7 @@ Run all: `make test`
 | Asset file deleted from asset store | `GET /assets/{asset_id}` returns 404; widget shows "Image not found — please re-upload" |
 | User state file corrupted | Backend returns 400; frontend falls back to creator defaults and logs warning |
 | Dashboard with multiple `display_image` widgets (multi-output) | Each shows its bound output if resolvable; M2 limitation notice shown if job result bundles all images into one entry |
-| Very tall canvas (many widgets) | Canvas scrolls vertically; toolbar and footer are `position: sticky` |
+| Very tall canvas (many widgets) | Canvas scrolls vertically; the canvas action group at the top-right remains accessible (sticky or fixed); progress remains visible without a separate footer |
 | Narrow screen (< 768 px) | Canvas collapses to single-column auto-flow |
 | Layout editing drop onto occupied cell | `findAvailableLayout` finds nearest free cell; widget snaps there |
 | `noofy.dashboardLayout.*` key in localStorage | Renamed to `noofy.builderDraft.*` in Phase A; no other layout-related localStorage keys remain |
@@ -436,16 +456,15 @@ Run all: `make test`
 
 ---
 
-### Phase B — Canvas grid renderer ✅ DONE
+### Phase B — Canvas grid renderer ✅ DONE (UI corrected in Phase I)
 
 - `CanvasDashboardView.tsx` created (~580 lines).
 - Renders CSS Grid canvas (12 columns, `minmax(64px, auto)` rows). Each control at its `effectiveLayout` position (user override → creator layout → widget-type default).
 - `display_image` / `result_image` controls resolve output via `output_id → WorkflowOutput.node_id → job result`.
-- Drag-drop repositioning in Edit Dashboard mode (HTML5 drag API).
-- Sticky toolbar (Restore Default Values, Edit Dashboard/Edit Variables, Reset Layout) and sticky footer (Run / Cancel / progress bar).
 - `AssetImageInput` fetches asset blob URLs with auth and revokes on unmount.
 - Integrated into `WorkflowRunPage`: `hasDashboard && viewMode === "canvas"` → renders canvas; classic two-panel otherwise.
 - CSS classes added to `global.css`.
+- _Phase I will correct: old sticky toolbar/footer replaced by canvas action group; old action buttons moved to workflow customization dropdown._
 
 **Files**: `CanvasDashboardView.tsx` (new), `WorkflowRunPage.tsx`, `global.css`
 
@@ -500,13 +519,14 @@ Run all: `make test`
 
 ---
 
-### Phase G — Edit Dashboard mode + user layout overrides ✅ DONE
+### Phase G — Edit Dashboard mode + user layout overrides ✅ DONE (UI corrected in Phase I)
 
-- `CanvasDashboardView` implements full drag-drop reposition in Edit Dashboard mode.
+- `CanvasDashboardView` implements drag-reposition in edit mode.
 - Widget cells show drag handle and disable inputs in editing mode.
-- Drop handler calls `onLayoutOverride` → `setLayoutOverride` in hook → debounced PUT.
+- Layout override saved via `setLayoutOverride` → debounced PUT.
 - "Reset Layout" calls `resetLayout` → `DELETE /workflows/{id}/user-state/layout`.
 - Layout overrides stored in `{data_dir}/user-state/{workflow_id}.json`.
+- _Phase I will correct: add grid-snapped resize handles; move Edit/Reset actions into workflow customization dropdown; enforce normal-mode lock (no handles visible)._
 
 **Files**: `CanvasDashboardView.tsx`, `WorkflowRunPage.tsx`, `useWorkflowUserState.ts`
 
@@ -522,7 +542,26 @@ Run all: `make test`
 
 **Files**: `useAppPreferences.ts` (new), `EngineSettingsPage.tsx`, `WorkflowRunPage.tsx`, `global.css`
 
-All phases complete.
+---
+
+### Phase I — Corrected Canvas UI/UX
+
+Corrects the canvas interaction model to match §17 and §3.17. Phases B and G shipped with the old sticky toolbar/footer model; this phase replaces it.
+
+- [ ] Remove old sticky canvas toolbar (Restore Default Values, Edit Dashboard/Edit Variables, Reset Layout standalone buttons).
+- [ ] Remove old sticky run footer (Run / Cancel buttons in footer).
+- [ ] Add canvas action group at the top-right of the canvas: **Run Workflow** → **Cancel Run** → square workflow customization button.
+- [ ] Workflow customization button uses a customization/controls icon (not the global settings gear icon).
+- [ ] Workflow customization dropdown contains: Restore Default Values, Edit Dashboard Layout, Edit Widgets, Reset Layout (conditional), Export as JSON, Export as Noofy.
+- [ ] Progress indicator shown inline in the canvas area, not in a footer bar.
+- [ ] Normal viewing mode: remove all drag handles, resize handles, selection outlines, and preset chips from widget cells.
+- [ ] Edit Dashboard Layout mode: add grid-snapped edge/corner resize handles; enforce `min_w` / `min_h` during resize drag.
+- [ ] Rename CSS classes: `.canvas-toolbar` → `.canvas-action-group`, remove `.canvas-run-footer`, add `.canvas-progress`.
+- [ ] Visual parity: `CanvasDashboardView` canvas area uses the same background, grid tokens, and widget card styles as `DashboardBuilderLayoutPage`.
+- [ ] Classic mode unchanged: two-panel layout in `WorkflowRunPage` is not modified.
+- [ ] Update `WorkflowRunPage.test.tsx` to cover all new tests listed in §12.
+
+**Files**: `CanvasDashboardView.tsx`, `WorkflowRunPage.tsx`, `WorkflowRunPage.test.tsx`, `global.css`
 
 ---
 
@@ -532,15 +571,21 @@ All phases complete.
 - [x] Opening a configured workflow shows the canvas layout by default
 - [x] Widget positions match saved `x / y / w / h` from `dashboard.json`
 - [x] Output image appears inside its `display_image` widget cell after a successful run
-- [x] Run / Cancel / progress are always visible (sticky footer)
 - [x] Controls without `layout` fields render without crashing
+- [ ] Run canvas is visually identical to the builder canvas (background, grid, widget cards)
+- [ ] Run / Cancel buttons and workflow customization button are at the top-right of the canvas
+- [ ] Progress is shown inline in the canvas area, not in a sticky footer
+- [ ] Normal mode: no drag handles, resize handles, selection outlines, or preset chips visible
 
-### Toolbar
-- [x] "Restore Default Values" resets values to creator defaults
-- [x] "Edit Dashboard" enters layout editing mode; widget inputs become read-only
-- [x] "Edit Variables" exits layout editing mode
-- [x] Drag-drop in Edit Dashboard mode repositions the widget and saves override
-- [x] "Reset Layout" appears only when user layout overrides exist and reverts to creator layout
+### Canvas action group and workflow customization dropdown
+- [ ] Run Workflow and Cancel Run buttons visible at top-right of canvas
+- [ ] Square workflow customization button visible to the right of Cancel Run
+- [ ] Customization button opens dropdown with: Restore Default Values, Edit Dashboard Layout, Edit Widgets, Reset Layout, Export as JSON, Export as Noofy
+- [ ] Reset Layout item hidden/disabled when no layout overrides exist
+- [ ] "Restore Default Values" resets values to creator defaults
+- [ ] "Edit Dashboard Layout" enters layout editing mode; widget inputs become read-only; drag and resize handles appear
+- [ ] Resize in edit mode snaps to grid; `min_w`/`min_h` enforced
+- [ ] Move/resize saves layout override immediately; "Reset Layout" reverts to creator positions
 
 ### Classic mode
 - [x] "Simple list" setting renders the two-panel flat-list view
@@ -561,3 +606,74 @@ All phases complete.
 - [x] Backend tests: `test_user_state.py` (7), `test_dashboard_assets.py` (9), adapter staging (4) — all passing
 - [x] Frontend tests: `gridLayout.test.ts` (13), `useAppPreferences.test.ts` (7), `useWorkflowUserState.test.ts` (9) — all passing
 - [x] No existing tests regressed
+
+---
+
+## 17. Canvas Interaction Model (source of truth)
+
+### 17.1 Visual parity between builder and run canvas
+
+The run canvas (Interactive Grid Layout view) must be visually indistinguishable from the Dashboard Layout Builder canvas:
+
+- Same canvas background, grid feel, widget card shape, border, shadow, spacing, and typography.
+- Same 12-column grid, same row height (`minmax(64px, auto)`), same gap.
+- Widget positions come directly from saved `layout.x/y/w/h` in `dashboard.json`.
+
+Do not redesign colors, button shapes, widget shapes, or any other element of the Noofy design system. Do not make the dashboard resemble a node editor.
+
+### 17.2 Normal viewing mode — layout locked
+
+The grid is fully locked. The user can only interact with widget values:
+
+- No drag handles, resize handles, selection outlines, or preset chips are rendered.
+- Widget value inputs (sliders, text fields, image pickers, etc.) remain fully interactive.
+
+### 17.3 Edit Dashboard Layout mode
+
+Entered via the **Edit Dashboard Layout** item in the workflow customization dropdown.
+
+- Widgets can be repositioned using a drag handle.
+- Widgets can be resized using grid-snapped edge/corner handles. No free-pixel dragging.
+- Each widget's `min_w` and `min_h` are enforced; a widget cannot shrink below its minimum.
+- Widget value inputs are disabled (read-only) during edit mode.
+- On release of any drag (move or resize), the new grid position is saved immediately via `PUT /workflows/{id}/user-state`.
+- A **Done** button exits back to normal viewing mode.
+
+### 17.4 Canvas action group (top-right)
+
+The canvas top-right holds three controls, left to right:
+
+```
+[Run Workflow]  [Cancel Run]  [customization-icon ▼]
+```
+
+- **Run Workflow** / **Cancel Run** — trigger and cancel the current job.
+- **Customization button** — a square button using a controls/sliders icon (not the global app settings gear). Opens a dropdown with all workflow-scoped actions.
+
+The app global settings button must not gain any workflow-specific items.
+
+### 17.5 Workflow customization dropdown items
+
+| Item | Condition | Action |
+|---|---|---|
+| Restore Default Values | always | Resets all input widget values to creator defaults; calls `DELETE /workflows/{id}/user-state/values` |
+| Edit Dashboard Layout | always | Enters layout edit mode (§17.3) |
+| Edit Widgets | always | Returns user to the widget configuration step |
+| Reset Layout | only when `layout_overrides` non-empty | Calls `DELETE /workflows/{id}/user-state/layout`; reverts canvas to creator positions |
+| Export as JSON | always | Exports workflow graph as ComfyUI-compatible JSON |
+| Export as Noofy | always | Exports workflow as `.noofy` package archive |
+
+---
+
+## 18. What Changed from Earlier Versions of This Document
+
+| Old assumption | Status | Replacement |
+|---|---|---|
+| Sticky canvas toolbar with standalone Restore / Edit Dashboard / Reset Layout buttons | **Removed** | All three are now items inside the workflow customization dropdown (§17.5) |
+| Sticky run footer holding Run / Cancel / progress bar | **Removed** | Run Workflow and Cancel Run are in the canvas action group (§17.4); progress is inline in the canvas area |
+| Resize handles in run view are a non-goal | **Replaced** | Grid-snapped edge/handle resize is allowed in Edit Dashboard Layout mode; free-pixel resize remains a non-goal |
+| Size-preset chip buttons on widget cards | **Removed** | No preset chips in the run view; presets are internal schema minimums only |
+| Run view and builder canvas may look different | **Replaced** | Run canvas must be visually identical to the builder canvas |
+| Normal mode: full layout lock was not enforced | **Replaced** | Normal mode renders no layout affordances at all |
+| Workflow actions accessible from the app global settings button | **Replaced** | A per-canvas customization button at top-right holds all workflow-scoped actions; global settings is unaffected |
+| `Edit Dashboard / Edit Variables` two-state toggle | **Removed** | Edit Dashboard Layout is a dropdown menu item; Done exits edit mode |
