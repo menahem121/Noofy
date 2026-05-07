@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -22,6 +22,13 @@ import {
 import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType, WIDGET_SIZE_PRESETS, type WidgetSizePreset } from "../../lib/widgetSizes";
+import {
+  DashboardCanvasFrame,
+  DashboardCanvasSurface,
+  DashboardCanvasWidgetShell,
+  canvasRowsForItems,
+  layoutFromCanvasPointer,
+} from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import {
@@ -124,10 +131,7 @@ export function DashboardBuilderLayoutPage({
   const placedWidgets = schema.widgets.filter((widget) => widget.layout);
   const allWidgetsPlaced = schema.widgets.length > 0 && unplacedWidgets.length === 0;
   const helperCopy = allWidgetsPlaced ? "Dashboard ready to save." : "Place all widgets on the canvas before saving.";
-  const canvasRows = Math.max(
-    12,
-    ...schema.widgets.map((widget) => (widget.layout ? widget.layout.y + widget.layout.h + 2 : 0)),
-  );
+  const canvasRows = canvasRowsForItems(schema.widgets);
 
   function handleDragStart(event: DragEvent, widgetId: string) {
     activeDragWidgetIdRef.current = widgetId;
@@ -234,18 +238,12 @@ export function DashboardBuilderLayoutPage({
     const canvas = canvasRef.current;
     if (!canvas) return null;
 
-    const rect = canvas.getBoundingClientRect();
     const baseLayout = widget.layout ?? defaultLayoutForWidgetType(widget.widgetType);
     const fitted = fitLayout(baseLayout, schema.layout.gridColumns);
-    const columnWidth = rect.width / schema.layout.gridColumns;
-    const rawX = Math.floor((event.clientX - rect.left - (fitted.w * columnWidth) / 2) / columnWidth);
-    const rawY = Math.floor((event.clientY - rect.top - (fitted.h * schema.layout.rowHeight) / 2) / schema.layout.rowHeight);
-
-    return {
-      ...fitted,
-      x: clamp(rawX, 0, schema.layout.gridColumns - fitted.w),
-      y: Math.max(0, rawY),
-    };
+    return layoutFromCanvasPointer(event, fitted, canvas, {
+      columns: schema.layout.gridColumns,
+      rowHeight: schema.layout.rowHeight,
+    });
   }
 
   function removeWidget(widgetId: string) {
@@ -370,23 +368,17 @@ export function DashboardBuilderLayoutPage({
             </div>
           </aside>
 
-          <main className="layout-canvas" aria-label="Dashboard layout canvas">
-            <div
+          <DashboardCanvasFrame aria-label="Dashboard layout canvas">
+            <DashboardCanvasSurface
               ref={canvasRef}
-              className={`layout-canvas__surface ${placedWidgets.length === 0 ? "layout-canvas__surface--empty" : ""}`}
+              empty={placedWidgets.length === 0}
+              rows={canvasRows}
+              rowHeight={schema.layout.rowHeight}
+              gridGap={schema.layout.gridGap}
               onDragOver={handleCanvasDragOver}
               onDragLeave={handleCanvasDragLeave}
               onDrop={handleCanvasDrop}
-              style={
-                {
-                  minHeight: `${canvasRows * schema.layout.rowHeight}px`,
-                  "--layout-row-height": `${schema.layout.rowHeight}px`,
-                  "--layout-grid-gap": `${schema.layout.gridGap}px`,
-                } as CSSProperties
-              }
             >
-              <div className="layout-canvas__glow" aria-hidden="true" />
-
               {placedWidgets.length === 0 ? (
                 <div className="layout-canvas__empty">
                   <div className="layout-canvas__empty-icon">
@@ -432,8 +424,8 @@ export function DashboardBuilderLayoutPage({
                   rowHeight={schema.layout.rowHeight}
                 />
               ) : null}
-            </div>
-          </main>
+            </DashboardCanvasSurface>
+          </DashboardCanvasFrame>
         </div>
       </div>
     </AppLayout>
@@ -499,19 +491,15 @@ function PlacedDashboardWidget({
   preview?: boolean;
 }) {
   const Icon = WIDGET_ICONS[widget.widgetType];
-  const style = {
-    left: `calc(${(layout.x / columns) * 100}% + ${gridGap / 2}px)`,
-    top: `${layout.y * rowHeight + gridGap / 2}px`,
-    width: `calc(${(layout.w / columns) * 100}% - ${gridGap}px)`,
-    minHeight: `${layout.h * rowHeight - gridGap}px`,
-  };
 
   return (
-    <article
-      className={`layout-canvas-widget ${selected ? "layout-canvas-widget--selected" : ""} ${
-        preview ? "layout-canvas-widget--preview" : ""
-      }`}
-      style={style}
+    <DashboardCanvasWidgetShell
+      layout={layout}
+      columns={columns}
+      gridGap={gridGap}
+      rowHeight={rowHeight}
+      selected={selected}
+      preview={preview}
       draggable={!preview}
       onClick={onSelect}
       onDragStart={preview ? undefined : (event) => onDragStart(event, widget.id)}
@@ -528,14 +516,14 @@ function PlacedDashboardWidget({
           </div>
         </div>
         {!preview ? (
-        <div className="layout-canvas-widget__actions" onClick={(event) => event.stopPropagation()}>
-          <button className="icon-button icon-button--card" type="button" aria-label={`Move ${widget.title}`} title="Drag to move">
-            <Move size={14} aria-hidden="true" />
-          </button>
-          <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${widget.title}`} title="Remove from canvas" onClick={onRemove}>
-            <Trash2 size={14} aria-hidden="true" />
-          </button>
-        </div>
+          <div className="layout-canvas-widget__actions" onClick={(event) => event.stopPropagation()}>
+            <button className="icon-button icon-button--card" type="button" aria-label={`Move ${widget.title}`} title="Drag to move">
+              <Move size={14} aria-hidden="true" />
+            </button>
+            <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${widget.title}`} title="Remove from canvas" onClick={onRemove}>
+              <Trash2 size={14} aria-hidden="true" />
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -547,7 +535,7 @@ function PlacedDashboardWidget({
           <SizePresetPicker current={layout} onChange={onPresetChange} />
         </div>
       ) : null}
-    </article>
+    </DashboardCanvasWidgetShell>
   );
 }
 
@@ -722,9 +710,4 @@ function readDragPayload(event: DragEvent): { widgetId: string } | null {
   }
 
   return null;
-}
-
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
 }

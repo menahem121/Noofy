@@ -32,6 +32,8 @@ interface AppLayoutProps {
   status: AppStatusView;
   children: ReactNode;
   onNavigate: (route: AppRouteId) => void;
+  mainClassName?: string;
+  contentClassName?: string;
 }
 
 const navItems = [
@@ -57,7 +59,14 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   return <SidebarContext.Provider value={{ sidebarOpen, setSidebarOpen }}>{children}</SidebarContext.Provider>;
 }
 
-export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayoutProps) {
+export function AppLayout({
+  activeRoute,
+  status,
+  children,
+  onNavigate,
+  mainClassName = "",
+  contentClassName = "",
+}: AppLayoutProps) {
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const isHome = activeRoute === "home";
   const effectiveOpen = isHome ? true : sidebarOpen;
@@ -153,8 +162,8 @@ export function AppLayout({ activeRoute, status, children, onNavigate }: AppLayo
         </div>
       </aside>
 
-      <main className="main-workspace">
-        <div className="workspace-content">{children}</div>
+      <main className={`main-workspace${mainClassName ? ` ${mainClassName}` : ""}`}>
+        <div className={`workspace-content${contentClassName ? ` ${contentClassName}` : ""}`}>{children}</div>
       </main>
     </div>
   );

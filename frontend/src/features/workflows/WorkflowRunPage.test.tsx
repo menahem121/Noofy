@@ -117,10 +117,13 @@ const configuredPackageData = {
   },
 };
 
-function mockConfiguredDashboardFetch(fetchMock: ReturnType<typeof vi.fn>) {
+function mockConfiguredDashboardFetch(
+  fetchMock: ReturnType<typeof vi.fn>,
+  runtimeResponse = readyRuntime,
+) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+    if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
     if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
@@ -577,7 +580,7 @@ describe("WorkflowRunPage", () => {
     });
   });
 
-  it("renders canvas widgets at their configured grid positions by default", async () => {
+  it("renders canvas widgets on the shared builder-style canvas at their configured positions", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
     renderRunPage();
@@ -586,8 +589,37 @@ describe("WorkflowRunPage", () => {
     const promptCell = screen.getByRole("textbox").closest("article");
     const resultCell = screen.getByText("Result A").closest("article");
 
-    expect(promptCell).toHaveStyle({ gridColumn: "1 / span 6", gridRow: "1 / span 3" });
-    expect(resultCell).toHaveStyle({ gridColumn: "7 / span 6", gridRow: "1 / span 4" });
+    expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
+    expect(promptCell).toHaveClass("layout-canvas-widget", "layout-canvas-widget--run");
+    expect(promptCell).toHaveStyle({
+      left: "calc(0% + 7px)",
+      top: "7px",
+      width: "calc(50% - 14px)",
+      height: "178px",
+    });
+    expect(resultCell).toHaveStyle({
+      left: "calc(50% + 7px)",
+      top: "7px",
+      width: "calc(50% - 14px)",
+      height: "242px",
+    });
+  });
+
+  it("renders canvas mode as a full-workspace canvas without the normal page header or engine notice", async () => {
+    mockConfiguredDashboardFetch(fetchMock, { ...readyRuntime, reachable: false, managed_process_running: false });
+
+    renderRunPage();
+
+    expect(await screen.findByRole("button", { name: /edit dashboard/i })).toBeInTheDocument();
+    expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
+    expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
+    expect(document.querySelector(".workspace-content--canvas-run")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /back to home/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Text to Image" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Describe the image you want, then let Noofy run the local workflow in the background."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("The local AI engine is offline")).not.toBeInTheDocument();
   });
 
   it("renders the classic two-panel dashboard when classic mode is selected", async () => {

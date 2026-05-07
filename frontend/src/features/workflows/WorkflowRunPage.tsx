@@ -437,9 +437,13 @@ export function WorkflowRunPage({ workflowId, onBack, onNavigate }: WorkflowRunP
 
   if (hasDashboard && viewMode === "canvas") {
     return (
-      <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate}>
-        {pageHeader}
-        {notices}
+      <AppLayout
+        activeRoute="workflows"
+        status={status}
+        onNavigate={onNavigate}
+        mainClassName="main-workspace--canvas-run"
+        contentClassName="workspace-content--canvas-run"
+      >
         <CanvasDashboardView
           controls={allControls}
           inputIndex={inputIndex}

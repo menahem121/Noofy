@@ -1,12 +1,20 @@
-import { useMemo, useState, type CSSProperties, type DragEvent } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import {
+  ChevronDown,
   Download,
-  GripVertical,
   Image as ImageIcon,
+  ImagePlus,
   Loader2,
+  Move,
   Play,
   RotateCcw,
+  Shuffle,
+  SlidersHorizontal,
   Square,
+  Sparkles,
+  ToggleLeft,
+  Type,
+  UploadCloud,
 } from "lucide-react";
 
 import {
@@ -17,9 +25,18 @@ import {
 } from "../../lib/api/noofyApi";
 import { findAvailableLayout, fitLayout, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import {
+  DASHBOARD_CANVAS_COLUMNS,
+  DASHBOARD_CANVAS_GRID_GAP,
+  DASHBOARD_CANVAS_ROW_HEIGHT,
+  DashboardCanvasFrame,
+  DashboardCanvasSurface,
+  DashboardCanvasWidgetShell,
+  canvasRowsForItems,
+  layoutFromCanvasPointer,
+} from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
 
-const GRID_COLUMNS = 12;
 const DRAG_MIME_TYPE = "application/noofy-dashboard-widget";
 const DRAG_TEXT_PREFIX = "noofy-widget:";
 
@@ -72,6 +89,7 @@ export function CanvasDashboardView({
 }: CanvasDashboardViewProps) {
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const canvasItems = useMemo(
     () => controls.map((control) => ({ id: control.id, layout: effectiveLayout(control) })),
     [controls, layoutOverrides],
@@ -105,7 +123,7 @@ export function CanvasDashboardView({
     const desired = layoutFromPointer(event, layout);
     if (!desired) return;
 
-    const preview = findAvailableLayout(controlId, desired, canvasItems, GRID_COLUMNS);
+    const preview = findAvailableLayout(controlId, desired, canvasItems, DASHBOARD_CANVAS_COLUMNS);
     setDragPreview((cur) => {
       if (
         cur?.controlId === controlId &&
@@ -129,7 +147,12 @@ export function CanvasDashboardView({
     const newLayout = dragPreview?.layout ?? layoutFromPointer(event, effectiveLayout(control));
     if (!newLayout) { clearDrag(); return; }
 
-    const resolved = findAvailableLayout(controlId, fitLayout(newLayout, GRID_COLUMNS), canvasItems, GRID_COLUMNS);
+    const resolved = findAvailableLayout(
+      controlId,
+      fitLayout(newLayout, DASHBOARD_CANVAS_COLUMNS),
+      canvasItems,
+      DASHBOARD_CANVAS_COLUMNS,
+    );
     onLayoutOverride(controlId, resolved);
     clearDrag();
   }
@@ -145,24 +168,10 @@ export function CanvasDashboardView({
   }
 
   function layoutFromPointer(event: DragEvent, currentLayout: GridItemLayout): GridItemLayout | null {
-    const canvas = document.getElementById("canvas-dashboard-surface");
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const ROW_HEIGHT = 64;
-    const colW = rect.width / GRID_COLUMNS;
-    const rawX = Math.floor((event.clientX - rect.left - (currentLayout.w * colW) / 2) / colW);
-    const rawY = Math.floor((event.clientY - rect.top - (currentLayout.h * ROW_HEIGHT) / 2) / ROW_HEIGHT);
-    return {
-      ...currentLayout,
-      x: Math.max(0, Math.min(rawX, GRID_COLUMNS - currentLayout.w)),
-      y: Math.max(0, rawY),
-    };
+    return layoutFromCanvasPointer(event, currentLayout, canvasRef.current);
   }
 
-  const maxRow = controls.reduce((max, c) => {
-    const l = effectiveLayout(c);
-    return Math.max(max, l.y + l.h);
-  }, 6);
+  const canvasRows = canvasRowsForItems(canvasItems);
 
   return (
     <div className="canvas-dashboard">
@@ -183,39 +192,42 @@ export function CanvasDashboardView({
         ) : null}
       </div>
 
-      <div
-        id="canvas-dashboard-surface"
-        className={`canvas-dashboard__surface${isEditingLayout ? " canvas-dashboard__surface--editing" : ""}`}
-        style={{ "--canvas-rows": maxRow + 2 } as CSSProperties}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onDragLeave={handleDragLeave}
-      >
-        {controls.map((control) => {
-          const layout = effectiveLayout(control);
-          const isPreview = dragPreview?.controlId === control.id;
-          const previewLayout = isPreview ? dragPreview!.layout : null;
-          const displayLayout = previewLayout ?? layout;
+      <DashboardCanvasFrame className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
+        <DashboardCanvasSurface
+          id="canvas-dashboard-surface"
+          ref={canvasRef}
+          className={isEditingLayout ? "canvas-dashboard__surface--editing" : ""}
+          rows={canvasRows}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onDragLeave={handleDragLeave}
+        >
+          {controls.map((control) => {
+            const layout = effectiveLayout(control);
+            const isPreview = dragPreview?.controlId === control.id;
+            const previewLayout = isPreview ? dragPreview!.layout : null;
+            const displayLayout = previewLayout ?? layout;
 
-          return (
-            <CanvasWidgetCell
-              key={control.id}
-              control={control}
-              layout={displayLayout}
-              isPreview={isPreview}
-              isEditingLayout={isEditingLayout}
-              inputIndex={inputIndex}
-              outputIndex={outputIndex}
-              outputImagesByNodeId={outputImagesByNodeId}
-              inputValues={inputValues}
-              onChange={onChange}
-              onImageUpload={onImageUpload}
-              onDragStart={handleDragStart}
-              onDragEnd={clearDrag}
-            />
-          );
-        })}
-      </div>
+            return (
+              <CanvasWidgetCell
+                key={control.id}
+                control={control}
+                layout={displayLayout}
+                isPreview={isPreview}
+                isEditingLayout={isEditingLayout}
+                inputIndex={inputIndex}
+                outputIndex={outputIndex}
+                outputImagesByNodeId={outputImagesByNodeId}
+                inputValues={inputValues}
+                onChange={onChange}
+                onImageUpload={onImageUpload}
+                onDragStart={handleDragStart}
+                onDragEnd={clearDrag}
+              />
+            );
+          })}
+        </DashboardCanvasSurface>
+      </DashboardCanvasFrame>
 
       <div className="canvas-run-footer">
         <div className="canvas-run-footer__progress">
@@ -286,31 +298,46 @@ function CanvasWidgetCell({
   onDragStart: (event: DragEvent, controlId: string) => void;
   onDragEnd: () => void;
 }) {
-  const style: CSSProperties = {
-    gridColumn: `${layout.x + 1} / span ${layout.w}`,
-    gridRow: `${layout.y + 1} / span ${layout.h}`,
-  };
-
   const isOutput = control.type === "display_image" || control.type === "result_image";
+  const Icon = iconForControlType(control.type);
 
   return (
-    <article
-      className={`widget-canvas-cell${isPreview ? " widget-canvas-cell--preview" : ""}${isEditingLayout ? " widget-canvas-cell--editing" : ""}`}
-      style={style}
+    <DashboardCanvasWidgetShell
+      className={`layout-canvas-widget--run${
+        isEditingLayout ? " layout-canvas-widget--run-editing" : " layout-canvas-widget--readonly"
+      }`}
+      layout={layout}
+      preview={isPreview}
+      style={
+        { height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT - DASHBOARD_CANVAS_GRID_GAP}px` } as CSSProperties
+      }
       draggable={isEditingLayout}
       onDragStart={isEditingLayout ? (e) => onDragStart(e, control.id) : undefined}
       onDragEnd={isEditingLayout ? onDragEnd : undefined}
     >
-      {isEditingLayout ? (
-        <div className="widget-canvas-cell__drag-handle" aria-hidden="true">
-          <GripVertical size={15} />
+      <header className="layout-canvas-widget__header">
+        <div className="layout-canvas-widget__title">
+          <span aria-hidden="true">
+            <Icon size={16} />
+          </span>
+          <div>
+            <h3>{control.label}</h3>
+            {control.description ? <p>{control.description}</p> : null}
+          </div>
         </div>
-      ) : null}
-
-      <div className="widget-canvas-cell__label">
-        <span>{control.label}</span>
-        {control.description ? <small>{control.description}</small> : null}
-      </div>
+        {isEditingLayout ? (
+          <div className="layout-canvas-widget__actions">
+            <button
+              className="icon-button icon-button--card"
+              type="button"
+              aria-label={`Move ${control.label}`}
+              title="Drag to move"
+            >
+              <Move size={14} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+      </header>
 
       <div className="widget-canvas-cell__content">
         {isOutput ? (
@@ -330,8 +357,20 @@ function CanvasWidgetCell({
           />
         )}
       </div>
-    </article>
+    </DashboardCanvasWidgetShell>
   );
+}
+
+function iconForControlType(type: string): typeof Type {
+  if (type === "slider") return SlidersHorizontal;
+  if (type === "toggle") return ToggleLeft;
+  if (type === "load_image") return ImagePlus;
+  if (type === "load_image_mask") return UploadCloud;
+  if (type === "display_image" || type === "result_image") return Sparkles;
+  if (type === "seed_widget") return Shuffle;
+  if (type === "lora_loader") return Sparkles;
+  if (type === "select") return ChevronDown;
+  return Type;
 }
 
 // ─── Output widget ────────────────────────────────────────────────────────────
