@@ -24,6 +24,16 @@ class CommandResult:
 
 CommandRunner = Callable[[list[str], Path | None], Awaitable[CommandResult]]
 
+_REQUIRED_RUNTIME_CHECKS: tuple[tuple[str, str], ...] = (
+    (
+        "torch.library.custom_op",
+        "import torch; "
+        "raise RuntimeError('torch.library.custom_op is required by comfy-kitchen') "
+        "if not hasattr(torch.library, 'custom_op') else None",
+    ),
+    ("comfy_kitchen", "import comfy_kitchen"),
+)
+
 
 class RuntimeEnvironment:
     def __init__(
@@ -35,6 +45,7 @@ class RuntimeEnvironment:
         bootstrap_python_executable: str = "python3",
         python_executable_override: str | None = None,
         required_imports: tuple[str, ...] = ("torch", "aiohttp"),
+        required_runtime_checks: tuple[tuple[str, str], ...] = _REQUIRED_RUNTIME_CHECKS,
         torch_cuda_index_url: str | None = None,
         torch_cpu_index_url: str = "https://download.pytorch.org/whl/cpu",
         hardware_profile: RuntimeHardwareProfile | None = None,
@@ -51,6 +62,7 @@ class RuntimeEnvironment:
         self.bootstrap_python_executable = bootstrap_python_executable
         self.python_executable_override = python_executable_override
         self.required_imports = required_imports
+        self.required_runtime_checks = required_runtime_checks
         self.torch_cuda_index_url = torch_cuda_index_url
         self.torch_cpu_index_url = torch_cpu_index_url
         self._hardware_profile = hardware_profile
@@ -274,7 +286,23 @@ class RuntimeEnvironment:
                     name=import_name,
                     available=result.returncode == 0,
                     error=(
-                        (result.stderr or result.stdout or None)
+                        self._redact_local_paths(result.stderr or result.stdout)
+                        if result.returncode != 0
+                        else None
+                    ),
+                )
+            )
+        for check_name, check_code in self.required_runtime_checks:
+            result = await self._command_runner(
+                [self.python_executable, "-c", check_code],
+                None,
+            )
+            dependencies.append(
+                RuntimeDependencyStatus(
+                    name=check_name,
+                    available=result.returncode == 0,
+                    error=(
+                        self._redact_local_paths(result.stderr or result.stdout)
                         if result.returncode != 0
                         else None
                     ),
@@ -363,3 +391,9 @@ class RuntimeEnvironment:
     def _redacted_command(self, command: list[str]) -> list[str]:
         home = str(Path.home())
         return [part.replace(home, "~") for part in command]
+
+    def _redact_local_paths(self, text: str) -> str | None:
+        if not text:
+            return None
+        home = str(Path.home())
+        return text.replace(home, "~")

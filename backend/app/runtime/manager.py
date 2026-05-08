@@ -628,7 +628,9 @@ class RuntimeManager:
                 else str(line).rstrip()
             )
             if text:
-                self.log_store.add("debug", text, "comfyui.stdout")
+                self.log_store.add(
+                    "debug", self._redact_local_paths(text), "comfyui.stdout"
+                )
 
     async def _poll_until_reachable(self, timeout_seconds: float) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -646,6 +648,9 @@ class RuntimeManager:
 
             await asyncio.sleep(self.health_poll_interval_seconds)
         return False
+
+    def _redact_local_paths(self, text: str) -> str:
+        return text.replace(str(Path.home()), "~")
 
     def _repo_error(self) -> str | None:
         if not self.repo_dir.exists():

@@ -85,6 +85,35 @@ async def test_environment_reports_dependency_check_failure(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_environment_reports_missing_required_torch_runtime_api(tmp_path: Path) -> None:
+    repo_dir = create_repo(tmp_path)
+    runtime_python = create_python(tmp_path, "runtime-python")
+
+    async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
+        if "torch.library.custom_op" in command[-1]:
+            return CommandResult(
+                returncode=1,
+                stderr="RuntimeError: torch.library.custom_op is required by comfy-kitchen",
+            )
+        return CommandResult(returncode=0)
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=tmp_path / "runtime",
+        python_executable_override=str(runtime_python),
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+
+    status = await environment.status()
+
+    assert not status.prepared
+    failed = {dependency.name for dependency in status.dependencies if not dependency.available}
+    assert failed == {"torch.library.custom_op"}
+    assert "torch.library.custom_op" in (status.error or "")
+
+
+@pytest.mark.anyio
 async def test_bootstrap_reports_environment_already_prepared(tmp_path: Path) -> None:
     repo_dir = create_repo(tmp_path)
     runtime_python = create_python(tmp_path, "runtime-python")

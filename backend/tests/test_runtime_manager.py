@@ -418,6 +418,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
         runtime_dir=tmp_path / "runtime",
         python_executable_override=sys.executable,
         required_imports=("json",),
+        required_runtime_checks=(),
         hardware_profile=RuntimeHardwareProfile(
             os_name="Darwin",
             os_version="",
