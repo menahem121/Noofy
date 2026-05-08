@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "./gridLayout";
+import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "./gridLayout";
 
 describe("layoutsOverlap", () => {
   it("returns true for identical cells", () => {
@@ -91,5 +91,35 @@ describe("findAvailableLayout", () => {
     const result = findAvailableLayout("new", desired, items, 12);
     expect(layoutsOverlap(result, items[0].layout)).toBe(false);
     expect(layoutsOverlap(result, items[1].layout)).toBe(false);
+  });
+});
+
+describe("findNearestAvailableLayout", () => {
+  it("returns the desired position when there is no collision", () => {
+    const desired: GridItemLayout = { x: 4, y: 3, w: 4, h: 2 };
+    const result = findNearestAvailableLayout("new", desired, [], 12);
+    expect(result).toEqual(desired);
+  });
+
+  it("chooses the nearest free position instead of scanning forward by row", () => {
+    const desired: GridItemLayout = { x: 0, y: 4, w: 4, h: 2 };
+    const items = [
+      { id: "self", layout: { x: 0, y: 0, w: 4, h: 2 } },
+      { id: "blocker", layout: { x: 0, y: 4, w: 4, h: 2 } },
+      { id: "below", layout: { x: 0, y: 6, w: 4, h: 2 } },
+    ];
+
+    const result = findNearestAvailableLayout("self", desired, items, 12);
+
+    expect(result).toEqual({ x: 0, y: 2, w: 4, h: 2 });
+  });
+
+  it("uses deterministic tie-breaking for equally near free positions", () => {
+    const desired: GridItemLayout = { x: 4, y: 4, w: 4, h: 2 };
+    const items = [{ id: "blocker", layout: { x: 4, y: 4, w: 4, h: 2 } }];
+
+    const result = findNearestAvailableLayout("new", desired, items, 12);
+
+    expect(result).toEqual({ x: 4, y: 2, w: 4, h: 2 });
   });
 });

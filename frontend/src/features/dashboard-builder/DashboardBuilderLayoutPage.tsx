@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 
 import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
-import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DashboardCanvasFrame,
@@ -325,7 +325,7 @@ export function DashboardBuilderLayoutPage({
         }),
         currentSchema.layout.gridColumns,
       );
-      const dropLayout = findAvailableLayout(
+      const dropLayout = findNearestAvailableLayout(
         moveState.widgetId,
         candidate,
         currentSchema.widgets,

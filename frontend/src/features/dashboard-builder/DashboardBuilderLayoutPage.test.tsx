@@ -315,11 +315,11 @@ describe("DashboardBuilderLayoutPage", () => {
     });
     const dropPreview = document.querySelector(".layout-canvas-widget--drop-preview") as HTMLElement;
     expect(dropPreview).toBeInTheDocument();
-    expect(dropPreview).toHaveStyle({ left: "50%", top: "256px" });
+    expect(dropPreview).toHaveStyle({ left: "0%", top: "64px" });
 
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
 
-    expect(promptCell).toHaveStyle({ left: "50%", top: "256px" });
+    expect(promptCell).toHaveStyle({ left: "0%", top: "64px" });
   });
 
   it("moves a newly dropped widget on the first follow-up drag", async () => {

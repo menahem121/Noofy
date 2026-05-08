@@ -26,7 +26,7 @@ import {
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
-import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
@@ -148,7 +148,7 @@ export function CanvasDashboardView({
 
   function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS);
-    return findAvailableLayout(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
+    return findNearestAvailableLayout(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
   }
 
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {

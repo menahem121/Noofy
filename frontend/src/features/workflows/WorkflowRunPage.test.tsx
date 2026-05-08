@@ -988,18 +988,18 @@ describe("WorkflowRunPage", () => {
 
     const dropPreview = document.querySelector(".layout-canvas-widget--drop-preview") as HTMLElement;
     expect(dropPreview).toBeInTheDocument();
-    expect(dropPreview).toHaveStyle({ left: "50%", top: "256px" });
+    expect(dropPreview).toHaveStyle({ left: "0%", top: "64px" });
 
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
 
-    expect(promptCell).toHaveStyle({ left: "50%", top: "256px" });
+    expect(promptCell).toHaveStyle({ left: "0%", top: "64px" });
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.layout_overrides.prompt).toEqual({ x: 16, y: 8, w: 16, h: 6 });
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 2, w: 16, h: 6 });
     });
   });
 

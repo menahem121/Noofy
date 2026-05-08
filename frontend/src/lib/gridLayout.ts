@@ -45,6 +45,39 @@ export function findAvailableLayout(
   return { ...fitted, x: 0, y: maxY + 1 };
 }
 
+export function findNearestAvailableLayout(
+  itemId: string,
+  desired: GridItemLayout,
+  items: Array<{ id: string; layout?: GridItemLayout | null }>,
+  columns: number,
+): GridItemLayout {
+  const fitted = fitLayout(desired, columns);
+  if (!hasLayoutCollision(itemId, fitted, items)) return fitted;
+
+  const maxY = items.reduce(
+    (max, item) => (item.layout ? Math.max(max, item.layout.y + item.layout.h) : max),
+    0,
+  );
+  const searchMaxY = Math.max(maxY + fitted.h + 40, fitted.y + fitted.h + 40);
+  let best: GridItemLayout | null = null;
+  let bestScore: LayoutCandidateScore | null = null;
+
+  for (let y = 0; y <= searchMaxY; y += 1) {
+    for (let x = 0; x <= columns - fitted.w; x += 1) {
+      const candidate = { ...fitted, x, y };
+      if (hasLayoutCollision(itemId, candidate, items)) continue;
+
+      const score = layoutCandidateScore(candidate, fitted);
+      if (!bestScore || compareLayoutCandidateScore(score, bestScore) < 0) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+  }
+
+  return best ?? { ...fitted, x: 0, y: maxY + 1 };
+}
+
 function hasLayoutCollision(
   itemId: string,
   layout: GridItemLayout,
@@ -54,6 +87,39 @@ function hasLayoutCollision(
     if (item.id === itemId || !item.layout) return false;
     return layoutsOverlap(layout, item.layout);
   });
+}
+
+interface LayoutCandidateScore {
+  squaredDistance: number;
+  manhattanDistance: number;
+  verticalDistance: number;
+  horizontalDistance: number;
+  y: number;
+  x: number;
+}
+
+function layoutCandidateScore(candidate: GridItemLayout, desired: GridItemLayout): LayoutCandidateScore {
+  const dx = candidate.x - desired.x;
+  const dy = candidate.y - desired.y;
+  return {
+    squaredDistance: dx * dx + dy * dy,
+    manhattanDistance: Math.abs(dx) + Math.abs(dy),
+    verticalDistance: Math.abs(dy),
+    horizontalDistance: Math.abs(dx),
+    y: candidate.y,
+    x: candidate.x,
+  };
+}
+
+function compareLayoutCandidateScore(a: LayoutCandidateScore, b: LayoutCandidateScore): number {
+  return (
+    a.squaredDistance - b.squaredDistance ||
+    a.manhattanDistance - b.manhattanDistance ||
+    a.verticalDistance - b.verticalDistance ||
+    a.horizontalDistance - b.horizontalDistance ||
+    a.y - b.y ||
+    a.x - b.x
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {
