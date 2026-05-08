@@ -1,6 +1,8 @@
 .PHONY: install run run-backend doctor test test-backend test-frontend test-exporter phase5e-real-smoke memory-governor-linux-validation
 
 BACKEND_PYTHON ?= .venv/bin/python
+BACKEND_VENV_DIR ?= $(CURDIR)/backend/.venv
+BACKEND_VENV_ACTIVATE ?= $(BACKEND_VENV_DIR)/bin/activate
 ROOT_BACKEND_PYTHON ?= backend/.venv/bin/python
 PYTEST ?= $(ROOT_BACKEND_PYTHON) -m pytest
 NOOFY_PYTHON ?= $(shell \
@@ -37,8 +39,21 @@ install:
 	$(NOOFY_PYTHON) $(NOOFY_SCRIPT) install --data-dir "$(NOOFY_DATA_DIR)"
 
 run:
-	$(REQUIRE_PYTHON)
-	-$(NOOFY_PYTHON) $(NOOFY_SCRIPT) run --data-dir "$(NOOFY_DATA_DIR)"
+	@backend_venv="$(BACKEND_VENV_DIR)"; \
+	backend_activate="$(BACKEND_VENV_ACTIVATE)"; \
+	if [ ! -f "$$backend_activate" ]; then \
+		printf 'Backend venv is missing. Run: make install\n' >&2; \
+		exit 1; \
+	fi; \
+	backend_real="$$(cd "$$backend_venv" && pwd -P)"; \
+	active_real=""; \
+	if [ -n "$${VIRTUAL_ENV:-}" ]; then \
+		active_real="$$(cd "$$VIRTUAL_ENV" 2>/dev/null && pwd -P || true)"; \
+	fi; \
+	if [ "$$active_real" != "$$backend_real" ]; then \
+		. "$$backend_activate"; \
+	fi; \
+	python $(NOOFY_SCRIPT) run --data-dir "$(NOOFY_DATA_DIR)"
 
 run-backend:
 	$(REQUIRE_PYTHON)
