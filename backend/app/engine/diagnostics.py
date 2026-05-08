@@ -33,6 +33,10 @@ class DiagnosticsReader(Protocol):
         """Return the latest error event, if one exists."""
 
 
+class DiagnosticsStore(DiagnosticsSink, DiagnosticsReader, Protocol):
+    """Record and query structured diagnostic events."""
+
+
 class LogStore:
     def __init__(self, max_events: int = 1000) -> None:
         self._events: deque[DiagnosticEvent] = deque(maxlen=max_events)

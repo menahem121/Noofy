@@ -1,8 +1,10 @@
 import inspect
+import re
+from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsStore, LogStore
 from app.engine.process_manager import ComfyUIProcessManager
-from app.engine.service import _diagnostic_event_payload, _install_developer_details
+from app.engine.service import EngineService, _diagnostic_event_payload, _install_developer_details
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.comfyui_updates import ComfyUIUpdateService
@@ -128,3 +130,58 @@ def test_diagnostic_emitters_require_explicit_sink() -> None:
     for emitter in emitters:
         parameter = inspect.signature(emitter).parameters["log_store"]
         assert parameter.default is inspect.Signature.empty, emitter
+
+
+def test_engine_service_uses_read_write_diagnostics_protocol() -> None:
+    parameter = inspect.signature(EngineService).parameters["log_store"]
+
+    assert parameter.annotation is DiagnosticsStore
+
+
+def test_child_component_diagnostics_are_visible_through_service_logs(tmp_path: Path) -> None:
+    log_store = LogStore()
+    service = EngineService(
+        workflow_loader=object(),
+        workflow_validator=object(),
+        runner_supervisor=object(),
+        runtime_manager=object(),
+        log_store=log_store,
+    )
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        log_store=log_store,
+    )
+
+    adapter.log_store.add(
+        "warning",
+        "Child component diagnostic",
+        "comfyui.adapter",
+        job_id="job-1",
+    )
+
+    logs = service.list_logs()
+    assert logs.events[-1].message == "Child component diagnostic"
+    assert logs.events[-1].job_id == "job-1"
+
+
+def test_production_diagnostics_do_not_create_private_log_store_fallbacks() -> None:
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    allowed_construction_files = {
+        Path("engine/service.py"),
+        Path("runtime/phase5e_real_smoke.py"),
+    }
+    construction_pattern = re.compile(r"\bLogStore\s*\(")
+
+    unexpected_constructions: list[str] = []
+    private_fallbacks: list[str] = []
+    for path in app_dir.rglob("*.py"):
+        relative_path = path.relative_to(app_dir)
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"log_store\s+(?:or|\|\|)\s+LogStore\s*\(", text):
+            private_fallbacks.append(str(relative_path))
+        if construction_pattern.search(text) and relative_path not in allowed_construction_files:
+            unexpected_constructions.append(str(relative_path))
+
+    assert private_fallbacks == []
+    assert unexpected_constructions == []

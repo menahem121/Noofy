@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.api import routes
 from app.core.config import settings as real_settings
-from app.engine.models import ComfyUIRuntimeStatus
+from app.engine.diagnostics import LogStore
+from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
 from app import main as main_module
 from app.main import create_app
 from app.runtime.launch_settings import ComfyUILaunchSettings, comfyui_launch_response
@@ -53,6 +54,27 @@ class FakeEngineService:
         self.shutdown_called = True
 
 
+class SharedDiagnosticsEngineService(FakeEngineService):
+    def __init__(self, log_store: LogStore) -> None:
+        super().__init__()
+        self.log_store = log_store
+
+    def list_logs(self, *, level=None, limit: int = 200):
+        return self.log_store.list_events(level=level, limit=limit)
+
+    def list_job_logs(self, job_id: str, *, level=None, limit: int = 200):
+        return self.log_store.list_events(job_id=job_id, level=level, limit=limit)
+
+    async def health(self):
+        return BackendHealthReport(
+            status="degraded",
+            comfyui=await self.runtime_status(),
+            workflow_package_count=0,
+            workflows=[],
+            latest_error=self.log_store.latest_error(),
+        )
+
+
 def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     fake_service = FakeEngineService()
     monkeypatch.setattr(routes, "engine_service", fake_service)
@@ -65,6 +87,37 @@ def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     assert payload["mode"] == "managed"
     assert payload["reachable"] is True
     assert payload["pid"] == 123
+
+
+def test_diagnostic_api_endpoints_read_from_shared_injected_store(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    log_store = LogStore()
+    log_store.add("info", "Global diagnostic", "test")
+    log_store.add("warning", "Job diagnostic", "test", job_id="job-1")
+    latest_error = log_store.add("error", "Latest failure", "test", job_id="job-1")
+    monkeypatch.setattr(routes, "engine_service", SharedDiagnosticsEngineService(log_store))
+
+    with TestClient(create_app()) as client:
+        logs_response = client.get("/api/logs")
+        job_logs_response = client.get("/api/jobs/job-1/logs")
+        health_response = client.get("/api/health")
+
+    assert logs_response.status_code == 200
+    assert job_logs_response.status_code == 200
+    assert health_response.status_code == 200
+    logs_payload = logs_response.json()
+    job_logs_payload = job_logs_response.json()
+    health_payload = health_response.json()
+
+    assert list(logs_payload) == ["events"]
+    assert logs_payload["events"][-1]["message"] == "Latest failure"
+    assert list(job_logs_payload) == ["events"]
+    assert [event["message"] for event in job_logs_payload["events"]] == [
+        "Job diagnostic",
+        "Latest failure",
+    ]
+    assert health_payload["latest_error"]["id"] == latest_error.id
+    assert health_payload["latest_error"]["message"] == "Latest failure"
 
 
 def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:

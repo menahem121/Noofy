@@ -15,7 +15,7 @@ from app.artifacts import AssetOwnership
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.diagnostics import LogStore
+from app.engine.diagnostics import DiagnosticsStore, LogStore
 from app.engine.models import (
     BackendHealthReport,
     DiagnosticLogResponse,
@@ -143,7 +143,7 @@ class EngineService:
         workflow_validator: WorkflowPackageValidator,
         runner_supervisor: RunnerSupervisor,
         runtime_manager: RuntimeManager,
-        log_store: LogStore,
+        log_store: DiagnosticsStore,
         capsule_loader: CapsuleLockLoader | None = None,
         capsule_installer: CapsuleInstaller | None = None,
         runner_process_coordinator: RunnerProcessCoordinator | None = None,
