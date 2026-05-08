@@ -21,6 +21,32 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
   fireEvent(target, event);
 }
 
+function dispatchDrag(target: Node, type: string, init: { clientX: number; clientY: number; dataTransfer: DataTransfer }) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    clientX: { value: init.clientX },
+    clientY: { value: init.clientY },
+    dataTransfer: { value: init.dataTransfer },
+  });
+  fireEvent(target, event);
+}
+
+function createDataTransfer(): DataTransfer {
+  const store = new Map<string, string>();
+  return {
+    dropEffect: "none",
+    effectAllowed: "all",
+    getData: (format: string) => store.get(format) ?? "",
+    setData: (format: string, data: string) => {
+      store.set(format, data);
+    },
+    clearData: (format?: string) => {
+      if (format) store.delete(format);
+      else store.clear();
+    },
+  } as DataTransfer;
+}
+
 const readyRuntime = {
   mode: "managed",
   reachable: true,
@@ -218,6 +244,75 @@ describe("DashboardBuilderLayoutPage", () => {
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
       expect(body.dashboard.sections[0].controls[0].layout).toEqual({ x: 0, y: 4, w: 16, h: 6 });
     });
+  });
+
+  it("moves a newly dropped widget on the first follow-up drag", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const unplacedSchema: DashboardSchema = {
+      ...placedSchema,
+      widgets: placedSchema.widgets.map((widget) => {
+        const { layout: _layout, ...unplacedWidget } = widget;
+        return unplacedWidget;
+      }),
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={unplacedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("main", { name: /dashboard layout canvas/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const dataTransfer = createDataTransfer();
+    const trayWidget = screen.getByText("Prompt").closest("article")!;
+    dispatchDrag(trayWidget, "dragstart", { clientX: 120, clientY: 120, dataTransfer });
+    dispatchDrag(canvasSurface, "dragover", { clientX: 300, clientY: 96, dataTransfer });
+    dispatchDrag(canvasSurface, "drop", { clientX: 300, clientY: 96, dataTransfer });
+
+    const textbox = screen.getByRole("textbox");
+    const promptCell = textbox.closest("article")!;
+    expect(promptCell).toHaveStyle({ top: "0px" });
+    expect(textbox.closest(".layout-canvas-widget__preview-surface")).toBeInTheDocument();
+    Object.defineProperty(promptCell, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(() => {
+        throw new Error("capture unavailable during native drag transition");
+      }),
+    });
+
+    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
+
+    expect(promptCell).toHaveClass("layout-canvas-widget--moving");
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "64px" });
+    });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
+
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--moving");
+    expect(promptCell).toHaveStyle({ top: "64px" });
   });
 
   it("steps through intermediate grid cells during fast placed-widget drags", async () => {

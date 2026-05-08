@@ -5041,6 +5041,15 @@ button:disabled {
   opacity: 1;
 }
 
+.layout-canvas-widget__preview-surface {
+  display: contents;
+  pointer-events: none;
+}
+
+.layout-canvas-widget__preview-surface * {
+  pointer-events: none;
+}
+
 .layout-preview-input {
   width: 100%;
   min-width: 0;

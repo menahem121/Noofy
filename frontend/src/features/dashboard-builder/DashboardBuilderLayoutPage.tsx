@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -150,7 +150,7 @@ export function DashboardBuilderLayoutPage({
     setSelectedWidgetId(null);
   }, [workflow, initialSchema]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     schemaRef.current = schema;
   }, [schema]);
 
@@ -252,12 +252,14 @@ export function DashboardBuilderLayoutPage({
       const fitted = fitLayout(desiredLayout, current.layout.gridColumns);
       const layout = findAvailableLayout(widgetId, fitted, current.widgets, current.layout.gridColumns);
 
-      return {
+      const nextSchema = {
         ...current,
         widgets: current.widgets.map((candidate) =>
           candidate.id === widgetId ? { ...candidate, layout } : candidate,
         ),
       };
+      schemaRef.current = nextSchema;
+      return nextSchema;
     });
     setSelectedWidgetId(widgetId);
   }
@@ -294,7 +296,7 @@ export function DashboardBuilderLayoutPage({
     if (shouldIgnoreWidgetMove(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    capturePointer(event.currentTarget, event.pointerId);
     setSelectedWidgetId(widgetId);
     setActiveDragWidgetId(widgetId);
     moveStateRef.current = {
@@ -409,7 +411,7 @@ export function DashboardBuilderLayoutPage({
   ) {
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    capturePointer(event.currentTarget, event.pointerId);
     resizeStateRef.current = {
       widgetId,
       handle,
@@ -723,7 +725,9 @@ function PlacedDashboardWidget({
         ) : null}
       </header>
 
-      <WidgetSurfacePreview widget={widget} />
+      <div className="layout-canvas-widget__preview-surface">
+        <WidgetSurfacePreview widget={widget} />
+      </div>
       {!preview ? <DashboardCanvasResizeHandles label={widget.title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
   );
@@ -783,6 +787,15 @@ function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
       "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
     ),
   );
+}
+
+function capturePointer(target: Element, pointerId: number) {
+  try {
+    target.setPointerCapture?.(pointerId);
+  } catch {
+    // The window-level listeners below still keep dragging active when a browser
+    // refuses capture during an edge transition from native drag/drop.
+  }
 }
 
 function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
