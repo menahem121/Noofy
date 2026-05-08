@@ -18,6 +18,10 @@ Current feedback surfaces:
 
 Diagnostics should be structured events, not ad hoc print output. Events should include source, level, message, job id when relevant, workflow id when relevant, and useful details.
 
+Runtime, install, smoke-test, Memory Governor, model, update, runner, and workflow subsystems should emit diagnostics through an injected diagnostics sink. They should not construct their own private diagnostic stores. The app composition root owns the shared in-memory `LogStore` and passes it to subsystems so events remain visible through `/api/logs`, `/api/health`, job logs, and other API/UI troubleshooting surfaces.
+
+Emit-only subsystems should depend on the small diagnostics sink contract instead of the concrete store. API-facing code that needs to read or filter events may use the concrete `LogStore` or a reader contract. This keeps runtime code decoupled from storage/exposure details while preserving one shared event stream for the UI.
+
 ## What To Log
 
 Add diagnostic events for important state transitions:
@@ -52,10 +56,11 @@ When changing behavior, add or update tests that prove:
 - diagnostics/logs are emitted when useful
 - frontend-facing response shapes remain stable
 - Memory Governor decisions remain deterministic for the same fake memory snapshots, local observation history, and runner states
+- runtime diagnostic emitters require an explicit injected sink rather than creating fallback stores
 
 ## Monitoring Direction
 
-For now, monitoring is in-memory and API-based. This is enough for development and early UI work.
+For now, monitoring is backed by the shared in-memory `LogStore` and exposed through backend APIs. This is enough for development and early UI work, but the storage implementation should remain behind the diagnostics sink/reader boundary so later persistence or streaming can be added without coupling runtime subsystems to the store.
 
 Later product builds may add:
 

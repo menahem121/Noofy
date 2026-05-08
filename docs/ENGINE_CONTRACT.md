@@ -48,6 +48,9 @@ For the first adapter:
 - Submit workflow graph through ComfyUI `/prompt`.
 - Track progress through ComfyUI `/ws`.
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
+- Read queue and job state through `/queue` and `/history`.
+- Retrieve generated files through `/view`.
+- Inspect models and node information through `/models` and `/object_info`.
 
 ## Diagnostics
 
@@ -62,9 +65,10 @@ The backend should record app-readable diagnostic events for:
 - runner reuse, queueing, switching, eviction, memory cleanup, retry, and blocked-by-memory decisions
 
 Diagnostics are for both the desktop UI and future agents. Prefer structured events over ad hoc print output.
-- Read queue and job state through `/queue` and `/history`.
-- Retrieve generated files through `/view`.
-- Inspect models and node information through `/models` and `/object_info`.
+
+Runtime subsystems should emit diagnostics through an injected diagnostics sink. They should not create fallback private stores when no sink is supplied. The backend composition root owns one shared diagnostics store for the running app, and API-facing service methods read from that shared store for `listLogs`, `listJobLogs`, health `latest_error`, and troubleshooting payloads.
+
+Emit-only components should not depend on storage, filtering, or API exposure details. Read/query behavior belongs in API-facing services or a diagnostics reader contract.
 
 Model validation for `ComfyUIEngineAdapter` must query the running ComfyUI instance through its API. It must not depend on a local ComfyUI source `models` path, because ComfyUI may be external in dev mode or app-managed in product mode.
 

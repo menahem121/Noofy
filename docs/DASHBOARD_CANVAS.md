@@ -128,13 +128,14 @@ Selected in Settings → Dashboard View → "Simple list". Renders the existing 
 
 Widgets have five named size presets. The creator/importer selects a preset in the builder layout step.
 
+Widget type → default preset mapping:
 | Preset | Grid columns (w) | Grid rows (h) | Use case |
 |---|---|---|---|
-| Compact | 8 | 4 | Sliders, toggles, simple number fields |
-| Standard | 11 | 4 | Most input fields, seed widget, dropdowns |
-| Wide | 16 | 6 | Textareas, prompt inputs |
-| Media | 13 | 10 | Image input / output at moderate size |
-| Media-Large | 19 | 14 | Primary output image, large preview |
+| Compact | 6 | 4 | toggles, int_field, string_field, toggle, seed_widget |
+| Standard | 8 | 6 | Most input fields, textarea, dropdowns, lora_loader |
+| Wide | 10 | 4 | slider |
+| Media | 10 | 10 | load_image , display_mask |
+| Media-Large | 14 | 14 | result_image, large preview |
 
 Rules:
 - Sizes align to the 32-column grid. A row of four Compact widgets or two Wide widgets fills 32 columns exactly.
@@ -144,17 +145,6 @@ Rules:
 - In normal workflow viewing mode, users cannot move or resize widgets.
 - In Edit Dashboard Layout mode, users can move and resize widgets using grid-snapped handles. The minimum size enforced during resize is the widget's `min_w` / `min_h`.
 - **No size-preset chip/button UI is rendered on widget cards in the run view.** Presets exist as internal schema defaults and minimums only; they are not exposed as selectable UI elements.
-
-Widget type → default preset mapping:
-
-| Widget type | Default preset |
-|---|---|
-| slider, int_field, toggle | Compact |
-| string_field, seed_widget, select | Standard |
-| textarea | Wide |
-| load_image, load_image_mask | Standard |
-| display_image, result_image | Media-Large |
-| lora_loader | Standard |
 
 ---
 

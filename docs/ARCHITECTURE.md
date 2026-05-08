@@ -71,6 +71,7 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Treat ComfyUI graphs as opaque execution data where possible.
 - Keep the app API stable enough that future adapters can replace or supplement ComfyUI.
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
+- Own diagnostics at the backend composition root: runtime/backend subsystems emit structured events through an injected diagnostics sink, while API-facing services read the shared diagnostics store for logs, job logs, health latest error, and troubleshooting payloads.
 - Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation. The runtime isolation foundation (paths, schemas, runner supervision, verified and registry-resolved installs, trust signing, source policy, smoke gating, GC) is implemented in [backend/app/runtime/](../backend/app/runtime/).
 - Use the [Memory Governor implementation plan](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
 
@@ -135,6 +136,8 @@ Development tooling may allow local overrides during iteration. Product workflow
 ### Diagnostics
 
 `GET /api/paths` returns all resolved directory paths with `exists` and `writable` status. It is protected by the same optional `NOOFY_API_TOKEN` as all other `/api/*` routes.
+
+Backend diagnostics are structured in-memory events exposed through app-owned API routes such as `/api/logs`, `/api/jobs/{job_id}/logs`, `/api/health`, and `/api/diagnostics`. Runtime subsystems should not instantiate private diagnostic stores; they receive the shared sink from the backend service factory so install failures, smoke tests, ComfyUI crashes, Memory Governor decisions, runner lifecycle events, model actions, updates, and workflow imports remain visible to the UI.
 
 ### Tauri integration (future)
 
