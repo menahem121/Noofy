@@ -7,11 +7,27 @@ import time
 
 import httpx
 
-from app.__main__ import runtime_config_line
+from app.__main__ import runtime_config_line, uvicorn_log_config
+from app.core.logging import SuppressResourceMonitorAccessLogFilter
 
 
 def test_runtime_config_line_advertises_api_base_url() -> None:
     assert runtime_config_line("127.0.0.1", 9123) == "NOOFY_BACKEND_API_BASE_URL=http://127.0.0.1:9123/api"
+
+
+def test_backend_log_config_filters_resource_monitor_access_logs() -> None:
+    log_config = uvicorn_log_config()
+
+    assert log_config["handlers"]["access"]["filters"] == ["noofy_resource_monitor"]
+
+
+def test_resource_monitor_access_log_filter_only_suppresses_resource_polling() -> None:
+    access_filter = SuppressResourceMonitorAccessLogFilter()
+    resources_record = logging_record(("127.0.0.1:1234", "GET", "/api/resources", "1.1", 200))
+    runtime_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime", "1.1", 200))
+
+    assert access_filter.filter(resources_record) is False
+    assert access_filter.filter(runtime_record) is True
 
 
 def test_backend_module_starts_on_free_port_and_serves_paths() -> None:
@@ -62,3 +78,17 @@ def test_backend_module_starts_on_free_port_and_serves_paths() -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
+
+
+def logging_record(args: tuple[object, ...]):
+    import logging
+
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %s',
+        args=args,
+        exc_info=None,
+    )

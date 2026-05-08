@@ -1,9 +1,11 @@
 import argparse
 import os
 import socket
+from copy import deepcopy
 from pathlib import Path
 
 import uvicorn
+from uvicorn.config import LOGGING_CONFIG
 
 
 def select_free_port(host: str) -> int:
@@ -25,6 +27,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def uvicorn_log_config() -> dict[str, object]:
+    config = deepcopy(LOGGING_CONFIG)
+    config.setdefault("filters", {})["noofy_resource_monitor"] = {
+        "()": "app.core.logging.SuppressResourceMonitorAccessLogFilter",
+    }
+    config["handlers"]["access"]["filters"] = ["noofy_resource_monitor"]
+    return config
+
+
 def main() -> None:
     args = parse_args()
     port = args.port or select_free_port(args.host)
@@ -35,7 +46,13 @@ def main() -> None:
         args.api_base_url_file.write_text(api_base_url, encoding="utf-8")
 
     print(runtime_config_line(args.host, port), flush=True)
-    uvicorn.run("app.main:app", host=args.host, port=port, log_level=args.log_level)
+    uvicorn.run(
+        "app.main:app",
+        host=args.host,
+        port=port,
+        log_level=args.log_level,
+        log_config=uvicorn_log_config(),
+    )
 
 
 if __name__ == "__main__":
