@@ -429,14 +429,14 @@ export function CanvasDashboardView({
             const layout = effectiveLayout(control);
             const previewLayout = movePreview?.controlId === control.id ? movePreview.layout : null;
             const displayLayout = previewLayout ?? layout;
-            const isPreview = movingControlId === control.id;
+            const isMoving = movingControlId === control.id;
 
             return (
               <CanvasWidgetCell
                 key={control.id}
                 control={control}
                 layout={displayLayout}
-                isPreview={isPreview}
+                isMoving={isMoving}
                 isEditingLayout={isEditingLayout}
                 inputIndex={inputIndex}
                 outputIndex={outputIndex}
@@ -460,7 +460,7 @@ export function CanvasDashboardView({
 function CanvasWidgetCell({
   control,
   layout,
-  isPreview,
+  isMoving,
   isEditingLayout,
   inputIndex,
   outputIndex,
@@ -473,7 +473,7 @@ function CanvasWidgetCell({
 }: {
   control: DashboardControlDef;
   layout: GridItemLayout;
-  isPreview: boolean;
+  isMoving: boolean;
   isEditingLayout: boolean;
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
@@ -491,9 +491,8 @@ function CanvasWidgetCell({
     <DashboardCanvasWidgetShell
       className={`layout-canvas-widget--run${
         isEditingLayout ? " layout-canvas-widget--run-editing" : " layout-canvas-widget--readonly"
-      }`}
+      }${isMoving ? " layout-canvas-widget--moving" : ""}`}
       layout={layout}
-      preview={isPreview}
       style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
       onPointerDown={isEditingLayout ? onMoveStart : undefined}
     >

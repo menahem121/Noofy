@@ -57,6 +57,10 @@ When in doubt during Milestone 1, keep the implementation small: start with one 
 When adapting large files from `third_party/comfyui/`, do not manually rewrite big chunks. If most of a file is needed, copy it with a terminal command into the app-owned codebase, rename it clearly, and then make focused edits from there. Keep ComfyUI-derived files identifiable and listed for maintenance reasons.
 
 ### Testing
-Use the repo-level test command by default:
+
+Prefer focused tests for normal changes. Run only the tests that cover the area you modified.
+
+Use the full repo-level test suite only when the change is broad, low-level, or risky enough that it could affect multiple parts of the app.
+
 ```bash
 make test

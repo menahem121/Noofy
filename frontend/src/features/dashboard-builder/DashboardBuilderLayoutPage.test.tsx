@@ -184,18 +184,27 @@ describe("DashboardBuilderLayoutPage", () => {
       toJSON: () => ({}),
     } as DOMRect);
 
-    const promptCell = screen.getByRole("textbox").closest("article")!;
-    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    const textbox = screen.getByRole("textbox");
+    const promptCell = textbox.closest("article")!;
+    dispatchPointer(textbox, "pointerdown", { clientX: 300, clientY: 96 });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
 
-    expect(promptCell).toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).toHaveClass("layout-canvas-widget--moving");
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
     await waitFor(() => {
       expect(promptCell).toHaveStyle({ top: "64px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
-    expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--moving");
     expect(promptCell).toHaveStyle({ top: "64px" });
+
+    dispatchPointer(screen.getByRole("textbox"), "pointerdown", { clientX: 300, clientY: 160 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "128px" });
+    });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
   });
 
   it("steps through intermediate grid cells during fast placed-widget drags", async () => {

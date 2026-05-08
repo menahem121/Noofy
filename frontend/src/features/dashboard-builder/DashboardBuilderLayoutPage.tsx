@@ -678,7 +678,8 @@ function PlacedDashboardWidget({
       gridGap={gridGap}
       rowHeight={rowHeight}
       selected={selected}
-      preview={preview || dragging}
+      preview={preview}
+      className={dragging ? "layout-canvas-widget--moving" : ""}
       onClick={onSelect}
       onPointerDown={!preview ? onMoveStart : undefined}
     >
@@ -742,6 +743,20 @@ function DragPreviewWidget({
 
 function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
+  if (
+    target instanceof HTMLInputElement &&
+    target.readOnly &&
+    target.classList.contains("layout-preview-input")
+  ) {
+    return false;
+  }
+  if (
+    target instanceof HTMLTextAreaElement &&
+    target.readOnly &&
+    target.classList.contains("layout-preview-input")
+  ) {
+    return false;
+  }
   return Boolean(
     target.closest(
       "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",

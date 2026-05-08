@@ -4970,9 +4970,9 @@ button:disabled {
     0 18px 42px rgba(0, 0, 0, 0.3);
 }
 
+.layout-canvas-widget--moving,
 .layout-canvas-widget--preview {
   z-index: 8;
-  pointer-events: none;
   opacity: 0.96;
   transform: scale(1.015);
   border-color: rgba(159, 122, 234, 0.88);
@@ -4980,6 +4980,10 @@ button:disabled {
   box-shadow:
     0 0 0 3px rgba(139, 92, 246, 0.2),
     0 28px 70px rgba(0, 0, 0, 0.42);
+}
+
+.layout-canvas-widget--preview {
+  pointer-events: none;
 }
 
 .layout-canvas-widget__header {
@@ -5380,6 +5384,14 @@ button:disabled {
 }
 
 .builder-layout-workspace .layout-canvas-widget:active {
+  cursor: grabbing;
+}
+
+.builder-layout-workspace .layout-preview-input {
+  cursor: grab;
+}
+
+.builder-layout-workspace .layout-canvas-widget:active .layout-preview-input {
   cursor: grabbing;
 }
 

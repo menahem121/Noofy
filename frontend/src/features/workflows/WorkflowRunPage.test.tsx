@@ -815,12 +815,14 @@ describe("WorkflowRunPage", () => {
     });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 160 });
 
-    expect(promptCell).toHaveClass("layout-canvas-widget--preview");
+    expect(promptCell).toHaveClass("layout-canvas-widget--moving");
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
     await waitFor(() => {
       expect(promptCell).toHaveStyle({ top: "64px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
+    expect(promptCell).not.toHaveClass("layout-canvas-widget--moving");
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 
     await waitFor(() => {
