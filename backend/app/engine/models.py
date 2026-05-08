@@ -135,6 +135,26 @@ class RuntimeBootstrapResult(BaseModel):
     environment: RuntimeEnvironmentStatus | None = None
 
 
+class ResourceMetric(BaseModel):
+    available: bool = False
+    percent: float | None = Field(default=None, ge=0, le=100)
+    used_mb: int | None = Field(default=None, ge=0)
+    total_mb: int | None = Field(default=None, ge=0)
+    free_mb: int | None = Field(default=None, ge=0)
+    source: str | None = None
+    error: str | None = None
+
+
+class MachineResourceSnapshot(BaseModel):
+    observed_at: str
+    cpu: ResourceMetric
+    ram: ResourceMetric
+    vram: ResourceMetric
+    backend: str = "unknown"
+    device_name: str | None = None
+    memory_pressure: str = "unknown"
+
+
 class ComfyUIVersionMetadata(BaseModel):
     active_tag: str | None = None
     source_hash: str | None = None

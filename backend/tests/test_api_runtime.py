@@ -27,6 +27,17 @@ class FakeEngineService:
             managed_vram_mode="normal",
         )
 
+    def resource_snapshot(self):
+        return {
+            "observed_at": "2026-05-08T10:00:00+00:00",
+            "cpu": {"available": True, "percent": 23.0, "used_mb": None, "total_mb": None, "free_mb": None, "source": "test", "error": None},
+            "ram": {"available": True, "percent": 35.0, "used_mb": 11_264, "total_mb": 32_768, "free_mb": 21_504, "source": "test", "error": None},
+            "vram": {"available": False, "percent": None, "used_mb": None, "total_mb": None, "free_mb": None, "source": None, "error": "vram_unavailable"},
+            "backend": "cpu",
+            "device_name": None,
+            "memory_pressure": "low",
+        }
+
     def comfyui_launch_settings(self):
         return comfyui_launch_response(ComfyUILaunchSettings(vram_mode="normal"), mode="managed")
 
@@ -54,6 +65,20 @@ def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     assert payload["mode"] == "managed"
     assert payload["reachable"] is True
     assert payload["pid"] == 123
+
+
+def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
+    fake_service = FakeEngineService()
+    monkeypatch.setattr(routes, "engine_service", fake_service)
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/resources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cpu"]["percent"] == 23.0
+    assert payload["ram"]["used_mb"] == 11264
+    assert payload["vram"]["available"] is False
 
 
 def test_app_shutdown_calls_engine_service_shutdown(monkeypatch) -> None:

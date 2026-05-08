@@ -18,7 +18,7 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
 
   if (!state.runtime) {
     return {
-      label: "Backend offline",
+      label: "Offline",
       description: "Start the Noofy backend to load live workflows",
       tone: "error",
     };
@@ -26,7 +26,7 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
 
   if (state.runtime.reachable) {
     return {
-      label: "Engine ready",
+      label: "Ready",
       description: "Local workflow engine is reachable",
       tone: "success",
     };
@@ -34,7 +34,7 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
 
   if (state.runtime.sidecar_starting || state.runtime.managed_process_running) {
     return {
-      label: "Engine starting",
+      label: "Starting",
       description: "The local engine process is still warming up",
       tone: "info",
       loading: true,
@@ -43,14 +43,14 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
 
   if (state.runtime.error) {
     return {
-      label: "Engine offline",
+      label: "Offline",
       description: state.runtime.error,
       tone: "error",
     };
   }
 
   return {
-    label: "Engine offline",
+    label: "Offline",
     description: "Open settings to start or repair the local engine",
     tone: "warning",
   };

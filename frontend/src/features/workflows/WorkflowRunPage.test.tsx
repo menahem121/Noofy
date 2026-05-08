@@ -62,6 +62,16 @@ const workflowStatus = {
   can_cancel_job: false,
 };
 
+const resourceSnapshot = {
+  observed_at: "2026-05-08T10:00:00+00:00",
+  cpu: { available: true, percent: 23, used_mb: null, total_mb: null, free_mb: null, source: "test", error: null },
+  ram: { available: true, percent: 35, used_mb: 11_264, total_mb: 32_768, free_mb: 21_504, source: "test", error: null },
+  vram: { available: false, percent: null, used_mb: null, total_mb: null, free_mb: null, source: null, error: "vram_unavailable" },
+  backend: "cpu",
+  device_name: null,
+  memory_pressure: "low",
+};
+
 const configuredPackageData = {
   metadata: {
     id: "text_to_image_v0",
@@ -124,6 +134,7 @@ function mockConfiguredDashboardFetch(
 ) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
     if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
@@ -647,6 +658,21 @@ describe("WorkflowRunPage", () => {
       screen.queryByText("Describe the image you want, then let Noofy run the local workflow in the background."),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("The local AI engine is offline")).not.toBeInTheDocument();
+  });
+
+  it("shows the compact resource monitor in the top bar while idle", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    expect(await screen.findByLabelText("Resource monitor")).toBeInTheDocument();
+    expect(screen.getByText("CPU")).toBeInTheDocument();
+    expect(screen.getByText("23%")).toBeInTheDocument();
+    expect(screen.getByText("RAM")).toBeInTheDocument();
+    expect(screen.getByText("11 / 32 GB")).toBeInTheDocument();
+    expect(screen.getByText("VRAM")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getAllByText("Engine ready").length).toBeGreaterThan(0);
   });
 
   it("renders the classic two-panel dashboard when classic mode is selected", async () => {

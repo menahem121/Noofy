@@ -1,4 +1,4 @@
-import { createContext, useContext, ReactNode, useState } from "react";
+import { createContext, useContext, ReactNode, useEffect, useState } from "react";
 import {
   Coffee,
   FolderClock,
@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 
 // Replace with your real Tipeee / donation URL when ready.
@@ -76,6 +77,7 @@ export function AppLayout({
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const isHome = activeRoute === "home";
   const effectiveOpen = isHome ? true : sidebarOpen;
+  const resources = useTopBarResources();
 
   function handleToggle() {
     if (!isHome) setSidebarOpen((o) => !o);
@@ -105,6 +107,7 @@ export function AppLayout({
         </div>
 
         <div className="topbar__actions">
+          <ResourceMonitor snapshot={resources} />
           <div className={`status-pill status-pill--${status.tone}`}>
             {status.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
             <span>{status.label}</span>
@@ -189,4 +192,96 @@ export function AppLayout({
       </main>
     </div>
   );
+}
+
+function useTopBarResources() {
+  const [snapshot, setSnapshot] = useState<MachineResourceSnapshot | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function refresh() {
+      try {
+        const next = await fetchResourceSnapshot();
+        if (active) setSnapshot(next);
+      } catch {
+        if (active) setSnapshot(null);
+      }
+    }
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  return snapshot;
+}
+
+function ResourceMonitor({ snapshot }: { snapshot: MachineResourceSnapshot | null }) {
+  return (
+    <div className="resource-monitor" aria-label="Resource monitor">
+      <ResourceMonitorItem label="CPU" metric={snapshot?.cpu ?? null} value={formatPercent(snapshot?.cpu ?? null)} />
+      <ResourceMonitorItem label="RAM" metric={snapshot?.ram ?? null} value={formatMemory(snapshot?.ram ?? null)} />
+      <ResourceMonitorItem label="VRAM" metric={snapshot?.vram ?? null} value={formatMemory(snapshot?.vram ?? null)} />
+    </div>
+  );
+}
+
+function ResourceMonitorItem({
+  label,
+  metric,
+  value,
+}: {
+  label: string;
+  metric: ResourceMetric | null;
+  value: string;
+}) {
+  const percent = metric?.available && metric.percent !== null ? Math.round(metric.percent) : null;
+  const usageClass = percent !== null && percent >= 90 ? " resource-monitor__item--high" : "";
+  const title = resourceTooltip(label, metric);
+
+  return (
+    <div className={`resource-monitor__item${usageClass}`} title={title}>
+      <span className="resource-monitor__text">
+        <span className="resource-monitor__label">{label}</span>
+        <span className="resource-monitor__value">{value}</span>
+      </span>
+      <span className="resource-monitor__bar" aria-hidden="true">
+        <span style={{ width: `${percent ?? 0}%` }} />
+      </span>
+    </div>
+  );
+}
+
+function formatPercent(metric: ResourceMetric | null) {
+  if (!metric?.available || metric.percent === null) return "—";
+  return `${Math.round(metric.percent)}%`;
+}
+
+function formatMemory(metric: ResourceMetric | null) {
+  if (!metric?.available) return "—";
+  if (metric.used_mb !== null && metric.total_mb !== null) {
+    return `${formatGb(metric.used_mb)} / ${formatGb(metric.total_mb)} GB`;
+  }
+  if (metric.total_mb !== null) return `— / ${formatGb(metric.total_mb)} GB`;
+  if (metric.free_mb !== null) return `${formatGb(metric.free_mb)} GB free`;
+  return "—";
+}
+
+function formatGb(mb: number) {
+  const gb = mb / 1024;
+  return gb >= 10 ? String(Math.round(gb)) : gb.toFixed(1);
+}
+
+function resourceTooltip(label: string, metric: ResourceMetric | null) {
+  if (!metric?.available) return `${label} usage unavailable`;
+  const source = metric.source ? `Source: ${metric.source}` : "Source: Noofy backend";
+  if (metric.used_mb !== null && metric.total_mb !== null && metric.free_mb !== null) {
+    return `${label}: ${formatGb(metric.used_mb)} GB used, ${formatGb(metric.free_mb)} GB free of ${formatGb(metric.total_mb)} GB. ${source}`;
+  }
+  if (metric.percent !== null) return `${label}: ${Math.round(metric.percent)}%. ${source}`;
+  return `${label}: available. ${source}`;
 }

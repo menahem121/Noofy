@@ -222,7 +222,74 @@ button:disabled {
 .topbar__actions {
   justify-content: flex-end;
   gap: 10px;
-  min-width: 250px;
+  min-width: min(760px, 62vw);
+}
+
+.resource-monitor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(46, 45, 49, 0.74);
+}
+
+.resource-monitor__item {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 74px;
+  min-height: 30px;
+  padding: 4px 8px 5px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(28, 27, 29, 0.36);
+}
+
+.resource-monitor__text {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.resource-monitor__label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.resource-monitor__value {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.resource-monitor__bar {
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(104, 99, 113, 0.38);
+}
+
+.resource-monitor__bar span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(159, 122, 234, 0.82), rgba(139, 92, 246, 0.96));
+  transition: width 180ms ease;
+}
+
+.resource-monitor__item--high .resource-monitor__bar span {
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.72), rgba(251, 191, 36, 0.96));
 }
 
 .topbar-progress {
@@ -1527,6 +1594,14 @@ button:disabled {
     min-width: 0;
   }
 
+  .resource-monitor__item {
+    min-width: 64px;
+  }
+
+  .resource-monitor__value {
+    font-size: 10px;
+  }
+
   .search-field {
     width: min(380px, 42vw);
   }
@@ -1556,6 +1631,16 @@ button:disabled {
 
   .status-pill {
     display: none;
+  }
+
+  .resource-monitor {
+    gap: 4px;
+    padding: 3px;
+  }
+
+  .resource-monitor__item {
+    min-width: 48px;
+    padding-inline: 6px;
   }
 
   .page-heading,

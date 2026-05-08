@@ -23,6 +23,7 @@ from app.engine.models import (
     JobProgress,
     JobResult,
     LogLevel,
+    MachineResourceSnapshot,
     ModelInfo,
     RuntimeBootstrapResult,
     WorkflowHealthSummary,
@@ -96,6 +97,7 @@ from app.runtime.memory_governor import (
 from app.runtime.model_store import LocalModelRequirement, ModelStore, http_streaming_downloader
 from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver, NoofyNodeRegistry
 from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
+from app.runtime.resource_monitor import SystemResourceObserver, build_resource_snapshot
 from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
@@ -152,6 +154,7 @@ class EngineService:
         memory_learning_store: LocalMemoryLearningStore | None = None,
         comfyui_update_service: ComfyUIUpdateService | None = None,
         comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
+        resource_observer: SystemResourceObserver | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -168,6 +171,7 @@ class EngineService:
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
         self.comfyui_launch_settings_store = comfyui_launch_settings_store
+        self.resource_observer = resource_observer or SystemResourceObserver()
         self.dashboard_authoring: DashboardAuthoringService | None = None
         self.workflow_exporter: WorkflowExporter | None = None
         self._job_workflows: dict[str, str] = {}
@@ -1185,6 +1189,19 @@ class EngineService:
 
     async def runtime_status(self):
         return await self.runtime_manager.status()
+
+    def resource_snapshot(self) -> MachineResourceSnapshot:
+        cpu_metric = self.resource_observer.cpu_metric()
+        memory_snapshot = (
+            self.memory_observer.snapshot()
+            if self.memory_observer is not None
+            else MachineMemorySnapshot(
+                available=False,
+                backend=MemoryBackend.UNKNOWN,
+                error="memory_observer_unavailable",
+            )
+        )
+        return build_resource_snapshot(memory_snapshot, cpu_metric=cpu_metric)
 
     def comfyui_launch_settings(self) -> ComfyUILaunchSettingsResponse:
         launch_settings = self._read_comfyui_launch_settings()

@@ -59,6 +59,11 @@ async def runtime_status():
     return await engine_service.runtime_status()
 
 
+@router.get("/resources")
+async def resource_snapshot():
+    return engine_service.resource_snapshot()
+
+
 @router.get("/engine/comfyui/status")
 async def comfyui_status():
     return await engine_service.runtime_status()

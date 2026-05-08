@@ -112,6 +112,26 @@ export interface RuntimeStatus {
   managed_vram_mode?: ComfyUIVramMode | string;
 }
 
+export interface ResourceMetric {
+  available: boolean;
+  percent: number | null;
+  used_mb: number | null;
+  total_mb: number | null;
+  free_mb: number | null;
+  source: string | null;
+  error: string | null;
+}
+
+export interface MachineResourceSnapshot {
+  observed_at: string;
+  cpu: ResourceMetric;
+  ram: ResourceMetric;
+  vram: ResourceMetric;
+  backend: string;
+  device_name: string | null;
+  memory_pressure: string;
+}
+
 export type ComfyUIVramMode = "normal" | "gpu_only" | "highvram" | "lowvram" | "novram" | "cpu";
 
 export interface ComfyUILaunchOption {
@@ -382,6 +402,10 @@ async function postBytes<T>(path: string, body: ArrayBuffer): Promise<T> {
 
 export function fetchRuntimeStatus() {
   return getJson<RuntimeStatus>("/runtime");
+}
+
+export function fetchResourceSnapshot() {
+  return getJson<MachineResourceSnapshot>("/resources");
 }
 
 export function fetchComfyUIVersions() {

@@ -5,6 +5,7 @@ import {
   fetchComfyUILaunchSettings,
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
+  fetchResourceSnapshot,
   fetchRuntimeStatus,
   fetchTrustPolicy,
   fetchWorkflows,
@@ -88,6 +89,27 @@ describe("noofyApi", () => {
       headers: {
         Accept: "application/json",
       },
+    });
+  });
+
+  it("fetches resource snapshots through the Noofy backend API", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        observed_at: "2026-05-08T10:00:00+00:00",
+        cpu: { available: true, percent: 23, used_mb: null, total_mb: null, free_mb: null, source: "test", error: null },
+        ram: { available: true, percent: 35, used_mb: 11264, total_mb: 32768, free_mb: 21504, source: "test", error: null },
+        vram: { available: false, percent: null, used_mb: null, total_mb: null, free_mb: null, source: null, error: "vram_unavailable" },
+        backend: "cpu",
+        device_name: null,
+        memory_pressure: "low",
+      }),
+    );
+
+    const snapshot = await fetchResourceSnapshot();
+
+    expect(snapshot.cpu.percent).toBe(23);
+    expect(fetchMock).toHaveBeenCalledWith("/api/resources", {
+      headers: { Accept: "application/json" },
     });
   });
 
