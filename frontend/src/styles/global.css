@@ -4696,6 +4696,8 @@ button:disabled {
   grid-template-columns: 300px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .layout-widget-tray {
@@ -4767,6 +4769,9 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
   cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
   transition:
     border-color 140ms,
     background 140ms,
@@ -4783,6 +4788,11 @@ button:disabled {
 
 .layout-tray-widget:active {
   cursor: grabbing;
+}
+
+.layout-tray-widget * {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .layout-tray-widget__icon {
@@ -4957,6 +4967,8 @@ button:disabled {
   background: rgba(46, 45, 49, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+  -webkit-user-select: none;
+  user-select: none;
   transition:
     border-color 140ms,
     box-shadow 140ms,
@@ -4967,6 +4979,11 @@ button:disabled {
 .layout-canvas-widget:hover {
   border-color: rgba(139, 92, 246, 0.42);
   background: rgba(55, 54, 59, 0.96);
+}
+
+.layout-canvas-widget * {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .layout-canvas-widget--selected {
@@ -5048,7 +5065,9 @@ button:disabled {
 }
 
 .layout-canvas-widget__preview-surface {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   pointer-events: none;
 }
 
@@ -5071,8 +5090,8 @@ button:disabled {
 
 .layout-preview-input--textarea {
   min-height: 112px;
-  resize: none;
   line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .layout-preview-slider {
@@ -5114,8 +5133,7 @@ button:disabled {
   gap: 8px;
 }
 
-.layout-preview-seed button,
-.layout-preview-output button {
+.layout-preview-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5128,7 +5146,7 @@ button:disabled {
   font-weight: 700;
 }
 
-.layout-preview-seed button {
+.layout-preview-seed .layout-preview-button {
   padding: 0 12px;
 }
 
@@ -5205,7 +5223,7 @@ button:disabled {
     rgba(28, 27, 29, 0.86);
 }
 
-.layout-preview-output button {
+.layout-preview-output .layout-preview-button {
   min-height: 30px;
   padding: 0 11px;
 }

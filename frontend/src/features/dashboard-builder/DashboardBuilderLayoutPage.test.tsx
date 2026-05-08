@@ -21,32 +21,6 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
   fireEvent(target, event);
 }
 
-function dispatchDrag(target: Node, type: string, init: { clientX: number; clientY: number; dataTransfer: DataTransfer }) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperties(event, {
-    clientX: { value: init.clientX },
-    clientY: { value: init.clientY },
-    dataTransfer: { value: init.dataTransfer },
-  });
-  fireEvent(target, event);
-}
-
-function createDataTransfer(): DataTransfer {
-  const store = new Map<string, string>();
-  return {
-    dropEffect: "none",
-    effectAllowed: "all",
-    getData: (format: string) => store.get(format) ?? "",
-    setData: (format: string, data: string) => {
-      store.set(format, data);
-    },
-    clearData: (format?: string) => {
-      if (format) store.delete(format);
-      else store.clear();
-    },
-  } as DataTransfer;
-}
-
 const readyRuntime = {
   mode: "managed",
   reachable: true,
@@ -311,11 +285,10 @@ describe("DashboardBuilderLayoutPage", () => {
       toJSON: () => ({}),
     } as DOMRect);
 
-    const dataTransfer = createDataTransfer();
     const trayWidget = screen.getByText("Prompt").closest("article")!;
-    dispatchDrag(trayWidget, "dragstart", { clientX: 120, clientY: 120, dataTransfer });
-    dispatchDrag(canvasSurface, "dragover", { clientX: 300, clientY: 96, dataTransfer });
-    dispatchDrag(canvasSurface, "drop", { clientX: 300, clientY: 96, dataTransfer });
+    dispatchPointer(trayWidget, "pointerdown", { clientX: 120, clientY: 120 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 96 });
 
     const textbox = screen.getByRole("textbox");
     const promptCell = textbox.closest("article")!;
@@ -324,7 +297,7 @@ describe("DashboardBuilderLayoutPage", () => {
     Object.defineProperty(promptCell, "setPointerCapture", {
       configurable: true,
       value: vi.fn(() => {
-        throw new Error("capture unavailable during native drag transition");
+        throw new Error("capture unavailable");
       }),
     });
 

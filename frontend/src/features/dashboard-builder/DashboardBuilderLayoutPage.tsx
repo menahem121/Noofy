@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -66,8 +66,10 @@ interface RuntimeState {
   runtime: RuntimeStatus | null;
 }
 
-const DRAG_MIME_TYPE = "application/noofy-dashboard-widget";
-const DRAG_TEXT_PREFIX = "noofy-widget:";
+interface PointerEventLocation {
+  clientX: number;
+  clientY: number;
+}
 
 const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   slider: SlidersHorizontal,
@@ -121,7 +123,6 @@ export function DashboardBuilderLayoutPage({
   const schemaRef = useRef(schema);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
-  const activeDragWidgetIdRef = useRef<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [movePreview, setMovePreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [savedFlash, setSavedFlash] = useState<"draft" | "saved" | null>(null);
@@ -161,32 +162,59 @@ export function DashboardBuilderLayoutPage({
   const helperCopy = allWidgetsPlaced ? "Dashboard ready to save." : "Place all widgets on the canvas before saving.";
   const canvasRows = canvasRowsForItems(schema.widgets);
 
-  function handleDragStart(event: DragEvent, widgetId: string) {
-    activeDragWidgetIdRef.current = widgetId;
+  function handleTrayPointerStart(event: PointerEvent<HTMLElement>, widgetId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    capturePointer(event.currentTarget, event.pointerId);
     setActiveDragWidgetId(widgetId);
     setDragPreview(null);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(DRAG_MIME_TYPE, JSON.stringify({ widgetId }));
-    event.dataTransfer.setData("text/plain", `${DRAG_TEXT_PREFIX}${widgetId}`);
+    event.currentTarget.ownerDocument.getSelection()?.removeAllRanges();
+
+    function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
+      pointerEvent.preventDefault();
+      updateTrayDragPreview(widgetId, pointerEvent);
+    }
+
+    function finishTrayDrag(shouldPlace: boolean, pointerEvent: globalThis.PointerEvent) {
+      const widget = schemaRef.current.widgets.find((candidate) => candidate.id === widgetId);
+      const desiredLayout = widget && isPointerInsideCanvas(pointerEvent) ? layoutFromPointer(pointerEvent, widget) : null;
+      if (shouldPlace && widget && desiredLayout) {
+        placeWidget(widget.id, desiredLayout);
+      }
+      clearDragState();
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    }
+
+    function handlePointerUp(pointerEvent: globalThis.PointerEvent) {
+      finishTrayDrag(true, pointerEvent);
+    }
+
+    function handlePointerCancel(pointerEvent: globalThis.PointerEvent) {
+      finishTrayDrag(false, pointerEvent);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
   }
 
-  function handleCanvasDragOver(event: DragEvent) {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const widgetId = activeDragWidgetIdRef.current ?? readDragPayload(event)?.widgetId;
-    if (!widgetId) return;
-
-    const widget = schema.widgets.find((candidate) => candidate.id === widgetId);
-    if (!widget) return;
+  function updateTrayDragPreview(widgetId: string, event: PointerEventLocation) {
+    const currentSchema = schemaRef.current;
+    const widget = currentSchema.widgets.find((candidate) => candidate.id === widgetId);
+    if (!widget || !isPointerInsideCanvas(event)) {
+      setDragPreview(null);
+      return;
+    }
 
     const desiredLayout = layoutFromPointer(event, widget);
     if (!desiredLayout) return;
-
     const previewLayout = findAvailableLayout(
       widget.id,
       desiredLayout,
-      schema.widgets,
-      schema.layout.gridColumns,
+      currentSchema.widgets,
+      currentSchema.layout.gridColumns,
     );
 
     setDragPreview((current) => {
@@ -203,43 +231,13 @@ export function DashboardBuilderLayoutPage({
     });
   }
 
-  function handleCanvasDrop(event: DragEvent) {
-    event.preventDefault();
-    const payload = readDragPayload(event);
-    const widgetId = payload?.widgetId ?? activeDragWidgetIdRef.current;
-    if (!widgetId) {
-      clearDragState();
-      return;
-    }
-
-    const widget = schema.widgets.find((candidate) => candidate.id === widgetId);
-    if (!widget) {
-      clearDragState();
-      return;
-    }
-
-    const desiredLayout = layoutFromPointer(event, widget);
-    if (!desiredLayout) {
-      clearDragState();
-      return;
-    }
-
-    placeWidget(widget.id, desiredLayout);
-    clearDragState();
-  }
-
-  function handleCanvasDragLeave(event: DragEvent) {
-    const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-    setDragPreview(null);
-  }
-
-  function handleDragEnd() {
-    clearDragState();
+  function isPointerInsideCanvas(event: PointerEventLocation): boolean {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return false;
+    return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
   }
 
   function clearDragState() {
-    activeDragWidgetIdRef.current = null;
     setActiveDragWidgetId(null);
     setDragPreview(null);
   }
@@ -264,15 +262,16 @@ export function DashboardBuilderLayoutPage({
     setSelectedWidgetId(widgetId);
   }
 
-  function layoutFromPointer(event: DragEvent, widget: DashboardWidget): DashboardWidgetLayout | null {
+  function layoutFromPointer(event: PointerEventLocation, widget: DashboardWidget): DashboardWidgetLayout | null {
     const canvas = canvasRef.current;
     if (!canvas) return null;
 
     const baseLayout = widget.layout ?? defaultLayoutForWidgetType(widget.widgetType);
-    const fitted = fitLayout(baseLayout, schema.layout.gridColumns);
+    const currentSchema = schemaRef.current;
+    const fitted = fitLayout(baseLayout, currentSchema.layout.gridColumns);
     return layoutFromCanvasPointer(event, fitted, canvas, {
-      columns: schema.layout.gridColumns,
-      rowHeight: schema.layout.rowHeight,
+      columns: currentSchema.layout.gridColumns,
+      rowHeight: currentSchema.layout.rowHeight,
     });
   }
 
@@ -570,8 +569,7 @@ export function DashboardBuilderLayoutPage({
                   <TrayWidgetItem
                     key={widget.id}
                     widget={widget}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
+                    onPointerStart={handleTrayPointerStart}
                   />
                 ))
               )}
@@ -586,9 +584,6 @@ export function DashboardBuilderLayoutPage({
               columns={schema.layout.gridColumns}
               rowHeight={schema.layout.rowHeight}
               gridGap={schema.layout.gridGap}
-              onDragOver={handleCanvasDragOver}
-              onDragLeave={handleCanvasDragLeave}
-              onDrop={handleCanvasDrop}
             >
               {placedWidgets.length === 0 ? (
                 <div className="layout-canvas__empty">
@@ -642,21 +637,17 @@ export function DashboardBuilderLayoutPage({
 
 function TrayWidgetItem({
   widget,
-  onDragStart,
-  onDragEnd,
+  onPointerStart,
 }: {
   widget: DashboardWidget;
-  onDragStart: (event: DragEvent, widgetId: string) => void;
-  onDragEnd: () => void;
+  onPointerStart: (event: PointerEvent<HTMLElement>, widgetId: string) => void;
 }) {
   const Icon = WIDGET_ICONS[widget.widgetType];
 
   return (
     <article
       className="layout-tray-widget"
-      draggable
-      onDragStart={(event) => onDragStart(event, widget.id)}
-      onDragEnd={onDragEnd}
+      onPointerDown={(event) => onPointerStart(event, widget.id)}
     >
       <div className="layout-tray-widget__icon" aria-hidden="true">
         <Icon size={17} />
@@ -807,16 +798,22 @@ function capturePointer(target: Element, pointerId: number) {
 function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   if (widget.widgetType === "textarea") {
     return (
-      <textarea
+      <div
         className="layout-preview-input layout-preview-input--textarea"
-        readOnly
-        value={String(widget.defaultValue ?? "")}
-      />
+        role="textbox"
+        aria-readonly="true"
+      >
+        {String(widget.defaultValue ?? "")}
+      </div>
     );
   }
 
   if (widget.widgetType === "string_field") {
-    return <input className="layout-preview-input" readOnly type="text" value={String(widget.defaultValue ?? "")} />;
+    return (
+      <div className="layout-preview-input" role="textbox" aria-readonly="true">
+        {String(widget.defaultValue ?? "")}
+      </div>
+    );
   }
 
   if (widget.widgetType === "slider") {
@@ -841,8 +838,10 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   if (widget.widgetType === "int_field" || widget.widgetType === "seed_widget") {
     return (
       <div className="layout-preview-seed">
-        <input className="layout-preview-input" readOnly type="text" value={String(widget.defaultValue ?? 0)} />
-        {widget.widgetType === "seed_widget" ? <button type="button">Random</button> : null}
+        <div className="layout-preview-input" role="textbox" aria-readonly="true">
+          {String(widget.defaultValue ?? 0)}
+        </div>
+        {widget.widgetType === "seed_widget" ? <span className="layout-preview-button">Random</span> : null}
       </div>
     );
   }
@@ -882,33 +881,13 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
         <Sparkles size={24} aria-hidden="true" />
         <span>Generated image will appear here</span>
         {widget.showDownload ? (
-          <button type="button">
+          <span className="layout-preview-button">
             <Download size={13} aria-hidden="true" />
             Download
-          </button>
+          </span>
         ) : null}
       </div>
     );
-  }
-
-  return null;
-}
-
-function readDragPayload(event: DragEvent): { widgetId: string } | null {
-  const raw = event.dataTransfer.getData(DRAG_MIME_TYPE);
-  const fallback = event.dataTransfer.getData("text/plain");
-
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as { widgetId?: unknown };
-      if (typeof parsed.widgetId === "string") return { widgetId: parsed.widgetId };
-    } catch {
-      return null;
-    }
-  }
-
-  if (fallback.startsWith(DRAG_TEXT_PREFIX)) {
-    return { widgetId: fallback.slice(DRAG_TEXT_PREFIX.length) };
   }
 
   return null;

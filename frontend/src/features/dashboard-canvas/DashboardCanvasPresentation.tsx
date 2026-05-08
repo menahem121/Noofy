@@ -1,7 +1,6 @@
 import {
   forwardRef,
   type CSSProperties,
-  type DragEvent,
   type HTMLAttributes,
   type PointerEvent,
   type ReactNode,
@@ -25,6 +24,11 @@ export interface DashboardCanvasItem {
 }
 
 export type DashboardResizeHandle = "east" | "south" | "southeast";
+
+interface CanvasPointerLocation {
+  clientX: number;
+  clientY: number;
+}
 
 export function canvasRowsForItems(
   items: DashboardCanvasItem[],
@@ -52,7 +56,7 @@ export function dashboardCanvasWidgetStyle(
 }
 
 export function layoutFromCanvasPointer(
-  event: DragEvent,
+  event: CanvasPointerLocation,
   currentLayout: GridItemLayout,
   canvas: HTMLElement | null,
   {
