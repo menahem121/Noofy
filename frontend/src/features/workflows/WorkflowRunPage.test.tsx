@@ -633,6 +633,9 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(document.querySelector(".workspace-content--canvas-run")).toBeInTheDocument();
+    expect(document.querySelector("#canvas-dashboard-surface")).toHaveStyle({
+      "--layout-surface-min-height": "768px",
+    });
     expect(screen.queryByRole("button", { name: /back to home/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Text to Image" })).not.toBeInTheDocument();
     expect(

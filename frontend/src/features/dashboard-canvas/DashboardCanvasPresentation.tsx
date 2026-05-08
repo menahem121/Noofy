@@ -199,7 +199,7 @@ export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<
   ...props
 }, ref) {
   const surfaceStyle = {
-    minHeight: `${rows * rowHeight}px`,
+    "--layout-surface-min-height": `${rows * rowHeight}px`,
     "--layout-columns": columns,
     "--layout-column-width": `${100 / columns}%`,
     "--layout-row-height": `${rowHeight}px`,

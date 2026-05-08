@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-if (typeof window !== "undefined" && typeof window.localStorage?.clear !== "function") {
+if (typeof window !== "undefined") {
   const store = new Map<string, string>();
   const localStorageShim: Storage = {
     get length() {

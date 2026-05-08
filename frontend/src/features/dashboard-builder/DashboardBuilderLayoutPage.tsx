@@ -496,7 +496,13 @@ export function DashboardBuilderLayoutPage({
   }
 
   return (
-    <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
+    <AppLayout
+      activeRoute="workflows"
+      status={appStatus}
+      onNavigate={onNavigate}
+      mainClassName="main-workspace--builder-layout"
+      contentClassName="workspace-content--builder-layout"
+    >
       <div className="builder-layout-page">
         <header className="builder-layout-topbar" aria-labelledby="builder-layout-title">
           <div className="builder-layout-topbar__left">

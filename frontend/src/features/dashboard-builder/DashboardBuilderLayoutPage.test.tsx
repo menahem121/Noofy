@@ -178,6 +178,32 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
   });
 
+  it("renders the layout builder canvas in the full workspace shell", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("main", { name: /dashboard layout canvas/i })).toHaveClass("layout-canvas");
+    expect(document.querySelector(".main-workspace--builder-layout")).toBeInTheDocument();
+    expect(document.querySelector(".workspace-content--builder-layout")).toBeInTheDocument();
+    expect(document.querySelector(".layout-canvas__surface")).toHaveStyle({
+      "--layout-surface-min-height": "768px",
+    });
+  });
+
   it("moves placed widgets by dragging the card body on snapped grid cells", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
