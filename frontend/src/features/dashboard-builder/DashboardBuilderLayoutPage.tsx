@@ -31,7 +31,6 @@ import {
   fitMovedLayoutPosition,
   layoutFromCanvasPointer,
   moveLayoutFromPointerDelta,
-  nextAdjacentMoveLayout,
   resizeLayoutFromPointerDelta,
   sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
@@ -125,11 +124,11 @@ export function DashboardBuilderLayoutPage({
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [movePreview, setMovePreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
+  const [dropPreview, setDropPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [savedFlash, setSavedFlash] = useState<"draft" | "saved" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const moveFrameRef = useRef<number | null>(null);
   const resizeStateRef = useRef<{
     widgetId: string;
     handle: DashboardResizeHandle;
@@ -142,8 +141,8 @@ export function DashboardBuilderLayoutPage({
     startLayout: DashboardWidgetLayout;
     startClientX: number;
     startClientY: number;
-    lastLayout: DashboardWidgetLayout;
-    targetLayout: DashboardWidgetLayout;
+    currentLayout: DashboardWidgetLayout;
+    dropLayout: DashboardWidgetLayout;
   } | null>(null);
 
   useEffect(() => {
@@ -303,10 +302,11 @@ export function DashboardBuilderLayoutPage({
       startLayout: layout,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      lastLayout: layout,
-      targetLayout: layout,
+      currentLayout: layout,
+      dropLayout: layout,
     };
     setMovePreview({ widgetId, layout });
+    setDropPreview({ widgetId, layout });
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const moveState = moveStateRef.current;
@@ -325,39 +325,17 @@ export function DashboardBuilderLayoutPage({
         }),
         currentSchema.layout.gridColumns,
       );
-      if (sameGridLayout(candidate, moveState.targetLayout)) return;
-      moveState.targetLayout = candidate;
-      applyMoveStep();
-    }
-
-    function applyMoveStep() {
-      const moveState = moveStateRef.current;
-      if (!moveState || sameGridLayout(moveState.lastLayout, moveState.targetLayout)) return;
-
-      const currentSchema = schemaRef.current;
-      const candidate = fitMovedLayoutPosition(
-        nextAdjacentMoveLayout(moveState.lastLayout, moveState.targetLayout),
+      const dropLayout = findAvailableLayout(
+        moveState.widgetId,
+        candidate,
+        currentSchema.widgets,
         currentSchema.layout.gridColumns,
       );
-      const collides = currentSchema.widgets.some((widget) => {
-        if (widget.id === moveState.widgetId || !widget.layout) return false;
-        return layoutsOverlap(candidate, widget.layout);
-      });
-      if (collides) {
-        moveState.targetLayout = moveState.lastLayout;
-        return;
-      }
-      moveState.lastLayout = candidate;
+      if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
+      moveState.currentLayout = candidate;
+      moveState.dropLayout = dropLayout;
       setMovePreview({ widgetId: moveState.widgetId, layout: candidate });
-      if (!sameGridLayout(candidate, moveState.targetLayout)) scheduleMoveStep();
-    }
-
-    function scheduleMoveStep() {
-      if (moveFrameRef.current !== null) return;
-      moveFrameRef.current = window.requestAnimationFrame(() => {
-        moveFrameRef.current = null;
-        applyMoveStep();
-      });
+      setDropPreview({ widgetId: moveState.widgetId, layout: dropLayout });
     }
 
     function commitMove(finalLayout: DashboardWidgetLayout | undefined) {
@@ -375,15 +353,12 @@ export function DashboardBuilderLayoutPage({
     }
 
     function finishMove(shouldCommit: boolean) {
-      const finalLayout = moveStateRef.current?.lastLayout;
-      if (moveFrameRef.current !== null) {
-        window.cancelAnimationFrame(moveFrameRef.current);
-        moveFrameRef.current = null;
-      }
+      const finalLayout = moveStateRef.current?.dropLayout;
       if (shouldCommit) commitMove(finalLayout);
       moveStateRef.current = null;
       setActiveDragWidgetId(null);
       setMovePreview(null);
+      setDropPreview(null);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerCancel);
@@ -595,6 +570,17 @@ export function DashboardBuilderLayoutPage({
                 </div>
               ) : null}
 
+              {dropPreview ? (
+                <DragPreviewWidget
+                  widget={schema.widgets.find((widget) => widget.id === dropPreview.widgetId) ?? null}
+                  layout={dropPreview.layout}
+                  columns={schema.layout.gridColumns}
+                  gridGap={schema.layout.gridGap}
+                  rowHeight={schema.layout.rowHeight}
+                  dropPreview
+                />
+              ) : null}
+
               {placedWidgets.map((widget) => {
                 if (!widget.layout) return null;
                 const previewLayout = movePreview?.widgetId === widget.id ? movePreview.layout : null;
@@ -675,6 +661,7 @@ function PlacedDashboardWidget({
   onResizeStart,
   dragging = false,
   preview = false,
+  dropPreview = false,
 }: {
   widget: DashboardWidget;
   layout: DashboardWidgetLayout;
@@ -688,6 +675,7 @@ function PlacedDashboardWidget({
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
   preview?: boolean;
+  dropPreview?: boolean;
 }) {
   const Icon = WIDGET_ICONS[widget.widgetType];
 
@@ -699,7 +687,10 @@ function PlacedDashboardWidget({
       rowHeight={rowHeight}
       selected={selected}
       preview={preview}
-      className={dragging ? "layout-canvas-widget--moving" : ""}
+      className={`${dragging ? "layout-canvas-widget--moving" : ""}${
+        dropPreview ? " layout-canvas-widget--drop-preview" : ""
+      }`}
+      aria-hidden={preview ? true : undefined}
       onClick={onSelect}
       onPointerDown={!preview ? onMoveStart : undefined}
     >
@@ -736,12 +727,14 @@ function DragPreviewWidget({
   columns,
   gridGap,
   rowHeight,
+  dropPreview = false,
 }: {
   widget: DashboardWidget | null;
   layout: DashboardWidgetLayout;
   columns: number;
   gridGap: number;
   rowHeight: number;
+  dropPreview?: boolean;
 }) {
   if (!widget) return null;
 
@@ -759,6 +752,7 @@ function DragPreviewWidget({
       onMoveStart={() => undefined}
       onResizeStart={() => undefined}
       preview
+      dropPreview={dropPreview}
     />
   );
 }

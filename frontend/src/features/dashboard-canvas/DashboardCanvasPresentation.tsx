@@ -169,14 +169,6 @@ export function fitMovedLayoutPosition(
   };
 }
 
-export function nextAdjacentMoveLayout(current: GridItemLayout, target: GridItemLayout): GridItemLayout {
-  return {
-    ...current,
-    x: current.x + Math.sign(target.x - current.x),
-    y: current.y + Math.sign(target.y - current.y),
-  };
-}
-
 export function sameGridLayout(a: GridItemLayout, b: GridItemLayout): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }

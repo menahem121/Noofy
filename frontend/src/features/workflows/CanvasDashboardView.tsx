@@ -26,7 +26,7 @@ import {
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
-import { fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { findAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
@@ -38,7 +38,6 @@ import {
   type DashboardResizeHandle,
   canvasRowsForItems,
   fitMovedLayoutPosition,
-  nextAdjacentMoveLayout,
   resizeLayoutFromPointerDelta,
   sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
@@ -95,10 +94,10 @@ export function CanvasDashboardView({
 }: CanvasDashboardViewProps) {
   const [movingControlId, setMovingControlId] = useState<string | null>(null);
   const [movePreview, setMovePreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
+  const [dropPreview, setDropPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
-  const moveFrameRef = useRef<number | null>(null);
   const resizeStateRef = useRef<{
     controlId: string;
     handle: DashboardResizeHandle;
@@ -112,8 +111,8 @@ export function CanvasDashboardView({
     startClientX: number;
     startClientY: number;
     columnWidth: number;
-    lastLayout: GridItemLayout;
-    targetLayout: GridItemLayout;
+    currentLayout: GridItemLayout;
+    dropLayout: GridItemLayout;
   } | null>(null);
   const canvasItems = useMemo(
     () => controls.map((control) => ({ id: control.id, layout: effectiveLayout(control) })),
@@ -147,11 +146,9 @@ export function CanvasDashboardView({
     return defaultLayoutForWidgetType(control.type);
   }
 
-  function resolveMoveLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
+  function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS);
-    return layoutCollides(controlId, fitted)
-      ? effectiveLayout(controls.find((control) => control.id === controlId)!)
-      : fitted;
+    return findAvailableLayout(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
   }
 
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
@@ -187,11 +184,12 @@ export function CanvasDashboardView({
       startClientX: event.clientX,
       startClientY: event.clientY,
       columnWidth,
-      lastLayout: layout,
-      targetLayout: layout,
+      currentLayout: layout,
+      dropLayout: layout,
     };
     setMovingControlId(controlId);
     setMovePreview({ controlId, layout });
+    setDropPreview({ controlId, layout });
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const moveState = moveStateRef.current;
@@ -206,51 +204,37 @@ export function CanvasDashboardView({
         },
         DASHBOARD_CANVAS_COLUMNS,
       );
-      if (sameGridLayout(candidate, moveState.targetLayout)) return;
-      moveState.targetLayout = candidate;
-      applyMoveStep();
+      const dropLayout = resolveMoveDropLayout(moveState.controlId, candidate);
+      if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
+      moveState.currentLayout = candidate;
+      moveState.dropLayout = dropLayout;
+      setMovePreview({ controlId: moveState.controlId, layout: candidate });
+      setDropPreview({ controlId: moveState.controlId, layout: dropLayout });
     }
 
-    function applyMoveStep() {
-      const moveState = moveStateRef.current;
-      if (!moveState || sameGridLayout(moveState.lastLayout, moveState.targetLayout)) return;
-
-      const nextLayout = nextAdjacentMoveLayout(moveState.lastLayout, moveState.targetLayout);
-      const resolved = resolveMoveLayout(moveState.controlId, nextLayout);
-      if (!sameGridLayout(resolved, nextLayout)) {
-        moveState.targetLayout = moveState.lastLayout;
-        return;
-      }
-
-      moveState.lastLayout = resolved;
-      setMovePreview({ controlId: moveState.controlId, layout: resolved });
-      if (!sameGridLayout(resolved, moveState.targetLayout)) scheduleMoveStep();
-    }
-
-    function scheduleMoveStep() {
-      if (moveFrameRef.current !== null) return;
-      moveFrameRef.current = window.requestAnimationFrame(() => {
-        moveFrameRef.current = null;
-        applyMoveStep();
-      });
-    }
-
-    function handlePointerUp() {
-      const finalLayout = moveStateRef.current?.lastLayout;
-      if (finalLayout) onLayoutOverride(controlId, finalLayout);
-      if (moveFrameRef.current !== null) {
-        window.cancelAnimationFrame(moveFrameRef.current);
-        moveFrameRef.current = null;
-      }
+    function finishMove(shouldCommit: boolean) {
+      const finalLayout = moveStateRef.current?.dropLayout;
+      if (shouldCommit && finalLayout) onLayoutOverride(controlId, finalLayout);
       moveStateRef.current = null;
       setMovingControlId(null);
       setMovePreview(null);
+      setDropPreview(null);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    }
+
+    function handlePointerUp() {
+      finishMove(true);
+    }
+
+    function handlePointerCancel() {
+      finishMove(false);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
   }
 
   function handleResizeStart(
@@ -410,6 +394,13 @@ export function CanvasDashboardView({
           className={isEditingLayout ? "canvas-dashboard__surface--editing" : ""}
           rows={canvasRows}
         >
+          {dropPreview ? (
+            <CanvasWidgetDropPreview
+              control={controls.find((control) => control.id === dropPreview.controlId) ?? null}
+              layout={dropPreview.layout}
+            />
+          ) : null}
+
           {controls.map((control) => {
             const layout = effectiveLayout(control);
             const previewLayout = movePreview?.controlId === control.id ? movePreview.layout : null;
@@ -441,6 +432,38 @@ export function CanvasDashboardView({
 }
 
 // ─── Single widget cell ───────────────────────────────────────────────────────
+
+function CanvasWidgetDropPreview({
+  control,
+  layout,
+}: {
+  control: DashboardControlDef | null;
+  layout: GridItemLayout;
+}) {
+  if (!control) return null;
+  const Icon = iconForControlType(control.type);
+
+  return (
+    <DashboardCanvasWidgetShell
+      className="layout-canvas-widget--run layout-canvas-widget--preview layout-canvas-widget--drop-preview"
+      layout={layout}
+      style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
+      aria-hidden="true"
+    >
+      <header className="layout-canvas-widget__header">
+        <div className="layout-canvas-widget__title">
+          <span aria-hidden="true">
+            <Icon size={16} />
+          </span>
+          <div>
+            <h3>{control.label}</h3>
+            {control.description ? <p>{control.description}</p> : null}
+          </div>
+        </div>
+      </header>
+    </DashboardCanvasWidgetShell>
+  );
+}
 
 function CanvasWidgetCell({
   control,

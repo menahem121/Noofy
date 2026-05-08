@@ -252,6 +252,76 @@ describe("DashboardBuilderLayoutPage", () => {
     });
   });
 
+  it("lets placed widgets drag through occupied cells and lands them in a free grid cell", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const wallSchema: DashboardSchema = {
+      ...placedSchema,
+      widgets: [
+        placedSchema.widgets[0],
+        {
+          ...placedSchema.widgets[0],
+          id: "result-a",
+          valueId: "result-a",
+          widgetType: "display_image",
+          title: "Result A",
+          layout: { x: 16, y: 0, w: 16, h: 8 },
+        },
+        {
+          ...placedSchema.widgets[0],
+          id: "result-b",
+          valueId: "result-b",
+          widgetType: "display_image",
+          title: "Result B",
+          layout: { x: 0, y: 8, w: 16, h: 8 },
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={wallSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
+
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "128px" });
+    });
+    const dropPreview = document.querySelector(".layout-canvas-widget--drop-preview") as HTMLElement;
+    expect(dropPreview).toBeInTheDocument();
+    expect(dropPreview).toHaveStyle({ left: "50%", top: "256px" });
+
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
+
+    expect(promptCell).toHaveStyle({ left: "50%", top: "256px" });
+  });
+
   it("moves a newly dropped widget on the first follow-up drag", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -320,7 +390,7 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(promptCell).toHaveStyle({ top: "64px" });
   });
 
-  it("steps through intermediate grid cells during fast placed-widget drags", async () => {
+  it("moves directly to the snapped grid cell during fast placed-widget drags", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -365,7 +435,6 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
     dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
 
-    expect(promptCell).toHaveStyle({ left: "15.625%" });
     await waitFor(() => {
       expect(promptCell).toHaveStyle({ left: "18.75%" });
     });

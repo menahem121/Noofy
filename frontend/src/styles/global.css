@@ -5139,6 +5139,18 @@ button:disabled {
   pointer-events: none;
 }
 
+.layout-canvas-widget--moving {
+  z-index: 9;
+}
+
+.layout-canvas-widget--drop-preview {
+  z-index: 6;
+  opacity: 0.58;
+  transform: none;
+  border-color: rgba(159, 122, 234, 0.72);
+  background: rgba(55, 54, 59, 0.72);
+}
+
 .layout-canvas-widget__header {
   display: flex;
   align-items: flex-start;

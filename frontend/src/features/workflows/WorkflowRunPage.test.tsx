@@ -873,7 +873,7 @@ describe("WorkflowRunPage", () => {
     });
   });
 
-  it("steps through intermediate grid cells during fast horizontal drags", async () => {
+  it("moves directly to the snapped grid cell during fast horizontal drags", async () => {
     const packageData = {
       ...configuredPackageData,
       outputs: [],
@@ -939,7 +939,6 @@ describe("WorkflowRunPage", () => {
     dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
     dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
 
-    expect(promptCell).toHaveStyle({ left: "15.625%" });
     await waitFor(() => {
       expect(promptCell).toHaveStyle({ left: "18.75%" });
     });
@@ -951,11 +950,11 @@ describe("WorkflowRunPage", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.layout_overrides.prompt).toEqual({ x: 6, y: 2, w: 8, h: 6 });
+      expect(body.layout_overrides.prompt).toEqual({ x: 6, y: 2, w: 16, h: 6 });
     });
   });
 
-  it("blocks occupied snapped moves at the last valid grid cell", async () => {
+  it("lets dragged widgets pass through occupied cells and drops at the nearest free grid cell", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
     renderRunPage();
@@ -982,12 +981,26 @@ describe("WorkflowRunPage", () => {
       clientY: 96,
     });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
+
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "64px" });
+      expect(promptCell).toHaveStyle({ top: "128px" });
     });
+
+    const dropPreview = document.querySelector(".layout-canvas-widget--drop-preview") as HTMLElement;
+    expect(dropPreview).toBeInTheDocument();
+    expect(dropPreview).toHaveStyle({ left: "50%", top: "256px" });
+
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
 
-    expect(promptCell).toHaveStyle({ top: "64px" });
+    expect(promptCell).toHaveStyle({ left: "50%", top: "256px" });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 16, y: 8, w: 16, h: 6 });
+    });
   });
 
   it("opens the dashboard builder widget step from the canvas options menu", async () => {
