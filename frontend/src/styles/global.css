@@ -1170,6 +1170,13 @@ button:disabled {
   font-weight: 700;
 }
 
+.field-group > span,
+.field-group > small,
+.field-group__hint {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .field-group textarea,
 .field-group input[type="number"] {
   width: 100%;
@@ -4981,7 +4988,35 @@ button:disabled {
   background: rgba(55, 54, 59, 0.96);
 }
 
-.layout-canvas-widget * {
+.layout-canvas-widget :where(
+  .layout-canvas-widget__header,
+  .layout-canvas-widget__header *,
+  .layout-canvas-widget__preview-surface,
+  .layout-canvas-widget__preview-surface *,
+  .widget-output-placeholder,
+  .widget-output-placeholder *,
+  .widget-output-image__download,
+  .canvas-widget-slider,
+  .canvas-widget-slider *,
+  .canvas-widget-toggle,
+  .canvas-widget-toggle *,
+  .canvas-widget-image-input__hint,
+  .canvas-widget-image-input__filename,
+  .canvas-widget-image-input__missing,
+  .layout-canvas-resize-handles,
+  .layout-canvas-resize-handles *
+) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.layout-canvas-widget :where(input, textarea, select) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.builder-layout-workspace .layout-canvas-widget :where(input, textarea, select),
+.layout-canvas-widget--run-editing :where(input, textarea, select) {
   -webkit-user-select: none;
   user-select: none;
 }
