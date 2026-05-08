@@ -530,11 +530,16 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText("Ready")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
-    expect(await screen.findByText("running")).toBeInTheDocument();
+    const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
+    expect(topBarProgress).toHaveAttribute("aria-valuenow", "20");
+    expect(screen.getByText("20%")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
     expect(await screen.findByText("Run canceled.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("progressbar", { name: /workflow progress/i })).not.toBeInTheDocument();
+    });
   });
 
   it("passes the runtime token to the job event stream URL", async () => {

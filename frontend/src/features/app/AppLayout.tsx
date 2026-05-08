@@ -27,6 +27,10 @@ export interface AppStatusView {
   loading?: boolean;
 }
 
+export interface AppTopBarProgress {
+  percent: number;
+}
+
 interface AppLayoutProps {
   activeRoute: AppRouteId;
   status: AppStatusView;
@@ -34,6 +38,7 @@ interface AppLayoutProps {
   onNavigate: (route: AppRouteId) => void;
   mainClassName?: string;
   contentClassName?: string;
+  progress?: AppTopBarProgress | null;
 }
 
 const navItems = [
@@ -66,6 +71,7 @@ export function AppLayout({
   onNavigate,
   mainClassName = "",
   contentClassName = "",
+  progress = null,
 }: AppLayoutProps) {
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const isHome = activeRoute === "home";
@@ -113,6 +119,22 @@ export function AppLayout({
             <Settings size={19} aria-hidden="true" />
           </button>
         </div>
+
+        {progress ? (
+          <div className="topbar-progress">
+            <div
+              className="topbar-progress__track"
+              role="progressbar"
+              aria-label="Workflow progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress.percent}
+            >
+              <span style={{ width: `${progress.percent}%` }} />
+            </div>
+            <span className="topbar-progress__value">{progress.percent}%</span>
+          </div>
+        ) : null}
       </header>
 
       <aside className="sidebar" aria-hidden={!effectiveOpen}>

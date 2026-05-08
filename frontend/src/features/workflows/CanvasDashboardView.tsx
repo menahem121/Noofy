@@ -23,7 +23,6 @@ import {
 
 import {
   type DashboardControlDef,
-  type JobProgress,
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
@@ -49,8 +48,6 @@ export interface CanvasRunState {
   isRunning: boolean;
   canRun: boolean;
   canCancel: boolean;
-  progress: JobProgress | null;
-  progressPercent: number;
 }
 
 interface CanvasDashboardViewProps {
@@ -406,18 +403,6 @@ export function CanvasDashboardView({
             </>
           )}
         </div>
-
-        {!isEditingLayout ? (
-        <div className="canvas-progress-overlay">
-          <div className="canvas-progress-overlay__labels">
-            <span>{runState.progress?.status ?? "Not started"}</span>
-            <span>{runState.progressPercent}%</span>
-          </div>
-          <div className="progress-bar" aria-label="Workflow progress">
-            <span style={{ width: `${runState.progressPercent}%` }} />
-          </div>
-        </div>
-        ) : null}
 
         <DashboardCanvasSurface
           id="canvas-dashboard-surface"

@@ -351,6 +351,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       : state.progress?.status === "completed"
         ? 100
         : 0;
+  const topBarProgress = isRunning ? { percent: progressPercent } : null;
 
   const inputControls = allControls.filter(
     (c) => c.type !== "result_image" && c.type !== "display_image" && c.input_id,
@@ -479,6 +480,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         onNavigate={onNavigate}
         mainClassName="main-workspace--canvas-run"
         contentClassName="workspace-content--canvas-run"
+        progress={topBarProgress}
       >
         <CanvasDashboardView
           controls={allControls}
@@ -492,8 +494,6 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
             isRunning,
             canRun,
             canCancel,
-            progress: state.progress,
-            progressPercent,
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           onChange={(inputId, value) => setInputValue(inputId, value)}
@@ -514,7 +514,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   }
 
   return (
-    <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate}>
+    <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate} progress={topBarProgress}>
       {pageHeader}
       {notices}
 
@@ -582,16 +582,6 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
                 <span>Your generated image will appear here.</span>
               </div>
             )}
-          </div>
-
-          <div className="progress-block">
-            <div className="progress-block__topline">
-              <span>{state.progress?.status ?? "Not started"}</span>
-              <span>{progressPercent}%</span>
-            </div>
-            <div className="progress-bar" aria-label="Workflow progress">
-              <span style={{ width: `${progressPercent}%` }} />
-            </div>
           </div>
 
           {state.result?.status === "failed" ? (

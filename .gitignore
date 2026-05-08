@@ -18,3 +18,4 @@ frontend/dist/
 frontend/src-tauri/target/
 frontend/coverage/
 *.tsbuildinfo
+ComfyUI-Crystools/

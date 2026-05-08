@@ -225,6 +225,47 @@ button:disabled {
   min-width: 250px;
 }
 
+.topbar-progress {
+  position: absolute;
+  right: 20px;
+  bottom: 0;
+  left: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: end;
+  gap: 12px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.topbar-progress__track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px 999px 0 0;
+  background: rgba(75, 72, 82, 0.72);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.34);
+}
+
+.topbar-progress__track span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9f7aea 0%, #8b5cf6 54%, #c4b5fd 100%);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.48);
+  transition: width 180ms ease;
+}
+
+.topbar-progress__value {
+  align-self: center;
+  color: #ddd6fe;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .status-pill {
   min-height: 30px;
   gap: 8px;
@@ -1256,37 +1297,6 @@ button:disabled {
 
 .preview-empty svg {
   color: var(--border-strong);
-}
-
-.progress-block {
-  margin-top: 16px;
-}
-
-.progress-block__topline {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: capitalize;
-}
-
-.progress-bar {
-  height: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-3);
-}
-
-.progress-bar span {
-  display: block;
-  height: 100%;
-  min-width: 0;
-  border-radius: inherit;
-  background: linear-gradient(135deg, var(--primary), var(--primary-pressed));
-  transition: width 160ms ease;
 }
 
 .recent-list {
@@ -5412,29 +5422,6 @@ button:disabled {
   min-height: 36px;
   padding-top: 8px;
   padding-bottom: 8px;
-}
-
-.canvas-progress-overlay {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  z-index: 25;
-  width: min(360px, calc(100% - 32px));
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 12px;
-  background: rgba(28, 27, 29, 0.78);
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(10px);
-}
-
-.canvas-progress-overlay__labels {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 .canvas-dashboard__surface--editing .layout-canvas-widget--run {
