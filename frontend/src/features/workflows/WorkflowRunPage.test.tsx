@@ -611,16 +611,16 @@ describe("WorkflowRunPage", () => {
     expect(document.querySelector("#canvas-dashboard-surface")).toHaveStyle({ "--layout-columns": "32" });
     expect(promptCell).toHaveClass("layout-canvas-widget", "layout-canvas-widget--run");
     expect(promptCell).toHaveStyle({
-      left: "calc(0% + 7px)",
-      top: "7px",
-      width: "calc(50% - 14px)",
-      height: "178px",
+      left: "0%",
+      top: "0px",
+      width: "50%",
+      height: "192px",
     });
     expect(resultCell).toHaveStyle({
-      left: "calc(50% + 7px)",
-      top: "7px",
-      width: "calc(50% - 14px)",
-      height: "242px",
+      left: "50%",
+      top: "0px",
+      width: "50%",
+      height: "256px",
     });
   });
 
@@ -737,14 +737,14 @@ describe("WorkflowRunPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 600, clientY: 256 });
     dispatchPointer(window, "pointerup", { clientX: 600, clientY: 256 });
 
-    expect(promptCell).toHaveStyle({ height: "242px" });
+    expect(promptCell).toHaveStyle({ height: "256px" });
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
     expect(screen.getByRole("textbox")).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
-    expect(promptCell).toHaveStyle({ width: "calc(50% - 14px)" });
-    expect(promptCell).toHaveStyle({ height: "178px" });
+    expect(promptCell).toHaveStyle({ width: "50%" });
+    expect(promptCell).toHaveStyle({ height: "192px" });
   });
 
   it("saves a grid-snapped resized layout to user state overrides", async () => {
@@ -817,7 +817,7 @@ describe("WorkflowRunPage", () => {
 
     expect(promptCell).toHaveClass("layout-canvas-widget--preview");
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "71px" });
+      expect(promptCell).toHaveStyle({ top: "64px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
@@ -897,9 +897,9 @@ describe("WorkflowRunPage", () => {
     dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
     dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
 
-    expect(promptCell).toHaveStyle({ left: "calc(15.625% + 7px)" });
+    expect(promptCell).toHaveStyle({ left: "15.625%" });
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ left: "calc(18.75% + 7px)" });
+      expect(promptCell).toHaveStyle({ left: "18.75%" });
     });
 
     dispatchPointer(window, "pointerup", { clientX: 325, clientY: 160 });
@@ -941,11 +941,11 @@ describe("WorkflowRunPage", () => {
     });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 224 });
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "71px" });
+      expect(promptCell).toHaveStyle({ top: "64px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
 
-    expect(promptCell).toHaveStyle({ top: "71px" });
+    expect(promptCell).toHaveStyle({ top: "64px" });
   });
 
   it("opens the dashboard builder widget step from the canvas options menu", async () => {

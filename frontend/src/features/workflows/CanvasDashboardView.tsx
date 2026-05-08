@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent,
 } from "react";
 import {
@@ -32,7 +31,6 @@ import { fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLa
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
-  DASHBOARD_CANVAS_GRID_GAP,
   DASHBOARD_CANVAS_ROW_HEIGHT,
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
@@ -496,9 +494,7 @@ function CanvasWidgetCell({
       }`}
       layout={layout}
       preview={isPreview}
-      style={
-        { height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT - DASHBOARD_CANVAS_GRID_GAP}px` } as CSSProperties
-      }
+      style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
       onPointerDown={isEditingLayout ? onMoveStart : undefined}
     >
       <header className="layout-canvas-widget__header">

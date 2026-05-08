@@ -41,14 +41,13 @@ export function dashboardCanvasWidgetStyle(
   {
     columns = DASHBOARD_CANVAS_COLUMNS,
     rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
-    gridGap = DASHBOARD_CANVAS_GRID_GAP,
   }: DashboardCanvasMetrics = {},
 ): CSSProperties {
   return {
-    left: `calc(${(layout.x / columns) * 100}% + ${gridGap / 2}px)`,
-    top: `${layout.y * rowHeight + gridGap / 2}px`,
-    width: `calc(${(layout.w / columns) * 100}% - ${gridGap}px)`,
-    minHeight: `${layout.h * rowHeight - gridGap}px`,
+    left: `${(layout.x / columns) * 100}%`,
+    top: `${layout.y * rowHeight}px`,
+    width: `${(layout.w / columns) * 100}%`,
+    minHeight: `${layout.h * rowHeight}px`,
   };
 }
 

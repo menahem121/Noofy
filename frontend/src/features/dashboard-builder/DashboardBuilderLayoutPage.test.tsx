@@ -190,12 +190,12 @@ describe("DashboardBuilderLayoutPage", () => {
 
     expect(promptCell).toHaveClass("layout-canvas-widget--preview");
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "71px" });
+      expect(promptCell).toHaveStyle({ top: "64px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 160 });
 
     expect(promptCell).not.toHaveClass("layout-canvas-widget--preview");
-    expect(promptCell).toHaveStyle({ top: "71px" });
+    expect(promptCell).toHaveStyle({ top: "64px" });
   });
 
   it("steps through intermediate grid cells during fast placed-widget drags", async () => {
@@ -243,9 +243,9 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(promptCell, "pointerdown", { clientX: 250, clientY: 160 });
     dispatchPointer(window, "pointermove", { clientX: 325, clientY: 160 });
 
-    expect(promptCell).toHaveStyle({ left: "calc(15.625% + 7px)" });
+    expect(promptCell).toHaveStyle({ left: "15.625%" });
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ left: "calc(18.75% + 7px)" });
+      expect(promptCell).toHaveStyle({ left: "18.75%" });
     });
     dispatchPointer(window, "pointerup", { clientX: 325, clientY: 160 });
   });
