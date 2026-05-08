@@ -125,7 +125,7 @@ For advanced users, contributors, and Unix-like source checkouts:
 
 **Prerequisites** — these are source-build tools; Noofy does not install them for you:
 
-| Tool | Minimum | Install |
+| Tool | Minimum | Recommended Install |
 |------|---------|---------|
 | Python | 3.11 | `brew install python@3.13` · [python.org](https://www.python.org/downloads) |
 | Node.js + npm | LTS v18 | `brew install node` · [nodejs.org](https://nodejs.org/en/download) |
