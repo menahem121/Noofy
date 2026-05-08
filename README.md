@@ -110,7 +110,7 @@ manually launching ComfyUI or installing ComfyUI Python dependencies.
 Packaged installers are the normal-user path:
 
 - Windows: `.exe`
-- macOS: `.dmg`
+- macOS Apple Silicon: `.dmg`
 - Linux: `.deb` or equivalent
 
 Packaged apps must ship built frontend assets and a Noofy-owned backend/Python

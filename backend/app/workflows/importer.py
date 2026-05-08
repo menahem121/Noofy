@@ -1397,7 +1397,9 @@ def _select_import_runtime_profile(
             and variant.gpu_backend_profile == "cpu"
         ):
             return profile, variant
-    return profile, profile.variants[0]
+    raise NoofyImportError(
+        f"No supported runtime profile variant for {os_name}/{architecture}."
+    )
 
 
 def _reject_unsupported_exported_launch_options(data: dict[str, Any]) -> None:
@@ -1448,6 +1450,8 @@ def _current_architecture() -> str:
 def _preferred_gpu_backend(os_name: str, architecture: str) -> str:
     if os_name == "darwin" and architecture == "arm64":
         return "mps"
+    if os_name == "darwin":
+        return "unsupported"
     if os_name in {"linux", "windows"} and architecture == "x64" and _has_nvidia_gpu():
         return "cuda"
     return "cpu"

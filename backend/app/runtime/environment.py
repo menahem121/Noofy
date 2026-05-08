@@ -11,8 +11,13 @@ from app.engine.models import (
     RuntimeDependencyStatus,
     RuntimeEnvironmentStatus,
     RuntimeHardwareProfile,
+    TorchInstallPlan,
 )
-from app.runtime.hardware import detect_hardware, plan_torch_install
+from app.runtime.hardware import (
+    UNSUPPORTED_MACOS_INTEL_ACCELERATOR,
+    detect_hardware,
+    plan_torch_install,
+)
 
 
 @dataclass(frozen=True)
@@ -108,13 +113,22 @@ class RuntimeEnvironment:
     async def status(self) -> RuntimeEnvironmentStatus:
         runtime_dir_writable = self._ensure_writable_runtime_dirs()
         python_exists = self._executable_exists(self.python_executable)
-        dependencies = await self._check_dependencies() if python_exists else []
-        error = self._status_error(runtime_dir_writable, python_exists, dependencies)
         hardware = await self._detect_hardware()
         torch_install_plan = plan_torch_install(
             hardware,
             cuda_index_url=self.torch_cuda_index_url,
             cpu_index_url=self.torch_cpu_index_url,
+        )
+        dependencies = (
+            await self._check_dependencies()
+            if python_exists and not _torch_install_plan_is_unsupported(torch_install_plan)
+            else []
+        )
+        error = self._status_error(
+            runtime_dir_writable,
+            python_exists,
+            dependencies,
+            torch_install_plan=torch_install_plan,
         )
 
         return RuntimeEnvironmentStatus(
@@ -156,6 +170,17 @@ class RuntimeEnvironment:
             )
             return RuntimeBootstrapResult(
                 status="requirements_missing", environment=current
+            )
+
+        if _torch_install_plan_is_unsupported(current.torch_install_plan):
+            self.log_store.add(
+                "error",
+                "ComfyUI managed runtime is not supported on this platform",
+                "runtime.environment",
+                details={"reason": current.torch_install_plan.reason},
+            )
+            return RuntimeBootstrapResult(
+                status="platform_unsupported", environment=current
             )
 
         if self.python_executable_override:
@@ -254,6 +279,8 @@ class RuntimeEnvironment:
         runtime_dir_writable: bool,
         python_exists: bool,
         dependencies: list[RuntimeDependencyStatus],
+        *,
+        torch_install_plan: TorchInstallPlan,
     ) -> str | None:
         if not self.repo_dir.exists():
             return f"ComfyUI repo not found: {self.repo_dir}"
@@ -263,6 +290,8 @@ class RuntimeEnvironment:
             return f"ComfyUI requirements.txt not found in: {self.repo_dir}"
         if not runtime_dir_writable:
             return f"Runtime directory is not writable: {self.runtime_dir}"
+        if _torch_install_plan_is_unsupported(torch_install_plan):
+            return torch_install_plan.reason
         if not python_exists:
             return f"Runtime Python executable not found: {self.python_executable}"
 
@@ -397,3 +426,10 @@ class RuntimeEnvironment:
             return None
         home = str(Path.home())
         return text.replace(home, "~")
+
+
+def _torch_install_plan_is_unsupported(plan: TorchInstallPlan) -> bool:
+    return (
+        plan.accelerator == UNSUPPORTED_MACOS_INTEL_ACCELERATOR
+        or not plan.packages
+    )

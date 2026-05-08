@@ -1,6 +1,6 @@
 # Architecture
 
-The app is a local AI workflow tool for Linux, Windows, and macOS. It should hide ComfyUI complexity from end users while keeping ComfyUI's workflow power available behind the scenes.
+The app is a local AI workflow tool for Linux, Windows, and macOS Apple Silicon. It should hide ComfyUI complexity from end users while keeping ComfyUI's workflow power available behind the scenes. macOS Intel is unsupported for managed ComfyUI runtime preparation.
 
 ## Stack
 

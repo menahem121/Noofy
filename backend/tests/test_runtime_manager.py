@@ -105,6 +105,13 @@ async def test_managed_start_checks_environment_before_process_start(
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(tmp_path / "missing-python"),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="cpu",
+        ),
         log_store=LogStore(),
     )
     manager = RuntimeManager(
@@ -420,7 +427,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
         required_imports=("json",),
         required_runtime_checks=(),
         hardware_profile=RuntimeHardwareProfile(
-            os_name="Darwin",
+            os_name="Linux",
             os_version="",
             machine="x86_64",
             architecture="x86_64",

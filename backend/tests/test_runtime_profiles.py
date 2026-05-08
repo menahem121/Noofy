@@ -52,6 +52,21 @@ def test_resolve_runtime_profile_selects_supported_variant() -> None:
     assert selection.variant.torch_version == "2.11.0"
 
 
+def test_resolve_runtime_profile_rejects_macos_intel() -> None:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+
+    with pytest.raises(RuntimeProfileResolutionError) as exc:
+        resolve_runtime_profile(
+            catalog,
+            runtime_profile_id="noofy-comfyui-v1-default",
+            os_name="darwin",
+            architecture="x64",
+            gpu_backend_profile="cpu",
+        )
+
+    assert exc.value.code is RuntimeProfileErrorCode.UNSUPPORTED_PROFILE_VARIANT
+
+
 def test_resolve_runtime_profile_selects_linux_cuda_variant() -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
 

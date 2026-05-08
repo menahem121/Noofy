@@ -8,6 +8,7 @@ from app.engine.models import RuntimeHardwareProfile, TorchInstallPlan
 CommandRunner = Callable[[list[str], Any], Awaitable[Any]]
 
 TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
+UNSUPPORTED_MACOS_INTEL_ACCELERATOR = "unsupported_macos_intel"
 
 
 async def detect_hardware(command_runner: CommandRunner) -> RuntimeHardwareProfile:
@@ -17,11 +18,15 @@ async def detect_hardware(command_runner: CommandRunner) -> RuntimeHardwareProfi
     notes: list[str] = []
 
     if os_name == "Darwin":
-        accelerator = "apple_mps" if machine.lower() in {"arm64", "aarch64"} else "cpu"
-        if accelerator == "cpu":
-            notes.append("macOS Intel detected; no Apple Silicon MPS or NVIDIA CUDA acceleration is available.")
-        else:
+        if machine.lower() in {"arm64", "aarch64"}:
+            accelerator = "apple_mps"
             notes.append("Apple Silicon detected; PyTorch macOS wheels can use MPS when available.")
+        else:
+            accelerator = UNSUPPORTED_MACOS_INTEL_ACCELERATOR
+            notes.append(
+                "macOS Intel is unsupported for Noofy managed ComfyUI runtime. "
+                "CPU/RAM diagnostics may work, but Noofy will not prepare a managed runtime."
+            )
         return RuntimeHardwareProfile(
             os_name=os_name,
             os_version=platform.mac_ver()[0] or None,
@@ -96,9 +101,15 @@ def plan_torch_install(
         )
 
     return TorchInstallPlan(
-        accelerator="cpu",
-        packages=TORCH_PACKAGES,
-        reason="macOS Intel or unknown macOS accelerator detected; installing standard PyTorch macOS wheels.",
+        accelerator=UNSUPPORTED_MACOS_INTEL_ACCELERATOR,
+        packages=[],
+        reason=(
+            "macOS Intel is unsupported for Noofy managed ComfyUI runtime. "
+            "No PyTorch or ComfyUI runtime will be installed."
+        ),
+        warnings=[
+            "Noofy supports macOS Apple Silicon, Windows, and Linux managed runtimes.",
+        ],
     )
 
 

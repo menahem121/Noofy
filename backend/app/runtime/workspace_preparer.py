@@ -1254,8 +1254,6 @@ def _dependency_lock_matches_runtime(
 def _uv_python_platform(os_name: str, architecture: str) -> str | None:
     if os_name == "darwin" and architecture == "arm64":
         return "aarch64-apple-darwin"
-    if os_name == "darwin" and architecture == "x64":
-        return "x86_64-apple-darwin"
     if os_name == "windows" and architecture == "x64":
         return "x86_64-pc-windows-msvc"
     if os_name == "linux" and architecture == "x64":

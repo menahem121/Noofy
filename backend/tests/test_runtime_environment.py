@@ -7,6 +7,14 @@ from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import CommandResult, RuntimeEnvironment
 from app.runtime.hardware import plan_torch_install
 
+SUPPORTED_TEST_HARDWARE = RuntimeHardwareProfile(
+    os_name="Linux",
+    os_version="",
+    machine="x86_64",
+    architecture="x86_64",
+    accelerator="cpu",
+)
+
 
 def create_repo(tmp_path: Path, *, requirements: bool = True) -> Path:
     repo_dir = tmp_path / "ComfyUI"
@@ -31,6 +39,7 @@ async def test_environment_reports_missing_python_executable(tmp_path: Path) -> 
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(tmp_path / "missing-python"),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         log_store=LogStore(),
     )
 
@@ -48,6 +57,7 @@ async def test_bootstrap_reports_missing_requirements_file(tmp_path: Path) -> No
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         log_store=LogStore(),
     )
 
@@ -72,6 +82,7 @@ async def test_environment_reports_dependency_check_failure(tmp_path: Path) -> N
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(runtime_python),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         command_runner=command_runner,
         log_store=LogStore(),
     )
@@ -101,6 +112,7 @@ async def test_environment_reports_missing_required_torch_runtime_api(tmp_path: 
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(runtime_python),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         command_runner=command_runner,
         log_store=LogStore(),
     )
@@ -127,6 +139,7 @@ async def test_bootstrap_reports_environment_already_prepared(tmp_path: Path) ->
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         python_executable_override=str(runtime_python),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         command_runner=command_runner,
         log_store=LogStore(),
     )
@@ -149,6 +162,7 @@ async def test_bootstrap_failure_is_logged(tmp_path: Path) -> None:
         repo_dir=repo_dir,
         runtime_dir=tmp_path / "runtime",
         bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
         log_store=log_store,
         command_runner=command_runner,
     )
@@ -184,10 +198,10 @@ async def test_bootstrap_installs_torch_before_comfyui_requirements(
         runtime_dir=runtime_dir,
         bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
         hardware_profile=RuntimeHardwareProfile(
-            os_name="Darwin",
-            os_version="14.0",
+            os_name="Linux",
+            os_version="",
             machine="x86_64",
-            architecture="i386",
+            architecture="x86_64",
             accelerator="cpu",
         ),
         command_runner=command_runner,
@@ -206,20 +220,54 @@ async def test_bootstrap_installs_torch_before_comfyui_requirements(
     assert torch_install_index < requirements_index
 
 
-def test_torch_plan_uses_standard_macos_wheels_for_intel_mac() -> None:
+@pytest.mark.anyio
+async def test_bootstrap_fails_closed_on_macos_intel(tmp_path: Path) -> None:
+    repo_dir = create_repo(tmp_path)
+    command_calls: list[list[str]] = []
+
+    async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
+        command_calls.append(command)
+        return CommandResult(returncode=0)
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=tmp_path / "runtime",
+        bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Darwin",
+            os_version="14.0",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="unsupported_macos_intel",
+        ),
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+
+    result = await environment.bootstrap()
+
+    assert result.status == "platform_unsupported"
+    assert result.environment is not None
+    assert not result.environment.prepared
+    assert "macOS Intel is unsupported" in (result.environment.error or "")
+    assert command_calls == []
+
+
+def test_torch_plan_rejects_macos_intel() -> None:
     plan = plan_torch_install(
         RuntimeHardwareProfile(
             os_name="Darwin",
             os_version="14.0",
             machine="x86_64",
-            architecture="i386",
-            accelerator="cpu",
+            architecture="x86_64",
+            accelerator="unsupported_macos_intel",
         )
     )
 
-    assert plan.accelerator == "cpu"
+    assert plan.accelerator == "unsupported_macos_intel"
+    assert plan.packages == []
     assert plan.index_url is None
-    assert plan.pip_args == []
+    assert "macOS Intel is unsupported" in plan.reason
 
 
 def test_torch_plan_uses_cuda_wheels_for_nvidia_gpu() -> None:

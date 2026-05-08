@@ -117,6 +117,10 @@ does not require dedicated VRAM fields. The Noofy-owned runner memory probe can
 record PyTorch MPS allocator/driver/recommended memory telemetry when those APIs
 are available in the runner process.
 
+macOS Intel is not a supported managed ComfyUI runtime target for Noofy.
+Generic Darwin RAM and process-tree observers may still produce diagnostics on
+Intel Macs, but those signals do not imply workflow/runtime support.
+
 CPU fallback uses RAM pressure. GPU-style estimates can be used as a RAM
 pressure proxy when no dedicated RAM estimate exists. Capsules whose runtime
 backend is explicitly `cpu` are classified as `cpu_only`.
