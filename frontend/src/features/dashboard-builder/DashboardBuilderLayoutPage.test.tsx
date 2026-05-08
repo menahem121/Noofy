@@ -146,7 +146,13 @@ describe("DashboardBuilderLayoutPage", () => {
       />,
     );
 
-    expect(await screen.findByRole("button", { name: /^resize prompt$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /resize prompt from top-left/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from top-right/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from bottom-left/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from bottom-right/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /resize prompt from/i })).toHaveLength(4);
+    expect(screen.queryByRole("button", { name: /resize prompt width/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize prompt height/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
@@ -200,7 +206,7 @@ describe("DashboardBuilderLayoutPage", () => {
       />,
     );
 
-    await screen.findByRole("button", { name: /^resize prompt$/i });
+    await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
     const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
     vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -341,7 +347,7 @@ describe("DashboardBuilderLayoutPage", () => {
       />,
     );
 
-    await screen.findByRole("button", { name: /^resize prompt$/i });
+    await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
     const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
     vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
       x: 0,

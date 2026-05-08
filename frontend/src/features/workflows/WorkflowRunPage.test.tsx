@@ -737,7 +737,13 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByLabelText("Workflow progress")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save dashboard/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /resize prompt/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /resize prompt from/i })).toHaveLength(4);
+    expect(screen.getByRole("button", { name: /resize prompt from top-left/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from top-right/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from bottom-left/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resize prompt from bottom-right/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize prompt width/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize prompt height/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(promptInput).toBeDisabled();
   });
@@ -764,7 +770,7 @@ describe("WorkflowRunPage", () => {
     } as DOMRect);
 
     const promptCell = screen.getByRole("textbox").closest("article");
-    dispatchPointer(screen.getByRole("button", { name: /resize prompt height/i }), "pointerdown", {
+    dispatchPointer(screen.getByRole("button", { name: /resize prompt from bottom-right/i }), "pointerdown", {
       clientX: 600,
       clientY: 192,
     });
@@ -802,7 +808,7 @@ describe("WorkflowRunPage", () => {
       toJSON: () => ({}),
     } as DOMRect);
 
-    dispatchPointer(screen.getByRole("button", { name: /resize prompt height/i }), "pointerdown", {
+    dispatchPointer(screen.getByRole("button", { name: /resize prompt from bottom-right/i }), "pointerdown", {
       clientX: 600,
       clientY: 192,
     });

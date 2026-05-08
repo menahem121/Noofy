@@ -23,7 +23,7 @@ export interface DashboardCanvasItem {
   layout?: GridItemLayout | null;
 }
 
-export type DashboardResizeHandle = "east" | "south" | "southeast";
+export type DashboardResizeHandle = "northwest" | "northeast" | "southwest" | "southeast";
 
 interface CanvasPointerLocation {
   clientX: number;
@@ -104,17 +104,29 @@ export function resizeLayoutFromPointerDelta({
   const minW = startLayout.minW ?? 2;
   const minH = startLayout.minH ?? 2;
 
-  return {
-    ...startLayout,
-    w:
-      handle === "east" || handle === "southeast"
-        ? clamp(startLayout.w + deltaColumns, minW, columns - startLayout.x)
-        : startLayout.w,
-    h:
-      handle === "south" || handle === "southeast"
-        ? Math.max(minH, startLayout.h + deltaRows)
-        : startLayout.h,
-  };
+  const right = startLayout.x + startLayout.w;
+  const bottom = startLayout.y + startLayout.h;
+  const nextLayout = { ...startLayout };
+
+  if (handle === "northeast" || handle === "southeast") {
+    nextLayout.w = clamp(startLayout.w + deltaColumns, minW, columns - startLayout.x);
+  }
+
+  if (handle === "northwest" || handle === "southwest") {
+    nextLayout.x = clamp(startLayout.x + deltaColumns, 0, right - minW);
+    nextLayout.w = right - nextLayout.x;
+  }
+
+  if (handle === "southwest" || handle === "southeast") {
+    nextLayout.h = Math.max(minH, startLayout.h + deltaRows);
+  }
+
+  if (handle === "northwest" || handle === "northeast") {
+    nextLayout.y = clamp(startLayout.y + deltaRows, 0, bottom - minH);
+    nextLayout.h = bottom - nextLayout.y;
+  }
+
+  return nextLayout;
 }
 
 export function moveLayoutFromPointerDelta({
@@ -268,29 +280,25 @@ export function DashboardCanvasResizeHandles({
   label: string;
   onResizeStart: (handle: DashboardResizeHandle, event: PointerEvent<HTMLButtonElement>) => void;
 }) {
+  const handles: Array<{ handle: DashboardResizeHandle; label: string; title: string }> = [
+    { handle: "northwest", label: `Resize ${label} from top-left`, title: "Resize from top-left" },
+    { handle: "northeast", label: `Resize ${label} from top-right`, title: "Resize from top-right" },
+    { handle: "southwest", label: `Resize ${label} from bottom-left`, title: "Resize from bottom-left" },
+    { handle: "southeast", label: `Resize ${label} from bottom-right`, title: "Resize from bottom-right" },
+  ];
+
   return (
     <div className="layout-canvas-resize-handles" aria-hidden="false">
-      <button
-        className="layout-canvas-resize-handle layout-canvas-resize-handle--east"
-        type="button"
-        aria-label={`Resize ${label} width`}
-        title="Resize width"
-        onPointerDown={(event) => onResizeStart("east", event)}
-      />
-      <button
-        className="layout-canvas-resize-handle layout-canvas-resize-handle--south"
-        type="button"
-        aria-label={`Resize ${label} height`}
-        title="Resize height"
-        onPointerDown={(event) => onResizeStart("south", event)}
-      />
-      <button
-        className="layout-canvas-resize-handle layout-canvas-resize-handle--southeast"
-        type="button"
-        aria-label={`Resize ${label}`}
-        title="Resize"
-        onPointerDown={(event) => onResizeStart("southeast", event)}
-      />
+      {handles.map((handle) => (
+        <button
+          key={handle.handle}
+          className={`layout-canvas-resize-handle layout-canvas-resize-handle--${handle.handle}`}
+          type="button"
+          aria-label={handle.label}
+          title={handle.title}
+          onPointerDown={(event) => onResizeStart(handle.handle, event)}
+        />
+      ))}
     </div>
   );
 }
