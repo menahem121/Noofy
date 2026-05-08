@@ -123,6 +123,7 @@ export function DashboardBuilderLayoutPage({
   const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
   const activeDragWidgetIdRef = useRef<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
+  const [movePreview, setMovePreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [savedFlash, setSavedFlash] = useState<"draft" | "saved" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
@@ -304,6 +305,7 @@ export function DashboardBuilderLayoutPage({
       lastLayout: layout,
       targetLayout: layout,
     };
+    setMovePreview({ widgetId, layout });
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const moveState = moveStateRef.current;
@@ -331,34 +333,22 @@ export function DashboardBuilderLayoutPage({
       const moveState = moveStateRef.current;
       if (!moveState || sameGridLayout(moveState.lastLayout, moveState.targetLayout)) return;
 
-      setSchema((current) => {
-        const latestMoveState = moveStateRef.current;
-        if (!latestMoveState || sameGridLayout(latestMoveState.lastLayout, latestMoveState.targetLayout)) {
-          return current;
-        }
-        const candidate = fitMovedLayoutPosition(
-          nextAdjacentMoveLayout(latestMoveState.lastLayout, latestMoveState.targetLayout),
-          current.layout.gridColumns,
-        );
-        const collides = current.widgets.some((widget) => {
-          if (widget.id === latestMoveState.widgetId || !widget.layout) return false;
-          return layoutsOverlap(candidate, widget.layout);
-        });
-        if (collides) {
-          latestMoveState.targetLayout = latestMoveState.lastLayout;
-          return current;
-        }
-        latestMoveState.lastLayout = candidate;
-        if (!sameGridLayout(candidate, latestMoveState.targetLayout)) scheduleMoveStep();
-        const nextSchema = {
-          ...current,
-          widgets: current.widgets.map((widget) =>
-            widget.id === latestMoveState.widgetId ? { ...widget, layout: candidate } : widget,
-          ),
-        };
-        schemaRef.current = nextSchema;
-        return nextSchema;
+      const currentSchema = schemaRef.current;
+      const candidate = fitMovedLayoutPosition(
+        nextAdjacentMoveLayout(moveState.lastLayout, moveState.targetLayout),
+        currentSchema.layout.gridColumns,
+      );
+      const collides = currentSchema.widgets.some((widget) => {
+        if (widget.id === moveState.widgetId || !widget.layout) return false;
+        return layoutsOverlap(candidate, widget.layout);
       });
+      if (collides) {
+        moveState.targetLayout = moveState.lastLayout;
+        return;
+      }
+      moveState.lastLayout = candidate;
+      setMovePreview({ widgetId: moveState.widgetId, layout: candidate });
+      if (!sameGridLayout(candidate, moveState.targetLayout)) scheduleMoveStep();
     }
 
     function scheduleMoveStep() {
@@ -369,19 +359,46 @@ export function DashboardBuilderLayoutPage({
       });
     }
 
-    function handlePointerUp() {
+    function commitMove(finalLayout: DashboardWidgetLayout | undefined) {
+      if (!finalLayout) return;
+      setSchema((current) => {
+        const nextSchema = {
+          ...current,
+          widgets: current.widgets.map((widget) =>
+            widget.id === widgetId ? { ...widget, layout: finalLayout } : widget,
+          ),
+        };
+        schemaRef.current = nextSchema;
+        return nextSchema;
+      });
+    }
+
+    function finishMove(shouldCommit: boolean) {
+      const finalLayout = moveStateRef.current?.lastLayout;
       if (moveFrameRef.current !== null) {
         window.cancelAnimationFrame(moveFrameRef.current);
         moveFrameRef.current = null;
       }
+      if (shouldCommit) commitMove(finalLayout);
       moveStateRef.current = null;
       setActiveDragWidgetId(null);
+      setMovePreview(null);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    }
+
+    function handlePointerUp() {
+      finishMove(true);
+    }
+
+    function handlePointerCancel() {
+      finishMove(false);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
   }
 
   function handleResizeStart(
@@ -575,12 +592,16 @@ export function DashboardBuilderLayoutPage({
                 </div>
               ) : null}
 
-              {placedWidgets.map((widget) =>
-                widget.layout ? (
+              {placedWidgets.map((widget) => {
+                if (!widget.layout) return null;
+                const previewLayout = movePreview?.widgetId === widget.id ? movePreview.layout : null;
+                const displayLayout = previewLayout ?? widget.layout;
+
+                return (
                   <PlacedDashboardWidget
                     key={widget.id}
                     widget={widget}
-                    layout={widget.layout}
+                    layout={displayLayout}
                     columns={schema.layout.gridColumns}
                     gridGap={schema.layout.gridGap}
                     rowHeight={schema.layout.rowHeight}
@@ -588,11 +609,11 @@ export function DashboardBuilderLayoutPage({
                     dragging={activeDragWidgetId === widget.id}
                     onSelect={() => setSelectedWidgetId(widget.id)}
                     onRemove={() => removeWidget(widget.id)}
-                    onMoveStart={(event) => handleMoveStart(event, widget.id, widget.layout!)}
-                    onResizeStart={(event, handle) => handleResizeStart(event, widget.id, widget.layout!, handle)}
+                    onMoveStart={(event) => handleMoveStart(event, widget.id, displayLayout)}
+                    onResizeStart={(event, handle) => handleResizeStart(event, widget.id, displayLayout, handle)}
                   />
-                ) : null,
-              )}
+                );
+              })}
 
               {dragPreview ? (
                 <DragPreviewWidget

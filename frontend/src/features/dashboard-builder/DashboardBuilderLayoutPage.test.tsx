@@ -153,9 +153,13 @@ describe("DashboardBuilderLayoutPage", () => {
   });
 
   it("moves placed widgets by dragging the card body on snapped grid cells", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-1/dashboard")) {
+        expect(init?.method).toBe("PUT");
+        return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -205,6 +209,15 @@ describe("DashboardBuilderLayoutPage", () => {
       expect(promptCell).toHaveStyle({ top: "128px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 224 });
+
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.dashboard.sections[0].controls[0].layout).toEqual({ x: 0, y: 4, w: 16, h: 6 });
+    });
   });
 
   it("steps through intermediate grid cells during fast placed-widget drags", async () => {
