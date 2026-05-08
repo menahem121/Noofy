@@ -87,34 +87,29 @@ const launchSettings = {
   disabled_reason: null,
   options: [
     {
-      value: "normal",
-      label: "Normal VRAM",
-      description: "Use ComfyUI defaults.",
-    },
-    {
-      value: "gpu_only",
-      label: "GPU only",
-      description: "Pass --gpu-only.",
-    },
-    {
-      value: "highvram",
-      label: "High VRAM",
-      description: "Pass --highvram.",
-    },
-    {
-      value: "lowvram",
-      label: "Low VRAM",
-      description: "Pass --lowvram.",
+      value: "cpu",
+      label: "CPU only",
+      description: "Runs without GPU acceleration, usually the slowest",
     },
     {
       value: "novram",
       label: "No VRAM",
-      description: "Pass --novram.",
+      description: "Extreme memory-saving mode, very slow but may still use GPU",
     },
     {
-      value: "cpu",
-      label: "CPU only",
-      description: "Pass --cpu.",
+      value: "lowvram",
+      label: "Low VRAM",
+      description: "For smaller GPUs",
+    },
+    {
+      value: "normal",
+      label: "Normal VRAM",
+      description: "Recommended",
+    },
+    {
+      value: "highvram",
+      label: "High VRAM",
+      description: "Faster if you have lots of VRAM",
     },
   ],
 };
@@ -211,7 +206,8 @@ describe("EngineSettingsPage", () => {
     expect(screen.getByRole("option", { name: /v0.19.0.*incompatible/i })).toBeInTheDocument();
   });
 
-  it("shows Normal VRAM by default and applies a managed VRAM launch mode", async () => {
+  it("stages a managed VRAM launch mode and saves it explicitly", async () => {
+    let currentLaunchSettings = launchSettings;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse({
@@ -221,31 +217,45 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings") && init?.method === "PUT") {
         expect(init.body).toBe(JSON.stringify({ vram_mode: "lowvram" }));
+        currentLaunchSettings = {
+          ...launchSettings,
+          vram_mode: "lowvram",
+        };
         return Promise.resolve(jsonResponse({
           status: "updated_restarted",
-          settings: {
-            ...launchSettings,
-            vram_mode: "lowvram",
-          },
+          settings: currentLaunchSettings,
           restart_status: "started",
           error: null,
         }));
       }
-      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(currentLaunchSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
     render(<EngineSettingsPage onNavigate={vi.fn()} />);
 
-    const select = await screen.findByRole("combobox", { name: /managed launch mode/i });
-    expect(select).toHaveValue("normal");
+    const slider = await screen.findByRole("slider", { name: /managed launch mode/i });
+    const save = screen.getByRole("button", { name: /save/i });
 
-    fireEvent.change(select, { target: { value: "lowvram" } });
+    expect(slider).toHaveValue("3");
+    expect(save).toBeDisabled();
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
+
+    fireEvent.change(slider, { target: { value: "2" } });
+
+    expect(screen.getByText("For smaller GPUs")).toBeInTheDocument();
+    expect(save).toBeEnabled();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/engine/comfyui/launch-settings", expect.objectContaining({
+      method: "PUT",
+    }));
+
+    fireEvent.click(save);
 
     expect(await screen.findByText(/managed engine restarted/i)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/engine/comfyui/launch-settings", expect.objectContaining({
       method: "PUT",
     }));
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
   it("shows fallback copy when start triggers repair and falls back", async () => {

@@ -6,11 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ComfyUIVramMode = Literal["normal", "gpu_only", "highvram", "lowvram", "novram", "cpu"]
+ComfyUIVramMode = Literal["normal", "highvram", "lowvram", "novram", "cpu"]
+DEFAULT_COMFYUI_VRAM_MODE: ComfyUIVramMode = "normal"
 
 COMFYUI_VRAM_FLAG_BY_MODE: dict[str, list[str]] = {
     "normal": [],
-    "gpu_only": ["--gpu-only"],
     "highvram": ["--highvram"],
     "lowvram": ["--lowvram"],
     "novram": ["--novram"],
@@ -26,40 +26,35 @@ class ComfyUILaunchOption(BaseModel):
 
 COMFYUI_VRAM_OPTIONS = [
     ComfyUILaunchOption(
-        value="normal",
-        label="Normal VRAM",
-        description="Use ComfyUI's default memory behavior.",
-    ),
-    ComfyUILaunchOption(
-        value="gpu_only",
-        label="GPU only",
-        description="Pass --gpu-only and keep all supported work on the GPU.",
-    ),
-    ComfyUILaunchOption(
-        value="highvram",
-        label="High VRAM",
-        description="Pass --highvram and keep models in GPU memory after use.",
-    ),
-    ComfyUILaunchOption(
-        value="lowvram",
-        label="Low VRAM",
-        description="Pass --lowvram and split model work to reduce VRAM use.",
+        value="cpu",
+        label="CPU only",
+        description="Runs without GPU acceleration, usually the slowest",
     ),
     ComfyUILaunchOption(
         value="novram",
         label="No VRAM",
-        description="Pass --novram when low VRAM mode is not enough.",
+        description="Extreme memory-saving mode, very slow but may still use GPU",
     ),
     ComfyUILaunchOption(
-        value="cpu",
-        label="CPU only",
-        description="Pass --cpu and run ComfyUI without GPU acceleration.",
+        value="lowvram",
+        label="Low VRAM",
+        description="For smaller GPUs",
+    ),
+    ComfyUILaunchOption(
+        value="normal",
+        label="Normal VRAM",
+        description="Recommended",
+    ),
+    ComfyUILaunchOption(
+        value="highvram",
+        label="High VRAM",
+        description="Faster if you have lots of VRAM",
     ),
 ]
 
 
 class ComfyUILaunchSettings(BaseModel):
-    vram_mode: ComfyUIVramMode = "normal"
+    vram_mode: ComfyUIVramMode = DEFAULT_COMFYUI_VRAM_MODE
 
 
 class ComfyUILaunchSettingsResponse(ComfyUILaunchSettings):

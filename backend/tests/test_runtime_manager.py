@@ -287,7 +287,6 @@ async def test_managed_start_command_omits_vram_flag_for_normal_mode(
 
     assert result.status == "started"
     assert result.comfyui.managed_vram_mode == "normal"
-    assert "--gpu-only" not in captured_command
     assert "--highvram" not in captured_command
     assert "--lowvram" not in captured_command
     assert "--novram" not in captured_command
@@ -298,7 +297,6 @@ async def test_managed_start_command_omits_vram_flag_for_normal_mode(
 @pytest.mark.parametrize(
     ("mode", "flag"),
     [
-        ("gpu_only", "--gpu-only"),
         ("highvram", "--highvram"),
         ("lowvram", "--lowvram"),
         ("novram", "--novram"),
@@ -345,7 +343,7 @@ async def test_managed_start_command_includes_selected_vram_flag(
         sum(
             1
             for item in captured_command
-            if item in {"--gpu-only", "--highvram", "--lowvram", "--novram", "--cpu"}
+            if item in {"--highvram", "--lowvram", "--novram", "--cpu"}
         )
         == 1
     )

@@ -132,7 +132,7 @@ export interface MachineResourceSnapshot {
   memory_pressure: string;
 }
 
-export type ComfyUIVramMode = "normal" | "gpu_only" | "highvram" | "lowvram" | "novram" | "cpu";
+export type ComfyUIVramMode = "normal" | "highvram" | "lowvram" | "novram" | "cpu";
 
 export interface ComfyUILaunchOption {
   value: ComfyUIVramMode;

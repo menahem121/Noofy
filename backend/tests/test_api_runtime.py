@@ -102,12 +102,11 @@ def test_comfyui_launch_settings_endpoint_returns_vram_options(monkeypatch) -> N
     assert payload["vram_mode"] == "normal"
     assert payload["applies_to_managed_runtime"] is True
     assert [option["value"] for option in payload["options"]] == [
-        "normal",
-        "gpu_only",
-        "highvram",
-        "lowvram",
-        "novram",
         "cpu",
+        "novram",
+        "lowvram",
+        "normal",
+        "highvram",
     ]
 
 

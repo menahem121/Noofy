@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Play, RotateCcw, Square, Wrench, Zap } from "lucide-react";
 
 import {
@@ -35,13 +35,15 @@ interface EngineSettingsState {
   actionResult: { label: string; status: string; ok: boolean } | null;
 }
 
+const DEFAULT_VRAM_MODE: ComfyUIVramMode = "normal";
+
 const initialState: EngineSettingsState = {
   loading: true,
   runtime: null,
   versions: null,
   launchSettings: null,
   selectedVersion: "latest",
-  selectedVramMode: "normal",
+  selectedVramMode: DEFAULT_VRAM_MODE,
   updateStatus: null,
   action: null,
   error: null,
@@ -73,6 +75,43 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   updated_restarted: "ComfyUI launch setting was saved and the managed engine restarted.",
   updated_restart_failed: "ComfyUI launch setting was saved, but the managed engine could not restart.",
 };
+
+const VRAM_MODE_OPTIONS: Array<{ value: ComfyUIVramMode; label: string; description: string }> = [
+  {
+    value: "cpu",
+    label: "CPU only",
+    description: "Runs without GPU acceleration, usually the slowest",
+  },
+  {
+    value: "novram",
+    label: "No VRAM",
+    description: "Extreme memory-saving mode, very slow but may still use GPU",
+  },
+  {
+    value: "lowvram",
+    label: "Low VRAM",
+    description: "For smaller GPUs",
+  },
+  {
+    value: "normal",
+    label: "Normal VRAM",
+    description: "Recommended",
+  },
+  {
+    value: "highvram",
+    label: "High VRAM",
+    description: "Faster if you have lots of VRAM",
+  },
+];
+
+const VRAM_MODE_INDEX_BY_VALUE = new Map(VRAM_MODE_OPTIONS.map((option, index) => [option.value, index]));
+
+function vramModeOption(mode: ComfyUIVramMode) {
+  return (
+    VRAM_MODE_OPTIONS.find((option) => option.value === mode) ??
+    VRAM_MODE_OPTIONS[VRAM_MODE_INDEX_BY_VALUE.get(DEFAULT_VRAM_MODE) ?? 0]
+  );
+}
 
 function actionResultMessage(result: { label: string; status: string }) {
   if (result.label === "rebuild") {
@@ -157,16 +196,16 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     await runComfyUIJob("update", state.selectedVersion, updateComfyUI);
   }
 
-  async function runVramModeChange(vramMode: ComfyUIVramMode) {
+  async function saveVramModeChange() {
+    if (!state.launchSettings || state.selectedVramMode === state.launchSettings.vram_mode) return;
     setState((current) => ({
       ...current,
       action: "vram",
-      selectedVramMode: vramMode,
       error: null,
       actionResult: null,
     }));
     try {
-      const result = await updateComfyUILaunchSettings(vramMode);
+      const result = await updateComfyUILaunchSettings(state.selectedVramMode);
       const ok = result.status !== "blocked" && result.status !== "updated_restart_failed";
       setState((current) => ({
         ...current,
@@ -246,6 +285,12 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   const currentIncompatibleReason = versions?.current?.incompatible_reason;
   const launchSettings = state.launchSettings;
   const vramBusy = state.action === "vram";
+  const selectedVramOption = vramModeOption(state.selectedVramMode);
+  const selectedVramIndex = VRAM_MODE_INDEX_BY_VALUE.get(selectedVramOption.value) ?? VRAM_MODE_INDEX_BY_VALUE.get(DEFAULT_VRAM_MODE) ?? 0;
+  const vramSliderProgress = (selectedVramIndex / (VRAM_MODE_OPTIONS.length - 1)) * 100;
+  const vramChanged = Boolean(launchSettings && state.selectedVramMode !== launchSettings.vram_mode);
+  const vramControlsDisabled = !launchSettings?.applies_to_managed_runtime || vramBusy || state.action !== null;
+  const vramSaveDisabled = !vramChanged || vramControlsDisabled;
 
   return (
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
@@ -368,7 +413,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
           </div>
         </article>
 
-        <article className="settings-panel">
+        <article className="settings-panel vram-mode-card">
           <div className="panel-heading">
             <div>
               <h2>VRAM Mode</h2>
@@ -377,25 +422,51 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
           </div>
 
           <div className="settings-option-group">
-            <label className="settings-option settings-option--select">
-              <div>
-                <strong>Managed launch mode</strong>
-                <span>
-                  Normal VRAM uses ComfyUI defaults and passes no VRAM launch flag.
-                </span>
-              </div>
-              <select
-                value={state.selectedVramMode}
-                disabled={!launchSettings?.applies_to_managed_runtime || vramBusy || state.action !== null}
-                onChange={(event) => void runVramModeChange(event.target.value as ComfyUIVramMode)}
-              >
-                {launchSettings?.options.map((option) => (
-                  <option value={option.value} key={option.value}>
+            <div className="vram-mode-card__summary" aria-live="polite">
+              <strong>{selectedVramOption.label}</strong>
+              <span>{selectedVramOption.description}</span>
+            </div>
+            <div className="vram-mode-slider">
+              <label className="sr-only" htmlFor="vram-mode-slider">Managed launch mode</label>
+              <input
+                id="vram-mode-slider"
+                type="range"
+                min="0"
+                max={VRAM_MODE_OPTIONS.length - 1}
+                step="1"
+                value={selectedVramIndex}
+                disabled={vramControlsDisabled}
+                aria-valuetext={`${selectedVramOption.label}: ${selectedVramOption.description}`}
+                style={{ "--vram-slider-progress": `${vramSliderProgress}%` } as CSSProperties}
+                onChange={(event) => {
+                  const nextMode = VRAM_MODE_OPTIONS[Number(event.target.value)]?.value ?? DEFAULT_VRAM_MODE;
+                  setState((current) => ({
+                    ...current,
+                    selectedVramMode: nextMode,
+                    actionResult: current.actionResult?.label === "vram" ? null : current.actionResult,
+                  }));
+                }}
+              />
+              <div className="vram-mode-slider__labels" aria-hidden="true">
+                {VRAM_MODE_OPTIONS.map((option) => (
+                  <span className={option.value === selectedVramOption.value ? "is-selected" : ""} key={option.value}>
                     {option.label}
-                  </option>
-                )) ?? <option value="normal">Normal VRAM</option>}
-              </select>
-            </label>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="button-row vram-mode-card__actions">
+            <button
+              className="primary-button primary-button--compact"
+              type="button"
+              disabled={vramSaveDisabled}
+              onClick={() => void saveVramModeChange()}
+            >
+              {vramBusy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
+              Save
+            </button>
           </div>
 
           {launchSettings && !launchSettings.applies_to_managed_runtime ? (
