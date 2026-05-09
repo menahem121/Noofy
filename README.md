@@ -244,6 +244,7 @@ of asking beginners to repair Python, pip, folders, or ComfyUI internals.
 - [Dashboard canvas](docs/DASHBOARD_CANVAS.md)
 - [Runtime isolation architecture](docs/RUNTIME_ISOLATION_ARCHITECTURE.md)
 - [Managed ComfyUI sidecar](docs/MANAGED_COMFYUI_SIDECAR.md)
+- [Packaged runtime](docs/PACKAGED_RUNTIME.md)
 - [ComfyUI updates](docs/COMFYUI_UPDATES.md)
 - [Noofy Verified publishing](docs/NOOFY_VERIFIED_PUBLISHING.md)
 - [OS sandboxing feasibility](docs/OS_SANDBOXING_FEASIBILITY.md)

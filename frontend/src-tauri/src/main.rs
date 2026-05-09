@@ -497,6 +497,11 @@ fn apply_backend_environment(
     }
     if let Some(uv) = layout.uv_executable {
         set_env(spec, "NOOFY_UV_EXECUTABLE", uv.into_os_string());
+    } else if require_packaged_python {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Packaged Noofy requires a bundled uv executable for isolated workflow dependency environments.",
+        ));
     }
 
     set_env(spec, "PYTHONNOUSERSITE", OsString::from("1"));
@@ -706,12 +711,18 @@ mod tests {
         } else {
             runtime.join("python").join("bin").join("python3")
         };
+        let uv = if cfg!(windows) {
+            runtime.join("python").join("Scripts").join("uv.exe")
+        } else {
+            runtime.join("python").join("bin").join("uv")
+        };
         let sidecar = if cfg!(windows) {
             runtime.join("bin").join("noofy-backend.exe")
         } else {
             runtime.join("bin").join("noofy-backend")
         };
         touch(&python);
+        touch(&uv);
         touch(&sidecar);
         touch(&runtime.join("backend").join("app").join("__main__.py"));
 
@@ -724,6 +735,25 @@ mod tests {
             env_value(&spec, "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE"),
             Some(&python.into_os_string())
         );
+    }
+
+    #[test]
+    fn packaged_backend_requires_bundled_uv() {
+        let resource_dir = temp_dir("missing-uv");
+        let runtime = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
+        let python = if cfg!(windows) {
+            runtime.join("python").join("python.exe")
+        } else {
+            runtime.join("python").join("bin").join("python3")
+        };
+        touch(&python);
+        touch(&runtime.join("backend").join("app").join("__main__.py"));
+
+        let error = backend_launch_spec(&context(resource_dir, true))
+            .expect_err("packaged launch should fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("bundled uv executable"));
     }
 
     #[test]

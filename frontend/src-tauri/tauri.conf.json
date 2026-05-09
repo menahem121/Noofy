@@ -18,7 +18,7 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "resources/noofy-runtime/python": "noofy-runtime/python",
+      "resources/noofy-runtime": "noofy-runtime",
       "../../backend/app": "noofy-runtime/backend/app",
       "../../backend/pyproject.toml": "noofy-runtime/backend/pyproject.toml",
       "../../third_party/comfyui": "noofy-runtime/comfyui"

@@ -234,7 +234,8 @@ Creator `.noofy` hardware observations (peak VRAM/RAM, tested resolution, batch 
 
 - Development may use `backend/.venv` or `NOOFY_BACKEND_PYTHON`; external ComfyUI mode is dev-only.
 - Product builds must not depend on system Python, Homebrew Python, user PATH, Conda, or developer virtualenvs.
-- Product v1 ships a Noofy-managed CPython under `runtime-store/python/`. `uv` is the primary resolver and dependency-env installer; `pip` is a compatibility fallback inside the managed Python.
+- Product v1 ships a bundled Noofy-managed CPython and `uv` in the Tauri resource root, verified by [PACKAGED_RUNTIME.md](PACKAGED_RUNTIME.md). Runtime-store Python environments for ComfyUI and community workflows are prepared from this trusted bootstrap runtime into app-data paths, keeping trusted backend dependencies separate from managed ComfyUI/PyTorch and custom-node dependencies.
+- `uv` is the primary resolver and dependency-env installer; `pip` is a compatibility fallback inside managed Python environments.
 
 ## Open Risks And Follow-Ups
 

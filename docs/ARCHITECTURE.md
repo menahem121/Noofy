@@ -72,7 +72,7 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Keep the app API stable enough that future adapters can replace or supplement ComfyUI.
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
 - Own diagnostics at the backend composition root: runtime/backend subsystems emit structured events through an injected diagnostics sink, while API-facing services read the shared diagnostics store for logs, job logs, health latest error, and troubleshooting payloads.
-- Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation. The runtime isolation foundation (paths, schemas, runner supervision, verified and registry-resolved installs, trust signing, source policy, smoke gating, GC) is implemented in [backend/app/runtime/](../backend/app/runtime/).
+- Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation. The runtime isolation foundation (paths, schemas, runner supervision, verified and registry-resolved installs, trust signing, source policy, smoke gating, GC) is implemented in [backend/app/runtime/](../backend/app/runtime/). Packaged builds prepare and verify the trusted Python and bundled `uv` artifact through [PACKAGED_RUNTIME.md](PACKAGED_RUNTIME.md).
 - Use the [Memory Governor implementation plan](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
 
 ## App Data Directories

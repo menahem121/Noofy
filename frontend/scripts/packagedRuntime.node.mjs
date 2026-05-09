@@ -1,0 +1,152 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+
+import {
+  backendArtifactMetadata,
+  currentRuntimeTarget,
+  runtimeManifestName,
+  sha256File,
+  verifyPackagedRuntime,
+} from "./packagedRuntime.mjs";
+
+test("verifyPackagedRuntime rejects a missing manifest", () => {
+  const runtimeRoot = tempDir("missing-manifest");
+
+  assert.throws(
+    () => verifyPackagedRuntime({ runtimeRoot, target: currentRuntimeTarget(), requireBuiltFrontend: false }),
+    /Packaged runtime manifest is missing/,
+  );
+});
+
+test("verifyPackagedRuntime accepts a manifest with matching executable checksums", { skip: process.platform === "win32" }, () => {
+  const runtimeRoot = tempDir("valid-runtime");
+  const python = fakeExecutable(path.join(runtimeRoot, "python", "bin", "python3"), {
+    versionCommand: "Python 3.13.7",
+  });
+  const uv = fakeExecutable(path.join(runtimeRoot, "python", "bin", "uv"), {
+    versionCommand: "uv 0.9.13",
+  });
+  writeManifest(runtimeRoot, python, uv);
+
+  const result = verifyPackagedRuntime({
+    runtimeRoot,
+    target: currentRuntimeTarget(),
+    requireBuiltFrontend: false,
+  });
+
+  assert.equal(result.python, python);
+  assert.equal(result.uv, uv);
+});
+
+test("verifyPackagedRuntime rejects checksum drift", { skip: process.platform === "win32" }, () => {
+  const runtimeRoot = tempDir("checksum-drift");
+  const python = fakeExecutable(path.join(runtimeRoot, "python", "bin", "python3"), {
+    versionCommand: "Python 3.13.7",
+  });
+  const uv = fakeExecutable(path.join(runtimeRoot, "python", "bin", "uv"), {
+    versionCommand: "uv 0.9.13",
+  });
+  writeManifest(runtimeRoot, python, uv);
+  writeFileSync(python, `${fakeExecutableSource("Python 3.13.7")}\n// changed\n`);
+
+  assert.throws(
+    () => verifyPackagedRuntime({ runtimeRoot, target: currentRuntimeTarget(), requireBuiltFrontend: false }),
+    /checksum mismatch/,
+  );
+});
+
+test("preparePackagedRuntime copies an explicit source artifact and writes a manifest", { skip: process.platform === "win32" }, () => {
+  const sourceRoot = tempDir("prepare-source");
+  const outputRoot = tempDir("prepare-output");
+  fakeExecutable(path.join(sourceRoot, "python", "bin", "python3"), {
+    versionCommand: "Python 3.13.7",
+  });
+  fakeExecutable(path.join(sourceRoot, "python", "bin", "uv"), {
+    versionCommand: "uv 0.9.13",
+  });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.resolve("scripts", "preparePackagedRuntime.mjs"),
+      "--source",
+      sourceRoot,
+      "--output",
+      outputRoot,
+      "--python-build-id",
+      "cpython-3.13-noofy-test",
+    ],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf-8",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const manifestPath = path.join(outputRoot, runtimeManifestName);
+  assert.match(result.stdout, /Packaged runtime prepared/);
+  assert.doesNotThrow(() =>
+    verifyPackagedRuntime({
+      runtimeRoot: outputRoot,
+      target: currentRuntimeTarget(),
+      requireBuiltFrontend: false,
+    }),
+  );
+  assert.match(manifestPath, /runtime-manifest\.json$/);
+});
+
+function tempDir(name) {
+  return mkdtempSync(path.join(tmpdir(), `noofy-${name}-`));
+}
+
+function fakeExecutable(filePath, { versionCommand }) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, fakeExecutableSource(versionCommand), { mode: 0o755 });
+  return filePath;
+}
+
+function fakeExecutableSource(versionCommand) {
+  return `#!/usr/bin/env node
+if (process.argv[2] === "--version") {
+  console.log(${JSON.stringify(versionCommand)});
+  process.exit(0);
+}
+if (process.argv[2] === "-c") {
+  process.exit(0);
+}
+process.exit(1);
+`;
+}
+
+function writeManifest(runtimeRoot, python, uv) {
+  writeFileSync(
+    path.join(runtimeRoot, runtimeManifestName),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        layoutVersion: 1,
+        target: currentRuntimeTarget(),
+        python: {
+          implementation: "CPython",
+          version: "3.13.7",
+          buildId: "cpython-3.13-noofy-test",
+          executable: "python/bin/python3",
+          sha256: sha256File(python),
+        },
+        uv: {
+          version: "0.9.13",
+          executable: "python/bin/uv",
+          sha256: sha256File(uv),
+        },
+        backend: backendArtifactMetadata(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
