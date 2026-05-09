@@ -1,14 +1,12 @@
-# Memory Governor Current Status
+# Memory Governor
 
 Date: 2026-05-06
 
-Status: Audited and updated after Runtime Isolation implementation.
+Status: current architecture/reference with remaining hardware-validation notes.
 
-This document is no longer a phase-by-phase implementation checklist. The old
-plan was useful for building the v1 policy, but most of that detail now lives in
-code and tests. Keep this file short: it should help future agents understand
-what the Memory Governor actually does, what is intentionally conservative, and
-where the remaining work is.
+This document is not a phase-by-phase implementation checklist. It explains what
+the Memory Governor does now, what is intentionally conservative, and where real
+hardware validation is still needed.
 
 ## Purpose
 

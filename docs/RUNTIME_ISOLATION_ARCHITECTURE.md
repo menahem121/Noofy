@@ -63,7 +63,7 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Transactional install + promotion + quarantine + startup sweep | [backend/app/runtime/capsule_installer.py](../backend/app/runtime/capsule_installer.py), [install_transactions.py](../backend/app/runtime/install_transactions.py) |
 | Runner process lifecycle, isolation, smoke tests | [backend/app/runtime/runner_process.py](../backend/app/runtime/runner_process.py), [isolation.py](../backend/app/runtime/isolation.py), [smoke_test.py](../backend/app/runtime/smoke_test.py) |
 | Runner selection, leases, idle-warm, switching | [backend/app/runtime/supervisor.py](../backend/app/runtime/supervisor.py), [runner_coordinator.py](../backend/app/runtime/runner_coordinator.py) |
-| Memory Governor (estimates, co-residence, eviction, retry) | [backend/app/runtime/memory_governor.py](../backend/app/runtime/memory_governor.py); strategy in [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md) |
+| Memory Governor (estimates, co-residence, eviction, retry) | [backend/app/runtime/memory_governor.py](../backend/app/runtime/memory_governor.py); strategy in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md) |
 | Reference index + GC + retention windows | [backend/app/runtime/storage_gc.py](../backend/app/runtime/storage_gc.py), [model_gc.py](../backend/app/runtime/model_gc.py) |
 | Engine adapter + job registry | [backend/app/engine/](../backend/app/engine/) |
 
@@ -200,7 +200,7 @@ Enforcement points:
 
 ## Memory Governor
 
-Multiple runners may stay warm only when the Memory Governor judges co-residence safe. The full strategy lives in [MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md). Architectural points relevant here:
+Multiple runners may stay warm only when the Memory Governor judges co-residence safe. The full strategy lives in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md). Architectural points relevant here:
 
 - One resident GPU-heavy runner is the **safe fallback** when confidence is low. `unknown` and `gpu_medium` are treated conservatively as GPU-heavy until local evidence proves otherwise.
 - Compatible runners stay `idle_warm` while at least one workflow view holds a lease; closing the last lease starts a default 90-second cooldown before eviction.

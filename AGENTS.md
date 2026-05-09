@@ -14,20 +14,20 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 
 - [README.md](README.md): public project introduction and high-level vision.
 - [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md): frontend visual direction, component rules, UI copy guidance, and interaction principles.
+- [docs/README.md](docs/README.md): compact docs index and status map.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stack, process boundaries, and major architecture decisions.
 - [docs/ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md): app-owned engine operations and job lifecycle.
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
+- [docs/DASHBOARD_ARCHITECTURE.md](docs/DASHBOARD_ARCHITECTURE.md): workflow import, dashboard authoring, canvas run view, user state, and dashboard assets.
 - [docs/RUNTIME_ISOLATION_ARCHITECTURE.md](docs/RUNTIME_ISOLATION_ARCHITECTURE.md): accepted runtime isolation architecture for community workflows, workflow capsules, runner processes, and trust boundaries.
-- [docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md](docs/RUNTIME_ISOLATION_IMPLEMENTATION_PLAN.md): phased implementation plan for runtime-store paths, schemas, runner supervision, verified installs, custom node resolution, and trust/marketplace readiness.
 - [docs/NOOFY_VERIFIED_PUBLISHING.md](docs/NOOFY_VERIFIED_PUBLISHING.md): Noofy Verified publishing, signing, validation gates, and revocation process.
 - [docs/OS_SANDBOXING_FEASIBILITY.md](docs/OS_SANDBOXING_FEASIBILITY.md): OS sandboxing feasibility and product-claim boundaries for community workflow execution.
-- [docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md](docs/MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md): v1 Memory Governor strategy for RAM/VRAM estimates, runner co-residence, eviction, retry, UI states, and diagnostics.
-- [docs/MILESTONE_1.md](docs/MILESTONE_1.md): first development target and what is intentionally out of scope.
-- [docs/MILESTONE_2_DASHBOARD_CANVAS.md](docs/MILESTONE_2_DASHBOARD_CANVAS.md): second milestone — production canvas dashboard, user value/layout persistence, asset store, classic mode setting.
+- [docs/MEMORY_GOVERNOR.md](docs/MEMORY_GOVERNOR.md): v1 Memory Governor strategy for RAM/VRAM estimates, runner co-residence, eviction, retry, UI states, diagnostics, and remaining hardware-validation limits.
 - [docs/MANAGED_COMFYUI_SIDECAR.md](docs/MANAGED_COMFYUI_SIDECAR.md): v1 requirement for app-managed ComfyUI startup, isolation, logs, health, and shutdown.
 - [docs/PACKAGED_RUNTIME.md](docs/PACKAGED_RUNTIME.md): packaged Python and bundled uv runtime artifact layout, manifest, verification, and CI release gate.
 - [docs/COMFYUI_UPDATES.md](docs/COMFYUI_UPDATES.md): user-managed upstream ComfyUI update flow, local validation, activation, and rollback safety.
 - [docs/FEEDBACK_TESTING_MONITORING.md](docs/FEEDBACK_TESTING_MONITORING.md): diagnostics, automated tests, progress feedback, logs, and monitoring direction.
+- [docs/MODEL_COMPATIBILITY_PLAN.md](docs/MODEL_COMPATIBILITY_PLAN.md): active future plan for model identity scanning and compatible LoRA discovery.
 
 ## Working Guidance
 
@@ -53,7 +53,7 @@ When adding or changing meaningful behavior, add automated tests for the success
 
 When adding workflow behavior, prefer workflow packages and dashboard schema over hardcoded single-purpose flows.
 
-When in doubt during Milestone 1, keep the implementation small: start with one text-to-image workflow that proves the architecture. This is not a long-term product limit.
+When in doubt during early MVP work, keep the implementation small: start with one text-to-image workflow that proves the architecture. This is not a long-term product limit.
 
 When adapting large files from `third_party/comfyui/`, do not manually rewrite big chunks. If most of a file is needed, copy it with a terminal command into the app-owned codebase, rename it clearly, and then make focused edits from there. Keep ComfyUI-derived files identifiable and listed for maintenance reasons.
 

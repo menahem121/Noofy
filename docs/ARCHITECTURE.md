@@ -73,7 +73,8 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Own the ComfyUI lifecycle in the app: start, stop, health checks, port selection, logs, crash recovery, and clear errors.
 - Own diagnostics at the backend composition root: runtime/backend subsystems emit structured events through an injected diagnostics sink, while API-facing services read the shared diagnostics store for logs, job logs, health latest error, and troubleshooting payloads.
 - Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation. The runtime isolation foundation (paths, schemas, runner supervision, verified and registry-resolved installs, trust signing, source policy, smoke gating, GC) is implemented in [backend/app/runtime/](../backend/app/runtime/). Packaged builds prepare and verify the trusted Python and bundled `uv` artifact through [PACKAGED_RUNTIME.md](PACKAGED_RUNTIME.md).
-- Use the [Memory Governor implementation plan](MEMORY_GOVERNOR_IMPLEMENTATION_PLAN.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
+- Use the [dashboard architecture](DASHBOARD_ARCHITECTURE.md) for workflow import, dashboard authoring, canvas rendering, user values/layout state, and dashboard assets.
+- Use the [Memory Governor](MEMORY_GOVERNOR.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
 
 ## App Data Directories
 
@@ -93,12 +94,17 @@ The backend owns a canonical set of per-user directories so the app never relies
 |------|-------------|---------|
 | `data_dir` | *base* | Root app-data directory |
 | `runtime_dir` | `data_dir/runtime` | venv, process state |
-| `models_dir` | `data_dir/models` | Downloaded AI models |
-| `user_workflows_dir` | `data_dir/workflows` | User-imported workflow packages |
+| `models_dir` | `data_dir/models` | Legacy/app-owned model directory override surface |
+| `model_store_dir` | `data_dir/model-store` | Shared model blobs, refs, and materialized model views |
+| `user_workflows_dir` | `data_dir/workflows` | Backward-compatible user workflow path override surface |
+| `workflow_store_dir` | `data_dir/workflow-store` | Internal imported workflow package store |
+| `workflow_packages_store_dir` | `data_dir/workflow-store/packages` | Normalized package copies by publisher/package/version |
 | `outputs_dir` | `data_dir/outputs` | Generated output files |
 | `logs_dir` | `data_dir/logs` | Diagnostic logs |
 | `cache_dir` | `data_dir/cache` | Transient cache |
 | `temp_dir` | `data_dir/temp` | Temporary files |
+| `user_state_dir` | `data_dir/user-state` | User-specific workflow values/layout and ComfyUI user state |
+| `dashboard_assets_dir` | `data_dir/dashboard-assets` | Durable image assets uploaded through dashboard widgets |
 | `trust_dir` | `data_dir/trust` | Trust keyring and future trust metadata |
 | `trust_keys_file` | `data_dir/trust/trusted-keys.json` | Trust roots for imported package verification |
 | `bundled_workflows_dir` | `backend/app/workflows/packages` | Read-only starter workflows |
