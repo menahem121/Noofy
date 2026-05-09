@@ -133,6 +133,7 @@ describe("noofyApi", () => {
     await rebuildComfyUI("v0.20.1");
     await fetchComfyUIUpdateStatus();
     await updateComfyUILaunchSettings("lowvram");
+    await fetchComfyUIVersions({ checkUpstream: true });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/engine/comfyui/versions", {
       headers: { Accept: "application/json" },
@@ -166,6 +167,9 @@ describe("noofyApi", () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ vram_mode: "lowvram" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(7, "/api/engine/comfyui/versions?check_upstream=true", {
+      headers: { Accept: "application/json" },
     });
   });
 

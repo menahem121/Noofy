@@ -2,9 +2,12 @@
 
 Noofy can update its managed ComfyUI sidecar independently of Noofy app releases.
 
-The updater queries stable upstream releases from `https://github.com/Comfy-Org/ComfyUI`.
-The settings dropdown defaults to `Latest version`, which means the newest stable
-upstream release. Older choices also come directly from upstream GitHub releases.
+The updater queries stable upstream releases from `https://github.com/Comfy-Org/ComfyUI`
+only after the user presses `Check for Updates` or starts a manual update. The
+settings page does not contact GitHub during passive app or settings startup.
+After an upstream check, the settings dropdown defaults to `Latest version`,
+which means the newest stable upstream release. Older choices also come directly
+from upstream GitHub releases.
 
 Noofy does not label an upstream release as compatible before local validation.
 Each selected version is installed into Noofy-managed runtime storage, smoke

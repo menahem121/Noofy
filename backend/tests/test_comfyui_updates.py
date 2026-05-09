@@ -176,6 +176,17 @@ async def test_versions_lists_upstream_releases_and_local_status(
 ) -> None:
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
     paths.ensure_directories()
+    fetch_count = 0
+
+    async def releases() -> list[UpstreamComfyUIRelease]:
+        nonlocal fetch_count
+        fetch_count += 1
+        return [
+            _release("v0.20.1"),
+            _release("v0.21.0-rc1", prerelease=True),
+            _release("v0.19.0"),
+        ]
+
     service = ComfyUIUpdateService(
         paths=paths,
         runtime_manager=_manager(tmp_path),
@@ -184,19 +195,19 @@ async def test_versions_lists_upstream_releases_and_local_status(
         bootstrap_python_executable="python3",
         torch_cuda_index_url=None,
         torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
-        release_fetcher=lambda: _async_releases(
-            [
-                _release("v0.20.1"),
-                _release("v0.21.0-rc1", prerelease=True),
-                _release("v0.19.0"),
-            ]
-        ),
+        release_fetcher=releases,
         log_store=LogStore(),
     )
 
-    versions = await service.versions()
+    local_versions = await service.versions()
+    versions = await service.versions(check_upstream=True)
 
+    assert fetch_count == 1
+    assert local_versions.upstream_checked is False
+    assert local_versions.latest_tag is None
+    assert local_versions.options == []
     assert versions.updates_allowed
+    assert versions.upstream_checked
     assert versions.latest_tag == "v0.20.1"
     assert [option.tag for option in versions.options] == ["v0.20.1", "v0.19.0"]
     assert all(option.status == "Available upstream" for option in versions.options)

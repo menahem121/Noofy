@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Play, RotateCcw, Square, Wrench, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Play, RotateCcw, Search, Square, Wrench, Zap } from "lucide-react";
 
 import {
   bootstrapEngine,
@@ -231,6 +231,25 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     await runComfyUIJob("rebuild", selected, rebuildComfyUI);
   }
 
+  async function checkComfyUIUpdates() {
+    setState((current) => ({ ...current, action: "check-updates", error: null, actionResult: null }));
+    try {
+      const versions = await fetchComfyUIVersions({ checkUpstream: true });
+      setState((current) => ({
+        ...current,
+        versions,
+        selectedVersion: versions.latest_tag ? "latest" : current.selectedVersion,
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
   async function runComfyUIJob(
     actionName: "update" | "rebuild",
     selected: string,
@@ -281,6 +300,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     state.action === "rebuild" ||
     (state.updateStatus?.operation === "rebuild" && state.updateStatus.status === "running");
   const engineJobBusy = updateBusy || rebuildBusy;
+  const checkUpdatesBusy = state.action === "check-updates";
   const currentRepairStatus = versions?.current?.repair_status;
   const currentIncompatibleReason = versions?.current?.incompatible_reason;
   const launchSettings = state.launchSettings;
@@ -496,6 +516,15 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               <h2>ComfyUI Version</h2>
               <p>Install upstream ComfyUI releases into Noofy's managed sidecar.</p>
             </div>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={state.action !== null}
+              onClick={() => void checkComfyUIUpdates()}
+            >
+              {checkUpdatesBusy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}
+              Check for Updates
+            </button>
           </div>
 
           <dl className="detail-list">
@@ -533,7 +562,11 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
             <label className="settings-option settings-option--select">
               <div>
                 <strong>Version</strong>
-                <span>Upstream releases are validated locally before activation.</span>
+                <span>
+                  {versions?.upstream_checked
+                    ? "Upstream releases are validated locally before activation."
+                    : "Press Check for Updates to load upstream ComfyUI releases."}
+                </span>
               </div>
               <select
                 value={state.selectedVersion}

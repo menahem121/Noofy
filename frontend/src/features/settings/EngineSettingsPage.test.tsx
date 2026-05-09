@@ -30,6 +30,7 @@ const readyRuntime = {
 const versions = {
   updates_allowed: true,
   disabled_reason: null,
+  upstream_checked: true,
   latest_tag: "v0.21.0",
   current: {
     tag: "v0.20.1",
@@ -81,6 +82,13 @@ const versions = {
   release_fetch_error: null,
 };
 
+const localVersions = {
+  ...versions,
+  upstream_checked: false,
+  latest_tag: null,
+  options: [versions.options[1]],
+};
+
 const launchSettings = {
   vram_mode: "normal",
   applies_to_managed_runtime: true,
@@ -123,7 +131,8 @@ describe("EngineSettingsPage", () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
-      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/versions?check_upstream=true")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(localVersions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
@@ -147,15 +156,23 @@ describe("EngineSettingsPage", () => {
     });
   });
 
-  it("shows current ComfyUI version and upstream release options", async () => {
+  it("loads upstream ComfyUI release options only when explicitly requested", async () => {
     render(<EngineSettingsPage onNavigate={vi.fn()} />);
 
     expect((await screen.findAllByText("v0.20.1")).length).toBeGreaterThan(0);
     const select = await screen.findByRole("combobox", { name: /version/i });
 
     expect(select).toHaveValue("latest");
-    expect(screen.getByRole("option", { name: /latest version.*v0.21.0/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /latest version.*v0.21.0/i })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/engine/comfyui/versions?check_upstream=true", expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: /check for updates/i }));
+
+    expect(await screen.findByRole("option", { name: /latest version.*v0.21.0/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /v0.20.1.*current/i })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/engine/comfyui/versions?check_upstream=true", {
+      headers: { Accept: "application/json" },
+    });
   });
 
   it("shows repair-blocked and incompatible ComfyUI version states", async () => {

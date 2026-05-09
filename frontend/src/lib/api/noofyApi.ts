@@ -205,6 +205,7 @@ export interface ComfyUIVersionOption {
 export interface ComfyUIVersionsResponse {
   updates_allowed: boolean;
   disabled_reason: string | null;
+  upstream_checked?: boolean;
   latest_tag: string | null;
   current: ComfyUIVersionRecord | null;
   options: ComfyUIVersionOption[];
@@ -408,8 +409,9 @@ export function fetchResourceSnapshot() {
   return getJson<MachineResourceSnapshot>("/resources");
 }
 
-export function fetchComfyUIVersions() {
-  return getJson<ComfyUIVersionsResponse>("/engine/comfyui/versions");
+export function fetchComfyUIVersions(options: { checkUpstream?: boolean } = {}) {
+  const suffix = options.checkUpstream ? "?check_upstream=true" : "";
+  return getJson<ComfyUIVersionsResponse>(`/engine/comfyui/versions${suffix}`);
 }
 
 export function fetchComfyUILaunchSettings() {

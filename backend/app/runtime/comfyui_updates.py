@@ -106,6 +106,7 @@ class ComfyUIVersionOption(BaseModel):
 class ComfyUIVersionsResponse(BaseModel):
     updates_allowed: bool
     disabled_reason: str | None = None
+    upstream_checked: bool = False
     latest_tag: str | None = None
     current: LocalComfyUIVersionRecord | None = None
     options: list[ComfyUIVersionOption] = Field(default_factory=list)
@@ -244,16 +245,17 @@ class ComfyUIUpdateService:
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
-    async def versions(self) -> ComfyUIVersionsResponse:
+    async def versions(self, *, check_upstream: bool = False) -> ComfyUIVersionsResponse:
         allowed, reason = self._updates_allowed()
         releases: list[UpstreamComfyUIRelease] = []
         fetch_error: str | None = None
-        try:
-            releases = _stable_sorted_releases(await self.release_fetcher())
-        except (
-            Exception
-        ) as exc:  # pragma: no cover - exercised through API behavior tests.
-            fetch_error = str(exc)
+        if allowed and check_upstream:
+            try:
+                releases = _stable_sorted_releases(await self.release_fetcher())
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - exercised through API behavior tests.
+                fetch_error = str(exc)
 
         records = self._read_records()
         active = self._active_record()
@@ -282,6 +284,7 @@ class ComfyUIUpdateService:
         return ComfyUIVersionsResponse(
             updates_allowed=allowed,
             disabled_reason=reason,
+            upstream_checked=allowed and check_upstream,
             latest_tag=latest,
             current=active,
             options=options,

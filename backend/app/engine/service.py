@@ -1260,14 +1260,15 @@ class EngineService:
     async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
         return await self.runtime_manager.bootstrap_environment()
 
-    async def comfyui_versions(self):
+    async def comfyui_versions(self, *, check_upstream: bool = False):
         if self.comfyui_update_service is None:
             return {
                 "updates_allowed": False,
                 "disabled_reason": "ComfyUI updater is not configured.",
+                "upstream_checked": False,
                 "options": [],
             }
-        return await self.comfyui_update_service.versions()
+        return await self.comfyui_update_service.versions(check_upstream=check_upstream)
 
     async def update_comfyui(self, request: ComfyUIUpdateRequest):
         if self.comfyui_update_service is None:

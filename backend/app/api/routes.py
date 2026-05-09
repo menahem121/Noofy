@@ -95,8 +95,8 @@ async def stop_comfyui():
 
 
 @router.get("/engine/comfyui/versions")
-async def comfyui_versions():
-    return await engine_service.comfyui_versions()
+async def comfyui_versions(check_upstream: bool = False):
+    return await engine_service.comfyui_versions(check_upstream=check_upstream)
 
 
 @router.post("/engine/comfyui/update")
