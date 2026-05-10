@@ -28,6 +28,8 @@ The frontend must not know whether a workflow is running through ComfyUI, a futu
 
 For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI sidecar. Connecting to an externally launched ComfyUI instance is a development convenience only.
 
+ComfyUI sidecar lifecycle, launch settings, bootstrap, update, rebuild, and repair operations are runtime management concerns owned by `ComfyUISidecarService`, not workflow execution operations on the engine contract.
+
 Workflow image uploads and generated output reads are adapter operations. The route layer and `EngineService` select the workflow/job-bound runner first, then dispatch through that runner's adapter. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
 
 ## Job Lifecycle

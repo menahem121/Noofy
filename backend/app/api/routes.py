@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -12,6 +12,7 @@ from app.composition import ApiServices
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
@@ -36,6 +37,12 @@ def get_engine_service(
     return services.engine_service
 
 
+def get_comfyui_sidecar_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> ComfyUISidecarService:
+    return cast(ComfyUISidecarService, services.comfyui_sidecar_service)
+
+
 def get_user_state_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> UserStateService:
@@ -49,6 +56,10 @@ def get_asset_service(
 
 
 EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
+ComfyUISidecarServiceDep = Annotated[
+    ComfyUISidecarService,
+    Depends(get_comfyui_sidecar_service),
+]
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
 DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
 
@@ -107,65 +118,65 @@ async def resource_snapshot(engine_service: EngineServiceDep):
 
 
 @router.get("/engine/comfyui/status")
-async def comfyui_status(engine_service: EngineServiceDep):
-    return await engine_service.runtime_status()
+async def comfyui_status(sidecar_service: ComfyUISidecarServiceDep):
+    return await sidecar_service.runtime_status()
 
 
 @router.get("/engine/comfyui/launch-settings")
-async def comfyui_launch_settings(engine_service: EngineServiceDep):
-    return engine_service.comfyui_launch_settings()
+async def comfyui_launch_settings(sidecar_service: ComfyUISidecarServiceDep):
+    return sidecar_service.comfyui_launch_settings()
 
 
 @router.put("/engine/comfyui/launch-settings")
 async def update_comfyui_launch_settings(
     request: ComfyUILaunchSettings,
-    engine_service: EngineServiceDep,
+    sidecar_service: ComfyUISidecarServiceDep,
 ):
-    return await engine_service.update_comfyui_launch_settings(request)
+    return await sidecar_service.update_comfyui_launch_settings(request)
 
 
 @router.post("/engine/comfyui/start")
-async def start_comfyui(engine_service: EngineServiceDep):
-    return await engine_service.start_comfyui()
+async def start_comfyui(sidecar_service: ComfyUISidecarServiceDep):
+    return await sidecar_service.start_comfyui()
 
 
 @router.post("/engine/comfyui/bootstrap")
-async def bootstrap_comfyui_runtime(engine_service: EngineServiceDep):
-    return await engine_service.bootstrap_comfyui_runtime()
+async def bootstrap_comfyui_runtime(sidecar_service: ComfyUISidecarServiceDep):
+    return await sidecar_service.bootstrap_comfyui_runtime()
 
 
 @router.post("/engine/comfyui/stop")
-async def stop_comfyui(engine_service: EngineServiceDep):
-    return await engine_service.stop_comfyui()
+async def stop_comfyui(sidecar_service: ComfyUISidecarServiceDep):
+    return await sidecar_service.stop_comfyui()
 
 
 @router.get("/engine/comfyui/versions")
 async def comfyui_versions(
-    engine_service: EngineServiceDep,
+    sidecar_service: ComfyUISidecarServiceDep,
     check_upstream: bool = False,
 ):
-    return await engine_service.comfyui_versions(check_upstream=check_upstream)
+    return await sidecar_service.comfyui_versions(check_upstream=check_upstream)
 
 
 @router.post("/engine/comfyui/update")
 async def update_comfyui(
     request: ComfyUIUpdateRequest,
-    engine_service: EngineServiceDep,
+    sidecar_service: ComfyUISidecarServiceDep,
 ):
-    return await engine_service.update_comfyui(request)
+    return await sidecar_service.update_comfyui(request)
 
 
 @router.post("/engine/comfyui/rebuild")
 async def rebuild_comfyui(
     request: ComfyUIRebuildRequest,
-    engine_service: EngineServiceDep,
+    sidecar_service: ComfyUISidecarServiceDep,
 ):
-    return await engine_service.rebuild_comfyui(request)
+    return await sidecar_service.rebuild_comfyui(request)
 
 
 @router.get("/engine/comfyui/update/status")
-async def comfyui_update_status(engine_service: EngineServiceDep):
-    return engine_service.comfyui_update_status()
+async def comfyui_update_status(sidecar_service: ComfyUISidecarServiceDep):
+    return sidecar_service.comfyui_update_status()
 
 
 @router.get("/runners")

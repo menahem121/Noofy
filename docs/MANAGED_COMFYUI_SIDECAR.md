@@ -30,6 +30,7 @@ The backend now has two layers:
 
 - `RuntimeEnvironment`: resolves the ComfyUI repo, app-owned runtime directory, virtual environment Python, logs/cache directories, `requirements.txt`, detected hardware profile, PyTorch install plan, and required import status.
 - `RuntimeManager`: owns runtime mode, free-port selection, process startup, health polling, stdout/stderr capture, failure reporting, and stop behavior.
+- `ComfyUISidecarService`: owns the application-facing ComfyUI sidecar operations exposed by `/api/engine/comfyui/*`, including start/stop/bootstrap, launch settings, upstream update/rebuild/status, and repair after managed startup failures.
 
 Managed startup checks the environment before spawning ComfyUI. If the repo, entrypoint, requirements file, Python executable, runtime directory, or required imports are missing, `/api/health` includes the environment failure and `/api/logs` records the state transition.
 

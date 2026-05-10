@@ -68,6 +68,33 @@ class FakeEngineService:
         self.shutdown_called = True
 
 
+class FakeComfyUISidecarService:
+    async def runtime_status(self) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="managed",
+            reachable=True,
+            base_url="http://127.0.0.1:9100",
+            repo_dir="/tmp/SidecarComfyUI",
+            managed_process_running=True,
+            pid=456,
+            managed_vram_mode="lowvram",
+        )
+
+    def comfyui_launch_settings(self):
+        return comfyui_launch_response(ComfyUILaunchSettings(vram_mode="lowvram"), mode="managed")
+
+    async def update_comfyui_launch_settings(self, request: ComfyUILaunchSettings):
+        return {
+            "status": "updated",
+            "settings": comfyui_launch_response(request, mode="managed").model_dump(),
+            "restart_status": "started",
+            "error": None,
+        }
+
+    async def start_comfyui(self):
+        return {"status": "started"}
+
+
 class SharedDiagnosticsEngineService(FakeEngineService):
     def __init__(self, log_store: LogStore) -> None:
         super().__init__()
@@ -100,6 +127,25 @@ def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     assert payload["mode"] == "managed"
     assert payload["reachable"] is True
     assert payload["pid"] == 123
+
+
+def test_comfyui_status_endpoint_uses_sidecar_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+
+    with TestClient(
+        create_app(
+            engine_service=FakeEngineService(),
+            comfyui_sidecar_service=FakeComfyUISidecarService(),
+        )
+    ) as client:
+        runtime_response = client.get("/api/runtime")
+        comfyui_response = client.get("/api/engine/comfyui/status")
+
+    assert runtime_response.status_code == 200
+    assert runtime_response.json()["base_url"] == "http://127.0.0.1:9000"
+    assert comfyui_response.status_code == 200
+    assert comfyui_response.json()["base_url"] == "http://127.0.0.1:9100"
+    assert comfyui_response.json()["pid"] == 456
 
 
 def test_create_app_defers_default_service_factory_until_lifespan(monkeypatch) -> None:

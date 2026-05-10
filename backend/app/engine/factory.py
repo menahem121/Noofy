@@ -13,6 +13,7 @@ from app.engine.service import (
     _workflow_source_files_dir,
 )
 from app.runtime.capsule_installer import CapsuleInstaller
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.comfyui_updates import (
     ComfyUIUpdateService,
     resolve_active_runtime_selection,
@@ -351,6 +352,12 @@ def create_default_engine_service() -> EngineService:
         ).python_executable,
         log_store=log_store,
     )
+    comfyui_sidecar_service = ComfyUISidecarService(
+        runtime_manager=runtime_manager,
+        update_service=comfyui_update_service,
+        launch_settings_store=launch_settings_store,
+        on_endpoint_changed=_reconfigure_adapter,
+    )
 
     log_store.add(
         "info",
@@ -378,6 +385,7 @@ def create_default_engine_service() -> EngineService:
         ),
         comfyui_update_service=comfyui_update_service,
         comfyui_launch_settings_store=launch_settings_store,
+        comfyui_sidecar_service=comfyui_sidecar_service,
         dashboard_authoring=DashboardAuthoringService(
             workflow_store_dir=paths.workflow_packages_store_dir,
             workflow_loader=loader,

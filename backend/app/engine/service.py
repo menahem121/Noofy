@@ -30,6 +30,7 @@ from app.engine.models import (
     WorkflowValidationResult,
 )
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.comfyui_updates import (
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
@@ -53,7 +54,6 @@ from app.runtime.launch_settings import (
     ComfyUILaunchSettingsResponse,
     ComfyUILaunchSettingsStore,
     ComfyUILaunchSettingsUpdateResult,
-    comfyui_launch_response,
 )
 from app.runtime.manager import RuntimeManager
 from app.runtime.memory_governor import (
@@ -131,6 +131,7 @@ class EngineService:
         memory_learning_store: LocalMemoryLearningStore | None = None,
         comfyui_update_service: ComfyUIUpdateService | None = None,
         comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
+        comfyui_sidecar_service: ComfyUISidecarService | None = None,
         resource_observer: SystemResourceObserver | None = None,
         dashboard_authoring: DashboardAuthoringService | None = None,
         workflow_exporter: WorkflowExporter | None = None,
@@ -151,6 +152,12 @@ class EngineService:
         self.resource_observer = resource_observer or SystemResourceObserver()
         self.dashboard_authoring = dashboard_authoring
         self.workflow_exporter = workflow_exporter
+        self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
+            runtime_manager=runtime_manager,
+            update_service=comfyui_update_service,
+            launch_settings_store=comfyui_launch_settings_store,
+            on_endpoint_changed=self._reconfigure_core_runner_endpoint,
+        )
         self._job_workflows: dict[str, str] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._memory_retry_roots: dict[str, str] = {}
@@ -1182,114 +1189,39 @@ class EngineService:
         return build_resource_snapshot(memory_snapshot, cpu_metric=cpu_metric)
 
     def comfyui_launch_settings(self) -> ComfyUILaunchSettingsResponse:
-        launch_settings = self._read_comfyui_launch_settings()
-        return comfyui_launch_response(launch_settings, mode=self.runtime_manager.mode)
+        return self.comfyui_sidecar_service.launch_settings()
 
     async def update_comfyui_launch_settings(
         self,
         request: ComfyUILaunchSettings,
     ) -> ComfyUILaunchSettingsUpdateResult:
-        current = self._read_comfyui_launch_settings()
-        response = comfyui_launch_response(request, mode=self.runtime_manager.mode)
-
-        if self.runtime_manager.mode != "managed":
-            return ComfyUILaunchSettingsUpdateResult(
-                status="blocked",
-                settings=response,
-                error=response.disabled_reason,
-            )
-
-        changed = current.vram_mode != request.vram_mode
-        self._write_comfyui_launch_settings(request)
-        self.runtime_manager.set_managed_vram_mode(request.vram_mode)
-
-        if not changed:
-            return ComfyUILaunchSettingsUpdateResult(status="unchanged", settings=response)
-
-        if not self.runtime_manager.is_managed_process_running():
-            return ComfyUILaunchSettingsUpdateResult(status="updated", settings=response)
-
-        await self.runtime_manager.stop()
-        start_result = await self.start_comfyui()
-        restart_ok = start_result.status in {"started", "already_running", "repair_completed_started"}
-        return ComfyUILaunchSettingsUpdateResult(
-            status="updated_restarted" if restart_ok else "updated_restart_failed",
-            settings=response,
-            restart_status=start_result.status,
-            error=None if restart_ok else start_result.comfyui.error,
-        )
+        return await self.comfyui_sidecar_service.update_launch_settings(request)
 
     async def start_comfyui(self):
-        result = await self.runtime_manager.start()
-        if (
-            self.comfyui_update_service is not None
-            and result.status in {"environment_not_ready", "repo_missing", "startup_failed"}
-        ):
-            result = await self.comfyui_update_service.repair_after_start_failure(
-                result,
-                repair_reason=result.comfyui.error or result.status,
-            )
-        self._reconfigure_core_runner_endpoint()
-        return result
+        return await self.comfyui_sidecar_service.start()
 
     async def stop_comfyui(self):
-        return await self.runtime_manager.stop()
+        return await self.comfyui_sidecar_service.stop()
 
     async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
-        return await self.runtime_manager.bootstrap_environment()
+        return await self.comfyui_sidecar_service.bootstrap_runtime()
 
     async def comfyui_versions(self, *, check_upstream: bool = False):
-        if self.comfyui_update_service is None:
-            return {
-                "updates_allowed": False,
-                "disabled_reason": "ComfyUI updater is not configured.",
-                "upstream_checked": False,
-                "options": [],
-            }
-        return await self.comfyui_update_service.versions(check_upstream=check_upstream)
+        return await self.comfyui_sidecar_service.versions(check_upstream=check_upstream)
 
     async def update_comfyui(self, request: ComfyUIUpdateRequest):
-        if self.comfyui_update_service is None:
-            return {
-                "status": "blocked",
-                "phase": "blocked",
-                "error": "ComfyUI updater is not configured.",
-            }
-        return await self.comfyui_update_service.start_update(request)
+        return await self.comfyui_sidecar_service.update(request)
 
     async def rebuild_comfyui(self, request: ComfyUIRebuildRequest):
-        if self.comfyui_update_service is None:
-            return {
-                "operation": "rebuild",
-                "status": "blocked",
-                "phase": "blocked",
-                "error": "ComfyUI updater is not configured.",
-            }
-        return await self.comfyui_update_service.start_rebuild(request)
+        return await self.comfyui_sidecar_service.rebuild(request)
 
     def comfyui_update_status(self):
-        if self.comfyui_update_service is None:
-            return {
-                "status": "idle",
-                "phase": "idle",
-                "error": "ComfyUI updater is not configured.",
-            }
-        return self.comfyui_update_service.update_status()
-
-    def _read_comfyui_launch_settings(self) -> ComfyUILaunchSettings:
-        if self.comfyui_launch_settings_store is None:
-            return ComfyUILaunchSettings()
-        return self.comfyui_launch_settings_store.read()
-
-    def _write_comfyui_launch_settings(self, launch_settings: ComfyUILaunchSettings) -> None:
-        if self.comfyui_launch_settings_store is not None:
-            self.comfyui_launch_settings_store.write(launch_settings)
+        return self.comfyui_sidecar_service.update_status()
 
     async def shutdown(self) -> None:
         if self.runner_process_coordinator is not None:
             await self.runner_process_coordinator.stop_all_runners()
-        if self.runtime_manager.mode == "managed":
-            await self.runtime_manager.stop()
+        await self.comfyui_sidecar_service.shutdown()
 
     # ------------------------------------------------------------------
     # Internals

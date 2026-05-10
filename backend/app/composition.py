@@ -6,6 +6,7 @@ from typing import Callable
 from app.core.config import settings
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
@@ -13,6 +14,7 @@ from app.workflows.user_state import UserStateService
 @dataclass(frozen=True)
 class ApiServices:
     engine_service: EngineService
+    comfyui_sidecar_service: object
     user_state_service: UserStateService
     asset_service: DashboardAssetService
 
@@ -24,11 +26,17 @@ def create_default_api_services() -> ApiServices:
 def create_api_services(
     *,
     engine_service: EngineService,
+    comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
 ) -> ApiServices:
     return ApiServices(
         engine_service=engine_service,
+        comfyui_sidecar_service=(
+            comfyui_sidecar_service
+            if comfyui_sidecar_service is not None
+            else getattr(engine_service, "comfyui_sidecar_service", engine_service)
+        ),
         user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
         asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
     )

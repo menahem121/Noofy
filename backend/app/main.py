@@ -16,15 +16,16 @@ from app.composition import (
 from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 from app.engine.service import EngineService
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
 logger = logging.getLogger(__name__)
 
 
-async def _start_comfyui_background(engine_service: EngineService) -> None:
+async def _start_comfyui_background(sidecar_service: ComfyUISidecarService) -> None:
     try:
-        result = await engine_service.start_comfyui()
+        result = await sidecar_service.start_comfyui()
         logger.info("Managed ComfyUI startup: status=%s", result.status)
     except Exception:
         logger.exception("Managed ComfyUI failed to start during backend startup")
@@ -36,7 +37,7 @@ async def lifespan(app: FastAPI):
     startup_task: asyncio.Task[None] | None = None
     if settings.comfyui_runtime_mode == "managed":
         startup_task = asyncio.create_task(
-            _start_comfyui_background(services.engine_service)
+            _start_comfyui_background(services.comfyui_sidecar_service)
         )
     try:
         yield
@@ -52,21 +53,35 @@ def create_app(
     *,
     services: ApiServices | None = None,
     engine_service: EngineService | None = None,
+    comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
     service_factory: ApiServicesFactory = create_default_api_services,
 ) -> FastAPI:
     if services is not None and any(
-        item is not None for item in (engine_service, user_state_service, asset_service)
+        item is not None
+        for item in (
+            engine_service,
+            comfyui_sidecar_service,
+            user_state_service,
+            asset_service,
+        )
     ):
         raise ValueError("Pass either services or individual service overrides, not both.")
     if services is None and any(
-        item is not None for item in (engine_service, user_state_service, asset_service)
+        item is not None
+        for item in (
+            engine_service,
+            comfyui_sidecar_service,
+            user_state_service,
+            asset_service,
+        )
     ):
         if engine_service is None:
             raise ValueError("engine_service is required when overriding API services.")
         services = create_api_services(
             engine_service=engine_service,
+            comfyui_sidecar_service=comfyui_sidecar_service,
             user_state_service=user_state_service,
             asset_service=asset_service,
         )

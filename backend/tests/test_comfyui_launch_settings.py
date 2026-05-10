@@ -2,15 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
-from app.engine.service import EngineService
+from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.launch_settings import ComfyUILaunchSettings, ComfyUILaunchSettingsStore
-
-
-class FakeRunnerSupervisor:
-    def core_runner(self):
-        raise LookupError("no core runner")
 
 
 class FakeRuntimeManager:
@@ -50,16 +44,17 @@ class FakeRuntimeManager:
         return ProcessActionResult(status="started", comfyui=await self.status())
 
 
-def _service(tmp_path: Path, manager: FakeRuntimeManager) -> tuple[EngineService, ComfyUILaunchSettingsStore]:
-    store = ComfyUILaunchSettingsStore(tmp_path / "runtime-store" / "settings" / "comfyui-launch.json")
+def _service(
+    tmp_path: Path,
+    manager: FakeRuntimeManager,
+) -> tuple[ComfyUISidecarService, ComfyUILaunchSettingsStore]:
+    store = ComfyUILaunchSettingsStore(
+        tmp_path / "runtime-store" / "settings" / "comfyui-launch.json"
+    )
     return (
-        EngineService(
-            None,  # type: ignore[arg-type]
-            None,  # type: ignore[arg-type]
-            FakeRunnerSupervisor(),  # type: ignore[arg-type]
-            manager,  # type: ignore[arg-type]
-            LogStore(),
-            comfyui_launch_settings_store=store,
+        ComfyUISidecarService(
+            runtime_manager=manager,  # type: ignore[arg-type]
+            launch_settings_store=store,
         ),
         store,
     )
@@ -75,11 +70,15 @@ def test_comfyui_launch_settings_default_to_normal_vram(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_comfyui_launch_setting_persists_without_restart_when_not_running(tmp_path: Path) -> None:
+async def test_comfyui_launch_setting_persists_without_restart_when_not_running(
+    tmp_path: Path,
+) -> None:
     manager = FakeRuntimeManager(mode="managed", running=False)
     service, store = _service(tmp_path, manager)
 
-    result = await service.update_comfyui_launch_settings(ComfyUILaunchSettings(vram_mode="lowvram"))
+    result = await service.update_comfyui_launch_settings(
+        ComfyUILaunchSettings(vram_mode="lowvram")
+    )
 
     assert result.status == "updated"
     assert result.restart_status is None
@@ -94,7 +93,9 @@ async def test_comfyui_launch_setting_restarts_running_managed_runtime(tmp_path:
     manager = FakeRuntimeManager(mode="managed", running=True)
     service, store = _service(tmp_path, manager)
 
-    result = await service.update_comfyui_launch_settings(ComfyUILaunchSettings(vram_mode="cpu"))
+    result = await service.update_comfyui_launch_settings(
+        ComfyUILaunchSettings(vram_mode="cpu")
+    )
 
     assert result.status == "updated_restarted"
     assert result.restart_status == "started"
@@ -109,7 +110,9 @@ async def test_comfyui_launch_setting_is_blocked_in_external_mode(tmp_path: Path
     manager = FakeRuntimeManager(mode="external", running=False)
     service, store = _service(tmp_path, manager)
 
-    result = await service.update_comfyui_launch_settings(ComfyUILaunchSettings(vram_mode="lowvram"))
+    result = await service.update_comfyui_launch_settings(
+        ComfyUILaunchSettings(vram_mode="lowvram")
+    )
 
     assert result.status == "blocked"
     assert result.settings.applies_to_managed_runtime is False
