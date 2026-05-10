@@ -1,6 +1,5 @@
 from fastapi.testclient import TestClient
 
-from app.api import routes
 from app.main import create_app
 from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
 
@@ -238,9 +237,8 @@ class FakeEngineService:
 
 def test_runners_endpoint_returns_registered_descriptors(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/runners")
 
     assert response.status_code == 200
@@ -252,9 +250,8 @@ def test_runners_endpoint_returns_registered_descriptors(monkeypatch) -> None:
 
 def test_memory_governor_metrics_endpoint_returns_counters(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/memory-governor/metrics")
 
     assert response.status_code == 200
@@ -268,9 +265,8 @@ def test_memory_governor_metrics_endpoint_returns_counters(monkeypatch) -> None:
 
 def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/workflows/text_to_image_v0/install-state")
 
     assert response.status_code == 200
@@ -288,9 +284,8 @@ def test_install_state_endpoint_returns_payload_shape(monkeypatch) -> None:
 
 def test_install_state_developer_details_endpoint_returns_technical_details(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/workflows/text_to_image_v0/install-state/developer-details")
 
     assert response.status_code == 200
@@ -299,9 +294,8 @@ def test_install_state_developer_details_endpoint_returns_technical_details(monk
 
 def test_install_state_unknown_workflow_uses_unsupported_payload(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/workflows/missing/install-state")
 
     assert response.status_code == 200
@@ -310,9 +304,8 @@ def test_install_state_unknown_workflow_uses_unsupported_payload(monkeypatch) ->
 
 def test_workflow_status_endpoint_includes_install_required_actions_and_runner_state(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/workflows/text_to_image_v0/status")
 
     assert response.status_code == 200
@@ -326,9 +319,8 @@ def test_workflow_status_endpoint_includes_install_required_actions_and_runner_s
 
 def test_workflow_status_unknown_workflow_returns_404(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/workflows/missing/status")
 
     assert response.status_code == 404
@@ -337,9 +329,8 @@ def test_workflow_status_unknown_workflow_returns_404(monkeypatch) -> None:
 def test_prepare_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post("/api/workflows/text_to_image_v0/prepare")
 
     assert response.status_code == 200
@@ -350,9 +341,8 @@ def test_prepare_endpoint_calls_service(monkeypatch) -> None:
 
 def test_cancel_prepare_endpoint_reports_no_active_cancelable_preparation(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.delete("/api/workflows/text_to_image_v0/prepare")
 
     assert response.status_code == 200
@@ -361,9 +351,8 @@ def test_cancel_prepare_endpoint_reports_no_active_cancelable_preparation(monkey
 
 def test_diagnostics_endpoint_hides_developer_details_by_default(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/diagnostics?workflow_id=text_to_image_v0")
 
     assert response.status_code == 200
@@ -374,9 +363,8 @@ def test_diagnostics_endpoint_hides_developer_details_by_default(monkeypatch) ->
 
 def test_diagnostics_endpoint_exposes_redacted_developer_details_when_requested(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/diagnostics?workflow_id=text_to_image_v0&developer_details=true")
 
     assert response.status_code == 200
@@ -385,9 +373,8 @@ def test_diagnostics_endpoint_exposes_redacted_developer_details_when_requested(
 
 def test_storage_diagnostics_endpoint_returns_reference_index(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/storage/diagnostics")
 
     assert response.status_code == 200
@@ -397,9 +384,8 @@ def test_storage_diagnostics_endpoint_returns_reference_index(monkeypatch) -> No
 def test_start_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post("/api/workflows/text_to_image_v0/runner/start")
 
     assert response.status_code == 200
@@ -411,9 +397,8 @@ def test_start_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
 def test_cancel_queued_runner_start_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.delete("/api/workflows/runner/queue/queue-1")
 
     assert response.status_code == 200
@@ -424,9 +409,8 @@ def test_cancel_queued_runner_start_endpoint_calls_service(monkeypatch) -> None:
 def test_stop_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post("/api/workflows/text_to_image_v0/runner/stop")
 
     assert response.status_code == 200
@@ -437,9 +421,8 @@ def test_stop_workflow_runner_endpoint_calls_service(monkeypatch) -> None:
 def test_open_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post("/api/workflows/text_to_image_v0/runner/leases")
 
     assert response.status_code == 200
@@ -451,9 +434,8 @@ def test_open_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
 def test_close_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.delete("/api/workflows/text_to_image_v0/runner/leases/lease-1")
 
     assert response.status_code == 200
@@ -464,9 +446,8 @@ def test_close_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None
 
 def test_validate_unknown_workflow_returns_404(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.post("/api/workflows/missing/validate")
 
     assert response.status_code == 404

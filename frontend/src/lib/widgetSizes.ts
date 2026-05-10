@@ -9,11 +9,11 @@ export interface WidgetPresetDef {
 }
 
 export const WIDGET_SIZE_PRESETS: Record<WidgetSizePreset, WidgetPresetDef> = {
-  compact: { name: "Compact", w: 8, h: 4 },
-  standard: { name: "Standard", w: 11, h: 4 },
-  wide: { name: "Wide", w: 16, h: 6 },
-  media: { name: "Media", w: 13, h: 10 },
-  "media-large": { name: "Media Large", w: 19, h: 14 },
+  compact: { name: "Compact", w: 6, h: 4 },
+  standard: { name: "Standard", w: 8, h: 6 },
+  wide: { name: "Wide", w: 10, h: 4 },
+  media: { name: "Media", w: 10, h: 10 },
+  "media-large": { name: "Media Large", w: 14, h: 14 },
 };
 
 export type WidgetTypeKey =
@@ -24,6 +24,7 @@ export type WidgetTypeKey =
   | "toggle"
   | "load_image"
   | "load_image_mask"
+  | "display_mask"
   | "display_image"
   | "result_image"
   | "seed_widget"
@@ -31,16 +32,17 @@ export type WidgetTypeKey =
   | "select";
 
 const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
-  slider: "compact",
+  slider: "wide",
   int_field: "compact",
   toggle: "compact",
-  string_field: "standard",
-  seed_widget: "standard",
+  string_field: "compact",
+  seed_widget: "compact",
   select: "standard",
-  load_image: "standard",
-  load_image_mask: "standard",
+  load_image: "media",
+  load_image_mask: "media",
+  display_mask: "media",
   lora_loader: "standard",
-  textarea: "wide",
+  textarea: "standard",
   display_image: "media-large",
   result_image: "media-large",
 };

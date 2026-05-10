@@ -22,7 +22,7 @@ React frontend
 
 The Tauri shell starts and manages the local backend process. The backend starts or connects to the local ComfyUI service.
 
-The FastAPI route layer is backed by composed application services. `EngineService` owns workflow execution orchestration, while user state and dashboard asset persistence stay in smaller application services. Default runtime, workflow, adapter, trust, diagnostics, and dashboard collaborators are wired by the backend composition/factory code rather than by route handlers.
+The FastAPI route layer is backed by composed application services. `EngineService` owns workflow execution orchestration, while user state and dashboard asset persistence stay in smaller application services. Default runtime, workflow, adapter, trust, diagnostics, and dashboard collaborators are wired by the backend composition/factory code during FastAPI lifespan startup, stored on `app.state`, and accessed by routes through request-scoped dependencies rather than route-module globals.
 
 For product v1, ComfyUI is a managed sidecar. The app must start it as a hidden local subprocess using an app-managed isolated Python environment. Users should not manually open ComfyUI or install ComfyUI dependencies into their system Python.
 

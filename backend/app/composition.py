@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from app.core.config import settings
 from app.engine.factory import create_default_engine_service
@@ -17,11 +18,20 @@ class ApiServices:
 
 
 def create_default_api_services() -> ApiServices:
+    return create_api_services(engine_service=create_default_engine_service())
+
+
+def create_api_services(
+    *,
+    engine_service: EngineService,
+    user_state_service: UserStateService | None = None,
+    asset_service: DashboardAssetService | None = None,
+) -> ApiServices:
     return ApiServices(
-        engine_service=create_default_engine_service(),
-        user_state_service=UserStateService(settings.paths.user_state_dir),
-        asset_service=DashboardAssetService(settings.paths.dashboard_assets_dir),
+        engine_service=engine_service,
+        user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
+        asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
     )
 
 
-default_api_services = create_default_api_services()
+ApiServicesFactory = Callable[[], ApiServices]

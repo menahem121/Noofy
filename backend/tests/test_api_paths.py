@@ -2,7 +2,6 @@
 
 from fastapi.testclient import TestClient
 
-from app.api import routes
 from app.engine.models import ComfyUIRuntimeStatus
 from app.main import create_app
 
@@ -27,9 +26,8 @@ class FakeEngineService:
 
 def test_paths_endpoint_returns_all_directory_entries(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/paths")
 
     assert response.status_code == 200
@@ -77,9 +75,8 @@ def test_paths_endpoint_returns_all_directory_entries(monkeypatch) -> None:
 
 def test_paths_endpoint_protected_by_token_when_set(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         without_token = client.get("/api/paths")
         with_wrong = client.get("/api/paths", headers={"Authorization": "Bearer wrong"})
         with_correct = client.get("/api/paths", headers={"Authorization": "Bearer secret-token"})
@@ -91,9 +88,8 @@ def test_paths_endpoint_protected_by_token_when_set(monkeypatch) -> None:
 
 def test_paths_endpoint_works_without_token(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/paths")
 
     assert response.status_code == 200

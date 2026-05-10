@@ -964,7 +964,7 @@ describe("WorkflowRunPage", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.layout_overrides.prompt).toEqual({ x: 6, y: 2, w: 16, h: 6 });
+      expect(body.layout_overrides.prompt).toEqual({ x: 6, y: 2, w: 8, h: 6 });
     });
   });
 

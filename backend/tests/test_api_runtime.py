@@ -4,8 +4,8 @@ import types
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import routes
 from app.api.schemas import ComfyUILaunchSettings
+from app.composition import create_api_services
 from app.core.config import settings as real_settings
 from app.engine.diagnostics import LogStore
 from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
@@ -91,9 +91,8 @@ class SharedDiagnosticsEngineService(FakeEngineService):
 
 def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.get("/api/engine/comfyui/status")
 
     assert response.status_code == 200
@@ -103,15 +102,36 @@ def test_runtime_status_endpoint_is_lightweight(monkeypatch) -> None:
     assert payload["pid"] == 123
 
 
+def test_create_app_defers_default_service_factory_until_lifespan(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+    factory_calls = 0
+
+    def service_factory():
+        nonlocal factory_calls
+        factory_calls += 1
+        return create_api_services(engine_service=fake_service)
+
+    app = create_app(service_factory=service_factory)
+
+    assert factory_calls == 0
+
+    with TestClient(app) as client:
+        response = client.get("/api/runtime")
+
+    assert response.status_code == 200
+    assert factory_calls == 1
+    assert fake_service.shutdown_called
+
+
 def test_diagnostic_api_endpoints_read_from_shared_injected_store(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     log_store = LogStore()
     log_store.add("info", "Global diagnostic", "test")
     log_store.add("warning", "Job diagnostic", "test", job_id="job-1")
     latest_error = log_store.add("error", "Latest failure", "test", job_id="job-1")
-    monkeypatch.setattr(routes, "engine_service", SharedDiagnosticsEngineService(log_store))
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=SharedDiagnosticsEngineService(log_store))) as client:
         logs_response = client.get("/api/logs")
         job_logs_response = client.get("/api/jobs/job-1/logs")
         health_response = client.get("/api/health")
@@ -136,9 +156,8 @@ def test_diagnostic_api_endpoints_read_from_shared_injected_store(monkeypatch) -
 
 def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.get("/api/resources")
 
     assert response.status_code == 200
@@ -149,9 +168,8 @@ def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
 
 
 def test_job_output_view_endpoint_returns_backend_owned_media(monkeypatch) -> None:
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get(
             "/api/jobs/job-1/outputs/view",
             params={
@@ -168,18 +186,16 @@ def test_job_output_view_endpoint_returns_backend_owned_media(monkeypatch) -> No
 
 def test_app_shutdown_calls_engine_service_shutdown(monkeypatch) -> None:
     fake_service = FakeEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         assert client.get("/api/runtime").status_code == 200
 
     assert fake_service.shutdown_called
 
 
 def test_comfyui_launch_settings_endpoint_returns_vram_options(monkeypatch) -> None:
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.get("/api/engine/comfyui/launch-settings")
 
     assert response.status_code == 200
@@ -196,9 +212,8 @@ def test_comfyui_launch_settings_endpoint_returns_vram_options(monkeypatch) -> N
 
 
 def test_comfyui_launch_settings_update_accepts_vram_mode(monkeypatch) -> None:
-    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
         response = client.put("/api/engine/comfyui/launch-settings", json={"vram_mode": "lowvram"})
 
     assert response.status_code == 200
@@ -237,10 +252,9 @@ def _patch_runtime_mode(monkeypatch, mode: str) -> None:
 
 def test_lifespan_managed_mode_fires_start_in_background(monkeypatch) -> None:
     fake_service = FakeEngineServiceWithStart()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
     _patch_runtime_mode(monkeypatch, "managed")
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         # Backend must be reachable immediately — before start_comfyui() finishes
         response = client.get("/api/runtime")
         assert response.status_code == 200
@@ -250,10 +264,9 @@ def test_lifespan_managed_mode_fires_start_in_background(monkeypatch) -> None:
 
 def test_lifespan_external_mode_does_not_call_start(monkeypatch) -> None:
     fake_service = FakeEngineServiceWithStart()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
     _patch_runtime_mode(monkeypatch, "external")
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         client.get("/api/runtime")
 
     assert not fake_service.start_called
@@ -265,9 +278,8 @@ def test_lifespan_managed_mode_start_failure_does_not_crash_backend(monkeypatch)
             raise RuntimeError("simulated ComfyUI startup failure")
 
     fake_service = FailingEngineService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
     _patch_runtime_mode(monkeypatch, "managed")
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.get("/api/runtime")
         assert response.status_code == 200

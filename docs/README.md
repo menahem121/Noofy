@@ -12,6 +12,7 @@ Status categories:
 - [ENGINE_CONTRACT.md](ENGINE_CONTRACT.md): backend-owned engine operations, adapter boundary, job lifecycle, diagnostics, and runtime ownership.
 - [WORKFLOW_PACKAGES.md](WORKFLOW_PACKAGES.md): `.noofy` package contents, bindings, smoke fixtures, model handling, storage cleanup direction, and creator-mode direction.
 - [DASHBOARD_ARCHITECTURE.md](DASHBOARD_ARCHITECTURE.md): import routing, dashboard authoring, canvas run dashboard, user state, dashboard assets, and related APIs.
+- [WIDGETS.md](WIDGETS.md): dashboard widget types, default grid minimum sizes, and widget sizing notes.
 - [RUNTIME_ISOLATION_ARCHITECTURE.md](RUNTIME_ISOLATION_ARCHITECTURE.md): community workflow capsules, isolated runner processes, dependency environments, trust boundaries, source policy, and GC.
 - [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md): current run-admission, memory observation, local learning, retry, and platform signal policy.
 - [MANAGED_COMFYUI_SIDECAR.md](MANAGED_COMFYUI_SIDECAR.md): app-managed ComfyUI lifecycle, path isolation, runtime modes, crash restart, and status APIs.

@@ -1,13 +1,15 @@
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from app.composition import default_api_services
-from app.core.config import settings
 from app.api.schemas import (
     ComfyUILaunchSettings,
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
 )
+from app.composition import ApiServices
+from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService
 from app.workflows.assets import AssetUploadError, DashboardAssetService
@@ -15,9 +17,40 @@ from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
 
 router = APIRouter()
-engine_service: EngineService = default_api_services.engine_service
-_user_state_service: UserStateService = default_api_services.user_state_service
-_asset_service: DashboardAssetService = default_api_services.asset_service
+
+
+def get_api_services(request: Request) -> ApiServices:
+    services = getattr(request.app.state, "api_services", None)
+    if services is None:
+        factory = getattr(request.app.state, "api_service_factory", None)
+        if factory is None:
+            raise RuntimeError("API services are not configured on app.state.")
+        services = factory()
+        request.app.state.api_services = services
+    return services
+
+
+def get_engine_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> EngineService:
+    return services.engine_service
+
+
+def get_user_state_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> UserStateService:
+    return services.user_state_service
+
+
+def get_asset_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> DashboardAssetService:
+    return services.asset_service
+
+
+EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
+UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
+DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
 
 
 @router.get("/paths")
@@ -26,17 +59,22 @@ async def resolved_paths():
 
 
 @router.get("/health")
-async def health():
+async def health(engine_service: EngineServiceDep):
     return await engine_service.health()
 
 
 @router.get("/logs")
-async def list_logs(level: str | None = None, limit: int = 200):
+async def list_logs(
+    engine_service: EngineServiceDep,
+    level: str | None = None,
+    limit: int = 200,
+):
     return engine_service.list_logs(level=level, limit=limit)
 
 
 @router.get("/diagnostics")
 async def diagnostics(
+    engine_service: EngineServiceDep,
     workflow_id: str | None = None,
     developer_details: bool = False,
     limit: int = 200,
@@ -49,93 +87,106 @@ async def diagnostics(
 
 
 @router.get("/storage/diagnostics")
-async def storage_diagnostics():
+async def storage_diagnostics(engine_service: EngineServiceDep):
     return engine_service.storage_diagnostics_payload()
 
 
 @router.get("/trust/policy")
-async def trust_policy():
+async def trust_policy(engine_service: EngineServiceDep):
     return engine_service.trust_policy_payload()
 
 
 @router.get("/runtime")
-async def runtime_status():
+async def runtime_status(engine_service: EngineServiceDep):
     return await engine_service.runtime_status()
 
 
 @router.get("/resources")
-async def resource_snapshot():
+async def resource_snapshot(engine_service: EngineServiceDep):
     return engine_service.resource_snapshot()
 
 
 @router.get("/engine/comfyui/status")
-async def comfyui_status():
+async def comfyui_status(engine_service: EngineServiceDep):
     return await engine_service.runtime_status()
 
 
 @router.get("/engine/comfyui/launch-settings")
-async def comfyui_launch_settings():
+async def comfyui_launch_settings(engine_service: EngineServiceDep):
     return engine_service.comfyui_launch_settings()
 
 
 @router.put("/engine/comfyui/launch-settings")
-async def update_comfyui_launch_settings(request: ComfyUILaunchSettings):
+async def update_comfyui_launch_settings(
+    request: ComfyUILaunchSettings,
+    engine_service: EngineServiceDep,
+):
     return await engine_service.update_comfyui_launch_settings(request)
 
 
 @router.post("/engine/comfyui/start")
-async def start_comfyui():
+async def start_comfyui(engine_service: EngineServiceDep):
     return await engine_service.start_comfyui()
 
 
 @router.post("/engine/comfyui/bootstrap")
-async def bootstrap_comfyui_runtime():
+async def bootstrap_comfyui_runtime(engine_service: EngineServiceDep):
     return await engine_service.bootstrap_comfyui_runtime()
 
 
 @router.post("/engine/comfyui/stop")
-async def stop_comfyui():
+async def stop_comfyui(engine_service: EngineServiceDep):
     return await engine_service.stop_comfyui()
 
 
 @router.get("/engine/comfyui/versions")
-async def comfyui_versions(check_upstream: bool = False):
+async def comfyui_versions(
+    engine_service: EngineServiceDep,
+    check_upstream: bool = False,
+):
     return await engine_service.comfyui_versions(check_upstream=check_upstream)
 
 
 @router.post("/engine/comfyui/update")
-async def update_comfyui(request: ComfyUIUpdateRequest):
+async def update_comfyui(
+    request: ComfyUIUpdateRequest,
+    engine_service: EngineServiceDep,
+):
     return await engine_service.update_comfyui(request)
 
 
 @router.post("/engine/comfyui/rebuild")
-async def rebuild_comfyui(request: ComfyUIRebuildRequest):
+async def rebuild_comfyui(
+    request: ComfyUIRebuildRequest,
+    engine_service: EngineServiceDep,
+):
     return await engine_service.rebuild_comfyui(request)
 
 
 @router.get("/engine/comfyui/update/status")
-async def comfyui_update_status():
+async def comfyui_update_status(engine_service: EngineServiceDep):
     return engine_service.comfyui_update_status()
 
 
 @router.get("/runners")
-async def list_runners():
+async def list_runners(engine_service: EngineServiceDep):
     return [descriptor.model_dump() for descriptor in engine_service.list_runners()]
 
 
 @router.get("/memory-governor/metrics")
-async def memory_governor_metrics():
+async def memory_governor_metrics(engine_service: EngineServiceDep):
     return {"metrics": engine_service.memory_governor_metrics()}
 
 
 @router.get("/workflows")
-async def list_workflows() -> list[dict[str, object]]:
+async def list_workflows(engine_service: EngineServiceDep) -> list[dict[str, object]]:
     return engine_service.list_workflows()
 
 
 @router.post("/workflows/import")
 async def import_workflow(
     request: Request,
+    engine_service: EngineServiceDep,
     filename: str | None = None,
     allow_unverified_community_preparation: bool = False,
 ):
@@ -150,7 +201,7 @@ async def import_workflow(
 
 
 @router.get("/workflows/{workflow_id}/package")
-async def get_workflow_package(workflow_id: str):
+async def get_workflow_package(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.get_workflow_package(workflow_id)
     except KeyError as exc:
@@ -158,17 +209,20 @@ async def get_workflow_package(workflow_id: str):
 
 
 @router.get("/workflows/{workflow_id}/install-state")
-async def get_workflow_install_state(workflow_id: str):
+async def get_workflow_install_state(workflow_id: str, engine_service: EngineServiceDep):
     return engine_service.get_install_state(workflow_id)
 
 
 @router.get("/workflows/{workflow_id}/install-state/developer-details")
-async def get_workflow_install_state_developer_details(workflow_id: str):
+async def get_workflow_install_state_developer_details(
+    workflow_id: str,
+    engine_service: EngineServiceDep,
+):
     return engine_service.get_install_state_developer_details(workflow_id)
 
 
 @router.get("/workflows/{workflow_id}/status")
-async def get_workflow_status(workflow_id: str):
+async def get_workflow_status(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.workflow_status(workflow_id)
     except KeyError as exc:
@@ -176,32 +230,32 @@ async def get_workflow_status(workflow_id: str):
 
 
 @router.post("/workflows/{workflow_id}/prepare")
-async def prepare_workflow(workflow_id: str):
+async def prepare_workflow(workflow_id: str, engine_service: EngineServiceDep):
     return await engine_service.prepare_workflow(workflow_id)
 
 
 @router.delete("/workflows/{workflow_id}/prepare")
-async def cancel_workflow_preparation(workflow_id: str):
+async def cancel_workflow_preparation(workflow_id: str, engine_service: EngineServiceDep):
     return engine_service.cancel_preparation(workflow_id)
 
 
 @router.post("/workflows/{workflow_id}/runner/start")
-async def start_workflow_runner(workflow_id: str):
+async def start_workflow_runner(workflow_id: str, engine_service: EngineServiceDep):
     return await engine_service.start_workflow_runner(workflow_id)
 
 
 @router.delete("/workflows/runner/queue/{queue_id}")
-async def cancel_queued_runner_start(queue_id: str):
+async def cancel_queued_runner_start(queue_id: str, engine_service: EngineServiceDep):
     return engine_service.cancel_queued_runner_start(queue_id)
 
 
 @router.post("/workflows/{workflow_id}/runner/stop")
-async def stop_workflow_runner(workflow_id: str):
+async def stop_workflow_runner(workflow_id: str, engine_service: EngineServiceDep):
     return await engine_service.stop_workflow_runner(workflow_id)
 
 
 @router.post("/workflows/{workflow_id}/runner/leases")
-async def open_workflow_runner_lease(workflow_id: str):
+async def open_workflow_runner_lease(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.open_workflow_runner_lease(workflow_id)
     except KeyError as exc:
@@ -209,7 +263,11 @@ async def open_workflow_runner_lease(workflow_id: str):
 
 
 @router.delete("/workflows/{workflow_id}/runner/leases/{lease_id}")
-async def close_workflow_runner_lease(workflow_id: str, lease_id: str):
+async def close_workflow_runner_lease(
+    workflow_id: str,
+    lease_id: str,
+    engine_service: EngineServiceDep,
+):
     try:
         return engine_service.close_workflow_runner_lease(workflow_id, lease_id)
     except KeyError as exc:
@@ -217,7 +275,7 @@ async def close_workflow_runner_lease(workflow_id: str, lease_id: str):
 
 
 @router.post("/workflows/{workflow_id}/validate")
-async def validate_workflow(workflow_id: str):
+async def validate_workflow(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return await engine_service.validate_workflow(workflow_id)
     except KeyError as exc:
@@ -225,7 +283,11 @@ async def validate_workflow(workflow_id: str):
 
 
 @router.post("/workflows/{workflow_id}/run")
-async def run_workflow(workflow_id: str, request: WorkflowRunRequest):
+async def run_workflow(
+    workflow_id: str,
+    request: WorkflowRunRequest,
+    engine_service: EngineServiceDep,
+):
     try:
         return await engine_service.run_workflow(workflow_id, request.inputs, request.options)
     except KeyError as exc:
@@ -235,33 +297,42 @@ async def run_workflow(workflow_id: str, request: WorkflowRunRequest):
 
 
 @router.get("/jobs/{job_id}/progress")
-async def get_progress(job_id: str):
+async def get_progress(job_id: str, engine_service: EngineServiceDep):
     return await engine_service.get_progress(job_id)
 
 
 @router.get("/jobs/{job_id}/logs")
-async def list_job_logs(job_id: str, level: str | None = None, limit: int = 200):
+async def list_job_logs(
+    job_id: str,
+    engine_service: EngineServiceDep,
+    level: str | None = None,
+    limit: int = 200,
+):
     return engine_service.list_job_logs(job_id, level=level, limit=limit)
 
 
 @router.get("/jobs/{job_id}/events")
-async def stream_job_events(job_id: str):
-    return StreamingResponse(engine_service.stream_progress_events(job_id), media_type="text/event-stream")
+async def stream_job_events(job_id: str, engine_service: EngineServiceDep):
+    return StreamingResponse(
+        engine_service.stream_progress_events(job_id),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/jobs/{job_id}/cancel")
-async def cancel_job(job_id: str):
+async def cancel_job(job_id: str, engine_service: EngineServiceDep):
     return await engine_service.cancel_job(job_id)
 
 
 @router.get("/jobs/{job_id}/result")
-async def get_result(job_id: str):
+async def get_result(job_id: str, engine_service: EngineServiceDep):
     return await engine_service.get_result(job_id)
 
 
 @router.get("/jobs/{job_id}/outputs/view")
 async def get_job_output_view(
     job_id: str,
+    engine_service: EngineServiceDep,
     filename: str,
     subfolder: str = "",
     output_type: str = Query("output", alias="type"),
@@ -281,7 +352,7 @@ async def get_job_output_view(
 
 
 @router.get("/workflows/{workflow_id}/bindable-inputs")
-async def get_bindable_inputs(workflow_id: str):
+async def get_bindable_inputs(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.get_bindable_inputs(workflow_id)
     except KeyError as exc:
@@ -289,7 +360,7 @@ async def get_bindable_inputs(workflow_id: str):
 
 
 @router.get("/workflows/{workflow_id}/unresolved-inputs")
-async def get_unresolved_inputs(workflow_id: str):
+async def get_unresolved_inputs(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.get_unresolved_inputs(workflow_id)
     except KeyError as exc:
@@ -297,7 +368,11 @@ async def get_unresolved_inputs(workflow_id: str):
 
 
 @router.post("/workflows/{workflow_id}/dashboard/validate")
-async def validate_dashboard(workflow_id: str, request: Request):
+async def validate_dashboard(
+    workflow_id: str,
+    request: Request,
+    engine_service: EngineServiceDep,
+):
     try:
         body = await request.json()
         return engine_service.validate_dashboard(
@@ -312,7 +387,11 @@ async def validate_dashboard(workflow_id: str, request: Request):
 
 
 @router.put("/workflows/{workflow_id}/dashboard")
-async def save_dashboard(workflow_id: str, request: Request):
+async def save_dashboard(
+    workflow_id: str,
+    request: Request,
+    engine_service: EngineServiceDep,
+):
     try:
         body = await request.json()
         return engine_service.save_dashboard(
@@ -327,7 +406,7 @@ async def save_dashboard(workflow_id: str, request: Request):
 
 
 @router.get("/workflows/{workflow_id}/export")
-async def export_workflow(workflow_id: str):
+async def export_workflow(workflow_id: str, engine_service: EngineServiceDep):
     try:
         archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
     except KeyError as exc:
@@ -342,7 +421,11 @@ async def export_workflow(workflow_id: str):
 
 
 @router.post("/workflows/{workflow_id}/uploads/image")
-async def upload_workflow_image(workflow_id: str, image: UploadFile = File(...)):
+async def upload_workflow_image(
+    workflow_id: str,
+    engine_service: EngineServiceDep,
+    image: UploadFile = File(...),
+):
     try:
         data = await image.read()
         result = await engine_service.upload_workflow_image(
@@ -359,19 +442,26 @@ async def upload_workflow_image(workflow_id: str, image: UploadFile = File(...))
 
 
 @router.get("/models")
-async def list_available_models():
+async def list_available_models(engine_service: EngineServiceDep):
     return await engine_service.list_available_models()
 
 
 # ─── User state ──────────────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/user-state")
-async def get_user_state(workflow_id: str):
-    return _user_state_service.get(workflow_id)
+async def get_user_state(
+    workflow_id: str,
+    user_state_service: UserStateServiceDep,
+):
+    return user_state_service.get(workflow_id)
 
 
 @router.put("/workflows/{workflow_id}/user-state")
-async def save_user_state(workflow_id: str, request: Request):
+async def save_user_state(
+    workflow_id: str,
+    request: Request,
+    user_state_service: UserStateServiceDep,
+):
     from app.workflows.user_state import WorkflowUserState
     body = await request.json()
     body["workflow_id"] = workflow_id
@@ -379,49 +469,65 @@ async def save_user_state(workflow_id: str, request: Request):
         state = WorkflowUserState.model_validate(body)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _user_state_service.save(state)
+    return user_state_service.save(state)
 
 
 @router.delete("/workflows/{workflow_id}/user-state/values")
-async def clear_user_state_values(workflow_id: str):
-    return _user_state_service.clear_values(workflow_id)
+async def clear_user_state_values(
+    workflow_id: str,
+    user_state_service: UserStateServiceDep,
+):
+    return user_state_service.clear_values(workflow_id)
 
 
 @router.delete("/workflows/{workflow_id}/user-state/layout")
-async def clear_user_state_layout(workflow_id: str):
-    return _user_state_service.clear_layout(workflow_id)
+async def clear_user_state_layout(
+    workflow_id: str,
+    user_state_service: UserStateServiceDep,
+):
+    return user_state_service.clear_layout(workflow_id)
 
 
 # ─── Dashboard assets ────────────────────────────────────────────────────────
 
 @router.post("/workflows/{workflow_id}/assets/image")
-async def upload_dashboard_asset(workflow_id: str, image: UploadFile = File(...)):
+async def upload_dashboard_asset(
+    workflow_id: str,
+    asset_service: DashboardAssetServiceDep,
+    image: UploadFile = File(...),
+):
     data = await image.read()
     content_type = image.content_type or "application/octet-stream"
     original_filename = image.filename or "upload"
     try:
-        return _asset_service.store(data, content_type, original_filename)
+        return asset_service.store(data, content_type, original_filename)
     except AssetUploadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/assets/{asset_id}/metadata")
-async def get_dashboard_asset_metadata(asset_id: str):
+async def get_dashboard_asset_metadata(
+    asset_id: str,
+    asset_service: DashboardAssetServiceDep,
+):
     try:
-        path = _asset_service.asset_path(asset_id)
+        path = asset_service.asset_path(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not path.exists():
         raise HTTPException(status_code=404, detail="Asset not found.")
-    return _asset_service.metadata(asset_id)
+    return asset_service.metadata(asset_id)
 
 
 @router.get("/assets/{asset_id}")
-async def serve_dashboard_asset(asset_id: str):
+async def serve_dashboard_asset(
+    asset_id: str,
+    asset_service: DashboardAssetServiceDep,
+):
     try:
-        path = _asset_service.asset_path(asset_id)
+        path = asset_service.asset_path(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not path.exists():
         raise HTTPException(status_code=404, detail="Asset not found.")
-    return FileResponse(path, media_type=_asset_service.content_type(asset_id))
+    return FileResponse(path, media_type=asset_service.content_type(asset_id))

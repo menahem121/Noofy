@@ -61,6 +61,9 @@ When adapting large files from `third_party/comfyui/`, do not manually rewrite b
 
 Prefer focused tests for normal changes. Run only the tests that cover the area you modified.
 
+For focused backend tests, use:
+backend/.venv/bin/python -m pytest <test-path>
+
 Use the full repo-level test suite only when the change is broad, low-level, or risky enough that it could affect multiple parts of the app.
 
 ```bash

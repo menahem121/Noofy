@@ -1,6 +1,5 @@
 from fastapi.testclient import TestClient
 
-from app.api import routes
 from app.main import create_app
 
 
@@ -77,9 +76,8 @@ class FakeImportService:
 def test_import_workflow_endpoint_passes_archive_bytes_to_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post(
             "/api/workflows/import?filename=test.noofy",
             content=b"archive-bytes",
@@ -97,9 +95,8 @@ def test_import_workflow_endpoint_passes_archive_bytes_to_service(monkeypatch) -
 def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
-    monkeypatch.setattr(routes, "engine_service", fake_service)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=fake_service)) as client:
         response = client.post(
             "/api/workflows/import?filename=test.noofy&allow_unverified_community_preparation=true",
             content=b"archive-bytes",
@@ -112,9 +109,8 @@ def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatc
 
 def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeImportService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeImportService())) as client:
         response = client.get("/api/workflows/unknown__eraserv4.5__0.1.0/package")
 
     assert response.status_code == 200
@@ -123,9 +119,8 @@ def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) ->
 
 def test_get_workflow_package_endpoint_returns_404_for_unknown_workflow(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeImportService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeImportService())) as client:
         response = client.get("/api/workflows/missing/package")
 
     assert response.status_code == 404
@@ -133,9 +128,8 @@ def test_get_workflow_package_endpoint_returns_404_for_unknown_workflow(monkeypa
 
 def test_trust_policy_endpoint_returns_public_key_metadata_only(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
-    monkeypatch.setattr(routes, "engine_service", FakeImportService())
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(engine_service=FakeImportService())) as client:
         response = client.get("/api/trust/policy")
 
     assert response.status_code == 200

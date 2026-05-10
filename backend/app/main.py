@@ -7,15 +7,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import routes
+from app.composition import (
+    ApiServices,
+    ApiServicesFactory,
+    create_api_services,
+    create_default_api_services,
+)
 from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
+from app.engine.service import EngineService
+from app.workflows.assets import DashboardAssetService
+from app.workflows.user_state import UserStateService
 
 logger = logging.getLogger(__name__)
 
 
-async def _start_comfyui_background() -> None:
+async def _start_comfyui_background(engine_service: EngineService) -> None:
     try:
-        result = await routes.engine_service.start_comfyui()
+        result = await engine_service.start_comfyui()
         logger.info("Managed ComfyUI startup: status=%s", result.status)
     except Exception:
         logger.exception("Managed ComfyUI failed to start during backend startup")
@@ -23,9 +32,12 @@ async def _start_comfyui_background() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    services = _api_services_for_app(app)
     startup_task: asyncio.Task[None] | None = None
     if settings.comfyui_runtime_mode == "managed":
-        startup_task = asyncio.create_task(_start_comfyui_background())
+        startup_task = asyncio.create_task(
+            _start_comfyui_background(services.engine_service)
+        )
     try:
         yield
     finally:
@@ -33,11 +45,35 @@ async def lifespan(app: FastAPI):
             startup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await startup_task
-        await routes.engine_service.shutdown()
+        await services.engine_service.shutdown()
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    services: ApiServices | None = None,
+    engine_service: EngineService | None = None,
+    user_state_service: UserStateService | None = None,
+    asset_service: DashboardAssetService | None = None,
+    service_factory: ApiServicesFactory = create_default_api_services,
+) -> FastAPI:
+    if services is not None and any(
+        item is not None for item in (engine_service, user_state_service, asset_service)
+    ):
+        raise ValueError("Pass either services or individual service overrides, not both.")
+    if services is None and any(
+        item is not None for item in (engine_service, user_state_service, asset_service)
+    ):
+        if engine_service is None:
+            raise ValueError("engine_service is required when overriding API services.")
+        services = create_api_services(
+            engine_service=engine_service,
+            user_state_service=user_state_service,
+            asset_service=asset_service,
+        )
+
     app = FastAPI(title="Local AI Workflow Backend", version="0.1.0", lifespan=lifespan)
+    app.state.api_services = services
+    app.state.api_service_factory = service_factory
     app.add_middleware(LocalApiTokenMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -47,6 +83,15 @@ def create_app() -> FastAPI:
     )
     app.include_router(routes.router, prefix="/api")
     return app
+
+
+def _api_services_for_app(app: FastAPI) -> ApiServices:
+    services = getattr(app.state, "api_services", None)
+    if services is None:
+        factory: ApiServicesFactory = app.state.api_service_factory
+        services = factory()
+        app.state.api_services = services
+    return services
 
 
 app = create_app()
