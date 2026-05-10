@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,7 @@ class TestNoofyDataDirOverride:
 
         assert paths.data_dir == Path("/tmp/noofy-test")
         assert paths.runtime_dir == Path("/tmp/noofy-test/runtime")
-        assert paths.models_dir == Path("/tmp/noofy-test/models")
+        assert paths.models_dir == Path.home() / "Documents" / "Noofy Models"
         assert paths.user_workflows_dir == Path("/tmp/noofy-test/workflows")
         assert paths.input_dir == Path("/tmp/noofy-test/input")
         assert paths.outputs_dir == Path("/tmp/noofy-test/outputs")
@@ -103,7 +104,37 @@ class TestTargetedOverrides:
 
         assert paths.runtime_dir == Path("/legacy/runtime")
         # Other dirs still under data_dir
-        assert paths.models_dir == Path("/tmp/base/models")
+        assert paths.models_dir == Path.home() / "Documents" / "Noofy Models"
+
+    def test_model_folder_settings_override_noofy_models_dir(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / "settings"
+        settings_dir.mkdir()
+        (settings_dir / "model-folders.json").write_text(
+            json.dumps({"noofy_models_dir": str(tmp_path / "User Models")}),
+            encoding="utf-8",
+        )
+
+        paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path)})
+
+        assert paths.models_dir == tmp_path / "User Models"
+
+    def test_rejects_configured_bundled_comfyui_models_dir(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / "settings"
+        settings_dir.mkdir()
+        (settings_dir / "model-folders.json").write_text(
+            json.dumps(
+                {
+                    "noofy_models_dir": str(
+                        tmp_path / "third_party" / "comfyui" / "models"
+                    )
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path)})
+
+        assert paths.models_dir == Path.home() / "Documents" / "Noofy Models"
 
     def test_comfyui_repo_dir_override(self) -> None:
         env = {"COMFYUI_REPO_DIR": "/opt/comfyui"}

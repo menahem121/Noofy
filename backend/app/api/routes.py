@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -8,6 +10,7 @@ from app.api.schemas import (
     ComfyUILaunchSettings,
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
+    ModelFolderUpdateRequest,
 )
 from app.composition import ApiServices
 from app.core.config import settings
@@ -19,6 +22,7 @@ from app.settings.api_keys import (
     CredentialStoreUnavailable,
     provider_from_slug,
 )
+from app.settings.model_folders import ModelFolderSettingsService
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
@@ -67,6 +71,12 @@ def get_api_key_service(
     return services.api_key_service
 
 
+def get_model_folder_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> ModelFolderSettingsService:
+    return services.model_folder_service
+
+
 EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
 ComfyUISidecarServiceDep = Annotated[
     ComfyUISidecarService,
@@ -75,11 +85,22 @@ ComfyUISidecarServiceDep = Annotated[
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
 DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
 ApiKeyServiceDep = Annotated[ApiKeySettingsService, Depends(get_api_key_service)]
+ModelFolderServiceDep = Annotated[ModelFolderSettingsService, Depends(get_model_folder_service)]
 
 
 @router.get("/paths")
-async def resolved_paths():
-    return settings.paths.writable_status()
+async def resolved_paths(model_folder_service: ModelFolderServiceDep):
+    entries = settings.paths.writable_status()
+    model_folder_settings = model_folder_service.settings(ensure_folders=False)
+    active_models_dir = Path(model_folder_settings.noofy_models_dir)
+    entries["models_dir"] = {
+        "path": str(active_models_dir),
+        "exists": active_models_dir.exists(),
+        "writable": os.access(active_models_dir, os.W_OK)
+        if active_models_dir.exists()
+        else False,
+    }
+    return entries
 
 
 @router.get("/health")
@@ -118,6 +139,22 @@ async def storage_diagnostics(engine_service: EngineServiceDep):
 @router.get("/settings/apis")
 async def api_key_settings(api_key_service: ApiKeyServiceDep):
     return api_key_service.settings()
+
+
+@router.get("/settings/model-folders")
+async def model_folder_settings(model_folder_service: ModelFolderServiceDep):
+    return model_folder_service.settings()
+
+
+@router.put("/settings/model-folders")
+async def update_model_folder_settings(
+    request: ModelFolderUpdateRequest,
+    model_folder_service: ModelFolderServiceDep,
+):
+    try:
+        return model_folder_service.update(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/settings/apis/{provider}/key")

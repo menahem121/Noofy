@@ -218,6 +218,7 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(
         return process_started, None if process_started else "not reachable"
 
     data_dir = tmp_path / "data"
+    extra_model_paths = data_dir / "runtime-store" / "settings" / "extra-model-paths.yaml"
     manager = RuntimeManager(
         mode="managed",
         external_base_url="http://127.0.0.1:8188",
@@ -232,6 +233,7 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(
         managed_user_directory=data_dir / "user-state" / "comfyui",
         managed_database_url=f"sqlite:///{(data_dir / 'user-state' / 'comfyui' / 'comfyui.db').as_posix()}",
         python_cache_dir=data_dir / "cache" / "python",
+        managed_extra_model_paths_config=extra_model_paths,
         log_store=LogStore(),
     )
 
@@ -251,6 +253,9 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(
     )
     assert _arg_value(captured_command, "--database-url").endswith(
         "/data/user-state/comfyui/comfyui.db"
+    )
+    assert _arg_value(captured_command, "--extra-model-paths-config") == str(
+        extra_model_paths
     )
     assert captured_env["PYTHONPYCACHEPREFIX"] == str(data_dir / "cache" / "python")
     assert all(

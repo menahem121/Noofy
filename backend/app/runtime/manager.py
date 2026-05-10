@@ -62,6 +62,8 @@ class RuntimeManager:
         managed_user_directory: Path | None = None,
         managed_database_url: str | None = None,
         python_cache_dir: Path | None = None,
+        managed_extra_model_paths_config: Path | None = None,
+        managed_model_roots: list[Path] | None = None,
         version_metadata: ComfyUIVersionMetadata | None = None,
         managed_vram_mode: str = "normal",
     ) -> None:
@@ -91,6 +93,8 @@ class RuntimeManager:
         self._managed_user_directory = managed_user_directory
         self._managed_database_url = managed_database_url
         self._python_cache_dir = python_cache_dir
+        self._managed_extra_model_paths_config = managed_extra_model_paths_config
+        self._managed_model_roots = managed_model_roots or []
         self._version_metadata = version_metadata
         self.managed_vram_mode = managed_vram_mode
         comfyui_vram_args(self.managed_vram_mode)
@@ -156,6 +160,17 @@ class RuntimeManager:
             ),
             version=self._version_metadata,
             managed_vram_mode=self.managed_vram_mode,
+            model_paths={
+                "noofy_models_dir": str(self._managed_model_roots[0])
+                if self._managed_model_roots
+                else None,
+                "external_comfyui_models_dir": str(self._managed_model_roots[1])
+                if len(self._managed_model_roots) > 1
+                else None,
+                "extra_model_paths_config": str(self._managed_extra_model_paths_config)
+                if self._managed_extra_model_paths_config
+                else None,
+            },
         )
 
     def reconfigure_managed_runtime(
@@ -180,6 +195,12 @@ class RuntimeManager:
     def set_managed_vram_mode(self, mode: str) -> None:
         comfyui_vram_args(mode)
         self.managed_vram_mode = mode
+
+    def set_managed_extra_model_paths_config(self, path: Path | None) -> None:
+        self._managed_extra_model_paths_config = path
+
+    def set_managed_model_roots(self, model_roots: list[Path]) -> None:
+        self._managed_model_roots = list(model_roots)
 
     async def start(self) -> ProcessActionResult:
         async with self._start_lock:
@@ -704,6 +725,8 @@ class RuntimeManager:
                 args.extend([flag, str(path)])
         if self._managed_database_url:
             args.extend(["--database-url", self._managed_database_url])
+        if self._managed_extra_model_paths_config is not None:
+            args.extend(["--extra-model-paths-config", str(self._managed_extra_model_paths_config)])
         return args
 
     def _managed_vram_args(self) -> list[str]:

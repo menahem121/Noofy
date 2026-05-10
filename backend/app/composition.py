@@ -8,6 +8,12 @@ from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService
+from app.settings.model_folders import (
+    ModelFolderSettingsService,
+    ModelFolderSettingsStore,
+    default_noofy_models_dir,
+    write_extra_model_paths_config,
+)
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
@@ -19,6 +25,7 @@ class ApiServices:
     user_state_service: UserStateService
     asset_service: DashboardAssetService
     api_key_service: ApiKeySettingsService
+    model_folder_service: ModelFolderSettingsService
 
 
 def create_default_api_services() -> ApiServices:
@@ -32,7 +39,24 @@ def create_api_services(
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
     api_key_service: ApiKeySettingsService | None = None,
+    model_folder_service: ModelFolderSettingsService | None = None,
 ) -> ApiServices:
+    extra_model_paths_config = settings.paths.runtime_store_dir / "settings" / "extra-model-paths.yaml"
+
+    def _apply_model_folder_change(noofy_models_dir, external_comfyui_models_dir) -> None:
+        write_extra_model_paths_config(
+            extra_model_paths_config,
+            noofy_models_dir=noofy_models_dir,
+            external_comfyui_models_dir=external_comfyui_models_dir,
+        )
+        apply_settings = getattr(engine_service, "apply_model_folder_settings", None)
+        if callable(apply_settings):
+            apply_settings(
+                noofy_models_dir,
+                external_comfyui_models_dir,
+                extra_model_paths_config=extra_model_paths_config,
+            )
+
     return ApiServices(
         engine_service=engine_service,
         comfyui_sidecar_service=(
@@ -46,6 +70,13 @@ def create_api_services(
         or ApiKeySettingsService(
             metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),
             log_store=getattr(engine_service, "log_store", None),
+        ),
+        model_folder_service=model_folder_service
+        or ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(settings.paths.settings_dir / "model-folders.json"),
+            default_noofy_models_dir=default_noofy_models_dir(settings.paths.data_dir),
+            log_store=getattr(engine_service, "log_store", None),
+            on_change=_apply_model_folder_change,
         ),
     )
 

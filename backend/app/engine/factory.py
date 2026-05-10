@@ -59,6 +59,12 @@ from app.runtime.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
+from app.settings.model_folders import (
+    ModelFolderSettingsStore,
+    default_noofy_models_dir,
+    ensure_model_subfolders,
+    write_extra_model_paths_config,
+)
 from app.trust import load_trust_verifier
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
@@ -70,15 +76,21 @@ from app.workflows.validator import WorkflowPackageValidator
 
 def comfyui_adapter_factory(
     *,
-    models_dir: Path,
+    model_roots: list[Path] | None = None,
+    models_dir: Path | None = None,
     log_store: DiagnosticsSink,
 ) -> AdapterFactory:
+    roots = model_roots or ([models_dir] if models_dir is not None else None)
+    if not roots:
+        raise ValueError("A ComfyUI adapter factory requires at least one model root.")
+
     def factory(descriptor: RunnerDescriptor) -> EngineAdapter:
         return ComfyUIEngineAdapter(
             descriptor.base_url,
-            models_dir,
+            roots[0],
             descriptor.ws_url,
             log_store=log_store,
+            model_roots=roots,
         )
 
     return factory
@@ -88,6 +100,28 @@ def create_default_engine_service() -> EngineService:
     paths = settings.paths
     paths.ensure_directories()
     log_store = LogStore()
+    model_folder_store = ModelFolderSettingsStore(
+        paths.settings_dir / "model-folders.json"
+    )
+    model_folder_settings = model_folder_store.read(
+        default_noofy_models_dir=default_noofy_models_dir(paths.data_dir)
+    )
+    noofy_models_dir = Path(model_folder_settings.noofy_models_dir)
+    external_comfyui_models_dir = (
+        Path(model_folder_settings.external_comfyui_models_dir)
+        if model_folder_settings.external_comfyui_models_dir
+        else None
+    )
+    ensure_model_subfolders(noofy_models_dir)
+    model_roots = [noofy_models_dir]
+    if external_comfyui_models_dir is not None:
+        model_roots.append(external_comfyui_models_dir)
+    extra_model_paths_config = paths.runtime_store_dir / "settings" / "extra-model-paths.yaml"
+    write_extra_model_paths_config(
+        extra_model_paths_config,
+        noofy_models_dir=noofy_models_dir,
+        external_comfyui_models_dir=external_comfyui_models_dir,
+    )
     sweep_report = InstallTransactionStore(
         paths.install_transactions_dir, log_store=log_store
     ).sweep_startup()
@@ -163,17 +197,20 @@ def create_default_engine_service() -> EngineService:
         managed_user_directory=paths.comfyui_user_dir,
         managed_database_url=f"sqlite:///{paths.comfyui_database_file.as_posix()}",
         python_cache_dir=paths.python_cache_dir,
+        managed_extra_model_paths_config=extra_model_paths_config,
+        managed_model_roots=model_roots,
         version_metadata=active_runtime.version_metadata,
         managed_vram_mode=launch_settings.vram_mode,
     )
     runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
         runtime_manager.base_url,
-        settings.comfyui_models_dir,
+        noofy_models_dir,
         runtime_manager.ws_url,
         log_store=log_store,
         dashboard_assets_dir=paths.dashboard_assets_dir,
         comfyui_input_dir=paths.input_dir,
+        model_roots=model_roots,
     )
     trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
     imported_package_store = ImportedWorkflowPackageStore(
@@ -232,7 +269,8 @@ def create_default_engine_service() -> EngineService:
         transactions_dir=paths.install_transactions_dir,
         log_store=log_store,
         downloader=http_streaming_downloader,
-        local_model_roots=[settings.comfyui_models_dir],
+        local_model_roots=model_roots,
+        owned_model_root=noofy_models_dir,
     )
     orphan_model_links_removed = model_store.sweep_orphan_materialized_links()
     if orphan_model_links_removed:
@@ -315,7 +353,7 @@ def create_default_engine_service() -> EngineService:
         runner_supervisor=supervisor,
         process_supervisor=runner_process_supervisor,
         adapter_factory=comfyui_adapter_factory(
-            models_dir=settings.comfyui_models_dir,
+            model_roots=model_roots,
             log_store=log_store,
         ),
         log_store=log_store,
@@ -396,5 +434,6 @@ def create_default_engine_service() -> EngineService:
             workflow_store_dir=paths.workflow_packages_store_dir,
             workflow_loader=loader,
         ),
+        model_roots_ref=model_roots,
     )
     return service

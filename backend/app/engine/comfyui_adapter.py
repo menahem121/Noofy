@@ -32,10 +32,12 @@ class ComfyUIEngineAdapter:
         log_store: DiagnosticsSink,
         dashboard_assets_dir: Path | None = None,
         comfyui_input_dir: Path | None = None,
+        model_roots: list[Path] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
         self.models_dir = models_dir
+        self.model_roots = model_roots or [models_dir]
         self.job_store = job_store or JobStore()
         self.log_store = log_store
         self.dashboard_assets_dir = dashboard_assets_dir
@@ -47,6 +49,10 @@ class ComfyUIEngineAdapter:
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
+
+    def configure_model_roots(self, model_roots: list[Path]) -> None:
+        self.model_roots = model_roots or [self.models_dir]
+        self.models_dir = self.model_roots[0]
 
     async def run_workflow(
         self,
@@ -282,24 +288,25 @@ class ComfyUIEngineAdapter:
 
     def _list_available_models_from_filesystem(self) -> list[ModelInfo]:
         models: list[ModelInfo] = []
-        if not self.models_dir.exists():
-            return models
-
-        for folder in sorted(
-            path for path in self.models_dir.iterdir() if path.is_dir()
-        ):
-            for file_path in sorted(
-                path for path in folder.iterdir() if path.is_file()
-            ):
-                if file_path.name.startswith("put_"):
-                    continue
-                models.append(
-                    ModelInfo(
-                        folder=folder.name,
-                        filename=file_path.name,
-                        path=str(file_path),
+        seen: set[tuple[str, str]] = set()
+        for root in self.model_roots:
+            if not root.exists():
+                continue
+            for folder in sorted(path for path in root.iterdir() if path.is_dir()):
+                for file_path in sorted(path for path in folder.iterdir() if path.is_file()):
+                    if file_path.name.startswith("put_"):
+                        continue
+                    key = (folder.name, file_path.name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    models.append(
+                        ModelInfo(
+                            folder=folder.name,
+                            filename=file_path.name,
+                            path=str(file_path),
+                        )
                     )
-                )
         return models
 
     async def _start_event_listener(

@@ -144,6 +144,14 @@ const apiSettings = {
   },
 };
 
+const modelFolderSettings = {
+  noofy_models_dir: "/Users/test/Documents/Noofy Models",
+  external_comfyui_models_dir: null,
+  categories: ["checkpoints", "loras", "vae"],
+  noofy_folder_exists: true,
+  external_folder_exists: null,
+};
+
 describe("EngineSettingsPage", () => {
   const fetchMock = vi.fn();
 
@@ -157,12 +165,14 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(localVersions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fetchMock.mockReset();
     window.localStorage.clear();
   });
@@ -204,6 +214,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       if (url.endsWith("/api/engine/comfyui/versions")) {
         return Promise.resolve(jsonResponse({
           ...versions,
@@ -271,6 +282,7 @@ describe("EngineSettingsPage", () => {
       }
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(currentLaunchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -334,6 +346,7 @@ describe("EngineSettingsPage", () => {
         }));
       }
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -349,6 +362,40 @@ describe("EngineSettingsPage", () => {
     expect(screen.queryByText("hf_test_secret_1234")).not.toBeInTheDocument();
   });
 
+  it("shows and updates the Noofy model folder setting", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("/Volumes/AI/Noofy Models");
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders") && init?.method === "PUT") {
+        expect(init.body).toBe(JSON.stringify({ noofy_models_dir: "/Volumes/AI/Noofy Models" }));
+        return Promise.resolve(jsonResponse({
+          status: "updated",
+          restart_required: true,
+          settings: {
+            ...modelFolderSettings,
+            noofy_models_dir: "/Volumes/AI/Noofy Models",
+          },
+        }));
+      }
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Model Folder" })).toBeInTheDocument();
+    expect(screen.getByText("/Users/test/Documents/Noofy Models")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /move folder/i }));
+
+    expect(await screen.findByText("/Volumes/AI/Noofy Models")).toBeInTheDocument();
+    expect(screen.getByText(/restart the managed engine/i)).toBeInTheDocument();
+  });
+
   it("shows fallback copy when start triggers repair and falls back", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -356,6 +403,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       if (url.endsWith("/api/engine/comfyui/start") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({ status: "repair_failed_fallback_active" }));
       }
@@ -377,6 +425,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       if (url.endsWith("/api/engine/comfyui/update/status")) {
         return Promise.resolve(jsonResponse({
           operation: "repair",
@@ -414,6 +463,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
       if (url.endsWith("/api/engine/comfyui/rebuild") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({
           operation: "rebuild",

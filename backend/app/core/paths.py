@@ -15,6 +15,7 @@ Packaged resources:   NOOFY_BUNDLED_RESOURCE_DIR, NOOFY_BUNDLED_COMFYUI_DIR,
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -23,6 +24,39 @@ from pathlib import Path
 # Bundled starter workflows ship inside the repo / packaged app.
 _BACKEND_APP_DIR = Path(__file__).resolve().parents[1]
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+NOOFY_MODELS_FOLDER_NAME = "Noofy Models"
+
+
+def _documents_models_dir(base_data_dir: Path) -> Path:
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return base_data_dir / NOOFY_MODELS_FOLDER_NAME
+    if str(home) and str(home) != ".":
+        return home / "Documents" / NOOFY_MODELS_FOLDER_NAME
+    return base_data_dir / NOOFY_MODELS_FOLDER_NAME
+
+
+def _configured_noofy_models_dir(base_data_dir: Path) -> Path | None:
+    settings_file = base_data_dir / "settings" / "model-folders.json"
+    if not settings_file.exists():
+        return None
+    try:
+        data = json.loads(settings_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    path = data.get("noofy_models_dir") if isinstance(data, dict) else None
+    if not isinstance(path, str) or not path.strip():
+        return None
+    configured = Path(path).expanduser()
+    if _looks_inside_repo_comfyui(configured.resolve(strict=False)):
+        return None
+    return configured
+
+
+def _looks_inside_repo_comfyui(path: Path) -> bool:
+    parts = {part.casefold() for part in path.parts}
+    return "third_party" in parts and "comfyui" in parts
 
 
 def _platform_data_dir(env: dict[str, str] | None = None) -> Path:
@@ -199,6 +233,9 @@ class NoofyPaths:
             self.dashboard_assets_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+        from app.settings.model_folders import ensure_model_subfolders
+
+        ensure_model_subfolders(self.models_dir)
 
     def writable_status(self) -> dict[str, dict[str, object]]:
         """Return a JSON-friendly dict of each directory and its writability."""
@@ -271,7 +308,16 @@ def resolve_paths(
     # NOOFY_RUNTIME_DIR is backward-compatible – it only overrides runtime_dir.
     runtime_dir = Path(env["NOOFY_RUNTIME_DIR"]) if env.get("NOOFY_RUNTIME_DIR") else base / "runtime"
 
-    models_dir = Path(env["NOOFY_MODELS_DIR"]) if env.get("NOOFY_MODELS_DIR") else base / "models"
+    configured_models_dir = _configured_noofy_models_dir(base)
+    if env.get("NOOFY_MODELS_DIR"):
+        env_models_dir = Path(env["NOOFY_MODELS_DIR"]).expanduser()
+        models_dir = (
+            _documents_models_dir(base)
+            if _looks_inside_repo_comfyui(env_models_dir.resolve(strict=False))
+            else env_models_dir
+        )
+    else:
+        models_dir = configured_models_dir or _documents_models_dir(base)
     user_workflows_dir = Path(env["NOOFY_WORKFLOWS_DIR"]) if env.get("NOOFY_WORKFLOWS_DIR") else base / "workflows"
     input_dir = Path(env["NOOFY_INPUT_DIR"]) if env.get("NOOFY_INPUT_DIR") else base / "input"
     outputs_dir = Path(env["NOOFY_OUTPUTS_DIR"]) if env.get("NOOFY_OUTPUTS_DIR") else base / "outputs"

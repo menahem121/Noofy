@@ -73,6 +73,22 @@ fn open_external_url(url: String) -> Result<(), String> {
     open::that(url).map_err(|e| format!("failed to open URL: {e}"))
 }
 
+#[tauri::command]
+fn select_folder() -> Result<Option<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let folder = PathBuf::from(path);
+    if !folder.is_dir() {
+        return Err("folder does not exist".to_string());
+    }
+    open::that(folder).map_err(|e| format!("failed to open folder: {e}"))
+}
+
 fn main() {
     let backend_process: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let backend_for_setup = Arc::clone(&backend_process);
@@ -82,7 +98,9 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             noofy_runtime_config,
-            open_external_url
+            open_external_url,
+            select_folder,
+            open_folder
         ])
         .setup(move |app| {
             let runtime = start_backend(app)?;

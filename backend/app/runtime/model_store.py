@@ -164,6 +164,7 @@ class ModelStore:
         log_store: DiagnosticsSink,
         downloader: DownloadFn | None = None,
         local_model_roots: list[Path] | None = None,
+        owned_model_root: Path | None = None,
         symlink_capability: bool | None = None,
     ) -> None:
         self.blobs_dir = blobs_dir
@@ -173,6 +174,7 @@ class ModelStore:
         self.log_store = log_store
         self._downloader = downloader
         self.local_model_roots = local_model_roots or []
+        self.owned_model_root = owned_model_root
         self._symlink_capability = symlink_capability
         self._lock = threading.Lock()
 
@@ -195,6 +197,7 @@ class ModelStore:
         if blob_path.exists():
             self._verify_existing_blob(model_lock, blob_path, sha256)
             self._write_ref(model_lock, sha256, blob_path)
+            self._materialize_owned_model(model_lock, blob_path)
             materialized, strategy = self._materialize(model_lock, blob_path)
             self.log_store.add(
                 "info",
@@ -238,6 +241,7 @@ class ModelStore:
 
             self._commit_blob(download_target, blob_path)
             self._write_ref(model_lock, sha256, blob_path)
+            self._materialize_owned_model(model_lock, blob_path)
             materialized, strategy = self._materialize(model_lock, blob_path)
         except BaseException as exc:
             self.log_store.add(
@@ -339,6 +343,7 @@ class ModelStore:
                 model_lock,
                 transactions_dir=staged_blobs_dir,
             )
+            owned_model_path = self._materialize_owned_model(model_lock, blob_path)
             target = self._model_view_path(view_path, model_lock)
             strategy = self._materialize_link_or_copy(blob_path, target)
             verified = self._verify_materialized_file(
@@ -361,6 +366,7 @@ class ModelStore:
                     size_bytes=model_lock.size_bytes,
                     store_ref=str(self._ref_path(model_lock.id)),
                     blob_path=str(blob_path),
+                    source_path=str(owned_model_path) if owned_model_path else None,
                     materialized_path=str(target),
                     materialization_strategy=strategy,
                     materialized_file_verified=verified,
@@ -698,6 +704,26 @@ class ModelStore:
         target = self._materialized_path(model_lock)
         strategy = self._materialize_link_or_copy(blob_path, target)
         return target, strategy
+
+    def _materialize_owned_model(self, model_lock: ModelLock, blob_path: Path) -> Path | None:
+        if self.owned_model_root is None:
+            return None
+        target = self._owned_model_path(model_lock)
+        if target.exists() or target.is_symlink():
+            return target
+        self._materialize_link_or_copy(blob_path, target)
+        return target
+
+    def _owned_model_path(self, model_lock: ModelLock) -> Path:
+        folder_parts = _safe_relative_parts(
+            model_lock.comfyui_folder, field_name="comfyui_folder"
+        )
+        filename_parts = _safe_relative_parts(
+            model_lock.filename, field_name="filename"
+        )
+        if self.owned_model_root is None:
+            raise ModelDownloadError("No owned model root is configured.")
+        return self.owned_model_root.joinpath(*folder_parts, *filename_parts)
 
     def _materialize_link_or_copy(self, blob_path: Path, target: Path) -> str:
         tmp_target = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")

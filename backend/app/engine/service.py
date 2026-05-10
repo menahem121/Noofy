@@ -136,6 +136,7 @@ class EngineService:
         resource_observer: SystemResourceObserver | None = None,
         dashboard_authoring: DashboardAuthoringService | None = None,
         workflow_exporter: WorkflowExporter | None = None,
+        model_roots_ref: list[Path] | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -153,6 +154,7 @@ class EngineService:
         self.resource_observer = resource_observer or SystemResourceObserver()
         self.dashboard_authoring = dashboard_authoring
         self.workflow_exporter = workflow_exporter
+        self.model_roots_ref = model_roots_ref
         self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
             runtime_manager=runtime_manager,
             update_service=comfyui_update_service,
@@ -183,6 +185,41 @@ class EngineService:
 
     def list_runners(self) -> list[RunnerDescriptor]:
         return self.runner_supervisor.list_runners()
+
+    def apply_model_folder_settings(
+        self,
+        noofy_models_dir: Path,
+        external_comfyui_models_dir: Path | None = None,
+        *,
+        extra_model_paths_config: Path | None = None,
+    ) -> None:
+        model_roots = [noofy_models_dir]
+        if external_comfyui_models_dir is not None:
+            model_roots.append(external_comfyui_models_dir)
+        if self.model_roots_ref is not None:
+            self.model_roots_ref[:] = model_roots
+        if self.capsule_installer is not None:
+            model_store = getattr(self.capsule_installer, "model_store", None)
+            if model_store is not None and hasattr(model_store, "owned_model_root"):
+                model_store.owned_model_root = noofy_models_dir
+        adapter = self.runner_supervisor.get_adapter(CORE_RUNNER_ID)
+        configure_model_roots = getattr(adapter, "configure_model_roots", None)
+        if callable(configure_model_roots):
+            configure_model_roots(model_roots)
+        if extra_model_paths_config is not None:
+            self.runtime_manager.set_managed_extra_model_paths_config(extra_model_paths_config)
+        self.runtime_manager.set_managed_model_roots(model_roots)
+        self.log_store.add(
+            "info",
+            "Model folder settings applied",
+            "engine.service",
+            details={
+                "noofy_models_dir": str(noofy_models_dir),
+                "external_comfyui_models_dir": str(external_comfyui_models_dir)
+                if external_comfyui_models_dir
+                else None,
+            },
+        )
 
     def workflow_status(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)

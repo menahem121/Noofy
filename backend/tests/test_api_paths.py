@@ -35,6 +35,7 @@ def test_paths_endpoint_returns_all_directory_entries(monkeypatch) -> None:
 
     expected_keys = {
         "data_dir",
+        "settings_dir",
         "runtime_dir",
         "runtime_store_dir",
         "dependency_envs_dir",

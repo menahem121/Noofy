@@ -8,10 +8,12 @@ depend directly on runtime implementation modules for request parsing.
 from app.runtime.comfyui_updates import ComfyUIRebuildRequest, ComfyUIUpdateRequest
 from app.runtime.launch_settings import ComfyUILaunchSettings
 from app.settings.api_keys import ApiKeyUpdateRequest
+from app.settings.model_folders import ModelFolderUpdateRequest
 
 __all__ = [
     "ApiKeyUpdateRequest",
     "ComfyUILaunchSettings",
     "ComfyUIRebuildRequest",
     "ComfyUIUpdateRequest",
+    "ModelFolderUpdateRequest",
 ]

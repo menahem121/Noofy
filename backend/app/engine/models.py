@@ -179,6 +179,7 @@ class ComfyUIRuntimeStatus(BaseModel):
     last_crash_at: str | None = None
     version: ComfyUIVersionMetadata | None = None
     managed_vram_mode: str = "normal"
+    model_paths: dict[str, str | None] = Field(default_factory=dict)
 
 
 class ProcessActionResult(BaseModel):

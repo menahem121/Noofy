@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Download, Eye, EyeOff, KeyRound, Loader2, Play, RotateCcw, Search, Square, Trash2, Wrench, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Download, Eye, EyeOff, FolderCog, FolderOpen, KeyRound, Loader2, Play, RotateCcw, Search, Square, Trash2, Wrench, Zap } from "lucide-react";
 
 import {
   bootstrapEngine,
@@ -8,6 +8,7 @@ import {
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
   fetchComfyUILaunchSettings,
+  fetchModelFolderSettings,
   fetchRuntimeStatus,
   rebuildComfyUI,
   startEngine,
@@ -15,14 +16,17 @@ import {
   updateExternalApiKey,
   updateComfyUI,
   updateComfyUILaunchSettings,
+  updateModelFolderSettings,
   type ApiKeyProviderId,
   type ApiKeySettingsResponse,
   type ComfyUILaunchSettings,
   type ComfyUIUpdateStatus,
   type ComfyUIVersionsResponse,
   type ComfyUIVramMode,
+  type ModelFolderSettings,
   type RuntimeStatus,
 } from "../../lib/api/noofyApi";
+import { openFolder, selectFolder } from "../../lib/folderDialogs";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
@@ -33,9 +37,11 @@ interface EngineSettingsState {
   versions: ComfyUIVersionsResponse | null;
   launchSettings: ComfyUILaunchSettings | null;
   apiSettings: ApiKeySettingsResponse | null;
+  modelFolderSettings: ModelFolderSettings | null;
   apiDrafts: Record<ApiKeyProviderId, string>;
   apiVisible: Record<ApiKeyProviderId, boolean>;
   apiStatus: { provider: ApiKeyProviderId; message: string; ok: boolean } | null;
+  modelFolderStatus: { message: string; ok: boolean } | null;
   selectedVersion: string;
   selectedVramMode: ComfyUIVramMode;
   updateStatus: ComfyUIUpdateStatus | null;
@@ -52,6 +58,7 @@ const initialState: EngineSettingsState = {
   versions: null,
   launchSettings: null,
   apiSettings: null,
+  modelFolderSettings: null,
   apiDrafts: {
     hugging_face: "",
     civitai: "",
@@ -61,6 +68,7 @@ const initialState: EngineSettingsState = {
     civitai: false,
   },
   apiStatus: null,
+  modelFolderStatus: null,
   selectedVersion: "latest",
   selectedVramMode: DEFAULT_VRAM_MODE,
   updateStatus: null,
@@ -152,11 +160,12 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [runtime, versions, launchSettings, apiSettings] = await Promise.all([
+      const [runtime, versions, launchSettings, apiSettings, modelFolderSettings] = await Promise.all([
         fetchRuntimeStatus(),
         fetchComfyUIVersions(),
         fetchComfyUILaunchSettings(),
         fetchApiKeySettings(),
+        fetchModelFolderSettings(),
       ]);
       setState((current) => ({
         ...current,
@@ -165,6 +174,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         versions,
         launchSettings,
         apiSettings,
+        modelFolderSettings,
         selectedVramMode: launchSettings.vram_mode,
       }));
     } catch (error) {
@@ -374,6 +384,67 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     }
   }
 
+  async function openCurrentModelFolder(path: string | null | undefined) {
+    if (!path) return;
+    try {
+      await openFolder(path);
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        modelFolderStatus: {
+          message: error instanceof Error ? error.message : String(error),
+          ok: false,
+        },
+      }));
+    }
+  }
+
+  async function chooseNoofyModelsFolder() {
+    const selected = await selectFolder();
+    if (!selected) return;
+    await saveModelFolderSettings({ noofy_models_dir: selected });
+  }
+
+  async function chooseExternalComfyUIModelsFolder() {
+    const selected = await selectFolder();
+    if (!selected) return;
+    await saveModelFolderSettings({ external_comfyui_models_dir: selected });
+  }
+
+  async function clearExternalComfyUIModelsFolder() {
+    await saveModelFolderSettings({ external_comfyui_models_dir: "" });
+  }
+
+  async function saveModelFolderSettings(payload: {
+    noofy_models_dir?: string;
+    external_comfyui_models_dir?: string;
+  }) {
+    setState((current) => ({ ...current, action: "model-folder", modelFolderStatus: null, error: null }));
+    try {
+      const result = await updateModelFolderSettings(payload);
+      setState((current) => ({
+        ...current,
+        modelFolderSettings: result.settings,
+        modelFolderStatus: {
+          message: result.restart_required
+            ? "Model folder saved. Restart the managed engine to use the new location."
+            : "Model folder settings saved.",
+          ok: true,
+        },
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        modelFolderStatus: {
+          message: error instanceof Error ? error.message : String(error),
+          ok: false,
+        },
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -406,6 +477,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   const vramSaveDisabled = !vramChanged || vramControlsDisabled;
   const apiSettings = state.apiSettings;
   const apiCredentialStoreUnavailable = apiSettings?.credential_store.available === false;
+  const modelFolderSettings = state.modelFolderSettings;
+  const modelFolderBusy = state.action === "model-folder";
 
   return (
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
@@ -712,6 +785,98 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
                 </div>
               );
             })}
+          </div>
+        </article>
+
+        <article className="settings-panel model-folder-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Model Folder</h2>
+              <p>Choose where Noofy stores models and optionally connect models you already use in ComfyUI.</p>
+            </div>
+          </div>
+
+          {state.modelFolderStatus ? (
+            <div className={`notice ${state.modelFolderStatus.ok ? "notice--success" : "notice--error"}`} role="status">
+              {state.modelFolderStatus.ok
+                ? <CheckCircle2 size={18} aria-hidden="true" />
+                : <AlertCircle size={18} aria-hidden="true" />}
+              <div>
+                <strong>{state.modelFolderStatus.ok ? "Saved" : "Folder action failed"}</strong>
+                <span>{state.modelFolderStatus.message}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="model-folder-sections">
+            <section className="model-folder-section" aria-labelledby="noofy-model-folder-title">
+              <div>
+                <h3 id="noofy-model-folder-title">Noofy Models Folder</h3>
+                <p>Noofy downloads new models here by default. You can also add model files to these folders yourself.</p>
+              </div>
+              <div className="path-display" title={modelFolderSettings?.noofy_models_dir ?? ""}>
+                {modelFolderSettings?.noofy_models_dir ?? "Loading..."}
+              </div>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!modelFolderSettings?.noofy_models_dir || modelFolderBusy}
+                  onClick={() => void openCurrentModelFolder(modelFolderSettings?.noofy_models_dir)}
+                >
+                  <FolderOpen size={16} aria-hidden="true" />
+                  Open Folder
+                </button>
+                <button
+                  className="primary-button primary-button--compact"
+                  type="button"
+                  disabled={modelFolderBusy || state.action !== null}
+                  onClick={() => void chooseNoofyModelsFolder()}
+                >
+                  {modelFolderBusy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <FolderCog size={16} aria-hidden="true" />}
+                  Move Folder / Change Location
+                </button>
+              </div>
+            </section>
+
+            <section className="model-folder-section" aria-labelledby="external-comfyui-folder-title">
+              <div>
+                <h3 id="external-comfyui-folder-title">Existing ComfyUI Models Folder</h3>
+                <p>If you already use ComfyUI, you can connect your existing ComfyUI models folder. Noofy will be able to reuse models from that folder, so you do not need to download the same models twice.</p>
+              </div>
+              <div className="path-display" title={modelFolderSettings?.external_comfyui_models_dir ?? ""}>
+                {modelFolderSettings?.external_comfyui_models_dir ?? "Not connected"}
+              </div>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!modelFolderSettings?.external_comfyui_models_dir || modelFolderBusy}
+                  onClick={() => void openCurrentModelFolder(modelFolderSettings?.external_comfyui_models_dir)}
+                >
+                  <FolderOpen size={16} aria-hidden="true" />
+                  Open Folder
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={modelFolderBusy || state.action !== null}
+                  onClick={() => void chooseExternalComfyUIModelsFolder()}
+                >
+                  <FolderCog size={16} aria-hidden="true" />
+                  Choose Folder
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!modelFolderSettings?.external_comfyui_models_dir || modelFolderBusy || state.action !== null}
+                  onClick={() => void clearExternalComfyUIModelsFolder()}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                  Disconnect
+                </button>
+              </div>
+            </section>
           </div>
         </article>
 

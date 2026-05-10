@@ -32,13 +32,20 @@ def _model_store_paths(root: Path) -> dict[str, Path]:
     }
 
 
-def _build_store(tmp_path: Path, downloader, *, local_model_roots: list[Path] | None = None) -> tuple[ModelStore, LogStore]:
+def _build_store(
+    tmp_path: Path,
+    downloader,
+    *,
+    local_model_roots: list[Path] | None = None,
+    owned_model_root: Path | None = None,
+) -> tuple[ModelStore, LogStore]:
     log_store = LogStore()
     store = ModelStore(
         **_model_store_paths(tmp_path),
         log_store=log_store,
         downloader=downloader,
         local_model_roots=local_model_roots,
+        owned_model_root=owned_model_root,
     )
     return store, log_store
 
@@ -408,6 +415,31 @@ async def test_materialize_model_view_reuses_existing_blob_without_download(tmp_
     assert call_count == 1
     assert first.view_path != second.view_path
     assert second.model_references[0].blob_path == first.model_references[0].blob_path
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_projects_downloaded_model_to_owned_folder(tmp_path: Path) -> None:
+    payload = b"downloaded-owned-model"
+    lock = _model_lock(payload, folder="loras", filename="style.safetensors")
+    owned_model_root = tmp_path / "Noofy Models"
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    store, _ = _build_store(
+        tmp_path,
+        downloader,
+        owned_model_root=owned_model_root,
+    )
+
+    view = await store.materialize_model_view(view_id="capsule-a", model_locks=[lock])
+
+    owned_model = owned_model_root / "loras" / "style.safetensors"
+    assert owned_model.exists()
+    assert owned_model.read_bytes() == payload
+    assert view.model_references[0].asset_ownership is AssetOwnership.NOOFY_DOWNLOADED
+    assert view.model_references[0].source_path == str(owned_model)
 
 
 @pytest.mark.anyio

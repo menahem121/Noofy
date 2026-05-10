@@ -110,6 +110,7 @@ export interface RuntimeStatus {
   last_crash_at: string | null;
   version?: ComfyUIRuntimeVersion | null;
   managed_vram_mode?: ComfyUIVramMode | string;
+  model_paths?: Record<string, string | null>;
 }
 
 export interface ResourceMetric {
@@ -253,6 +254,20 @@ export interface ApiKeySettingsResponse {
 export interface ApiKeyUpdateResult {
   status: "saved" | "cleared" | string;
   provider: ApiKeyProviderMetadata;
+}
+
+export interface ModelFolderSettings {
+  noofy_models_dir: string;
+  external_comfyui_models_dir: string | null;
+  categories: string[];
+  noofy_folder_exists: boolean;
+  external_folder_exists: boolean | null;
+}
+
+export interface ModelFolderUpdateResult {
+  status: string;
+  settings: ModelFolderSettings;
+  restart_required: boolean;
 }
 
 export interface WorkflowHealthSummary {
@@ -447,6 +462,10 @@ export function fetchApiKeySettings() {
   return getJson<ApiKeySettingsResponse>("/settings/apis");
 }
 
+export function fetchModelFolderSettings() {
+  return getJson<ModelFolderSettings>("/settings/model-folders");
+}
+
 export function fetchHealth() {
   return getJson<BackendHealthReport>("/health");
 }
@@ -602,6 +621,13 @@ export function updateExternalApiKey(provider: ApiKeyProviderId, apiKey: string)
 
 export function clearExternalApiKey(provider: ApiKeyProviderId) {
   return deleteJson<ApiKeyUpdateResult>(`/settings/apis/${provider}/key`);
+}
+
+export function updateModelFolderSettings(payload: {
+  noofy_models_dir?: string;
+  external_comfyui_models_dir?: string;
+}) {
+  return putJson<ModelFolderUpdateResult>("/settings/model-folders", payload);
 }
 
 export function isEngineJob(response: unknown): response is EngineJob {
