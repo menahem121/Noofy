@@ -61,6 +61,14 @@ Use multiple signals, strongest first:
 
 Registry APIs and metadata formats change. Before implementation, verify current upstream API contracts and rate/auth requirements from primary sources.
 
+External model-platform API keys are user settings and must be handled by the backend only. Store Hugging Face and Civitai keys in the operating system credential store, with only non-sensitive metadata such as `configured` and `last_four` in Noofy app-data settings. Do not place full keys in workflow packages, dashboards, diagnostics, logs, packaged runtime files, or runner environment variables by default.
+
+Civitai provides a model-version lookup endpoint by file hash:
+
+- `GET https://civitai.com/api/v1/model-versions/by-hash/{hash}`
+
+This lookup returns a model version, not only the top-level model. The response can provide fields such as model ID, model name, version name, file information, and download URL. Older official REST reference material says the fields match the normal model-version endpoint and that supported hashes include AutoV1, AutoV2, SHA256, CRC32, and Blake3. Re-verify the current endpoint behavior before implementation.
+
 ## Compatibility Rules
 
 Compatibility should produce a confidence classification and explanation.

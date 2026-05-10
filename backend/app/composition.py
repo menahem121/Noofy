@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
+from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
@@ -17,6 +18,7 @@ class ApiServices:
     comfyui_sidecar_service: object
     user_state_service: UserStateService
     asset_service: DashboardAssetService
+    api_key_service: ApiKeySettingsService
 
 
 def create_default_api_services() -> ApiServices:
@@ -29,6 +31,7 @@ def create_api_services(
     comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
+    api_key_service: ApiKeySettingsService | None = None,
 ) -> ApiServices:
     return ApiServices(
         engine_service=engine_service,
@@ -39,6 +42,11 @@ def create_api_services(
         ),
         user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
         asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
+        api_key_service=api_key_service
+        or ApiKeySettingsService(
+            metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),
+            log_store=getattr(engine_service, "log_store", None),
+        ),
     )
 
 

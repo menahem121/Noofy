@@ -1,8 +1,10 @@
 import { type CSSProperties, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Download, Loader2, Play, RotateCcw, Search, Square, Wrench, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Download, Eye, EyeOff, KeyRound, Loader2, Play, RotateCcw, Search, Square, Trash2, Wrench, Zap } from "lucide-react";
 
 import {
   bootstrapEngine,
+  clearExternalApiKey,
+  fetchApiKeySettings,
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
   fetchComfyUILaunchSettings,
@@ -10,8 +12,11 @@ import {
   rebuildComfyUI,
   startEngine,
   stopEngine,
+  updateExternalApiKey,
   updateComfyUI,
   updateComfyUILaunchSettings,
+  type ApiKeyProviderId,
+  type ApiKeySettingsResponse,
   type ComfyUILaunchSettings,
   type ComfyUIUpdateStatus,
   type ComfyUIVersionsResponse,
@@ -27,6 +32,10 @@ interface EngineSettingsState {
   runtime: RuntimeStatus | null;
   versions: ComfyUIVersionsResponse | null;
   launchSettings: ComfyUILaunchSettings | null;
+  apiSettings: ApiKeySettingsResponse | null;
+  apiDrafts: Record<ApiKeyProviderId, string>;
+  apiVisible: Record<ApiKeyProviderId, boolean>;
+  apiStatus: { provider: ApiKeyProviderId; message: string; ok: boolean } | null;
   selectedVersion: string;
   selectedVramMode: ComfyUIVramMode;
   updateStatus: ComfyUIUpdateStatus | null;
@@ -42,6 +51,16 @@ const initialState: EngineSettingsState = {
   runtime: null,
   versions: null,
   launchSettings: null,
+  apiSettings: null,
+  apiDrafts: {
+    hugging_face: "",
+    civitai: "",
+  },
+  apiVisible: {
+    hugging_face: false,
+    civitai: false,
+  },
+  apiStatus: null,
   selectedVersion: "latest",
   selectedVramMode: DEFAULT_VRAM_MODE,
   updateStatus: null,
@@ -105,6 +124,10 @@ const VRAM_MODE_OPTIONS: Array<{ value: ComfyUIVramMode; label: string; descript
 ];
 
 const VRAM_MODE_INDEX_BY_VALUE = new Map(VRAM_MODE_OPTIONS.map((option, index) => [option.value, index]));
+const API_PROVIDERS: Array<{ id: ApiKeyProviderId; label: string; fieldId: string }> = [
+  { id: "hugging_face", label: "Hugging Face API Key", fieldId: "hugging-face-api-key" },
+  { id: "civitai", label: "Civitai API Key", fieldId: "civitai-api-key" },
+];
 
 function vramModeOption(mode: ComfyUIVramMode) {
   return (
@@ -129,10 +152,11 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [runtime, versions, launchSettings] = await Promise.all([
+      const [runtime, versions, launchSettings, apiSettings] = await Promise.all([
         fetchRuntimeStatus(),
         fetchComfyUIVersions(),
         fetchComfyUILaunchSettings(),
+        fetchApiKeySettings(),
       ]);
       setState((current) => ({
         ...current,
@@ -140,6 +164,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         runtime,
         versions,
         launchSettings,
+        apiSettings,
         selectedVramMode: launchSettings.vram_mode,
       }));
     } catch (error) {
@@ -281,6 +306,74 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     }
   }
 
+  async function saveApiKey(provider: ApiKeyProviderId) {
+    const apiKey = state.apiDrafts[provider].trim();
+    if (!apiKey) return;
+    setState((current) => ({ ...current, action: `api-save-${provider}`, apiStatus: null, error: null }));
+    try {
+      const result = await updateExternalApiKey(provider, apiKey);
+      setState((current) => ({
+        ...current,
+        apiSettings: current.apiSettings
+          ? {
+              ...current.apiSettings,
+              providers: {
+                ...current.apiSettings.providers,
+                [provider]: result.provider,
+              },
+            }
+          : current.apiSettings,
+        apiDrafts: { ...current.apiDrafts, [provider]: "" },
+        apiVisible: { ...current.apiVisible, [provider]: false },
+        apiStatus: { provider, message: `${result.provider.label} API key saved.`, ok: true },
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        apiStatus: {
+          provider,
+          message: error instanceof Error ? error.message : String(error),
+          ok: false,
+        },
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
+  async function clearApiKey(provider: ApiKeyProviderId) {
+    setState((current) => ({ ...current, action: `api-clear-${provider}`, apiStatus: null, error: null }));
+    try {
+      const result = await clearExternalApiKey(provider);
+      setState((current) => ({
+        ...current,
+        apiSettings: current.apiSettings
+          ? {
+              ...current.apiSettings,
+              providers: {
+                ...current.apiSettings.providers,
+                [provider]: result.provider,
+              },
+            }
+          : current.apiSettings,
+        apiDrafts: { ...current.apiDrafts, [provider]: "" },
+        apiVisible: { ...current.apiVisible, [provider]: false },
+        apiStatus: { provider, message: `${result.provider.label} API key removed.`, ok: true },
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        apiStatus: {
+          provider,
+          message: error instanceof Error ? error.message : String(error),
+          ok: false,
+        },
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -311,6 +404,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   const vramChanged = Boolean(launchSettings && state.selectedVramMode !== launchSettings.vram_mode);
   const vramControlsDisabled = !launchSettings?.applies_to_managed_runtime || vramBusy || state.action !== null;
   const vramSaveDisabled = !vramChanged || vramControlsDisabled;
+  const apiSettings = state.apiSettings;
+  const apiCredentialStoreUnavailable = apiSettings?.credential_store.available === false;
 
   return (
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
@@ -508,6 +603,116 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               </div>
             </div>
           ) : null}
+        </article>
+
+        <article className="settings-panel api-settings-card">
+          <div className="panel-heading">
+            <div>
+              <h2>APIs</h2>
+              <p>Save model platform API keys in this computer&apos;s credential store.</p>
+            </div>
+          </div>
+
+          {apiCredentialStoreUnavailable ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Credential store unavailable</strong>
+                <span>{apiSettings?.credential_store.error ?? "Noofy could not access the operating system credential store."}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {state.apiStatus ? (
+            <div className={`notice ${state.apiStatus.ok ? "notice--success" : "notice--error"}`} role="status">
+              {state.apiStatus.ok
+                ? <CheckCircle2 size={18} aria-hidden="true" />
+                : <AlertCircle size={18} aria-hidden="true" />}
+              <div>
+                <strong>{state.apiStatus.ok ? "Saved" : "Could not save API key"}</strong>
+                <span>{state.apiStatus.message}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="api-key-list">
+            {API_PROVIDERS.map((provider) => {
+              const metadata = apiSettings?.providers[provider.id];
+              const draft = state.apiDrafts[provider.id];
+              const isVisible = state.apiVisible[provider.id];
+              const saveAction = state.action === `api-save-${provider.id}`;
+              const clearAction = state.action === `api-clear-${provider.id}`;
+              const busy = saveAction || clearAction;
+              const configuredCopy = metadata?.configured
+                ? `Saved key ending in ${metadata.last_four ?? "...."}`
+                : "No key saved";
+
+              return (
+                <div className="api-key-field" key={provider.id}>
+                  <div className="api-key-field__label-row">
+                    <label htmlFor={provider.fieldId}>{provider.label}</label>
+                    <span>{configuredCopy}</span>
+                  </div>
+                  <div className="api-key-field__control">
+                    <input
+                      id={provider.fieldId}
+                      type={isVisible ? "text" : "password"}
+                      value={draft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder={metadata?.configured ? "Enter a replacement key" : "Paste API key"}
+                      disabled={apiCredentialStoreUnavailable || busy}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setState((current) => ({
+                          ...current,
+                          apiDrafts: { ...current.apiDrafts, [provider.id]: value },
+                          apiStatus: current.apiStatus?.provider === provider.id ? null : current.apiStatus,
+                        }));
+                      }}
+                    />
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={`${isVisible ? "Hide" : "Show"} ${provider.label}`}
+                      title={`${isVisible ? "Hide" : "Show"} ${provider.label}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setState((current) => ({
+                          ...current,
+                          apiVisible: { ...current.apiVisible, [provider.id]: !current.apiVisible[provider.id] },
+                        }));
+                      }}
+                    >
+                      {isVisible ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                    </button>
+                  </div>
+                  <div className="button-row api-key-field__actions">
+                    <button
+                      className="primary-button primary-button--compact"
+                      type="button"
+                      aria-label={`Save ${provider.label}`}
+                      disabled={apiCredentialStoreUnavailable || !draft.trim() || state.action !== null}
+                      onClick={() => void saveApiKey(provider.id)}
+                    >
+                      {saveAction ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <KeyRound size={16} aria-hidden="true" />}
+                      Save
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      aria-label={`Clear ${provider.label}`}
+                      disabled={apiCredentialStoreUnavailable || !metadata?.configured || state.action !== null}
+                      onClick={() => void clearApiKey(provider.id)}
+                    >
+                      {clearAction ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </article>
 
         <article className="settings-panel">

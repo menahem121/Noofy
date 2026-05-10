@@ -230,6 +230,31 @@ export interface ComfyUIUpdateStatus {
   incompatible_version?: string | null;
 }
 
+export type ApiKeyProviderId = "hugging_face" | "civitai";
+
+export interface ApiKeyProviderMetadata {
+  provider: ApiKeyProviderId;
+  label: string;
+  configured: boolean;
+  last_four: string | null;
+}
+
+export interface CredentialStoreStatus {
+  available: boolean;
+  status: string;
+  error: string | null;
+}
+
+export interface ApiKeySettingsResponse {
+  providers: Record<ApiKeyProviderId, ApiKeyProviderMetadata>;
+  credential_store: CredentialStoreStatus;
+}
+
+export interface ApiKeyUpdateResult {
+  status: "saved" | "cleared" | string;
+  provider: ApiKeyProviderMetadata;
+}
+
 export interface WorkflowHealthSummary {
   workflow_id: string;
   valid: boolean;
@@ -418,6 +443,10 @@ export function fetchComfyUILaunchSettings() {
   return getJson<ComfyUILaunchSettings>("/engine/comfyui/launch-settings");
 }
 
+export function fetchApiKeySettings() {
+  return getJson<ApiKeySettingsResponse>("/settings/apis");
+}
+
 export function fetchHealth() {
   return getJson<BackendHealthReport>("/health");
 }
@@ -565,6 +594,14 @@ export function fetchComfyUIUpdateStatus() {
 
 export function updateComfyUILaunchSettings(vramMode: ComfyUIVramMode) {
   return putJson<ComfyUILaunchSettingsUpdateResult>("/engine/comfyui/launch-settings", { vram_mode: vramMode });
+}
+
+export function updateExternalApiKey(provider: ApiKeyProviderId, apiKey: string) {
+  return putJson<ApiKeyUpdateResult>(`/settings/apis/${provider}/key`, { api_key: apiKey });
+}
+
+export function clearExternalApiKey(provider: ApiKeyProviderId) {
+  return deleteJson<ApiKeyUpdateResult>(`/settings/apis/${provider}/key`);
 }
 
 export function isEngineJob(response: unknown): response is EngineJob {

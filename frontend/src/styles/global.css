@@ -1266,6 +1266,68 @@ button:disabled {
   border-color: var(--accent);
 }
 
+.api-key-list {
+  display: grid;
+  gap: 16px;
+}
+
+.api-key-field {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(66, 64, 71, 0.35);
+  border: 1px solid var(--border);
+}
+
+.api-key-field__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.api-key-field__label-row label {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.api-key-field__label-row span {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.api-key-field__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+}
+
+.api-key-field__control input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: 0;
+}
+
+.api-key-field__control input:focus {
+  border-color: var(--accent);
+}
+
+.api-key-field__control input::placeholder {
+  color: var(--text-muted);
+}
+
+.api-key-field__actions {
+  justify-content: flex-end;
+}
+
 .vram-mode-card__summary {
   display: grid;
   gap: 3px;

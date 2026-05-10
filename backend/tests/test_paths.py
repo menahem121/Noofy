@@ -177,6 +177,7 @@ class TestEnsureDirectories:
         paths.ensure_directories()
 
         assert paths.data_dir.is_dir()
+        assert paths.settings_dir.is_dir()
         assert paths.runtime_dir.is_dir()
         assert paths.models_dir.is_dir()
         assert paths.comfyui_custom_nodes_dir.is_dir()
@@ -227,6 +228,7 @@ class TestWritableStatus:
         status = paths.writable_status()
 
         assert "data_dir" in status
+        assert "settings_dir" in status
         assert "runtime_store_dir" in status
         assert "dependency_envs_dir" in status
         assert "dependency_locks_dir" in status

@@ -68,6 +68,10 @@ class NoofyPaths:
         return self.data_dir / "runtime-store"
 
     @property
+    def settings_dir(self) -> Path:
+        return self.data_dir / "settings"
+
+    @property
     def dependency_envs_dir(self) -> Path:
         return self.runtime_store_dir / "envs"
 
@@ -163,6 +167,7 @@ class NoofyPaths:
         """
         for directory in (
             self.data_dir,
+            self.settings_dir,
             self.runtime_dir,
             self.runtime_store_dir,
             self.dependency_envs_dir,
@@ -209,6 +214,7 @@ class NoofyPaths:
     def _all_named(self) -> list[tuple[str, Path]]:
         return [
             ("data_dir", self.data_dir),
+            ("settings_dir", self.settings_dir),
             ("runtime_dir", self.runtime_dir),
             ("runtime_store_dir", self.runtime_store_dir),
             ("dependency_envs_dir", self.dependency_envs_dir),

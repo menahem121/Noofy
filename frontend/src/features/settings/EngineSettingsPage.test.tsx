@@ -122,6 +122,28 @@ const launchSettings = {
   ],
 };
 
+const apiSettings = {
+  providers: {
+    hugging_face: {
+      provider: "hugging_face",
+      label: "Hugging Face",
+      configured: false,
+      last_four: null,
+    },
+    civitai: {
+      provider: "civitai",
+      label: "Civitai",
+      configured: false,
+      last_four: null,
+    },
+  },
+  credential_store: {
+    available: true,
+    status: "available",
+    error: null,
+  },
+};
+
 describe("EngineSettingsPage", () => {
   const fetchMock = vi.fn();
 
@@ -134,6 +156,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/engine/comfyui/versions?check_upstream=true")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(localVersions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   });
@@ -180,6 +203,7 @@ describe("EngineSettingsPage", () => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       if (url.endsWith("/api/engine/comfyui/versions")) {
         return Promise.resolve(jsonResponse({
           ...versions,
@@ -246,13 +270,14 @@ describe("EngineSettingsPage", () => {
         }));
       }
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(currentLaunchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
     render(<EngineSettingsPage onNavigate={vi.fn()} />);
 
     const slider = await screen.findByRole("slider", { name: /managed launch mode/i });
-    const save = screen.getByRole("button", { name: /save/i });
+    const save = screen.getByRole("button", { name: "Save" });
 
     expect(slider).toHaveValue("3");
     expect(save).toBeDisabled();
@@ -272,7 +297,56 @@ describe("EngineSettingsPage", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/engine/comfyui/launch-settings", expect.objectContaining({
       method: "PUT",
     }));
-    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("shows the APIs settings card with hidden API key inputs", async () => {
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "APIs" })).toBeInTheDocument();
+    const huggingFaceInput = screen.getByLabelText("Hugging Face API Key");
+    const civitaiInput = screen.getByLabelText("Civitai API Key");
+
+    expect(huggingFaceInput).toHaveAttribute("type", "password");
+    expect(civitaiInput).toHaveAttribute("type", "password");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show Hugging Face API Key" }));
+
+    expect(huggingFaceInput).toHaveAttribute("type", "text");
+  });
+
+  it("saves a Hugging Face API key without fetching it back", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis/hugging_face/key") && init?.method === "PUT") {
+        expect(init.body).toBe(JSON.stringify({ api_key: "hf_test_secret_1234" }));
+        return Promise.resolve(jsonResponse({
+          status: "saved",
+          provider: {
+            provider: "hugging_face",
+            label: "Hugging Face",
+            configured: true,
+            last_four: "1234",
+          },
+        }));
+      }
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    const input = await screen.findByLabelText("Hugging Face API Key");
+    fireEvent.change(input, { target: { value: "hf_test_secret_1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Hugging Face API Key" }));
+
+    expect(await screen.findByText("Hugging Face API key saved.")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+    expect(screen.getByText("Saved key ending in 1234")).toBeInTheDocument();
+    expect(screen.queryByText("hf_test_secret_1234")).not.toBeInTheDocument();
   });
 
   it("shows fallback copy when start triggers repair and falls back", async () => {
@@ -281,6 +355,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       if (url.endsWith("/api/engine/comfyui/start") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({ status: "repair_failed_fallback_active" }));
       }
@@ -301,6 +376,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       if (url.endsWith("/api/engine/comfyui/update/status")) {
         return Promise.resolve(jsonResponse({
           operation: "repair",
@@ -337,6 +413,7 @@ describe("EngineSettingsPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
       if (url.endsWith("/api/engine/comfyui/rebuild") && init?.method === "POST") {
         return Promise.resolve(jsonResponse({
           operation: "rebuild",

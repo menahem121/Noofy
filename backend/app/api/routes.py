@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.api.schemas import (
+    ApiKeyUpdateRequest,
     ComfyUILaunchSettings,
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
@@ -13,6 +14,11 @@ from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
+from app.settings.api_keys import (
+    ApiKeySettingsService,
+    CredentialStoreUnavailable,
+    provider_from_slug,
+)
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
@@ -55,6 +61,12 @@ def get_asset_service(
     return services.asset_service
 
 
+def get_api_key_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> ApiKeySettingsService:
+    return services.api_key_service
+
+
 EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
 ComfyUISidecarServiceDep = Annotated[
     ComfyUISidecarService,
@@ -62,6 +74,7 @@ ComfyUISidecarServiceDep = Annotated[
 ]
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
 DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
+ApiKeyServiceDep = Annotated[ApiKeySettingsService, Depends(get_api_key_service)]
 
 
 @router.get("/paths")
@@ -100,6 +113,42 @@ async def diagnostics(
 @router.get("/storage/diagnostics")
 async def storage_diagnostics(engine_service: EngineServiceDep):
     return engine_service.storage_diagnostics_payload()
+
+
+@router.get("/settings/apis")
+async def api_key_settings(api_key_service: ApiKeyServiceDep):
+    return api_key_service.settings()
+
+
+@router.put("/settings/apis/{provider}/key")
+async def save_api_key(
+    provider: str,
+    request: ApiKeyUpdateRequest,
+    api_key_service: ApiKeyServiceDep,
+):
+    resolved_provider = provider_from_slug(provider)
+    if resolved_provider is None:
+        raise HTTPException(status_code=404, detail="Unknown API key provider.")
+    try:
+        return api_key_service.save_key(resolved_provider, request.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CredentialStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.delete("/settings/apis/{provider}/key")
+async def clear_api_key(
+    provider: str,
+    api_key_service: ApiKeyServiceDep,
+):
+    resolved_provider = provider_from_slug(provider)
+    if resolved_provider is None:
+        raise HTTPException(status_code=404, detail="Unknown API key provider.")
+    try:
+        return api_key_service.clear_key(resolved_provider)
+    except CredentialStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/trust/policy")

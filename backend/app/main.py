@@ -17,6 +17,7 @@ from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 from app.engine.service import EngineService
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
+from app.settings.api_keys import ApiKeySettingsService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
@@ -56,6 +57,7 @@ def create_app(
     comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
+    api_key_service: ApiKeySettingsService | None = None,
     service_factory: ApiServicesFactory = create_default_api_services,
 ) -> FastAPI:
     if services is not None and any(
@@ -65,6 +67,7 @@ def create_app(
             comfyui_sidecar_service,
             user_state_service,
             asset_service,
+            api_key_service,
         )
     ):
         raise ValueError("Pass either services or individual service overrides, not both.")
@@ -75,6 +78,7 @@ def create_app(
             comfyui_sidecar_service,
             user_state_service,
             asset_service,
+            api_key_service,
         )
     ):
         if engine_service is None:
@@ -84,6 +88,7 @@ def create_app(
             comfyui_sidecar_service=comfyui_sidecar_service,
             user_state_service=user_state_service,
             asset_service=asset_service,
+            api_key_service=api_key_service,
         )
 
     app = FastAPI(title="Local AI Workflow Backend", version="0.1.0", lifespan=lifespan)
