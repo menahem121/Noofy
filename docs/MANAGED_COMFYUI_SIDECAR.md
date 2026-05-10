@@ -60,6 +60,8 @@ The settings screen also lets users choose a managed ComfyUI VRAM launch mode. `
 
 This keeps models, input staging, outputs, temp files, custom nodes, ComfyUI user/database state, logs, cache, dashboard assets, and workflow state out of `third_party/comfyui/`.
 
+The managed sidecar also sees Noofy's user-visible model storage through a generated `extra-model-paths.yaml` under the runtime store. The configured Noofy Models folder (default `~/Documents/Noofy Models`) is registered as the default category root, and an optional user-connected ComfyUI `models/` folder is registered as a secondary read/reuse-only root. Downloads always land in the Noofy Models folder; Noofy must never write models into the external ComfyUI folder or `third_party/comfyui/`. See [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md).
+
 `GET /api/runtime` and `GET /api/engine/comfyui/status` return lightweight runtime status for UI polling without running workflow validation or model checks. FastAPI shutdown stops a managed ComfyUI process so the backend does not leave an owned sidecar running after app exit.
 
 ## Runtime Modes

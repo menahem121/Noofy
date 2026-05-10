@@ -45,6 +45,8 @@ Each input control binds to a workflow input ID, which maps to an engine graph n
 
 Import accepts `.noofy` archives and raw ComfyUI JSON. A `.noofy` archive may already include package metadata, required models, custom-node records, export observations, and a dashboard schema. Raw JSON is a degraded import and usually needs dashboard setup.
 
+When an archive declares required models, the import now goes through a staged preview/commit flow so the user can review missing models, optionally download them with progress and cancel, and only then commit the import. Pending sessions expire after 1 hour and return `410`. Full behavior, endpoints, and invariants are in [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md).
+
 Routing rules:
 
 - Valid configured dashboard: open the run page.
@@ -94,8 +96,12 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 
 Important dashboard APIs:
 
-- `POST /api/workflows/import`: import a workflow package.
+- `POST /api/workflows/import`: import a workflow package directly (no staged preview).
+- `POST /api/workflows/import/preview`: stage a `.noofy` import so the model summary can be reviewed before commit. Returns an `import_session_id` when models need review, or commits immediately if the archive has no required models.
+- `POST /api/workflows/import/{session}/download-models` / `GET .../{job_id}` / `POST .../{job_id}/cancel`: start, poll, and cancel the background model download job for a staged import.
+- `POST /api/workflows/import/{session}/commit` / `DELETE /api/workflows/import/{session}`: finalize or discard a staged import.
 - `GET /api/workflows/{id}/package`: return the normalized package and dashboard schema.
+- `GET /api/workflows/{id}/model-summary`: return identity-verified required-model availability for the installed workflow.
 - `GET /api/workflows/{id}/bindable-inputs`: expose bindable graph inputs for builder suggestions.
 - `GET /api/workflows/{id}/unresolved-inputs`: expose unresolved runtime inputs that need setup.
 - `GET /api/workflows/{id}/output-nodes`: expose output-capable nodes for result widgets.

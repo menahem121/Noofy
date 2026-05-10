@@ -97,6 +97,8 @@ Noofy currently includes foundations for:
 - `.noofy` archive import and workflow package normalization
 - dashboard widget selection and layout work
 - model validation through the active engine adapter
+- a user-visible Noofy Models folder (`~/Documents/Noofy Models`), optional reuse of an existing ComfyUI models folder, and Settings cards for the model folder and Hugging Face / Civitai API keys
+- staged `.noofy` import that previews required models, downloads missing ones from Hugging Face or Civitai with progress and cancel, and only commits the workflow when the user is ready
 - isolated workflow/runtime preparation for community workflows when possible
 - structured diagnostics for runtime, install, workflow, and memory behavior
 - a Noofy ComfyUI export extension
@@ -250,4 +252,5 @@ of asking beginners to repair Python, pip, folders, or ComfyUI internals.
 - [OS sandboxing feasibility](docs/OS_SANDBOXING_FEASIBILITY.md)
 - [Memory Governor](docs/MEMORY_GOVERNOR.md)
 - [Memory Governor Linux validation](docs/MEMORY_GOVERNOR_LINUX_VALIDATION.md)
+- [Model resolution and downloads](docs/MODEL_RESOLUTION_AND_DOWNLOADS.md)
 - [Model compatibility plan](docs/MODEL_COMPATIBILITY_PLAN.md)

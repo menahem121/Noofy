@@ -97,7 +97,11 @@ The first version validates required models before running a workflow.
 
 Validation depends on the active `EngineAdapter`. For ComfyUI, the adapter asks the running ComfyUI instance which models are available and compares that against the package's `required_models`.
 
-If a model is missing, the backend should return a structured missing-model response. Automatic download can be added later using the same package metadata.
+For imported workflows, validation also uses Noofy's `ModelAvailabilityService` summary so identity-verified availability across the Noofy Models folder and the optional connected ComfyUI folder is respected. The structured availability is exposed at `GET /api/workflows/{id}/model-summary`.
+
+Required models also record where they came from in the source graph (`node_id`, `node_type`, `input_name`) so the UI can show users which workflow step needs each file.
+
+Missing models can be resolved through external model providers (Hugging Face and Civitai). The full identity, resolver, staged import preview, download transaction, and background job behavior are described in [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md).
 
 Model identity should use the strongest exported data available:
 
@@ -114,7 +118,7 @@ Model and asset ownership should use explicit policy values:
 - `user_local`: Noofy may reuse the file, but must not delete the user's original.
 - `external_reference`: Noofy may store or forget the reference, but must not delete the source.
 
-Do not validate workflow models by reading a hardcoded local ComfyUI models folder.
+Do not validate workflow models by reading a hardcoded local ComfyUI models folder. The user-configurable Noofy Models folder (default `~/Documents/Noofy Models`) and the optional connected ComfyUI folder are the supported roots.
 
 ## Workflow Removal And Storage Cleanup Direction
 

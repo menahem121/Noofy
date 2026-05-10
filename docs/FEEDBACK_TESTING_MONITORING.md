@@ -15,6 +15,9 @@ Current feedback surfaces:
 - `GET /api/jobs/{job_id}/events`: frontend-ready progress/result stream.
 - `GET /api/runners`: runner lifecycle state, including warm/queued/memory-related state.
 - Workflow runner lease endpoints: frontend reports open/close intent; backend decides warm retention.
+- `GET /api/workflows/{id}/model-summary`: identity-verified required-model availability for an installed workflow.
+- `GET /api/workflows/import/{session}/download-models/{job_id}`: live progress for the staged-import model download job (current model, bytes, percent, speed, per-model status, refreshed summary).
+- `GET /api/settings/model-folders` and `GET /api/settings/apis`: model folder and external provider key status (only `configured`/`last_four`, never full keys).
 
 Diagnostics should be structured events, not ad hoc print output. Events should include source, level, message, job id when relevant, workflow id when relevant, and useful details.
 
@@ -34,8 +37,11 @@ Add diagnostic events for important state transitions:
 - ComfyUI WebSocket disconnects or execution errors
 - managed sidecar start, stop, crash, and recovery events
 - Memory Governor estimates, signal confidence, local learning updates, co-residence admits/denies, runner evictions, memory-release waits, retry-after-cleanup attempts, and blocked-by-memory outcomes
+- staged import lifecycle: preview created, session expired, commit, cancel
+- model download job lifecycle: provider authentication required, rate limited, hash mismatch, disk-space failure, cleanup of interrupted transactions, completion
+- model folder and API key setting changes (provider name only; never the key itself)
 
-Avoid logging secrets, full prompts by default, API keys, local private paths beyond what is needed for debugging, or large binary payloads.
+Avoid logging secrets, full prompts by default, API keys, local private paths beyond what is needed for debugging, or large binary payloads. Provider URLs that carry credentials (for example `?token=...`) must be redacted before reaching diagnostics or UI messages.
 
 ## Automated Tests
 
@@ -45,9 +51,14 @@ Current test areas:
 
 - workflow package loading and validation
 - model validation through the active `EngineAdapter`
+- model availability summary, provider resolver (mocked), download transactions, and startup cleanup
+- staged `.noofy` import preview, session TTL, background download job, cancel/commit endpoints
+- API key endpoints with mocked OS credential stores (full keys never appear in responses or fixtures)
 - ComfyUI result parsing and backend-owned output media URLs
 - ComfyUI WebSocket progress/error/result parsing
 - diagnostic log filtering and latest error tracking
+
+Default tests must use mocked/offline provider responses. No default test may call live Hugging Face or Civitai APIs.
 
 When changing behavior, add or update tests that prove:
 

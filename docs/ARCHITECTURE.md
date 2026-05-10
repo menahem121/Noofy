@@ -79,6 +79,7 @@ The frontend reads this runtime config in `frontend/src/lib/api/noofyApi.ts`. If
 - Use the accepted [runtime isolation architecture](RUNTIME_ISOLATION_ARCHITECTURE.md) for community workflow imports, custom node dependencies, workflow capsules, and runner isolation. The runtime isolation foundation (paths, schemas, runner supervision, verified and registry-resolved installs, trust signing, source policy, smoke gating, GC) is implemented in [backend/app/runtime/](../backend/app/runtime/). Packaged builds prepare and verify the trusted Python and bundled `uv` artifact through [PACKAGED_RUNTIME.md](PACKAGED_RUNTIME.md).
 - Use the [dashboard architecture](DASHBOARD_ARCHITECTURE.md) for workflow import, dashboard authoring, canvas rendering, user values/layout state, and dashboard assets.
 - Use the [Memory Governor](MEMORY_GOVERNOR.md) for v1 RAM/VRAM decisions, runner co-residence, memory-risk recovery, and user-facing memory states.
+- Use [Model resolution and downloads](MODEL_RESOLUTION_AND_DOWNLOADS.md) for the Noofy Models folder, the optional connected ComfyUI folder, Hugging Face/Civitai API key settings, the staged import preview, and the background model download job.
 
 ## App Data Directories
 
@@ -99,6 +100,7 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `data_dir` | *base* | Root app-data directory |
 | `runtime_dir` | `data_dir/runtime` | venv, process state |
 | `models_dir` | `data_dir/models` | Legacy/app-owned model directory override surface |
+| `noofy_models_dir` | `~/Documents/Noofy Models` (user-configurable) | Active Noofy Models folder for user-visible model storage and downloads. Fallback is `data_dir/Noofy Models` when `Documents` is unavailable. See [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md). |
 | `model_store_dir` | `data_dir/model-store` | Shared model blobs, refs, and materialized model views |
 | `user_workflows_dir` | `data_dir/workflows` | Backward-compatible user workflow path override surface |
 | `workflow_store_dir` | `data_dir/workflow-store` | Internal imported workflow package store |

@@ -1,0 +1,268 @@
+# Model Resolution And Downloads
+
+Status: current architecture/reference.
+
+This doc describes how Noofy locates required workflow models on the user's
+machine, resolves missing ones through external model providers, and downloads
+them safely. It covers the model folder layout, the API key surface for
+provider authentication, the staged workflow import preview, and the background
+download job that drives the import progress UI.
+
+## Model Folder Layout
+
+The Noofy backend resolves a beginner-friendly default model folder and creates
+ComfyUI-style category subfolders inside it.
+
+- Default path: `~/Documents/Noofy Models`.
+- Fallback: when `Documents` cannot be resolved, the backend uses
+  `<data_dir>/Noofy Models`.
+- The folder must not be inside `third_party/comfyui/` and is rejected when it
+  resolves there.
+- Subfolders are the standard ComfyUI categories such as `checkpoints`, `loras`,
+  `vae`, `clip`, `controlnet`, `upscale_models`, etc. The full list lives in
+  [backend/app/settings/model_folders.py](../backend/app/settings/model_folders.py).
+
+Users can also connect an existing ComfyUI `models/` folder for read/reuse only.
+Noofy treats that folder as a user-owned secondary root for availability checks.
+
+Invariants:
+
+- Noofy-owned downloads always go to the configured Noofy Models folder.
+- Noofy never writes models into the external ComfyUI folder or into
+  `third_party/comfyui/`.
+- The managed ComfyUI sidecar sees the Noofy Models folder (and the optional
+  external ComfyUI folder) through a generated `extra-model-paths.yaml` under
+  the runtime store. Noofy Models is registered as the default category root.
+
+### Settings API
+
+- `GET /api/settings/model-folders` — returns the active Noofy Models folder,
+  optional external ComfyUI folder, the supported category list, and existence
+  flags.
+- `PUT /api/settings/model-folders` — updates either or both folders. Empty
+  string for `external_comfyui_models_dir` clears the connected ComfyUI folder.
+  Validation rejects locations inside `third_party/comfyui/`, non-folder paths,
+  and unwritable Noofy Models targets. Successful changes return
+  `restart_required: true` so the UI can prompt for a managed-sidecar restart.
+
+## API Keys (Hugging Face And Civitai)
+
+External model-platform credentials are settings owned by the backend.
+
+- Storage: OS credential store via `KeyringCredentialStore`
+  ([backend/app/settings/api_keys.py](../backend/app/settings/api_keys.py)).
+  Plaintext/file-backed keyring fallbacks are explicitly blocked.
+- App data: only non-sensitive metadata (`configured`, `last_four`,
+  `label`) is persisted in Noofy app data.
+- Full keys must never appear in frontend responses, diagnostics, logs, runner
+  environment variables, packaged runtime files, or test fixtures.
+- Backend services read keys internally when calling providers.
+
+Endpoints:
+
+- `GET /api/settings/apis` — provider list with `configured`/`last_four` and a
+  `credential_store` status (`available`, `unavailable`).
+- `PUT /api/settings/apis/{provider}/key` — save a key. Returns `503` if the OS
+  credential store is unusable.
+- `DELETE /api/settings/apis/{provider}/key` — clear a saved key.
+
+Provider slugs accept `hugging-face`/`hugging_face`/`hf` and `civitai`.
+
+## Required-Model Availability
+
+For each required model declared by a `.noofy` package, Noofy produces a
+`RequiredModelAvailability` record summarising local presence, provider source
+hints, and a user-safe status. The summary is also exposed for an installed
+workflow.
+
+Status values:
+
+- `available` — local file found with strong-enough identity for the model's
+  verification level (`sha256_size`, `filename_size`, or `filename_only`).
+- `possible_match` — a same-name file exists but identity is too weak to
+  trust automatically.
+- `missing` — not present locally; can be downloaded if a provider source is
+  resolvable.
+- `needs_manual_download` — missing with no provider source Noofy can act on.
+- `download_failed`, `authentication_required`, `rate_limited`,
+  `hash_mismatch`, `not_enough_disk_space`, `canceled` — terminal/failure
+  states for download attempts.
+
+The summary includes counts and `ready_to_run` (true only when every required
+model resolves to `available`).
+
+Endpoint:
+
+- `GET /api/workflows/{workflow_id}/model-summary` — current availability for
+  an installed workflow.
+
+`WorkflowPackageValidator` runs this summary for imported packages so workflow
+validation reflects Noofy-verified availability (not just raw engine
+`object_info`).
+
+## Provider Resolver
+
+When a required model has no usable `source_urls` from the package, Noofy can
+search providers for a reliable match. See
+[backend/app/workflows/model_availability.py](../backend/app/workflows/model_availability.py).
+
+Resolution order:
+
+1. Explicit package `source_urls` (preferred when present).
+2. Hugging Face search (`GET https://huggingface.co/api/models`).
+3. Civitai by-hash lookup (`GET https://civitai.com/api/v1/model-versions/by-hash/{sha256}`)
+   when the package declares a SHA-256.
+4. Civitai query fallback (`GET https://civitai.com/api/v1/models`).
+
+Authentication and rate limits:
+
+- Public access is allowed without keys when providers permit it.
+- When the corresponding key is configured, requests send
+  `Authorization: Bearer <token>`.
+- `401` and `403` raise `ProviderAuthenticationRequired` and surface a
+  user-safe message. `429` raises `ProviderRateLimited`.
+
+Matching is intentionally conservative:
+
+- A candidate is only accepted as reliable when the filename matches exactly
+  **and** either the SHA-256 matches or the byte size matches.
+- Fuzzy name matches and "first search result" picks are never used for
+  automatic downloads.
+- Secret tokens and any leaked URL credentials are redacted from diagnostic
+  messages before they reach logs or the UI.
+
+## Staged `.noofy` Import Flow
+
+Imports that contain required model records now go through a preview/commit
+flow so the user can review missing models before any state is persisted.
+
+Endpoints:
+
+- `POST /api/workflows/import/preview` — parse the archive and return a
+  `StagedWorkflowImportResponse` with an `import_session_id`, a workflow
+  summary, and a `model_summary`. Archives with no required models commit
+  immediately and return `import_session_id: null`.
+- `POST /api/workflows/import/{session}/download-models` — start a background
+  download job for the `missing` models in the session. Returns
+  `ImportModelDownloadJobStart` with a `job_id`.
+- `GET /api/workflows/import/{session}/download-models/{job_id}` — poll job
+  progress.
+- `POST /api/workflows/import/{session}/download-models/{job_id}/cancel` —
+  request cancellation.
+- `POST /api/workflows/import/{session}/commit` — finalize the import. Fails
+  with `409` while a download job is still active.
+- `DELETE /api/workflows/import/{session}` — cancel the import. Active
+  downloads are signaled to stop.
+
+Frontend behavior:
+
+- The import modal shows the staged model list (filename, type/folder,
+  identity level, size when known, source availability, status) before
+  committing.
+- User actions: **Download missing models**, **Continue without downloading**,
+  **Cancel import**.
+- Continuing without downloading commits the workflow but leaves it not ready
+  while any required model remains unavailable. Running stays blocked until
+  the model summary reports `ready_to_run: true`.
+
+### Session TTL
+
+Pending import sessions live for **1 hour** of inactivity
+(`IMPORT_SESSION_TTL` in [backend/app/engine/service.py](../backend/app/engine/service.py)).
+
+- Active download jobs keep their session alive across the polling window.
+- Expired sessions are removed opportunistically and return `410` from any
+  staged endpoint, with a message telling the user to import the workflow
+  again.
+
+## Download Transactions
+
+Every download runs as a transaction under the Noofy Models folder:
+
+```text
+<Noofy Models>/
+  .downloads/
+    <download_id>/
+      <filename>.part
+      download-state.json
+```
+
+Behavior:
+
+- Bytes stream into `<filename>.part`. `download-state.json` records the
+  redacted source URL, provider, target folder/filename, expected size and
+  SHA-256, current status, and timestamps.
+- Size and SHA-256 are verified when known. Mismatches fail the transaction.
+- On success, Noofy moves the file atomically into the configured Noofy Models
+  category folder. Final validated models must never remain under
+  `.downloads/`.
+- On failure or cancellation, the `.part` file and the transaction folder are
+  cleaned up safely.
+- Path containment and symlink-escape protections enforce that final files
+  land inside the configured Noofy Models folder.
+
+### Startup Cleanup
+
+On backend startup the `ModelAvailabilityService` removes any transaction
+folder whose `download-state.json` is in an active status
+(`downloading`, `verifying`, `placing`). Completed-but-not-yet-moved
+transactions are left for the normal flow to finalize on retry.
+
+## Background Download Job
+
+`POST /api/workflows/import/{session}/download-models` schedules an
+`asyncio` task per session. Progress events update:
+
+- `current_model_filename`, `current_model_index`, `total_models`
+- `bytes_downloaded`, `total_bytes`, `percent`
+- `speed_bytes_per_second`
+- per-model `status`/`status_label` and optional `message`
+- a refreshed `model_summary` once the job ends
+
+Status transitions: `queued` → `running` → `completed` | `failed` | `canceled`.
+
+Cancellation rules:
+
+- Models that already finished before cancel are kept on disk and reflected in
+  the final summary as `available`.
+- The in-flight model's partial download is removed via the transaction
+  cleanup path.
+- Retries start a fresh transaction and a new `job_id`.
+
+## Safety Rules (Quick Reference)
+
+- Frontend must never call Hugging Face or Civitai directly.
+- Backend never writes downloads outside the configured Noofy Models folder.
+- Backend never writes downloads into the external (user-owned) ComfyUI folder
+  or `third_party/comfyui/`.
+- API keys live only in the OS credential store. Only `configured`/`last_four`
+  ever appear in JSON responses.
+- Provider responses with `401`/`403`/`429` are surfaced with user-safe
+  messages; secrets and credential-bearing URL fragments are redacted from
+  diagnostics.
+- Auto-download requires exact filename plus exact size or matching SHA-256.
+
+## Code Map
+
+- Model availability/resolver/downloads: [backend/app/workflows/model_availability.py](../backend/app/workflows/model_availability.py)
+- Model folder settings: [backend/app/settings/model_folders.py](../backend/app/settings/model_folders.py)
+- API key settings: [backend/app/settings/api_keys.py](../backend/app/settings/api_keys.py)
+- Staged import / background job orchestration: [backend/app/engine/service.py](../backend/app/engine/service.py)
+- API routes: [backend/app/api/routes.py](../backend/app/api/routes.py)
+- Frontend API client: [frontend/src/lib/api/noofyApi.ts](../frontend/src/lib/api/noofyApi.ts)
+- Import preview modal / progress UI: [frontend/src/features/home/HomePage.tsx](../frontend/src/features/home/HomePage.tsx)
+- Settings screen (model folder + APIs cards): [frontend/src/features/settings/EngineSettingsPage.tsx](../frontend/src/features/settings/EngineSettingsPage.tsx)
+
+## Focused Tests
+
+- Provider resolver, availability summary, transaction safety, startup
+  cleanup: [backend/tests/test_model_availability.py](../backend/tests/test_model_availability.py)
+- Staged import preview, TTL, download job, cancel/commit endpoints:
+  [backend/tests/test_api_workflow_import.py](../backend/tests/test_api_workflow_import.py)
+- API key endpoints and credential store handling:
+  [backend/tests/test_api_keys.py](../backend/tests/test_api_keys.py)
+- Frontend import preview/progress/cancel:
+  [frontend/src/features/home/HomePage.test.tsx](../frontend/src/features/home/HomePage.test.tsx)
+
+Default tests must use mocked/offline provider responses. No default test may
+hit live Hugging Face or Civitai endpoints.

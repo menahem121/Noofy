@@ -19,6 +19,7 @@ The backend owns the `EngineAdapter` contract and translates app workflow reques
 - [docs/ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md): app-owned engine operations and job lifecycle.
 - [docs/WORKFLOW_PACKAGES.md](docs/WORKFLOW_PACKAGES.md): workflow package, required model, input binding, output, and dashboard schema concepts.
 - [docs/DASHBOARD_ARCHITECTURE.md](docs/DASHBOARD_ARCHITECTURE.md): workflow import, dashboard authoring, canvas run view, user state, and dashboard assets.
+- [docs/MODEL_RESOLUTION_AND_DOWNLOADS.md](docs/MODEL_RESOLUTION_AND_DOWNLOADS.md): Noofy Models folder, Hugging Face/Civitai API keys, staged import preview, provider resolver, download transactions, background download job, and session TTL.
 - [docs/RUNTIME_ISOLATION_ARCHITECTURE.md](docs/RUNTIME_ISOLATION_ARCHITECTURE.md): accepted runtime isolation architecture for community workflows, workflow capsules, runner processes, and trust boundaries.
 - [docs/NOOFY_VERIFIED_PUBLISHING.md](docs/NOOFY_VERIFIED_PUBLISHING.md): Noofy Verified publishing, signing, validation gates, and revocation process.
 - [docs/OS_SANDBOXING_FEASIBILITY.md](docs/OS_SANDBOXING_FEASIBILITY.md): OS sandboxing feasibility and product-claim boundaries for community workflow execution.

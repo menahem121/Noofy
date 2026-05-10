@@ -1,10 +1,10 @@
 # Model Compatibility Plan
 
-Status: active future plan, not started in the current codebase.
+Status: active future plan, partially overlapping with shipped behavior.
 
 The first user-facing feature is a LoRA selector action such as **Find compatible LoRAs**. The durable architecture goal is broader: a backend model identity and compatibility system that can later help with LoRAs, checkpoints, VAEs, ControlNets, upscalers, missing-model resolution, and marketplace/package model requirements.
 
-Current repo verification: Noofy has model requirement identity levels, a model store, model-view materialization, and model validation through the active `EngineAdapter`. It does not yet have a model identity scanner, LoRA compatibility resolver, compatible-LoRA API, registry search/download flow, or frontend compatible-LoRA picker.
+Current repo verification: Noofy has model requirement identity levels, a model store, model-view materialization, and model validation through the active `EngineAdapter`. Required-model resolution and verified downloads from Hugging Face and Civitai (by-hash and query) are already implemented for the staged `.noofy` import flow and Noofy Models folder — see [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md). What is still missing for this plan: a generic local model identity scanner, the LoRA compatibility resolver, the compatible-LoRA API, registry search beyond required-model resolution, and the frontend compatible-LoRA picker.
 
 ## Product Behavior
 

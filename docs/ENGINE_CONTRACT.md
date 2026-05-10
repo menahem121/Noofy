@@ -11,7 +11,8 @@ The app owns the engine contract. UI code should depend on this contract, not on
 - `getResult(jobId)`: return final outputs, errors, and generated files.
 - `fetchOutput(jobId, filename, subfolder, type)`: serve generated output media through the backend API.
 - `listAvailableModels()`: report models available to the active engine.
-- `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability.
+- `getModelAvailabilitySummary(workflowId)`: return identity-verified required-model availability for an imported workflow, including local matches across the Noofy Models folder and the optional connected ComfyUI folder.
+- `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability. For imported workflows, validation uses the model availability summary so identity-verified local files take effect, not just raw engine `object_info`.
 - `uploadWorkflowImage(workflowId, file)`: stage or upload a workflow image input through the selected runner.
 - `listLogs(level?, limit?)`: return recent backend and engine diagnostic events.
 - `listJobLogs(jobId, level?, limit?)`: return diagnostic events for a specific job.
@@ -77,7 +78,7 @@ Runtime subsystems should emit diagnostics through an injected diagnostics sink.
 
 Emit-only components should not depend on storage, filtering, or API exposure details. Read/query behavior belongs in API-facing services or a diagnostics reader contract.
 
-Model validation for `ComfyUIEngineAdapter` must query the running ComfyUI instance through its API. It must not depend on a local ComfyUI source `models` path, because ComfyUI may be external in dev mode or app-managed in product mode.
+Model validation for `ComfyUIEngineAdapter` must query the running ComfyUI instance through its API. It must not depend on a local ComfyUI source `models` path, because ComfyUI may be external in dev mode or app-managed in product mode. Required-model availability for imported workflows is reported by Noofy's `ModelAvailabilityService`, which scans the configured Noofy Models folder and the optional connected ComfyUI folder; see [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md).
 
 ## Runtime Ownership
 
