@@ -32,9 +32,9 @@ CommandRunner = Callable[[list[str], Path | None], Awaitable[CommandResult]]
 _REQUIRED_RUNTIME_CHECKS: tuple[tuple[str, str], ...] = (
     (
         "torch.library.custom_op",
-        "import torch; "
-        "raise RuntimeError('torch.library.custom_op is required by comfy-kitchen') "
-        "if not hasattr(torch.library, 'custom_op') else None",
+        "import torch\n"
+        "if not hasattr(torch.library, 'custom_op'):\n"
+        "    raise RuntimeError('torch.library.custom_op is required by comfy-kitchen')",
     ),
     ("comfy_kitchen", "import comfy_kitchen"),
 )

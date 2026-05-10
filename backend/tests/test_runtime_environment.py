@@ -1,10 +1,16 @@
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.engine.diagnostics import LogStore
 from app.engine.models import RuntimeHardwareProfile
-from app.runtime.environment import CommandResult, RuntimeEnvironment
+from app.runtime.environment import (
+    _REQUIRED_RUNTIME_CHECKS,
+    CommandResult,
+    RuntimeEnvironment,
+)
 from app.runtime.hardware import plan_torch_install
 
 SUPPORTED_TEST_HARDWARE = RuntimeHardwareProfile(
@@ -30,6 +36,21 @@ def create_python(tmp_path: Path, name: str = "python") -> Path:
     python.write_text("", encoding="utf-8")
     python.chmod(0o755)
     return python
+
+
+def test_torch_custom_op_runtime_check_accepts_present_api() -> None:
+    check_code = dict(_REQUIRED_RUNTIME_CHECKS)["torch.library.custom_op"]
+    original_torch = sys.modules.get("torch")
+    sys.modules["torch"] = SimpleNamespace(
+        library=SimpleNamespace(custom_op=lambda *args, **kwargs: None)
+    )
+    try:
+        exec(check_code, {})
+    finally:
+        if original_torch is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = original_torch
 
 
 @pytest.mark.anyio
