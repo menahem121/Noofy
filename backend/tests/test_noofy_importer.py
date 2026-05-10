@@ -58,6 +58,7 @@ from app.runtime.workspace_store import (
 )
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows import importer as importer_module
+from app.workflows import import_runtime_profile as import_runtime_profile_module
 from app.workflows.importer import (
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
@@ -93,9 +94,9 @@ class FakeSourceFetcher:
 
 @pytest.fixture(autouse=True)
 def _supported_import_platform(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
-    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
-    monkeypatch.setattr(importer_module, "_has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "linux")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
+    monkeypatch.setattr(import_runtime_profile_module, "has_nvidia_gpu", lambda: False)
 
 
 def _archive_bytes() -> bytes:
@@ -964,9 +965,9 @@ def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
-    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
-    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
-    monkeypatch.setattr(importer_module, "_has_nvidia_gpu", lambda: True)
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "linux")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
+    monkeypatch.setattr(import_runtime_profile_module, "has_nvidia_gpu", lambda: True)
 
     _, variant = importer_module._select_import_runtime_profile(catalog.profiles)
 
@@ -977,9 +978,9 @@ def test_import_runtime_profile_falls_back_to_linux_cpu_without_nvidia(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
-    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "linux")
-    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
-    monkeypatch.setattr(importer_module, "_has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "linux")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
+    monkeypatch.setattr(import_runtime_profile_module, "has_nvidia_gpu", lambda: False)
 
     _, variant = importer_module._select_import_runtime_profile(catalog.profiles)
 
@@ -990,8 +991,8 @@ def test_import_runtime_profile_rejects_macos_intel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
-    monkeypatch.setattr(importer_module, "_current_os_name", lambda: "darwin")
-    monkeypatch.setattr(importer_module, "_current_architecture", lambda: "x64")
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
 
     with pytest.raises(NoofyImportError, match="darwin/x64"):
         importer_module._select_import_runtime_profile(catalog.profiles)

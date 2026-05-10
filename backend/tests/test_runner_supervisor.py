@@ -55,6 +55,8 @@ class RecordingAdapter:
         self.progress_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.result_calls: list[str] = []
+        self.upload_calls: list[tuple[str, str, bytes, str]] = []
+        self.fetch_output_calls: list[tuple[str, str, str, str]] = []
         self._next_job_id = next_job_id
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
@@ -85,6 +87,24 @@ class RecordingAdapter:
     async def get_result(self, job_id: str) -> JobResult:
         self.result_calls.append(job_id)
         return JobResult(job_id=job_id, status="completed")
+
+    async def upload_workflow_image(
+        self, workflow_package, filename: str, data: bytes, content_type: str
+    ) -> dict[str, str]:
+        self.upload_calls.append(
+            (workflow_package.metadata.id, filename, data, content_type)
+        )
+        return {"filename": f"uploaded-{filename}"}
+
+    async def fetch_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> tuple[bytes, str]:
+        self.fetch_output_calls.append((job_id, filename, subfolder, output_type))
+        return b"output-bytes", "image/png"
 
 
 class MemoryRetryAdapter(RecordingAdapter):
@@ -803,6 +823,95 @@ def test_engine_service_runner_lease_reports_no_bound_runner() -> None:
         "lease_id": None,
         "runner": None,
     }
+
+
+def test_engine_service_uses_constructor_dashboard_dependencies() -> None:
+    class DashboardAuthoring:
+        def get_bindable_inputs(self, workflow_id: str) -> dict[str, object]:
+            return {"workflow_id": workflow_id, "inputs": []}
+
+    class Exporter:
+        def export_archive(self, workflow_id: str) -> tuple[bytes, str]:
+            return b"archive", f"{workflow_id}.noofy"
+
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        dashboard_authoring=DashboardAuthoring(),
+        workflow_exporter=Exporter(),
+    )
+
+    assert service.get_bindable_inputs("text_to_image_v0") == {
+        "workflow_id": "text_to_image_v0",
+        "inputs": [],
+    }
+    assert service.export_workflow_archive("text_to_image_v0") == (
+        b"archive",
+        "text_to_image_v0.noofy",
+    )
+
+
+@pytest.mark.anyio
+async def test_upload_workflow_image_uses_bound_runner_adapter() -> None:
+    service, supervisor = _build_service(RecordingAdapter())
+    isolated_adapter = RecordingAdapter()
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        isolated_adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    result = await service.upload_workflow_image(
+        "text_to_image_v0",
+        "input.png",
+        b"image-bytes",
+        "image/png",
+    )
+
+    assert result == {"filename": "uploaded-input.png"}
+    assert isolated_adapter.upload_calls == [
+        ("text_to_image_v0", "input.png", b"image-bytes", "image/png")
+    ]
+
+
+@pytest.mark.anyio
+async def test_fetch_output_uses_job_bound_runner_adapter() -> None:
+    core_adapter = RecordingAdapter(next_job_id="core-job")
+    service, supervisor = _build_service(core_adapter)
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        isolated_adapter,
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    content, media_type = await service.fetch_output(
+        job.job_id,
+        "result.png",
+        "preview",
+        "output",
+    )
+
+    assert content == b"output-bytes"
+    assert media_type == "image/png"
+    assert isolated_adapter.fetch_output_calls == [
+        ("isolated-job", "result.png", "preview", "output")
+    ]
+    assert core_adapter.fetch_output_calls == []
 
 
 @pytest.mark.anyio

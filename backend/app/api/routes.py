@@ -1,19 +1,23 @@
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from app.composition import default_api_services
 from app.core.config import settings
+from app.api.schemas import (
+    ComfyUILaunchSettings,
+    ComfyUIRebuildRequest,
+    ComfyUIUpdateRequest,
+)
 from app.engine.models import WorkflowRunRequest
-from app.engine.service import EngineService, create_default_engine_service
-from app.runtime.comfyui_updates import ComfyUIRebuildRequest, ComfyUIUpdateRequest
-from app.runtime.launch_settings import ComfyUILaunchSettings
+from app.engine.service import EngineService
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
 
 router = APIRouter()
-engine_service: EngineService = create_default_engine_service()
-_user_state_service = UserStateService(settings.paths.user_state_dir)
-_asset_service = DashboardAssetService(settings.paths.dashboard_assets_dir)
+engine_service: EngineService = default_api_services.engine_service
+_user_state_service: UserStateService = default_api_services.user_state_service
+_asset_service: DashboardAssetService = default_api_services.asset_service
 
 
 @router.get("/paths")
@@ -253,6 +257,27 @@ async def cancel_job(job_id: str):
 @router.get("/jobs/{job_id}/result")
 async def get_result(job_id: str):
     return await engine_service.get_result(job_id)
+
+
+@router.get("/jobs/{job_id}/outputs/view")
+async def get_job_output_view(
+    job_id: str,
+    filename: str,
+    subfolder: str = "",
+    output_type: str = Query("output", alias="type"),
+):
+    try:
+        content, media_type = await engine_service.fetch_output(
+            job_id,
+            filename,
+            subfolder,
+            output_type,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=content, media_type=media_type)
 
 
 @router.get("/workflows/{workflow_id}/bindable-inputs")

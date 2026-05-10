@@ -198,7 +198,7 @@ time.sleep(1.0)
         + "\n",
         encoding="utf-8",
     )
-    probe = Path(__file__).with_name("runner_memory_probe.py")
+    probe = BACKEND_ROOT / "app" / "runtime" / "runner_memory_probe.py"
     result = subprocess.run(
         [
             python_executable,

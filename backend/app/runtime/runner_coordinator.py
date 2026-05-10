@@ -11,7 +11,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.engine.adapter import EngineAdapter
-from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.diagnostics import DiagnosticsSink
 from app.runtime.runner_process import (
     RunnerLaunchSpec,
@@ -109,12 +108,6 @@ def comfyui_adapter_factory(
     models_dir: Path,
     log_store: DiagnosticsSink,
 ) -> AdapterFactory:
-    def factory(descriptor: RunnerDescriptor) -> EngineAdapter:
-        return ComfyUIEngineAdapter(
-            descriptor.base_url,
-            models_dir,
-            descriptor.ws_url,
-            log_store=log_store,
-        )
+    from app.engine.factory import comfyui_adapter_factory as _factory
 
-    return factory
+    return _factory(models_dir=models_dir, log_store=log_store)

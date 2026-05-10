@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import shutil
@@ -11,74 +10,56 @@ import zipfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
-import websockets
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from app.core.paths import NoofyPaths
 from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import ComfyUIVersionMetadata, ProcessActionResult
 from app.runtime.environment import CommandRunner, RuntimeEnvironment
 from app.runtime.manager import RuntimeManager
+from app.runtime.comfyui_update_archive import (
+    extract_github_zip,
+    safe_tag,
+    validate_zip_member,
+)
+from app.runtime.comfyui_update_records import (
+    ACTIVE_COMFYUI_FILENAME,
+    LOCAL_VALIDATION_FILENAME,
+    UPDATE_METADATA_SCHEMA_VERSION,
+    ComfyUIVersionRecordStore,
+    LocalComfyUIVersionRecord,
+    now_iso as _now_iso,
+    read_active_payload as _read_active_payload,
+    read_active_record as _read_active_record,
+    read_previous_active_record as _read_previous_active_record,
+    write_json as _write_json,
+)
+from app.runtime.comfyui_update_releases import (
+    UPSTREAM_REPO,
+    UpstreamComfyUIRelease,
+    download_archive,
+    fetch_upstream_releases,
+    stable_sorted_releases,
+    version_sort_key,
+)
+from app.runtime.comfyui_update_smoke import (
+    assert_no_runtime_dirs_in_source,
+    required_route_status_usable,
+    smoke_prompt_and_websocket,
+    smoke_required_routes,
+)
 from app.runtime.profiles import (
     RuntimeSourceOriginKind,
     RuntimeSourceStatus,
     build_comfyui_source_manifest,
 )
 
-UPSTREAM_REPO = "Comfy-Org/ComfyUI"
-UPSTREAM_RELEASES_API = f"https://api.github.com/repos/{UPSTREAM_REPO}/releases"
-ACTIVE_COMFYUI_FILENAME = "active-comfyui.json"
-LOCAL_VALIDATION_FILENAME = "local-validation.json"
-UPDATE_METADATA_SCHEMA_VERSION = "0.1.0"
 AUTOMATIC_REPAIR_MAX_ATTEMPTS = 2
 AUTOMATIC_REPAIR_WINDOW = timedelta(hours=24)
-
-
-class UpstreamComfyUIRelease(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    tag_name: str = Field(min_length=1)
-    name: str | None = None
-    draft: bool = False
-    prerelease: bool = False
-    published_at: str | None = None
-    zipball_url: str | None = None
-    tarball_url: str | None = None
-    html_url: str | None = None
-    target_commitish: str | None = None
-
-
-class LocalComfyUIVersionRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tag: str
-    available_upstream: bool = False
-    installed: bool = False
-    active: bool = False
-    locally_verified: bool = False
-    failed_validation: bool = False
-    failed_reason: str | None = None
-    source_hash: str | None = None
-    commit_sha: str | None = None
-    source_path: str | None = None
-    env_path: str | None = None
-    archive_url: str | None = None
-    installed_at: str | None = None
-    activated_at: str | None = None
-    validated_at: str | None = None
-    repair_status: str | None = None
-    repair_attempt_count: int = 0
-    last_repair_attempt_at: str | None = None
-    last_repair_error: str | None = None
-    repair_blocked_until: str | None = None
-    incompatible: bool = False
-    incompatible_reason: str | None = None
-    last_successfully_started_at: str | None = None
 
 
 class ComfyUIVersionOption(BaseModel):
@@ -241,6 +222,7 @@ class ComfyUIUpdateService:
         self.archive_downloader = archive_downloader or self._download_archive
         self.command_runner = command_runner
         self.smoke_tester = smoke_tester or self._default_smoke_test
+        self.record_store = ComfyUIVersionRecordStore(paths)
         self._job = ComfyUIUpdateJobStatus()
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -1240,34 +1222,10 @@ class ComfyUIUpdateService:
         )
 
     async def _fetch_upstream_releases(self) -> list[UpstreamComfyUIRelease]:
-        payload: list[object] = []
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            for page in range(1, 6):
-                response = await client.get(
-                    UPSTREAM_RELEASES_API,
-                    headers={"Accept": "application/vnd.github+json"},
-                    params={"per_page": 100, "page": page},
-                )
-                response.raise_for_status()
-                page_payload = response.json()
-                if not isinstance(page_payload, list):
-                    raise RuntimeError("GitHub releases response was not a list.")
-                payload.extend(page_payload)
-                if len(page_payload) < 100:
-                    break
-        releases = [UpstreamComfyUIRelease.model_validate(item) for item in payload]
-        return _stable_sorted_releases(releases)
+        return await fetch_upstream_releases()
 
     async def _download_archive(self, url: str, dest: Path) -> int:
-        bytes_written = 0
-        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                with dest.open("wb") as file:
-                    async for chunk in response.aiter_bytes():
-                        file.write(chunk)
-                        bytes_written += len(chunk)
-        return bytes_written
+        return await download_archive(url, dest)
 
     async def _default_smoke_test(
         self, source_dir: Path, env_dir: Path, record: LocalComfyUIVersionRecord
@@ -1316,66 +1274,25 @@ class ComfyUIUpdateService:
         return True, None
 
     def _active_record(self) -> LocalComfyUIVersionRecord | None:
-        return _read_active_record(self.paths)
+        return self.record_store.active_record()
 
     def _previous_active_record(self) -> LocalComfyUIVersionRecord | None:
-        return _read_previous_active_record(self.paths)
+        return self.record_store.previous_active_record()
 
     def _read_records(self) -> dict[str, LocalComfyUIVersionRecord]:
-        path = self.paths.core_engines_dir / LOCAL_VALIDATION_FILENAME
-        if not path.exists():
-            return {}
-        with path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
-        records = payload.get("records", {})
-        if not isinstance(records, dict):
-            return {}
-        return {
-            tag: LocalComfyUIVersionRecord.model_validate(record)
-            for tag, record in records.items()
-        }
+        return self.record_store.read_records()
 
     def _write_records(self, records: dict[str, LocalComfyUIVersionRecord]) -> None:
-        _write_json(
-            self.paths.core_engines_dir / LOCAL_VALIDATION_FILENAME,
-            {
-                "schema_version": UPDATE_METADATA_SCHEMA_VERSION,
-                "updated_at": _now_iso(),
-                "records": {
-                    tag: record.model_dump(mode="json")
-                    for tag, record in sorted(records.items())
-                },
-            },
-        )
+        self.record_store.write_records(records)
 
     def _upsert_record(self, record: LocalComfyUIVersionRecord) -> None:
-        records = self._read_records()
-        records[record.tag] = record
-        self._write_records(records)
+        self.record_store.upsert_record(record)
 
     def _write_active_record(self, record: LocalComfyUIVersionRecord) -> None:
-        active_payload = _read_active_payload(self.paths) or {}
-        previous = self._active_record()
-        existing_previous = active_payload.get("previous_active")
-        previous_payload = (
-            existing_previous if isinstance(existing_previous, dict) else None
-        )
-        if previous is not None and previous.tag != record.tag:
-            previous_payload = previous.model_dump(mode="json")
-        _write_json(
-            self.paths.core_engines_dir / ACTIVE_COMFYUI_FILENAME,
-            {
-                "schema_version": UPDATE_METADATA_SCHEMA_VERSION,
-                "active": record.model_dump(mode="json"),
-                "previous_active": previous_payload,
-            },
-        )
+        self.record_store.write_active_record(record)
 
     def _mark_active(self, active_tag: str) -> None:
-        records = self._read_records()
-        for tag, record in list(records.items()):
-            records[tag] = record.model_copy(update={"active": tag == active_tag})
-        self._write_records(records)
+        self.record_store.mark_active(active_tag)
 
     def _set_job(
         self,
@@ -1419,46 +1336,10 @@ class ComfyUIUpdateService:
         )
 
 
-def _read_active_record(paths: NoofyPaths) -> LocalComfyUIVersionRecord | None:
-    payload = _read_active_payload(paths)
-    if payload is None:
-        return None
-    active = payload.get("active")
-    if not isinstance(active, dict):
-        return None
-    return LocalComfyUIVersionRecord.model_validate(active)
-
-
-def _read_previous_active_record(paths: NoofyPaths) -> LocalComfyUIVersionRecord | None:
-    payload = _read_active_payload(paths)
-    if payload is None:
-        return None
-    previous = payload.get("previous_active")
-    if not isinstance(previous, dict):
-        return None
-    return LocalComfyUIVersionRecord.model_validate(previous)
-
-
-def _read_active_payload(paths: NoofyPaths) -> dict[str, object] | None:
-    path = paths.core_engines_dir / ACTIVE_COMFYUI_FILENAME
-    if not path.exists():
-        return None
-    with path.open("r", encoding="utf-8") as file:
-        payload = json.load(file)
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
 def _stable_sorted_releases(
     releases: list[UpstreamComfyUIRelease],
 ) -> list[UpstreamComfyUIRelease]:
-    stable = [
-        release for release in releases if not release.draft and not release.prerelease
-    ]
-    return sorted(
-        stable, key=lambda release: _version_sort_key(release.tag_name), reverse=True
-    )
+    return stable_sorted_releases(releases)
 
 
 def _resolve_release(
@@ -1661,12 +1542,11 @@ def _version_option(
 
 
 def _version_sort_key(tag: str) -> tuple[int, ...]:
-    numbers = [int(part) for part in re.findall(r"\d+", tag)]
-    return tuple(numbers or [0])
+    return version_sort_key(tag)
 
 
 def _safe_tag(tag: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", tag).strip("-") or "unknown"
+    return safe_tag(tag)
 
 
 def _venv_python(env_path: Path) -> str:
@@ -1685,115 +1565,24 @@ def _record_paths_ready(record: LocalComfyUIVersionRecord | None) -> bool:
 
 
 def _extract_github_zip(archive_path: Path, dest: Path) -> None:
-    raw_dest = dest.parent / "_raw-source"
-    shutil.rmtree(raw_dest, ignore_errors=True)
-    raw_dest.mkdir(parents=True)
-    with zipfile.ZipFile(archive_path) as archive:
-        for member in archive.infolist():
-            _validate_zip_member(member)
-            archive.extract(member, raw_dest)
-    roots = [path for path in raw_dest.iterdir() if path.is_dir()]
-    source_root = (
-        roots[0] if len(roots) == 1 and (roots[0] / "main.py").exists() else raw_dest
-    )
-    if not (source_root / "main.py").exists():
-        raise RuntimeError("Downloaded ComfyUI archive did not contain main.py.")
-    shutil.rmtree(dest, ignore_errors=True)
-    shutil.copytree(source_root, dest)
-    shutil.rmtree(raw_dest, ignore_errors=True)
+    extract_github_zip(archive_path, dest)
 
 
 def _validate_zip_member(member: zipfile.ZipInfo) -> None:
-    path = PurePosixPath(member.filename)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise RuntimeError(f"Unsafe ComfyUI archive path: {member.filename}")
-    mode = member.external_attr >> 16
-    if mode & 0o170000 == 0o120000:
-        raise RuntimeError(f"ComfyUI archive contains a symlink: {member.filename}")
+    validate_zip_member(member)
 
 
 async def _smoke_required_routes(base_url: str) -> None:
-    async with httpx.AsyncClient(timeout=10) as client:
-        for path in ("/system_stats", "/object_info", "/models", "/queue", "/history"):
-            response = await client.get(f"{base_url}{path}")
-            if not _required_route_status_usable(path, response.status_code):
-                raise RuntimeError(
-                    f"ComfyUI smoke route failed: {path} -> {response.status_code}"
-                )
-        view_response = await client.get(
-            f"{base_url}/view",
-            params={"filename": "__noofy_missing__.png", "type": "output"},
-        )
-        if not _required_route_status_usable("/view", view_response.status_code):
-            raise RuntimeError(
-                f"ComfyUI smoke route failed: /view -> {view_response.status_code}"
-            )
+    await smoke_required_routes(base_url)
 
 
 def _required_route_status_usable(path: str, status_code: int) -> bool:
-    if path == "/view":
-        return status_code < 500 and status_code != 405
-    return 200 <= status_code < 300
+    return required_route_status_usable(path, status_code)
 
 
 async def _smoke_prompt_and_websocket(base_url: str, ws_url: str) -> None:
-    client_id = f"noofy-smoke-{uuid4().hex}"
-    prompt = {
-        "1": {
-            "class_type": "EmptyImage",
-            "inputs": {"width": 16, "height": 16, "batch_size": 1, "color": 0},
-        },
-        "2": {"class_type": "PreviewImage", "inputs": {"images": ["1", 0]}},
-    }
-    async with websockets.connect(f"{ws_url}?clientId={client_id}") as websocket:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{base_url}/prompt", json={"prompt": prompt, "client_id": client_id}
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"ComfyUI smoke prompt failed: {response.status_code} {response.text[:200]}"
-                )
-        deadline = asyncio.get_running_loop().time() + 30
-        while asyncio.get_running_loop().time() < deadline:
-            message = await asyncio.wait_for(websocket.recv(), timeout=5)
-            if isinstance(message, bytes):
-                continue
-            payload = json.loads(message)
-            if payload.get("type") == "executing":
-                data = payload.get("data")
-                if isinstance(data, dict) and data.get("node") is None:
-                    return
-        raise RuntimeError(
-            "ComfyUI smoke WebSocket did not report workflow completion."
-        )
+    await smoke_prompt_and_websocket(base_url, ws_url)
 
 
 def _assert_no_runtime_dirs_in_source(source_dir: Path) -> None:
-    forbidden = {
-        "models",
-        "input",
-        "output",
-        "temp",
-        "custom_nodes",
-        "user",
-        "__pycache__",
-    }
-    present = sorted(
-        path.name for path in source_dir.iterdir() if path.name in forbidden
-    )
-    if present:
-        raise RuntimeError(
-            f"ComfyUI source contains runtime directories after smoke test: {', '.join(present)}"
-        )
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    assert_no_runtime_dirs_in_source(source_dir)

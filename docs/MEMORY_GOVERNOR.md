@@ -4,9 +4,8 @@ Date: 2026-05-06
 
 Status: current architecture/reference with remaining hardware-validation notes.
 
-This document is not a phase-by-phase implementation checklist. It explains what
-the Memory Governor does now, what is intentionally conservative, and where real
-hardware validation is still needed.
+This document explains what the Memory Governor does now, what is intentionally
+conservative, and where real hardware validation is still needed.
 
 ## Purpose
 
@@ -227,22 +226,20 @@ failures. Do not add an abstract adaptive-margin formula without evidence. If
 Noofy still needs its own margins, keep them small, justified, and secondary to
 real pressure/budget/backend signals and local empirical learning.
 
-## Obsolete Plan Parts
+## Source Of Truth
 
-The old phase checklist has been removed. It duplicated tests and created the
-false impression that every listed future enhancement had to be implemented.
-
-The detailed signal matrix, long UI copy table, and acceptance checklists are no
-longer useful as the source of truth. The source of truth is now:
+This document intentionally stays at the architecture and operating-policy
+level. The source of truth for exact behavior is:
 
 - `backend/app/runtime/memory_governor.py`
+- `backend/app/runtime/system_memory.py`
+- `backend/app/engine/memory_observation.py`
 - `backend/app/engine/service.py`
 - `backend/tests/test_memory_governor.py`
 - runner/engine service tests covering queueing, eviction, retry, and API shape
 
-The old "complete for Phase 5f" status was too broad. The more accurate status
-is: complete enough for practical v1 workflow admission, with the explicit
-platform accuracy limits documented here.
+Current status: complete enough for practical v1 workflow admission, with the
+explicit platform accuracy limits documented here.
 
 ## Test Coverage
 

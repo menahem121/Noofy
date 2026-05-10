@@ -1,6 +1,6 @@
 # OS Sandboxing Feasibility
 
-Status: Phase 6 feasibility evaluation.
+Status: feasibility reference.
 
 Noofy's runtime isolation architecture isolates dependencies, runner workspaces, model views, install transactions, and runner processes. It does not currently provide a hard security sandbox for arbitrary community Python code.
 
@@ -36,9 +36,9 @@ Feasibility:
 - Tauri app signing/notarization and managed Python runners need careful entitlement design.
 - Per-runner filesystem allowlists may be possible through app-container paths and scoped access, but this requires product packaging work and real-device testing.
 
-Phase 6 decision:
+Decision:
 
-- macOS sandboxing is feasible only as a dedicated hardening phase after product packaging is stable.
+- macOS sandboxing is feasible only as dedicated hardening work after product packaging is stable.
 - Runtime isolation completion does not require macOS App Sandbox implementation.
 
 ## Windows
@@ -57,7 +57,7 @@ Feasibility:
 - Restricted tokens can reduce privileges but may break Python, GPU, file linking, model access, and custom-node subprocesses.
 - AppContainer offers stronger boundaries but requires significant packaging and filesystem capability work.
 
-Phase 6 decision:
+Decision:
 
 - Windows process supervision and cleanup are necessary product reliability work.
 - Windows AppContainer-style sandboxing is future security hardening, not required for this runtime isolation plan.
@@ -80,14 +80,14 @@ Feasibility:
 - GPU access, model-store mounts, cache directories, and Python runner startup complicate a portable default sandbox.
 - Flatpak could provide a packaging-level sandbox, but AppImage/deb/rpm distributions would need separate handling.
 
-Phase 6 decision:
+Decision:
 
 - Linux sandboxing is feasible for a future controlled packaging target or optional runner wrapper.
 - It is not required to complete dependency/runtime isolation.
 
 ## Cross-Platform Future Requirements
 
-A future OS sandboxing phase should define:
+Future OS sandboxing work should define:
 
 - runner filesystem allowlists
 - network policy per trust level
@@ -98,8 +98,8 @@ A future OS sandboxing phase should define:
 - diagnostics for sandbox denial without exposing technical noise by default
 - compatibility tests per OS/package format/GPU backend
 
-## Phase 6 Conclusion
+## Conclusion
 
-OS-level sandboxing is not a Phase 6 completion blocker for the runtime isolation implementation plan, because the accepted architecture is dependency/runtime isolation rather than malicious-code containment.
+OS-level sandboxing is not required for the current runtime isolation architecture, because the accepted architecture is dependency/runtime isolation rather than malicious-code containment.
 
-Phase 6 is complete on this point when docs and UI make that boundary explicit and do not imply unverified community code is safe or OS-sandboxed.
+Docs and UI must make that boundary explicit and must not imply unverified community code is safe or OS-sandboxed.

@@ -168,8 +168,8 @@ def test_child_component_diagnostics_are_visible_through_service_logs(tmp_path: 
 def test_production_diagnostics_do_not_create_private_log_store_fallbacks() -> None:
     app_dir = Path(__file__).resolve().parents[1] / "app"
     allowed_construction_files = {
+        Path("engine/factory.py"),
         Path("engine/service.py"),
-        Path("runtime/phase5e_real_smoke.py"),
     }
     construction_pattern = re.compile(r"\bLogStore\s*\(")
 

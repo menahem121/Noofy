@@ -32,7 +32,7 @@ BOOTSTRAP_RUNTIME_CODE = r"""
 import asyncio
 import json
 
-from app.engine.service import create_default_engine_service
+from app.engine.factory import create_default_engine_service
 
 
 async def main():
@@ -53,7 +53,7 @@ RUNTIME_STATUS_CODE = r"""
 import asyncio
 import json
 
-from app.engine.service import create_default_engine_service
+from app.engine.factory import create_default_engine_service
 
 
 async def main():

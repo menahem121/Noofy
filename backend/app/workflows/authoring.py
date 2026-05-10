@@ -20,6 +20,7 @@ from app.workflows.package import (
     WorkflowOutput,
     WorkflowPackage,
 )
+from app.workflows.store_paths import mutable_package_dir
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -175,18 +176,9 @@ class DashboardAuthoringService:
     def _find_package_dir(self, workflow_id: str) -> Path | None:
         """Return the mutable package directory for a workflow, or None if bundled-only."""
         package = self._get_package(workflow_id)
-        if package.identity is None:
+        candidate = mutable_package_dir(self.workflow_store_dir, package)
+        if candidate is None:
             return None
-        from app.workflows.importer import (
-            _safe_store_segment,
-        )  # local import to avoid circular deps
-
-        candidate = (
-            self.workflow_store_dir
-            / _safe_store_segment(package.identity.publisher_id)
-            / _safe_store_segment(package.identity.package_id)
-            / _safe_store_segment(package.identity.version)
-        )
         if not candidate.exists():
             return None
         return candidate

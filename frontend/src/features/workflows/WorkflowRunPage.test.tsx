@@ -237,7 +237,18 @@ describe("WorkflowRunPage", () => {
           jsonResponse({
             job_id: "job-1",
             status: "completed",
-            outputs: [{ output: { images: [{ view_url: "/api/view?filename=result.png" }] } }],
+            outputs: [
+              {
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
             error: null,
           }),
         );
@@ -252,7 +263,10 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
-    expect(screen.getByAltText("Generated workflow output")).toHaveAttribute("src", "/api/view?filename=result.png");
+    expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+    );
   });
 
   it("blocks the run and explains missing model requirements", async () => {
@@ -1138,14 +1152,27 @@ describe("WorkflowRunPage", () => {
                 node_id: "9",
                 output: {
                   images: [
-                    { view_url: "/api/view?filename=node-9-a.png" },
-                    { view_url: "/api/view?filename=node-9-b.png" },
+                    {
+                      view_url:
+                        "/api/jobs/job-canvas/outputs/view?filename=node-9-a.png&subfolder=&type=output",
+                    },
+                    {
+                      view_url:
+                        "/api/jobs/job-canvas/outputs/view?filename=node-9-b.png&subfolder=&type=output",
+                    },
                   ],
                 },
               },
               {
                 node_id: "10",
-                output: { images: [{ view_url: "/api/view?filename=node-10.png" }] },
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-canvas/outputs/view?filename=node-10.png&subfolder=&type=output",
+                    },
+                  ],
+                },
               },
             ],
             error: null,
@@ -1163,15 +1190,15 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByAltText("Generated workflow output 1")).toHaveAttribute(
       "src",
-      "/api/view?filename=node-9-a.png",
+      "/api/jobs/job-canvas/outputs/view?filename=node-9-a.png&subfolder=&type=output",
     );
     expect(screen.getByAltText("Generated workflow output 2")).toHaveAttribute(
       "src",
-      "/api/view?filename=node-9-b.png",
+      "/api/jobs/job-canvas/outputs/view?filename=node-9-b.png&subfolder=&type=output",
     );
     expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
       "src",
-      "/api/view?filename=node-10.png",
+      "/api/jobs/job-canvas/outputs/view?filename=node-10.png&subfolder=&type=output",
     );
   });
 });

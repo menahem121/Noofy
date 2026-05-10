@@ -139,7 +139,6 @@ from app.runtime.storage_gc import (
 )
 from app.runtime.runner_coordinator import (
     RunnerProcessCoordinator,
-    comfyui_adapter_factory,
 )
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
@@ -374,7 +373,6 @@ __all__ = [
     "canonical_json_bytes",
     "capsule_fingerprint",
     "capsule_lock_content_hash",
-    "comfyui_adapter_factory",
     "conservative_memory_class",
     "decide_memory_admission",
     "default_memory_observer",

@@ -51,7 +51,8 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Path layout, env var overrides | [backend/app/core/paths.py](../backend/app/core/paths.py) |
 | Trust roots, signature verification (Ed25519 + HMAC for tests) | [backend/app/trust.py](../backend/app/trust.py) |
 | Durable source policy schema and enforcement | [backend/app/source_policy.py](../backend/app/source_policy.py) |
-| Workflow package import / `.noofy` archive normalizer | [backend/app/workflows/importer.py](../backend/app/workflows/importer.py), [backend/app/workflows/package.py](../backend/app/workflows/package.py) |
+| Workflow package import orchestration | [backend/app/workflows/importer.py](../backend/app/workflows/importer.py), [backend/app/workflows/package.py](../backend/app/workflows/package.py) |
+| Workflow import helpers | [archive_validation.py](../backend/app/workflows/archive_validation.py), [import_normalization.py](../backend/app/workflows/import_normalization.py), [package_persistence.py](../backend/app/workflows/package_persistence.py), [import_runtime_profile.py](../backend/app/workflows/import_runtime_profile.py), [import_policy.py](../backend/app/workflows/import_policy.py), [import_capsule_lock.py](../backend/app/workflows/import_capsule_lock.py), [store_paths.py](../backend/app/workflows/store_paths.py) |
 | Capsule lock + install-state schemas | [backend/app/workflows/capsule.py](../backend/app/workflows/capsule.py), [backend/app/runtime/install_state.py](../backend/app/runtime/install_state.py) |
 | Layered fingerprints (dependency-env, runner, capsule) | [backend/app/runtime/fingerprints.py](../backend/app/runtime/fingerprints.py) |
 | Runtime profile catalog | [backend/app/runtime/profiles.py](../backend/app/runtime/profiles.py), [backend/app/runtime/profile_catalog.json](../backend/app/runtime/profile_catalog.json) |
@@ -66,6 +67,8 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Memory Governor (estimates, co-residence, eviction, retry) | [backend/app/runtime/memory_governor.py](../backend/app/runtime/memory_governor.py); strategy in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md) |
 | Reference index + GC + retention windows | [backend/app/runtime/storage_gc.py](../backend/app/runtime/storage_gc.py), [model_gc.py](../backend/app/runtime/model_gc.py) |
 | Engine adapter + job registry | [backend/app/engine/](../backend/app/engine/) |
+
+Manual validation and hardware smoke harnesses are tools, not product runtime modules. They live under [backend/tools/validation/](../backend/tools/validation/) and are invoked through Makefile validation targets.
 
 `EngineService` requests a runner from `RunnerSupervisor` for every workflow operation. There is no implicit global adapter endpoint; jobs are tracked through `job_id -> runner_id` in the engine job registry.
 
@@ -160,7 +163,7 @@ Install state records a split `smoke_test_report`. A workflow becomes `ready` on
 3. **runner health** — staged runner process starts on a localhost port and reports healthy.
 4. **workflow execution** — a real graph runs end-to-end. Custom-node packages must exercise at least one declared custom-node type. Workflows with unresolved runtime inputs (e.g. creator-local `LoadImage`) cannot reach `ready`; they stop at `prepared_needs_input_setup`.
 
-Real-hardware staged smoke is run with `make phase5e-real-smoke` on the Linux validation host. Unit tests use lightweight/fake runner adapters.
+Real-hardware staged smoke is run with the Makefile validation target on the Linux validation host. Unit tests use lightweight/fake runner adapters.
 
 ## Trust Model
 

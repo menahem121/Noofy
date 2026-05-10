@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from app.runtime.isolation import CapsuleLock
+from app.workflows.store_paths import imported_workflow_id
 
 CAPSULE_LOCK_FILENAME = "capsule.lock.json"
 
@@ -102,7 +103,7 @@ class CapsuleLockLoader:
             return None
         for lock_path in sorted(directory.glob(f"*/*/*/{CAPSULE_LOCK_FILENAME}")):
             lock = self._load(lock_path)
-            if _imported_workflow_id(
+            if imported_workflow_id(
                 lock.workflow.publisher_id,
                 lock.workflow.package_id,
                 lock.workflow.version,
@@ -114,19 +115,3 @@ class CapsuleLockLoader:
         with lock_path.open("r", encoding="utf-8") as file:
             data = json.load(file)
         return CapsuleLock.model_validate(data)
-
-
-def _imported_workflow_id(publisher_id: str, package_id: str, version: str) -> str:
-    return "__".join(
-        [
-            _safe_store_segment(publisher_id),
-            _safe_store_segment(package_id),
-            _safe_store_segment(version),
-        ]
-    )
-
-
-def _safe_store_segment(value: str) -> str:
-    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value.strip())
-    cleaned = cleaned.strip(".-_")
-    return cleaned or "unknown"

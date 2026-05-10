@@ -182,6 +182,58 @@ class ComfyUIEngineAdapter:
             return api_models
         return self._list_available_models_from_filesystem()
 
+    async def upload_workflow_image(
+        self,
+        workflow_package: WorkflowPackage,
+        filename: str,
+        data: bytes,
+        content_type: str,
+    ) -> dict[str, str]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/upload/image",
+                files={"image": (filename, data, content_type)},
+            )
+
+        if response.status_code not in (200, 201):
+            raise ValueError(f"ComfyUI upload failed with status {response.status_code}")
+
+        result = response.json()
+        uploaded_filename = result.get("name") if isinstance(result, dict) else None
+        self.log_store.add(
+            "info",
+            "Uploaded workflow image",
+            "comfyui.adapter",
+            workflow_id=workflow_package.metadata.id,
+            details={"filename": uploaded_filename or filename},
+        )
+        return {"filename": uploaded_filename or filename}
+
+    async def fetch_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> tuple[bytes, str]:
+        del job_id
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.base_url}/view",
+                params={
+                    "filename": filename,
+                    "subfolder": subfolder,
+                    "type": output_type,
+                },
+            )
+
+        if response.status_code != 200:
+            raise ValueError(f"ComfyUI output fetch failed with status {response.status_code}")
+        return (
+            response.content,
+            response.headers.get("content-type", "application/octet-stream"),
+        )
+
     async def _list_available_models_from_api(self) -> list[ModelInfo]:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -452,7 +504,7 @@ class ComfyUIEngineAdapter:
             outputs=[
                 {
                     "node_id": str(node),
-                    "output": self._add_view_urls(output),
+                    "output": self._add_view_urls(job_id, output),
                 }
             ],
         )
@@ -576,7 +628,7 @@ class ComfyUIEngineAdapter:
                 outputs.append(
                     {
                         "node_id": node_id,
-                        "output": self._add_view_urls(node_output),
+                        "output": self._add_view_urls(job_id, node_output),
                     }
                 )
 
@@ -586,7 +638,7 @@ class ComfyUIEngineAdapter:
             outputs=outputs,
         )
 
-    def _add_view_urls(self, node_output: dict[str, Any]) -> dict[str, Any]:
+    def _add_view_urls(self, job_id: str, node_output: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(node_output)
         for output_type in ("images", "audio", "video"):
             items = enriched.get(output_type)
@@ -596,7 +648,7 @@ class ComfyUIEngineAdapter:
                 (
                     {
                         **item,
-                        "view_url": self._build_view_url(item),
+                        "view_url": self._build_view_url(job_id, item),
                     }
                     if isinstance(item, dict)
                     else item
@@ -605,7 +657,7 @@ class ComfyUIEngineAdapter:
             ]
         return enriched
 
-    def _build_view_url(self, item: dict[str, Any]) -> str:
+    def _build_view_url(self, job_id: str, item: dict[str, Any]) -> str:
         query = urlencode(
             {
                 "filename": item.get("filename", ""),
@@ -613,7 +665,7 @@ class ComfyUIEngineAdapter:
                 "type": item.get("type", "output"),
             }
         )
-        return f"{self.base_url}/view?{query}"
+        return f"/api/jobs/{job_id}/outputs/view?{query}"
 
     def _ws_url_for_client(self, client_id: str) -> str:
         separator = "&" if "?" in self.ws_url else "?"

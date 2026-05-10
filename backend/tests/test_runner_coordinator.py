@@ -3,11 +3,9 @@ from pathlib import Path
 import pytest
 
 from app.engine.diagnostics import LogStore
+from app.engine.factory import comfyui_adapter_factory
 from app.engine.models import ModelInfo
-from app.runtime.runner_coordinator import (
-    RunnerProcessCoordinator,
-    comfyui_adapter_factory,
-)
+from app.runtime.runner_coordinator import RunnerProcessCoordinator
 from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.supervisor import (
     RunnerDescriptor,

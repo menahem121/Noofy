@@ -22,9 +22,13 @@ React frontend
 
 The Tauri shell starts and manages the local backend process. The backend starts or connects to the local ComfyUI service.
 
+The FastAPI route layer is backed by composed application services. `EngineService` owns workflow execution orchestration, while user state and dashboard asset persistence stay in smaller application services. Default runtime, workflow, adapter, trust, diagnostics, and dashboard collaborators are wired by the backend composition/factory code rather than by route handlers.
+
 For product v1, ComfyUI is a managed sidecar. The app must start it as a hidden local subprocess using an app-managed isolated Python environment. Users should not manually open ComfyUI or install ComfyUI dependencies into their system Python.
 
 External ComfyUI URLs such as `http://127.0.0.1:8188` are development mode only.
+
+Generated media URLs returned to the frontend are Noofy backend API URLs. ComfyUI upload and `/view` endpoints are adapter implementation details and must not become frontend contracts.
 
 Community workflows from the internet are a first-class product direction. Noofy should automatically prepare custom nodes and normal Python dependencies when they can be resolved into isolated workflow capsules. These installs must never mutate the trusted core runtime or another installed workflow. Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible.
 

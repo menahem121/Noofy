@@ -5,12 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import routes
+from app.api.schemas import ComfyUILaunchSettings
 from app.core.config import settings as real_settings
 from app.engine.diagnostics import LogStore
 from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
 from app import main as main_module
 from app.main import create_app
-from app.runtime.launch_settings import ComfyUILaunchSettings, comfyui_launch_response
+from app.runtime.launch_settings import comfyui_launch_response
 
 
 class FakeEngineService:
@@ -49,6 +50,19 @@ class FakeEngineService:
             "restart_status": "started",
             "error": None,
         }
+
+    async def fetch_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> tuple[bytes, str]:
+        assert job_id == "job-1"
+        assert filename == "result.png"
+        assert subfolder == "preview"
+        assert output_type == "output"
+        return b"image-bytes", "image/png"
 
     async def shutdown(self) -> None:
         self.shutdown_called = True
@@ -132,6 +146,24 @@ def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
     assert payload["cpu"]["percent"] == 23.0
     assert payload["ram"]["used_mb"] == 11264
     assert payload["vram"]["available"] is False
+
+
+def test_job_output_view_endpoint_returns_backend_owned_media(monkeypatch) -> None:
+    monkeypatch.setattr(routes, "engine_service", FakeEngineService())
+
+    with TestClient(create_app()) as client:
+        response = client.get(
+            "/api/jobs/job-1/outputs/view",
+            params={
+                "filename": "result.png",
+                "subfolder": "preview",
+                "type": "output",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"image-bytes"
+    assert response.headers["content-type"] == "image/png"
 
 
 def test_app_shutdown_calls_engine_service_shutdown(monkeypatch) -> None:

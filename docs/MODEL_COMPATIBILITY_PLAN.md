@@ -89,7 +89,7 @@ Names may change, but the backend needs these capabilities:
 
 Downloads must check disk space, write to Noofy-owned model storage, verify hash/size when available, register local identity, materialize the file into the runner-visible model view, refresh relevant selectors, and emit diagnostics.
 
-## Implementation Phases
+## Implementation Order
 
 1. Local checkpoint identity scanner: SHA-256, size, safetensors metadata, tensor signatures, persisted identity records.
 2. Local LoRA identity scanner: LoRA detection, target architecture, trigger words, base-model metadata.

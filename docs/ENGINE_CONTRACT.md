@@ -9,8 +9,10 @@ The app owns the engine contract. UI code should depend on this contract, not on
 - `streamProgress(jobId)`: stream frontend-ready progress/result events.
 - `cancelJob(jobId)`: stop a running or queued job.
 - `getResult(jobId)`: return final outputs, errors, and generated files.
+- `fetchOutput(jobId, filename, subfolder, type)`: serve generated output media through the backend API.
 - `listAvailableModels()`: report models available to the active engine.
 - `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability.
+- `uploadWorkflowImage(workflowId, file)`: stage or upload a workflow image input through the selected runner.
 - `listLogs(level?, limit?)`: return recent backend and engine diagnostic events.
 - `listJobLogs(jobId, level?, limit?)`: return diagnostic events for a specific job.
 - `listRunners()`: report runner lifecycle and memory-governor state through the backend API.
@@ -25,6 +27,8 @@ The first implementation is `ComfyUIEngineAdapter`, which translates app operati
 The frontend must not know whether a workflow is running through ComfyUI, a future platform-native engine, or another adapter.
 
 For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI sidecar. Connecting to an externally launched ComfyUI instance is a development convenience only.
+
+Workflow image uploads and generated output reads are adapter operations. The route layer and `EngineService` select the workflow/job-bound runner first, then dispatch through that runner's adapter. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
 
 ## Job Lifecycle
 
@@ -49,7 +53,8 @@ For the first adapter:
 - Track progress through ComfyUI `/ws`.
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
 - Read queue and job state through `/queue` and `/history`.
-- Retrieve generated files through `/view`.
+- Retrieve generated files through ComfyUI `/view` inside the adapter, while returning backend-owned media URLs such as `/api/jobs/{job_id}/outputs/view?...` to the frontend.
+- Upload image inputs through ComfyUI `/upload/image` inside the adapter, selected by workflow runner.
 - Inspect models and node information through `/models` and `/object_info`.
 
 ## Diagnostics

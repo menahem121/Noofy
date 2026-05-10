@@ -45,7 +45,7 @@ Current test areas:
 
 - workflow package loading and validation
 - model validation through the active `EngineAdapter`
-- ComfyUI result parsing and view URL creation
+- ComfyUI result parsing and backend-owned output media URLs
 - ComfyUI WebSocket progress/error/result parsing
 - diagnostic log filtering and latest error tracking
 

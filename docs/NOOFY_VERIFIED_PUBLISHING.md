@@ -1,6 +1,6 @@
 # Noofy Verified Publishing Process
 
-Status: Phase 6 definition and local backend implementation notes for marketplace readiness.
+Status: publishing reference and local backend implementation notes for marketplace readiness.
 
 This document defines what "Noofy Verified" means operationally. It does not implement the full in-app marketplace.
 
@@ -109,7 +109,7 @@ Revocation should not silently delete local user data. It should prevent new pre
 
 ## Completion Criteria
 
-The publishing process is complete for Phase 6 when:
+The publishing process is complete when:
 
 - production asymmetric verification exists in the backend
 - public trust roots can be loaded without private key material

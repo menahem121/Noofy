@@ -15,6 +15,7 @@ from typing import Any
 
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
+from app.workflows.store_paths import mutable_package_dir
 
 
 class WorkflowExportError(Exception):
@@ -99,16 +100,9 @@ class WorkflowExporter:
 
     def _find_package_dir(self, workflow_id: str) -> Path | None:
         package = self._get_package(workflow_id)
-        if package.identity is None:
+        candidate = mutable_package_dir(self.workflow_store_dir, package)
+        if candidate is None:
             return None
-        from app.workflows.importer import _safe_store_segment
-
-        candidate = (
-            self.workflow_store_dir
-            / _safe_store_segment(package.identity.publisher_id)
-            / _safe_store_segment(package.identity.package_id)
-            / _safe_store_segment(package.identity.version)
-        )
         return candidate if candidate.exists() else None
 
 

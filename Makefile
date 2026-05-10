@@ -75,7 +75,7 @@ test-exporter:
 	$(PYTEST) comfyui_export2noofy_node/tests
 
 phase5e-real-smoke:
-	cd backend && $(BACKEND_PYTHON) -m app.runtime.phase5e_real_smoke \
+	cd backend && $(BACKEND_PYTHON) -m tools.validation.phase5e_real_smoke \
 		--comfyui-source-dir $(COMFYUI_SOURCE_DIR) \
 		--python-executable $(COMFYUI_PYTHON) \
 		--test-workflows-dir ../test_workflows \
@@ -86,6 +86,6 @@ phase5e-real-smoke:
 		--json-output $(PHASE5E_SMOKE_SUMMARY)
 
 memory-governor-linux-validation:
-	cd backend && $(BACKEND_PYTHON) -m app.runtime.memory_governor_hardware_validation \
+	cd backend && $(BACKEND_PYTHON) -m tools.validation.memory_governor_hardware_validation \
 		--data-dir $(MEMORY_GOVERNOR_VALIDATION_DATA_DIR) \
 		--json-output $(MEMORY_GOVERNOR_VALIDATION_OUTPUT)

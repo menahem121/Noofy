@@ -34,4 +34,4 @@ Status categories:
 
 ## Removed Completed Plans
 
-Completed milestone and implementation-plan histories were removed after durable decisions were merged into reference docs. Use git history for old phase checklists or progress logs.
+Completed milestone and implementation-plan histories were removed after durable decisions were merged into reference docs. Use git history for old checklists or progress logs.

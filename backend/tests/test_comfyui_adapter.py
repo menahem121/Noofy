@@ -6,6 +6,7 @@ import pytest
 from app.engine.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.models import JobProgress
+from app.workflows.loader import WorkflowPackageLoader
 
 
 def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
@@ -33,7 +34,90 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
 
     assert result.status == "completed"
     assert result.outputs[0]["node_id"] == "9"
-    assert "sample+image.png" in result.outputs[0]["output"]["images"][0]["view_url"]
+    view_url = result.outputs[0]["output"]["images"][0]["view_url"]
+    assert view_url.startswith("/api/jobs/job-1/outputs/view?")
+    assert "sample+image.png" in view_url
+
+
+@pytest.mark.anyio
+async def test_upload_workflow_image_posts_to_configured_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/upload/image"
+        return httpx.Response(200, json={"name": "stored.png"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
+    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package(
+        "text_to_image_v0"
+    )
+
+    result = await adapter.upload_workflow_image(
+        package,
+        "input.png",
+        b"image-bytes",
+        "image/png",
+    )
+
+    assert result == {"filename": "stored.png"}
+    assert len(requests) == 1
+
+
+@pytest.mark.anyio
+async def test_fetch_output_reads_from_configured_view_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/view"
+        assert request.url.params["filename"] == "result.png"
+        assert request.url.params["subfolder"] == "preview"
+        assert request.url.params["type"] == "output"
+        return httpx.Response(
+            200,
+            content=b"image-bytes",
+            headers={"content-type": "image/png"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
+
+    content, media_type = await adapter.fetch_output(
+        "job-1",
+        "result.png",
+        "preview",
+        "output",
+    )
+
+    assert content == b"image-bytes"
+    assert media_type == "image/png"
+    assert len(requests) == 1
 
 
 def test_terminal_progress_logs_once(tmp_path: Path) -> None:
@@ -165,8 +249,8 @@ def test_result_from_comfyui_executed_ws_message(tmp_path: Path) -> None:
     assert result is not None
     assert result.status == "running"
     assert result.outputs[0]["node_id"] == "9"
-    assert result.outputs[0]["output"]["images"][0]["view_url"].endswith(
-        "/view?filename=sample.png&subfolder=&type=output"
+    assert result.outputs[0]["output"]["images"][0]["view_url"] == (
+        "/api/jobs/job-1/outputs/view?filename=sample.png&subfolder=&type=output"
     )
 
 

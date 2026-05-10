@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.runtime import phase5e_real_smoke as real_smoke
+from tools.validation import phase5e_real_smoke as real_smoke
 from app.runtime.isolation import SmokeStageResult, SmokeStageStatus, SmokeTestReport
 
 
@@ -135,7 +136,28 @@ async def test_run_validation_summarizes_selected_scenarios(
         calls.append(scenario.name)
         return _passed_report(custom_nodes=bool(capsule.custom_nodes))
 
+    def fake_imported_package_capsule_lock(package):
+        return SimpleNamespace(custom_nodes=package.custom_nodes)
+
+    class FakeImportedPackageStore:
+        def package_dir(self, package) -> Path:
+            return tmp_path / "packages" / package.metadata.id
+
+    def fake_prepare_workspace(**kwargs):
+        scenario_workspace = tmp_path / "runner-workspaces" / kwargs["package"].metadata.id
+        return SimpleNamespace(
+            runner_workspace_path=scenario_workspace,
+            dependency_env_path=tmp_path / "envs" / kwargs["package"].metadata.id,
+        )
+
     monkeypatch.setattr(real_smoke, "_run_smoke", fake_run_smoke)
+    monkeypatch.setattr(
+        real_smoke,
+        "imported_package_capsule_lock",
+        fake_imported_package_capsule_lock,
+    )
+    monkeypatch.setattr(real_smoke, "_import_package", lambda *args, **kwargs: FakeImportedPackageStore())
+    monkeypatch.setattr(real_smoke, "_prepare_workspace", fake_prepare_workspace)
 
     summary = await real_smoke.run_validation(
         _config(tmp_path),

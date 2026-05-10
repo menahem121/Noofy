@@ -86,6 +86,7 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 - Image inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/image`.
 - ComfyUI `input/` is staging-only. The backend stages dashboard assets into the runner-visible input directory immediately before execution.
 - Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs.
+- Generated result media is also served through the backend API. Job results contain app-owned output URLs such as `/api/jobs/{job_id}/outputs/view?...`, while the selected `EngineAdapter` performs any engine-specific file retrieval.
 
 `WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values and layout overrides are pruned, new controls use creator defaults, and the cleaned state is saved back.
 
@@ -100,7 +101,9 @@ Important dashboard APIs:
 - `GET /api/workflows/{id}/output-nodes`: expose output-capable nodes for result widgets.
 - `PUT /api/workflows/{id}/dashboard`: save a configured dashboard.
 - `POST /api/workflows/{id}/assets/image`: store a Noofy dashboard image asset.
+- `POST /api/workflows/{id}/uploads/image`: upload or stage a workflow image input through the workflow-selected engine adapter.
 - `GET /api/assets/{asset_id}`: serve a dashboard asset.
+- `GET /api/jobs/{job_id}/outputs/view`: serve generated job output media through the job-bound engine adapter.
 - `GET/PUT /api/workflows/{id}/user-state`: read/write values and layout overrides.
 - `DELETE /api/workflows/{id}/user-state/values`: restore creator defaults.
 - `DELETE /api/workflows/{id}/user-state/layout`: reset user layout overrides.

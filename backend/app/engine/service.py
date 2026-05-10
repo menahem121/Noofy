@@ -1,9 +1,6 @@
 import asyncio
-import contextlib
 import hashlib
-import json
 import re
-from collections.abc import Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,8 +11,11 @@ from pydantic import ValidationError
 from app.artifacts import AssetOwnership
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
-from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.diagnostics import DiagnosticsStore, LogStore
+from app.engine.diagnostics import DiagnosticsStore
+from app.engine.memory_observation import (
+    MemoryObservationCoordinator,
+    memory_input_profile_fingerprint,
+)
 from app.engine.models import (
     BackendHealthReport,
     DiagnosticLogResponse,
@@ -34,20 +34,11 @@ from app.runtime.comfyui_updates import (
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
     ComfyUIUpdateService,
-    resolve_active_runtime_selection,
 )
-from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
-from app.runtime.dependency_lock import core_dependency_lock_from_capsule
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.dependency_resolver import UvDependencyLockResolver
-from app.runtime.uv_executable import resolve_noofy_uv_executable
-from app.runtime.custom_nodes import CustomNodeWorkspaceMaterializer
-from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_state import (
     InstallStateStore,
     user_facing_install_message,
 )
-from app.runtime.install_transactions import InstallTransactionStore
 from app.runtime.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
@@ -66,41 +57,31 @@ from app.runtime.launch_settings import (
 )
 from app.runtime.manager import RuntimeManager
 from app.runtime.memory_governor import (
-    GpuProcessMemorySample,
-    BackendAllocatorMemorySample,
     LocalMemoryLearningStore,
-    LocalMemoryObservation,
     MachineMemoryObserver,
     MachineMemorySnapshot,
     MemoryAdmissionRequest,
-    MemoryAttributionQuality,
     MemoryBackend,
     MemoryDecisionAction,
     MemoryGovernorDecision,
-    MemoryObservationOutcome,
     MemoryReleaseStatus,
-    MemorySampleWindow,
     ProcessTreeMemoryObserver,
-    ProcessTreeMemorySample,
     RunnerMemoryTelemetryReader,
     RunnerMemorySnapshot,
     WorkflowMemoryEstimateRequest,
     build_workflow_memory_estimate,
     decide_memory_admission,
-    default_memory_observer,
     likely_memory_error,
     memory_user_status_for_decision,
     record_memory_governor_decision,
     retry_after_memory_cleanup_decision,
     wait_for_memory_release,
 )
-from app.runtime.model_store import LocalModelRequirement, ModelStore, http_streaming_downloader
-from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver, NoofyNodeRegistry
-from app.runtime.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH, load_runtime_profile_catalog
+from app.runtime.model_store import LocalModelRequirement
 from app.runtime.resource_monitor import SystemResourceObserver, build_resource_snapshot
-from app.runtime.runner_coordinator import RunnerProcessCoordinator, comfyui_adapter_factory
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
+from app.runtime.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runner_process import RunnerLaunchSpec
+from app.runtime.smoke_test import SmokeExecutionFixture
 from app.runtime.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
 from app.runtime.supervisor import (
     CORE_RUNNER_FINGERPRINT,
@@ -115,18 +96,14 @@ from app.runtime.supervisor import (
     RunnerSupervisor,
 )
 from app.source_policy import ModelSourceTrust, SourcePolicy
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
-    DependencyEnvManifestStore,
-    RunnerWorkspaceManifestStore,
-)
-from app.trust import capsule_source_policy, load_trust_verifier, workflow_source_policy, workflow_trust_payload
+from app.trust import capsule_source_policy, workflow_source_policy, workflow_trust_payload
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.exporter import WorkflowExportError, WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
+from app.workflows.store_paths import imported_workflow_id, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
 
 _PREPARABLE_TRUST_LEVELS = {
@@ -155,6 +132,8 @@ class EngineService:
         comfyui_update_service: ComfyUIUpdateService | None = None,
         comfyui_launch_settings_store: ComfyUILaunchSettingsStore | None = None,
         resource_observer: SystemResourceObserver | None = None,
+        dashboard_authoring: DashboardAuthoringService | None = None,
+        workflow_exporter: WorkflowExporter | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -166,24 +145,27 @@ class EngineService:
         self.runner_process_coordinator = runner_process_coordinator
         self.imported_package_store = imported_package_store
         self.memory_observer = memory_observer
-        self.process_tree_memory_observer = process_tree_memory_observer or ProcessTreeMemoryObserver()
-        self.runner_memory_telemetry_reader = runner_memory_telemetry_reader or RunnerMemoryTelemetryReader()
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
         self.comfyui_launch_settings_store = comfyui_launch_settings_store
         self.resource_observer = resource_observer or SystemResourceObserver()
-        self.dashboard_authoring: DashboardAuthoringService | None = None
-        self.workflow_exporter: WorkflowExporter | None = None
+        self.dashboard_authoring = dashboard_authoring
+        self.workflow_exporter = workflow_exporter
         self._job_workflows: dict[str, str] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._memory_retry_roots: dict[str, str] = {}
         self._memory_retry_attempted_roots: set[str] = set()
         self._queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._memory_governor_metrics: dict[str, int] = {}
-        self._memory_sampling_tasks: dict[str, asyncio.Task[None]] = {}
-        self._memory_sampling_stop_events: dict[str, asyncio.Event] = {}
-        self._memory_sampling_snapshots: dict[str, list[MachineMemorySnapshot]] = {}
-        self._job_memory_attribution: dict[str, dict[str, Any]] = {}
+        self.memory_observation = MemoryObservationCoordinator(
+            runner_supervisor=runner_supervisor,
+            log_store=log_store,
+            memory_observer=memory_observer,
+            process_tree_memory_observer=process_tree_memory_observer or ProcessTreeMemoryObserver(),
+            runner_memory_telemetry_reader=runner_memory_telemetry_reader or RunnerMemoryTelemetryReader(),
+            memory_learning_store=memory_learning_store,
+            record_metric=self._record_memory_governor_metric,
+        )
 
     def list_workflows(self) -> list[dict[str, object]]:
         return [
@@ -940,30 +922,16 @@ class EngineService:
     async def upload_workflow_image(
         self, workflow_id: str, filename: str, data: bytes, content_type: str
     ) -> dict[str, str]:
-        """Proxy an image upload to the ComfyUI runner for the given workflow."""
-        import httpx
-
-        # Ensure workflow exists
-        self.workflow_loader.get_package(workflow_id)
-
-        status = await self.runtime_manager.status()
-        if not status.reachable:
-            raise ValueError("ComfyUI runtime is not reachable — cannot upload image")
-
-        base_url = self.runtime_manager.base_url.rstrip("/")
-        url = f"{base_url}/upload/image"
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                url,
-                files={"image": (filename, data, content_type)},
-            )
-
-        if response.status_code not in (200, 201):
-            raise ValueError(f"ComfyUI upload failed with status {response.status_code}")
-
-        result = response.json()
-        return {"filename": result.get("name", filename)}
+        """Upload or stage an image through the workflow-selected engine adapter."""
+        package = self.workflow_loader.get_package(workflow_id)
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+        return await adapter.upload_workflow_image(
+            package,
+            filename,
+            data,
+            content_type,
+        )
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -1024,7 +992,7 @@ class EngineService:
             package=package,
             workflow_id=workflow_id,
             runner=runner,
-            input_profile_fingerprint=_memory_input_profile_fingerprint(inputs, options),
+            input_profile_fingerprint=memory_input_profile_fingerprint(inputs, options),
             memory_retry_after_cleanup=memory_retry_after_cleanup,
         )
         if memory_decision is not None:
@@ -1136,6 +1104,16 @@ class EngineService:
         self._record_local_memory_observation_for_result(result)
         retry_job = await self._maybe_retry_after_memory_cleanup(result)
         return retry_job or result
+
+    async def fetch_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> tuple[bytes, str]:
+        adapter = self._adapter_for_job(job_id)
+        return await adapter.fetch_output(job_id, filename, subfolder, output_type)
 
     async def stream_progress_events(self, job_id: str):
         while True:
@@ -1706,249 +1684,19 @@ class EngineService:
         retry_after_cleanup: bool = False,
         telemetry_observed_after: str | None = None,
     ) -> None:
-        if self.memory_observer is None or job_id in self._memory_sampling_tasks:
-            return
-        stop_event = asyncio.Event()
-        snapshots: list[MachineMemorySnapshot] = []
-        if initial_snapshot is not None:
-            snapshots.append(
-                self._attribute_memory_snapshot(
-                    initial_snapshot,
-                    job_id=job_id,
-                    workflow_id=workflow_id,
-                    runner_id=runner_id,
-                    sample_window=MemorySampleWindow.BEFORE_SUBMIT,
-                    telemetry_observed_after=telemetry_observed_after,
-                )
-            )
-        self._memory_sampling_stop_events[job_id] = stop_event
-        self._memory_sampling_snapshots[job_id] = snapshots
-        execution_window = (
-            MemorySampleWindow.RETRY_AFTER_CLEANUP
-            if retry_after_cleanup
-            else MemorySampleWindow.WORKFLOW_EXECUTION
-        )
-
-        async def _sample() -> None:
-            while not stop_event.is_set():
-                snapshots.append(
-                    self._attribute_memory_snapshot(
-                        self.memory_observer.snapshot(),
-                        job_id=job_id,
-                        workflow_id=workflow_id,
-                        runner_id=runner_id,
-                        sample_window=execution_window,
-                        telemetry_observed_after=telemetry_observed_after,
-                    )
-                )
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=0.5)
-                except TimeoutError:
-                    continue
-            snapshots.append(
-                self._attribute_memory_snapshot(
-                    self.memory_observer.snapshot(),
-                    job_id=job_id,
-                    workflow_id=workflow_id,
-                    runner_id=runner_id,
-                    sample_window=MemorySampleWindow.AFTER_COMPLETION,
-                    telemetry_observed_after=telemetry_observed_after,
-                )
-            )
-
-        self._memory_sampling_tasks[job_id] = asyncio.create_task(_sample())
-        self.log_store.add(
-            "info",
-            "Started best-effort job memory sampling",
-            "memory_governor",
+        self.memory_observation.start_job_sampling(
             job_id=job_id,
             workflow_id=workflow_id,
-            details={"runner_id": runner_id},
-        )
-
-    def _attribute_memory_snapshot(
-        self,
-        snapshot: MachineMemorySnapshot,
-        *,
-        job_id: str,
-        workflow_id: str,
-        runner_id: str,
-        sample_window: MemorySampleWindow,
-        telemetry_observed_after: str | None = None,
-    ) -> MachineMemorySnapshot:
-        try:
-            runner = self.runner_supervisor.get_runner(runner_id)
-        except Exception:
-            runner = None
-        root_pid = runner.pid if runner is not None else None
-        process_sample = self.process_tree_memory_observer.sample(root_pid)
-        process_pids = {pid for pid in [process_sample.root_pid, *process_sample.child_pids] if pid is not None}
-        gpu_sample = _sample_gpu_process_memory(self.memory_observer, process_pids)
-        allocator_sample = self.runner_memory_telemetry_reader.sample(
-            runner.memory_telemetry_path if runner is not None else None,
             runner_id=runner_id,
-            job_id=job_id,
-            sample_window=sample_window,
-            observed_after=telemetry_observed_after,
-        )
-        attribution_quality = _best_service_attribution_quality(
-            [
-                process_sample.attribution_quality,
-                gpu_sample.attribution_quality,
-                allocator_sample.attribution_quality,
-            ]
-        )
-        attribution_sources = _unique_service_values(
-            [
-                *process_sample.attribution_sources,
-                *gpu_sample.attribution_sources,
-                *allocator_sample.attribution_sources,
-            ]
-        )
-        attribution_reasons = _unique_service_values(
-            [
-                *process_sample.attribution_reasons,
-                *gpu_sample.attribution_reasons,
-                *allocator_sample.attribution_reasons,
-            ]
-        )
-        return snapshot.model_copy(
-            update={
-                "runner_id": runner_id,
-                "job_id": job_id,
-                "workflow_id": workflow_id,
-                "runner_root_pid": root_pid,
-                "runner_child_pids": process_sample.child_pids,
-                "sample_window": sample_window,
-                "attribution_quality": attribution_quality,
-                "attribution_sources": attribution_sources,
-                "attribution_reasons": attribution_reasons,
-                "process_tree_ram_mb": process_sample.process_tree_ram_mb,
-                "process_tree_vram_mb": gpu_sample.process_tree_vram_mb,
-                "backend_allocator_current_vram_mb": allocator_sample.current_vram_mb,
-                "backend_allocator_peak_vram_mb": allocator_sample.peak_vram_mb,
-                "backend_allocator_details": allocator_sample.details,
-            }
+            initial_snapshot=initial_snapshot,
+            retry_after_cleanup=retry_after_cleanup,
+            telemetry_observed_after=telemetry_observed_after,
         )
 
     async def _finish_job_memory_sampling(self, job_id: str) -> None:
-        stop_event = self._memory_sampling_stop_events.pop(job_id, None)
-        task = self._memory_sampling_tasks.pop(job_id, None)
-        if stop_event is not None:
-            stop_event.set()
-        if task is not None:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(task, timeout=1)
-        snapshots = self._memory_sampling_snapshots.pop(job_id, [])
-        if not snapshots:
-            return
-        system_peak_vram_mb, system_peak_ram_mb = _peak_used_memory_delta_from_snapshots(snapshots)
-        process_peak_ram_mb = _peak_optional(snapshot.process_tree_ram_mb for snapshot in snapshots)
-        process_peak_vram_mb = _peak_optional(snapshot.process_tree_vram_mb for snapshot in snapshots)
-        allocator_peak_vram_mb = _peak_optional(
-            snapshot.backend_allocator_peak_vram_mb or snapshot.backend_allocator_current_vram_mb
-            for snapshot in snapshots
-        )
-        peak_vram_mb = (
-            process_peak_vram_mb
-            if process_peak_vram_mb is not None
-            else allocator_peak_vram_mb
-            if allocator_peak_vram_mb is not None
-            else system_peak_vram_mb
-        )
-        peak_ram_mb = process_peak_ram_mb if process_peak_ram_mb is not None else system_peak_ram_mb
-        attribution_quality = _best_service_attribution_quality(
-            snapshot.attribution_quality for snapshot in snapshots
-        )
-        if attribution_quality is MemoryAttributionQuality.UNKNOWN:
-            attribution_quality = (
-                MemoryAttributionQuality.SYSTEM_DELTA
-                if system_peak_vram_mb is not None or system_peak_ram_mb is not None
-                else MemoryAttributionQuality.UNAVAILABLE
-            )
-        attribution_sources = _unique_service_values(
-            source
-            for snapshot in snapshots
-            for source in snapshot.attribution_sources
-        )
-        attribution_reasons = _unique_service_values(
-            reason
-            for snapshot in snapshots
-            for reason in snapshot.attribution_reasons
-        )
-        if process_peak_vram_mb is None and system_peak_vram_mb is not None:
-            attribution_sources.append("system_memory_delta")
-            attribution_reasons.append("system_vram_delta_active_job_window")
-        if allocator_peak_vram_mb is not None:
-            attribution_sources.append("runner_backend_allocator")
-            attribution_reasons.append("runner_backend_allocator_peak")
-        if process_peak_ram_mb is None and system_peak_ram_mb is not None:
-            attribution_sources.append("system_memory_delta")
-            attribution_reasons.append("system_ram_delta_active_job_window")
-        attribution_sources = _unique_service_values(attribution_sources)
-        attribution_reasons = _unique_service_values(attribution_reasons)
-        try:
-            runner = self.runner_supervisor.runner_for_job(job_id)
-        except JobRunnerNotFoundError:
-            runner = None
-        runner_root_pid = runner.pid if runner is not None else None
-        runner_child_pids = _unique_int_values(
-            pid
-            for snapshot in snapshots
-            for pid in snapshot.runner_child_pids
-        )
-        sample_windows_observed = _unique_service_values(snapshot.sample_window.value for snapshot in snapshots)
-        self._job_memory_attribution[job_id] = {
-            "runner_root_pid": runner_root_pid,
-            "runner_child_pids": runner_child_pids,
-            "sample_window": _sample_window_for_selected_peak(
-                snapshots,
-                selected_vram_mb=peak_vram_mb,
-                selected_ram_mb=peak_ram_mb,
-            ),
-            "process_tree_peak_vram_mb": process_peak_vram_mb,
-            "process_tree_peak_ram_mb": process_peak_ram_mb,
-            "system_peak_delta_vram_mb": system_peak_vram_mb,
-            "system_peak_delta_ram_mb": system_peak_ram_mb,
-            "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
-            "backend_allocator_details": _merge_service_dicts(
-                snapshot.backend_allocator_details for snapshot in snapshots
-            ),
-            "attribution_quality": attribution_quality,
-            "attribution_sources": attribution_sources,
-            "attribution_reasons": attribution_reasons,
-            "sample_windows_observed": sample_windows_observed,
-        }
-        if runner is not None:
-            self.runner_supervisor.fill_runner_memory_observation(
-                runner.runner_id,
-                observed_execution_peak_vram_mb=peak_vram_mb,
-                observed_execution_peak_ram_mb=peak_ram_mb,
-            )
-        self.log_store.add(
-            "info",
-            "Finished best-effort job memory sampling",
-            "memory_governor",
-            job_id=job_id,
+        await self.memory_observation.finish_job_sampling(
+            job_id,
             workflow_id=self._job_workflows.get(job_id),
-            details={
-                "sample_count": len(snapshots),
-                "process_tree_peak_vram_mb": process_peak_vram_mb,
-                "process_tree_peak_ram_mb": process_peak_ram_mb,
-                "selected_peak_vram_mb": peak_vram_mb,
-                "selected_peak_ram_mb": peak_ram_mb,
-                "system_peak_delta_vram_mb": system_peak_vram_mb,
-                "system_peak_delta_ram_mb": system_peak_ram_mb,
-                "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
-                "sample_window": self._job_memory_attribution[job_id]["sample_window"].value,
-                "sample_windows_observed": sample_windows_observed,
-                "runner_id": runner.runner_id if runner is not None else None,
-                "runner_root_pid": runner_root_pid,
-                "runner_child_pids": runner_child_pids,
-                "attribution_quality": attribution_quality.value,
-                "attribution_sources": attribution_sources,
-                "attribution_reasons": attribution_reasons,
-            },
         )
 
     async def _maybe_retry_after_memory_cleanup(self, result: JobResult) -> EngineJob | None:
@@ -1972,7 +1720,7 @@ class EngineService:
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 machine_profile_id=machine_snapshot.machine_profile_id,
                 backend=machine_snapshot.backend,
-                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2]),
+                input_profile_fingerprint=memory_input_profile_fingerprint(run_request[1], run_request[2]),
             )
             if self.memory_learning_store is not None
             else None
@@ -1982,7 +1730,7 @@ class EngineService:
                 workflow_id=workflow_id,
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 declared_memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
-                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2]),
+                input_profile_fingerprint=memory_input_profile_fingerprint(run_request[1], run_request[2]),
                 local_evidence=local_evidence,
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb if runner is not None else None,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb if runner is not None else None,
@@ -2086,84 +1834,11 @@ class EngineService:
         return self._wait_for_memory_release_after_cleanup(decision)
 
     def _record_local_memory_observation_for_result(self, result: JobResult) -> None:
-        if self.memory_learning_store is None:
-            return
-        workflow_id = self._job_workflows.get(result.job_id)
-        if workflow_id is None:
-            return
-        if result.status not in {"completed", "failed", "canceled"}:
-            return
-        run_request = self._job_run_requests.get(result.job_id)
-        try:
-            runner = self.runner_supervisor.runner_for_job(result.job_id)
-        except JobRunnerNotFoundError:
-            runner = None
-        attribution = self._job_memory_attribution.get(result.job_id, {})
-        machine_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
-        if result.status == "completed":
-            outcome = MemoryObservationOutcome.SUCCESS
-        elif result.status == "canceled":
-            outcome = MemoryObservationOutcome.CANCELED
-        elif likely_memory_error(result.error):
-            outcome = MemoryObservationOutcome.MEMORY_ERROR
-        else:
-            outcome = MemoryObservationOutcome.RUNTIME_ERROR
-        summary = self.memory_learning_store.record(
-            LocalMemoryObservation(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
-                machine_profile_id=machine_snapshot.machine_profile_id if machine_snapshot is not None else None,
-                backend=machine_snapshot.backend if machine_snapshot is not None else MemoryBackend.UNKNOWN,
-                input_profile_fingerprint=_memory_input_profile_fingerprint(run_request[1], run_request[2])
-                if run_request is not None
-                else None,
-                runner_id=runner.runner_id if runner is not None else None,
-                job_id=result.job_id,
-                runner_root_pid=attribution.get("runner_root_pid"),
-                runner_child_pids=attribution.get("runner_child_pids", []),
-                sample_window=attribution.get("sample_window", MemorySampleWindow.UNKNOWN),
-                outcome=outcome,
-                memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
-                peak_vram_mb=(
-                    runner.observed_execution_peak_vram_mb
-                    if runner is not None and runner.observed_execution_peak_vram_mb is not None
-                    else None
-                ),
-                peak_ram_mb=(
-                    runner.observed_execution_peak_ram_mb
-                    if runner is not None and runner.observed_execution_peak_ram_mb is not None
-                    else None
-                ),
-                process_tree_peak_vram_mb=attribution.get("process_tree_peak_vram_mb"),
-                process_tree_peak_ram_mb=attribution.get("process_tree_peak_ram_mb"),
-                system_peak_delta_vram_mb=attribution.get("system_peak_delta_vram_mb"),
-                system_peak_delta_ram_mb=attribution.get("system_peak_delta_ram_mb"),
-                backend_allocator_peak_vram_mb=attribution.get("backend_allocator_peak_vram_mb"),
-                backend_allocator_details=attribution.get("backend_allocator_details", {}),
-                attribution_quality=attribution.get("attribution_quality", MemoryAttributionQuality.UNKNOWN),
-                attribution_sources=attribution.get("attribution_sources", []),
-                attribution_reasons=attribution.get("attribution_reasons", []),
-                retry_required=outcome is MemoryObservationOutcome.MEMORY_ERROR,
-            )
+        self.memory_observation.record_result_observation(
+            result,
+            workflow_id=self._job_workflows.get(result.job_id),
+            run_request=self._job_run_requests.get(result.job_id),
         )
-        self.log_store.add(
-            "info",
-            "Recorded local workflow memory observation",
-            "memory_governor",
-            job_id=result.job_id,
-            workflow_id=workflow_id,
-            details={
-                "outcome": outcome.value,
-                "successful_runs": summary.successful_runs,
-                "memory_error_runs": summary.memory_error_runs,
-                "observed_peak_vram_mb": summary.observed_peak_vram_mb,
-                "observed_peak_ram_mb": summary.observed_peak_ram_mb,
-                "attribution_quality": summary.attribution_quality.value,
-                "attribution_sources": summary.attribution_sources,
-            },
-        )
-        self._record_memory_governor_metric(f"local_observation_{outcome.value}")
-        self._job_memory_attribution.pop(result.job_id, None)
 
     def memory_governor_metrics(self) -> dict[str, int]:
         return dict(self._memory_governor_metrics)
@@ -2492,137 +2167,10 @@ def _observed_hardware_int(package: WorkflowPackage, key: str) -> int | None:
     return parsed if parsed >= 0 else None
 
 
-def _peak_used_memory_delta_from_snapshots(snapshots: list[MachineMemorySnapshot]) -> tuple[int | None, int | None]:
-    return (
-        _peak_used_delta_mb((snapshot.total_vram_mb, snapshot.free_vram_mb) for snapshot in snapshots),
-        _peak_used_delta_mb((snapshot.total_ram_mb, snapshot.free_ram_mb) for snapshot in snapshots),
-    )
-
-
-def _peak_optional(values: Iterable[int | None]) -> int | None:
-    present = [value for value in values if value is not None]
-    return max(present) if present else None
-
-
-def _peak_used_delta_mb(values: Iterable[tuple[int | None, int | None]]) -> int | None:
-    used_values = [
-        total_mb - free_mb
-        for total_mb, free_mb in values
-        if total_mb is not None and free_mb is not None and total_mb >= free_mb
-    ]
-    if not used_values:
-        return None
-    delta_mb = max(used_values) - used_values[0]
-    return delta_mb if delta_mb > 0 else None
-
-
-def _sample_window_for_selected_peak(
-    snapshots: list[MachineMemorySnapshot],
-    *,
-    selected_vram_mb: int | None,
-    selected_ram_mb: int | None,
-) -> MemorySampleWindow:
-    if selected_vram_mb is not None:
-        for snapshot in snapshots:
-            if snapshot.process_tree_vram_mb == selected_vram_mb:
-                return snapshot.sample_window
-        for snapshot in snapshots:
-            if snapshot.backend_allocator_peak_vram_mb == selected_vram_mb:
-                return snapshot.sample_window
-        for snapshot in snapshots:
-            if snapshot.backend_allocator_current_vram_mb == selected_vram_mb:
-                return snapshot.sample_window
-    if selected_ram_mb is not None:
-        for snapshot in snapshots:
-            if snapshot.process_tree_ram_mb == selected_ram_mb:
-                return snapshot.sample_window
-    return MemorySampleWindow.UNKNOWN
-
-
-def _merge_service_dicts(values: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for value in values:
-        if not isinstance(value, dict):
-            continue
-        for key, item in value.items():
-            if isinstance(item, dict) and isinstance(merged.get(key), dict):
-                merged[key] = {**merged[key], **item}
-            else:
-                merged[key] = item
-    return merged
-
-
-def _sample_gpu_process_memory(
-    observer: MachineMemoryObserver | None,
-    pids: set[int],
-) -> GpuProcessMemorySample:
-    if observer is None:
-        return GpuProcessMemorySample(
-            requested_pids=sorted(pids),
-            attribution_sources=["gpu_process_attribution_unavailable"],
-            error="memory_observer_unavailable",
-        )
-    sampler = getattr(observer, "sample_process_vram", None)
-    if sampler is None:
-        return GpuProcessMemorySample(
-            requested_pids=sorted(pids),
-            attribution_sources=["gpu_process_attribution_unavailable"],
-            error="gpu_process_attribution_unavailable",
-        )
-    return sampler(pids)
-
-
-def _best_service_attribution_quality(values: Iterable[MemoryAttributionQuality]) -> MemoryAttributionQuality:
-    present = list(values)
-    if not present:
-        return MemoryAttributionQuality.UNKNOWN
-    return max(present, key=_service_attribution_quality_rank)
-
-
-def _service_attribution_quality_rank(quality: MemoryAttributionQuality) -> int:
-    if quality is MemoryAttributionQuality.PROCESS_EXACT:
-        return 6
-    if quality is MemoryAttributionQuality.BACKEND_ALLOCATOR:
-        return 5
-    if quality is MemoryAttributionQuality.PROCESS_TREE:
-        return 4
-    if quality is MemoryAttributionQuality.ACTIVE_WINDOW_DELTA:
-        return 3
-    if quality is MemoryAttributionQuality.SYSTEM_DELTA:
-        return 2
-    if quality is MemoryAttributionQuality.UNAVAILABLE:
-        return 1
-    return 0
-
-
-def _unique_service_values(values: Iterable[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        ordered.append(value)
-    return ordered
-
-
-def _unique_int_values(values: Iterable[int]) -> list[int]:
-    return sorted(set(values))
-
-
 def _required_free_after_cleanup(estimated_peak_mb: int | None, margin_mb: int | None) -> int | None:
     if estimated_peak_mb is None:
         return None
     return estimated_peak_mb + (margin_mb or 0)
-
-
-def _memory_input_profile_fingerprint(inputs: dict[str, Any], options: dict[str, Any]) -> str:
-    payload = {
-        "inputs": inputs,
-        "options": options,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _estimated_vram_after_cleanup(decision: MemoryGovernorDecision) -> int | None:
@@ -2818,316 +2366,18 @@ def _default_core_smoke_execution_fixture() -> SmokeExecutionFixture:
 
 
 def _imported_workflow_id(capsule_lock: CapsuleLock) -> str:
-    return "__".join(
-        [
-            _safe_store_segment(capsule_lock.workflow.publisher_id),
-            _safe_store_segment(capsule_lock.workflow.package_id),
-            _safe_store_segment(capsule_lock.workflow.version),
-        ]
+    return imported_workflow_id(
+        capsule_lock.workflow.publisher_id,
+        capsule_lock.workflow.package_id,
+        capsule_lock.workflow.version,
     )
 
 
 def _safe_store_segment(value: str) -> str:
-    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value.strip())
-    cleaned = cleaned.strip(".-_")
-    return cleaned or "unknown"
+    return safe_store_segment(value)
 
 
 def create_default_engine_service() -> EngineService:
-    paths = settings.paths
-    paths.ensure_directories()
-    log_store = LogStore()
-    sweep_report = InstallTransactionStore(paths.install_transactions_dir, log_store=log_store).sweep_startup()
-    if (
-        sweep_report.stale_transactions_quarantined
-        or sweep_report.expired_quarantines_removed
-        or sweep_report.stale_tmp_files_removed
-        or sweep_report.stale_lock_files_removed
-    ):
-        log_store.add(
-            "info",
-            "Runtime install startup sweep completed",
-            "runtime.install_transaction",
-            details={
-                "stale_transactions_quarantined": sweep_report.stale_transactions_quarantined,
-                "expired_quarantines_removed": sweep_report.expired_quarantines_removed,
-                "stale_tmp_files_removed": sweep_report.stale_tmp_files_removed,
-                "stale_lock_files_removed": sweep_report.stale_lock_files_removed,
-            },
-        )
+    from app.engine.factory import create_default_engine_service as _factory
 
-    loader = WorkflowPackageLoader(
-        settings.workflows_dir,
-        user_packages_dir=paths.user_workflows_dir,
-        imported_packages_dir=paths.workflow_packages_store_dir,
-    )
-    validator = WorkflowPackageValidator()
-    developer_runtime_override = (
-        settings.comfyui_repo_dir_override_active
-        or settings.comfyui_python_executable_override_active
-    )
-    active_runtime = resolve_active_runtime_selection(
-        paths,
-        fallback_repo_dir=settings.comfyui_repo_dir,
-        fallback_python_executable=settings.comfyui_python_executable,
-        mode=settings.comfyui_runtime_mode,
-        developer_override=developer_runtime_override,
-    )
-    launch_settings_store = ComfyUILaunchSettingsStore(paths.runtime_store_dir / "settings" / "comfyui-launch.json")
-    launch_settings = launch_settings_store.read()
-    runtime_environment = RuntimeEnvironment(
-        repo_dir=active_runtime.repo_dir,
-        runtime_dir=settings.runtime_dir,
-        bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
-        python_executable_override=active_runtime.python_executable,
-        torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
-        torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
-        log_store=log_store,
-        logs_dir=paths.logs_dir,
-        cache_dir=paths.cache_dir,
-        venv_dir_override=active_runtime.venv_dir,
-    )
-    runtime_manager = RuntimeManager(
-        mode=settings.comfyui_runtime_mode,
-        external_base_url=settings.comfyui_base_url,
-        external_ws_url=settings.comfyui_ws_url,
-        repo_dir=active_runtime.repo_dir,
-        python_executable=runtime_environment.python_executable,
-        managed_host=settings.comfyui_managed_host,
-        managed_port=settings.comfyui_managed_port,
-        startup_timeout_seconds=settings.comfyui_startup_timeout_seconds,
-        health_poll_interval_seconds=settings.comfyui_health_poll_interval_seconds,
-        max_restart_attempts=settings.comfyui_max_restart_attempts,
-        restart_backoff_base_seconds=settings.comfyui_restart_backoff_base,
-        log_store=log_store,
-        environment=runtime_environment,
-        pid_dir=paths.runtime_dir,
-        managed_base_directory=paths.data_dir,
-        managed_output_directory=paths.outputs_dir,
-        managed_input_directory=paths.input_dir,
-        managed_temp_directory=paths.data_dir,
-        managed_user_directory=paths.comfyui_user_dir,
-        managed_database_url=f"sqlite:///{paths.comfyui_database_file.as_posix()}",
-        python_cache_dir=paths.python_cache_dir,
-        version_metadata=active_runtime.version_metadata,
-        managed_vram_mode=launch_settings.vram_mode,
-    )
-    runtime_manager._cleanup_stale_pid()
-    adapter = ComfyUIEngineAdapter(
-        runtime_manager.base_url,
-        settings.comfyui_models_dir,
-        runtime_manager.ws_url,
-        log_store=log_store,
-        dashboard_assets_dir=paths.dashboard_assets_dir,
-        comfyui_input_dir=paths.input_dir,
-    )
-    trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
-    imported_package_store = ImportedWorkflowPackageStore(
-        paths.workflow_packages_store_dir,
-        log_store=log_store,
-        trust_verifier=trust_verifier,
-        node_registry_resolver=NodeRegistryResolver(
-            registry=NoofyNodeRegistry(registry_id="noofy-empty-local-registry"),
-            log_store=log_store,
-        ),
-        custom_node_source_cache=CustomNodeSourceCache(
-            cache_dir=paths.custom_node_cache_dir,
-            log_store=log_store,
-        ),
-    )
-
-    supervisor = RunnerSupervisor()
-    supervisor.register_core_runner(
-        RunnerDescriptor(
-            runner_id=CORE_RUNNER_ID,
-            kind=RunnerKind.CORE_COMFYUI,
-            base_url=runtime_manager.base_url,
-            ws_url=runtime_manager.ws_url,
-            fingerprint=CORE_RUNNER_FINGERPRINT,
-            status=RunnerStatus.UNKNOWN,
-        ),
-        adapter,
-    )
-
-    capsule_loader = CapsuleLockLoader(
-        settings.workflows_dir,
-        user_packages_dir=paths.user_workflows_dir,
-        imported_packages_dir=paths.workflow_packages_store_dir,
-    )
-    dependency_lock_store = ResolvedDependencyLockStore(paths.dependency_locks_dir)
-    preseed_capsule_loader = CapsuleLockLoader(
-        settings.workflows_dir,
-        user_packages_dir=paths.user_workflows_dir,
-    )
-    for capsule_lock in preseed_capsule_loader.list_capsule_locks():
-        if not capsule_lock.custom_nodes:
-            dependency_lock_store.write(core_dependency_lock_from_capsule(capsule_lock))
-    install_state_store = InstallStateStore(paths.workflow_store_dir / "install-state")
-    stale_install_state_temps = install_state_store.remove_stale_temp_files()
-    if stale_install_state_temps:
-        log_store.add(
-            "info",
-            "Removed stale install-state temp files",
-            "runtime.install_state",
-            details={"removed_count": stale_install_state_temps},
-        )
-    model_store = ModelStore(
-        blobs_dir=paths.model_blobs_dir,
-        refs_dir=paths.model_refs_dir,
-        materialized_dir=paths.model_materialized_dir,
-        transactions_dir=paths.install_transactions_dir,
-        log_store=log_store,
-        downloader=http_streaming_downloader,
-        local_model_roots=[settings.comfyui_models_dir],
-    )
-    orphan_model_links_removed = model_store.sweep_orphan_materialized_links()
-    if orphan_model_links_removed:
-        log_store.add(
-            "info",
-            "Removed orphan materialized model links",
-            "model.store",
-            details={"removed_count": orphan_model_links_removed},
-        )
-    runner_process_supervisor = RunnerProcessSupervisor(
-        log_store=log_store,
-        startup_timeout_seconds=settings.comfyui_startup_timeout_seconds,
-        health_poll_interval_seconds=settings.comfyui_health_poll_interval_seconds,
-        pid_dir=paths.runtime_store_dir / "runners",
-    )
-    stale_runner_pids_cleaned = runner_process_supervisor.cleanup_stale_pid_files()
-    if stale_runner_pids_cleaned:
-        log_store.add(
-            "info",
-            "Cleaned stale workflow runner PID files",
-            "runtime.runner_process",
-            details={"cleaned_count": stale_runner_pids_cleaned},
-        )
-    runner_smoke_tester = RunnerSmokeTester(
-        process_supervisor=runner_process_supervisor,
-        launch_spec_factory=lambda capsule_lock, prepared_workspace: _workflow_runner_launch_spec(
-            capsule_lock,
-            dependency_env_path=prepared_workspace.dependency_env_path,
-            runner_workspace_path=prepared_workspace.runner_workspace_path,
-            runtime_manager=runtime_manager,
-            runner_id_suffix="smoke",
-        ),
-        execution_fixture_resolver=lambda capsule_lock, prepared_workspace: _smoke_execution_fixture_for_capsule(
-            capsule_lock,
-            workflow_loader=loader,
-        ),
-        log_store=log_store,
-    )
-    capsule_installer = CapsuleInstaller(
-        install_state_store=install_state_store,
-        model_store=model_store,
-        workspace_preparer=RuntimeWorkspacePreparer(
-            dependency_env_store=DependencyEnvManifestStore(paths.dependency_envs_dir),
-            runner_workspace_store=RunnerWorkspaceManifestStore(paths.runner_workspaces_dir),
-            comfyui_source_dir=active_runtime.repo_dir,
-            model_view_dir=paths.model_materialized_dir,
-            runtime_profile_catalog=load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH),
-            dependency_env_installer=UvDependencyEnvironmentInstaller(
-                wheel_cache_dir=paths.wheel_cache_dir,
-                uv_cache_dir=paths.cache_dir / "uv",
-                uv_executable=resolve_noofy_uv_executable(),
-                log_store=log_store,
-            ),
-            dependency_lock_store=dependency_lock_store,
-            dependency_lock_resolver=UvDependencyLockResolver(
-                wheel_cache_dir=paths.wheel_cache_dir,
-                work_dir=paths.install_transactions_dir,
-                uv_cache_dir=paths.cache_dir / "uv",
-                uv_executable=resolve_noofy_uv_executable(),
-                log_store=log_store,
-            ),
-            custom_node_materializer=CustomNodeWorkspaceMaterializer(),
-            custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
-                workflow_id,
-                workflow_loader=loader,
-                imported_package_store=imported_package_store,
-            ),
-            custom_node_source_cache_dir=paths.custom_node_cache_dir,
-            dependency_transactions_dir=paths.install_transactions_dir,
-            log_store=log_store,
-        ),
-        workspace_smoke_test=runner_smoke_tester.run,
-        log_store=log_store,
-    )
-    runner_process_coordinator = RunnerProcessCoordinator(
-        runner_supervisor=supervisor,
-        process_supervisor=runner_process_supervisor,
-        adapter_factory=comfyui_adapter_factory(
-            models_dir=settings.comfyui_models_dir,
-            log_store=log_store,
-        ),
-        log_store=log_store,
-    )
-
-    # Wire the on_restart callback so the supervisor (and its adapter) learn
-    # the new URL after a crash-restart that picked a new port.
-    def _reconfigure_adapter() -> None:
-        supervisor.update_runner_endpoint(
-            CORE_RUNNER_ID,
-            runtime_manager.base_url,
-            runtime_manager.ws_url,
-        )
-
-    runtime_manager._on_restart = _reconfigure_adapter
-    comfyui_update_service = ComfyUIUpdateService(
-        paths=paths,
-        runtime_manager=runtime_manager,
-        mode=settings.comfyui_runtime_mode,
-        developer_override=developer_runtime_override,
-        bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
-        torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
-        torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
-        bundled_repo_dir=settings.comfyui_repo_dir,
-        bundled_python_executable=RuntimeEnvironment(
-            repo_dir=settings.comfyui_repo_dir,
-            runtime_dir=settings.runtime_dir,
-            bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
-            torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
-            torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
-            log_store=log_store,
-            logs_dir=paths.logs_dir,
-            cache_dir=paths.cache_dir,
-        ).python_executable,
-        log_store=log_store,
-    )
-
-    log_store.add(
-        "info",
-        "Backend engine service initialized",
-        "engine.service",
-        details={
-            "runtime_mode": runtime_manager.mode,
-            "data_dir": str(paths.data_dir),
-            "core_runner_id": CORE_RUNNER_ID,
-        },
-    )
-    service = EngineService(
-        loader,
-        validator,
-        supervisor,
-        runtime_manager,
-        log_store,
-        capsule_loader=capsule_loader,
-        capsule_installer=capsule_installer,
-        runner_process_coordinator=runner_process_coordinator,
-        imported_package_store=imported_package_store,
-        memory_observer=default_memory_observer(),
-        memory_learning_store=LocalMemoryLearningStore(paths.user_state_dir / "memory-learning"),
-        comfyui_update_service=comfyui_update_service,
-        comfyui_launch_settings_store=launch_settings_store,
-    )
-    service.dashboard_authoring = DashboardAuthoringService(
-        workflow_store_dir=paths.workflow_packages_store_dir,
-        workflow_loader=loader,
-        validator=validator,
-        log_store=log_store,
-    )
-    service.workflow_exporter = WorkflowExporter(
-        workflow_store_dir=paths.workflow_packages_store_dir,
-        workflow_loader=loader,
-    )
-    return service
+    return _factory()
