@@ -15,7 +15,8 @@ def write_imported_package_transaction(
     root_dir: Path,
     target_dir: Path,
     package: WorkflowPackage,
-    app_capsule_lock: CapsuleLock,
+    app_capsule_lock: CapsuleLock | None,
+    runtime_resolution_unavailable: dict[str, object] | None = None,
     archive_data: bytes,
     original_filename: str | None,
     schema_version: str,
@@ -29,10 +30,11 @@ def write_imported_package_transaction(
         (transaction_dir / "source-archive.noofy").write_bytes(archive_data)
         _write_dashboard(transaction_dir, package)
         _write_package_metadata(transaction_dir, package)
-        (transaction_dir / "capsule.lock.json").write_text(
-            app_capsule_lock.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
+        if app_capsule_lock is not None:
+            (transaction_dir / "capsule.lock.json").write_text(
+                app_capsule_lock.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
         (transaction_dir / "exported-capsule.lock.json").write_text(
             json.dumps(package.exported_capsule, indent=2, sort_keys=True),
             encoding="utf-8",
@@ -41,6 +43,7 @@ def write_imported_package_transaction(
             transaction_dir,
             package=package,
             app_capsule_lock=app_capsule_lock,
+            runtime_resolution_unavailable=runtime_resolution_unavailable,
             original_filename=original_filename,
             schema_version=schema_version,
         )
@@ -82,7 +85,8 @@ def _write_import_report(
     transaction_dir: Path,
     *,
     package: WorkflowPackage,
-    app_capsule_lock: CapsuleLock,
+    app_capsule_lock: CapsuleLock | None,
+    runtime_resolution_unavailable: dict[str, object] | None,
     original_filename: str | None,
     schema_version: str,
 ) -> None:
@@ -98,12 +102,22 @@ def _write_import_report(
                     if package.import_metadata
                     else "imported"
                 ),
-                "runtime_resolution": {
-                    "runtime_profile_id": app_capsule_lock.runtime.runtime_profile_id,
-                    "runtime_profile_variant_id": app_capsule_lock.runtime.runtime_profile_variant_id,
-                    "runtime_profile_manifest_hash": app_capsule_lock.runtime.runtime_profile_manifest_hash,
-                    "selection_stage": "import_time_phase5c",
-                },
+                "runtime_resolution": (
+                    {
+                        "runtime_profile_id": app_capsule_lock.runtime.runtime_profile_id,
+                        "runtime_profile_variant_id": app_capsule_lock.runtime.runtime_profile_variant_id,
+                        "runtime_profile_manifest_hash": app_capsule_lock.runtime.runtime_profile_manifest_hash,
+                        "selection_stage": "import_time_phase5c",
+                    }
+                    if app_capsule_lock is not None
+                    else (
+                        runtime_resolution_unavailable
+                        or {
+                            "selection_stage": "unavailable",
+                            "reason": "runtime_profile_unavailable",
+                        }
+                    )
+                ),
                 "source_resolution": (
                     package.import_metadata.developer_details.get(
                         "source_resolution", {}

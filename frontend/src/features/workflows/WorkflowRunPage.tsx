@@ -340,9 +340,17 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const missingModels = state.validation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
   const trust = workflowSummary?.trust;
+  const installStatus = typeof state.workflowStatus?.install?.status === "string"
+    ? state.workflowStatus.install.status
+    : null;
   const memoryStatus = state.result ? null : state.job?.memory_status ?? null;
   const canRun = Boolean(
-    state.validation?.valid && state.runtime?.reachable && !isRunning && !isWaitingForMemory && !isBlockedByMemory,
+    state.workflowStatus?.can_prepare !== false
+      && state.validation?.valid
+      && state.runtime?.reachable
+      && !isRunning
+      && !isWaitingForMemory
+      && !isBlockedByMemory,
   );
   const canCancel = Boolean(isRunning && state.job && !isBlockedByMemory);
   const progressPercent =
@@ -448,6 +456,15 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           <div>
             <strong>The local AI engine is offline</strong>
             <span>Open Engine Settings to prepare or start the engine before running this workflow.</span>
+          </div>
+        </div>
+      ) : null}
+      {installStatus === "unsupported" ? (
+        <div className="notice notice--warning" role="status">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>This workflow cannot run on this machine</strong>
+            <span>You can still inspect and edit its dashboard.</span>
           </div>
         </div>
       ) : null}

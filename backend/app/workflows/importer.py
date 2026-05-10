@@ -161,12 +161,33 @@ class ImportedWorkflowPackageStore:
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
             )
             target_dir = self.package_dir(package)
-            app_capsule_lock = imported_package_capsule_lock(package)
+            runtime_resolution_unavailable: dict[str, object] | None = None
+            try:
+                app_capsule_lock: CapsuleLock | None = build_imported_package_capsule_lock(package)
+            except ImportCapsuleLockError as exc:
+                if isinstance(exc.__cause__, RuntimeProfileSelectionError):
+                    runtime_resolution_unavailable = _unsupported_local_runtime_resolution(
+                        exc.__cause__
+                    )
+                if runtime_resolution_unavailable is not None:
+                    self.log_store.add(
+                        "warning",
+                        "Capsule lock unavailable — no runtime profile for this platform",
+                        "workflow.import",
+                        details={
+                            **runtime_resolution_unavailable,
+                            "error": str(exc),
+                        },
+                    )
+                    app_capsule_lock = None
+                else:
+                    raise NoofyImportError(str(exc)) from exc
             write_imported_package_transaction(
                 root_dir=self.root_dir,
                 target_dir=target_dir,
                 package=package,
                 app_capsule_lock=app_capsule_lock,
+                runtime_resolution_unavailable=runtime_resolution_unavailable,
                 archive_data=data,
                 original_filename=original_filename,
                 schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
@@ -742,6 +763,24 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
         return build_imported_package_capsule_lock(package)
     except ImportCapsuleLockError as exc:
         raise NoofyImportError(str(exc)) from exc
+
+
+def _unsupported_local_runtime_resolution(
+    exc: RuntimeProfileSelectionError,
+) -> dict[str, object] | None:
+    os_name = current_os_name()
+    architecture = current_architecture()
+    if os_name != "darwin" or architecture != "x64":
+        return None
+    expected_message = f"No supported runtime profile variant for {os_name}/{architecture}."
+    if str(exc) != expected_message:
+        return None
+    return {
+        "selection_stage": "unavailable",
+        "reason": "unsupported_local_runtime_platform",
+        "os": os_name,
+        "architecture": architecture,
+    }
 
 
 def _select_import_runtime_profile(

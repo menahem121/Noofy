@@ -946,6 +946,20 @@ class EngineService:
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
+        unavailable = self._imported_workflow_without_preparable_capsule(package)
+        if unavailable is not None:
+            self.log_store.add(
+                "warning",
+                "Workflow validation blocked because no preparable capsule is available",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={"error": unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[unavailable],
+            )
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
         validation = await self._validate_package(package, adapter)
@@ -980,6 +994,20 @@ class EngineService:
         memory_retry_after_cleanup: bool = False,
     ):
         package = self.workflow_loader.get_package(workflow_id)
+        unavailable = self._imported_workflow_without_preparable_capsule(package)
+        if unavailable is not None:
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked because no preparable capsule is available",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={"error": unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[unavailable],
+            )
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
 
@@ -1317,6 +1345,18 @@ class EngineService:
         if capsule_lock.trust.level not in _PREPARABLE_TRUST_LEVELS:
             return None
         return capsule_lock
+
+    def _imported_workflow_without_preparable_capsule(
+        self, package: WorkflowPackage
+    ) -> str | None:
+        if package.import_metadata is None:
+            return None
+        if self._preparable_capsule_lock(package.metadata.id) is not None:
+            return None
+        return (
+            "This imported workflow cannot run on this machine because Noofy could "
+            "not resolve a supported managed runtime profile for it."
+        )
 
     def _unsupported_install_payload(self, workflow_id: str) -> dict[str, object]:
         return {

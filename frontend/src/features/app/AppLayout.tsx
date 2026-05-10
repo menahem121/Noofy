@@ -1,4 +1,4 @@
-import { createContext, useContext, ReactNode, useEffect, useState } from "react";
+import { createContext, useContext, ReactNode, useEffect, useRef, useState } from "react";
 import {
   Coffee,
   FolderClock,
@@ -196,24 +196,36 @@ export function AppLayout({
 
 function useTopBarResources() {
   const [snapshot, setSnapshot] = useState<MachineResourceSnapshot | null>(null);
+  const failureCountRef = useRef(0);
 
   useEffect(() => {
     let active = true;
+    let interval: number | null = null;
 
     async function refresh() {
       try {
         const next = await fetchResourceSnapshot();
-        if (active) setSnapshot(next);
+        if (active) {
+          failureCountRef.current = 0;
+          setSnapshot(next);
+        }
       } catch {
-        if (active) setSnapshot(null);
+        if (active) {
+          failureCountRef.current += 1;
+          setSnapshot(null);
+          if (failureCountRef.current >= 3 && interval !== null) {
+            window.clearInterval(interval);
+            interval = null;
+          }
+        }
       }
     }
 
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 5000);
+    interval = window.setInterval(() => void refresh(), 5000);
     return () => {
       active = false;
-      window.clearInterval(interval);
+      if (interval !== null) window.clearInterval(interval);
     };
   }, []);
 

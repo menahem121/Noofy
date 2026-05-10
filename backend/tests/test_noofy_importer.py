@@ -39,6 +39,7 @@ from app.runtime.supervisor import (
     CORE_RUNNER_ID,
     RunnerDescriptor,
     RunnerKind,
+    RunnerStatus,
     RunnerSupervisor,
 )
 from app.trust import (
@@ -799,6 +800,125 @@ def test_import_store_persists_normalized_package_and_original_source_files(
     assert capsule.workflow.package_id == "controlnet_two_model_workflow"
     assert len(capsule.custom_nodes) == 5
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
+
+
+def test_import_store_allows_macos_intel_dashboard_import_without_capsule_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
+    monkeypatch.setattr(importer_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(importer_module, "current_architecture", lambda: "x64")
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+
+    package = store.import_archive(
+        _archive_bytes(),
+        original_filename="exported-workflow-for-testing.noofy",
+    )
+
+    package_dir = (
+        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+    )
+    assert (package_dir / "package.json").exists()
+    assert not (package_dir / "capsule.lock.json").exists()
+    import_report = json.loads(
+        (package_dir / "import-report.json").read_text(encoding="utf-8")
+    )
+    assert import_report["runtime_resolution"] == {
+        "architecture": "x64",
+        "os": "darwin",
+        "reason": "unsupported_local_runtime_platform",
+        "selection_stage": "unavailable",
+    }
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    assert log_store.list_events().events[-2].message == (
+        "Capsule lock unavailable — no runtime profile for this platform"
+    )
+
+
+def test_import_store_does_not_hide_runtime_catalog_selection_bugs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(importer_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(importer_module, "current_architecture", lambda: "x64")
+
+    def fail_capsule_lock(package):
+        cause = import_runtime_profile_module.RuntimeProfileSelectionError(
+            "Runtime profile catalog is empty."
+        )
+        raise importer_module.ImportCapsuleLockError(str(cause)) from cause
+
+    monkeypatch.setattr(
+        importer_module,
+        "build_imported_package_capsule_lock",
+        fail_capsule_lock,
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+
+    with pytest.raises(NoofyImportError, match="Runtime profile catalog is empty"):
+        store.import_archive(
+            _archive_bytes(),
+            original_filename="exported-workflow-for-testing.noofy",
+        )
+
+
+@pytest.mark.anyio
+async def test_imported_workflow_without_capsule_lock_cannot_validate_or_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(import_runtime_profile_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(import_runtime_profile_module, "current_architecture", lambda: "x64")
+    monkeypatch.setattr(importer_module, "current_os_name", lambda: "darwin")
+    monkeypatch.setattr(importer_module, "current_architecture", lambda: "x64")
+    log_store = LogStore()
+    packages_dir = tmp_path / "packages"
+    store = ImportedWorkflowPackageStore(packages_dir, log_store=log_store)
+    package = store.import_archive(
+        _archive_bytes(),
+        original_filename="exported-workflow-for-testing.noofy",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        RunnerDescriptor(
+            runner_id=CORE_RUNNER_ID,
+            kind=RunnerKind.CORE_COMFYUI,
+            base_url="http://127.0.0.1:8188",
+            fingerprint=CORE_RUNNER_FINGERPRINT,
+            status=RunnerStatus.READY,
+        ),
+        StubAdapter(),
+    )
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(
+            Path("missing-bundled"),
+            imported_packages_dir=packages_dir,
+        ),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=log_store,
+        capsule_loader=CapsuleLockLoader(
+            Path("missing-bundled"),
+            imported_packages_dir=packages_dir,
+        ),
+        capsule_installer=_installer_for_imported_prepare(tmp_path / "runtime"),
+    )
+
+    validation = await service.validate_workflow(package.metadata.id)
+    run_result = await service.run_workflow(package.metadata.id, {}, {})
+    status = service.workflow_status(package.metadata.id)
+
+    assert validation.valid is False
+    assert "could not resolve a supported managed runtime profile" in validation.errors[0]
+    assert run_result.valid is False
+    assert "could not resolve a supported managed runtime profile" in run_result.errors[0]
+    assert status["can_prepare"] is False
+    assert status["install"]["status"] == "unsupported"
 
 
 def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(

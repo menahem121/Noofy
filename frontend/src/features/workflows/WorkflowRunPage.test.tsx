@@ -689,6 +689,43 @@ describe("WorkflowRunPage", () => {
     expect(screen.getAllByText("Engine ready").length).toBeGreaterThan(0);
   });
 
+  it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...workflowStatus,
+            install: { status: "unsupported" },
+            can_prepare: false,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("This workflow cannot run on this machine")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+  });
+
   it("renders the classic two-panel dashboard when classic mode is selected", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
     mockConfiguredDashboardFetch(fetchMock);
