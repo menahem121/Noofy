@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,13 +49,18 @@ class DashboardAuthoringService:
     # Read
     # ------------------------------------------------------------------
 
-    def get_bindable_inputs(self, workflow_id: str) -> dict[str, Any]:
-        """Return a list of bindable graph inputs derived heuristically from the graph."""
+    def get_bindable_inputs(
+        self,
+        workflow_id: str,
+        *,
+        object_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a list of bindable graph inputs derived from the graph and node definitions."""
         package = self._get_package(workflow_id)
-        nodes = _classify_graph_inputs(package.comfyui_graph)
+        nodes = _classify_graph_inputs(package.comfyui_graph, object_info=object_info)
         return {
             "workflow_id": workflow_id,
-            "enrichment": "heuristic",
+            "enrichment": "object_info" if object_info is not None else "heuristic",
             "nodes": nodes,
         }
 
@@ -237,7 +243,11 @@ _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 
 
-def _classify_graph_inputs(graph: dict[str, Any]) -> list[dict[str, Any]]:
+def _classify_graph_inputs(
+    graph: dict[str, Any],
+    *,
+    object_info: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
     for node_id, node in graph.items():
         if not isinstance(node, dict):
@@ -263,21 +273,25 @@ def _classify_graph_inputs(graph: dict[str, Any]) -> list[dict[str, Any]]:
             # Skip link references (arrays like ["3", 0]).
             if isinstance(value, list):
                 continue
-            kind = _value_kind(input_name, value, node_type)
+            option_spec = _options_for_node_input(object_info, node_type, input_name)
+            kind = "select" if option_spec.options else _value_kind(input_name, value, node_type)
             if kind is None:
                 continue
             widget_types = _widget_types_for_kind(kind)
-            scalar_inputs.append(
-                {
-                    "input_name": input_name,
-                    "current_value": value,
-                    "kind": kind,
-                    "suggested_widget_type": (
-                        widget_types[0] if widget_types else "string_field"
-                    ),
-                    "widget_types": widget_types,
-                }
-            )
+            input_record = {
+                "input_name": input_name,
+                "current_value": value,
+                "kind": kind,
+                "suggested_widget_type": (
+                    widget_types[0] if widget_types else "string_field"
+                ),
+                "widget_types": widget_types,
+            }
+            if option_spec.options:
+                input_record["options"] = option_spec.options
+            if option_spec.tooltip:
+                input_record["hint"] = option_spec.tooltip
+            scalar_inputs.append(input_record)
 
         if scalar_inputs or node_type in _IMAGE_NODE_TYPES:
             nodes.append(
@@ -317,9 +331,83 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "seed": ["seed_widget", "int_field"],
         "image_input": ["load_image", "load_image_mask"],
         "lora": ["lora_loader"],
-        "select": ["select"],
+        "select": ["select", "string_field"],
     }
     return mapping.get(kind, ["string_field"])
+
+
+class _ComfyInputOptionSpec:
+    def __init__(self, options: list[str] | None = None, tooltip: str | None = None) -> None:
+        self.options = options or []
+        self.tooltip = tooltip
+
+
+def _options_for_node_input(
+    object_info: Mapping[str, Any] | None,
+    node_type: str,
+    input_name: str,
+) -> _ComfyInputOptionSpec:
+    if object_info is None:
+        return _ComfyInputOptionSpec()
+
+    node_info = object_info.get(node_type)
+    if not isinstance(node_info, Mapping):
+        return _ComfyInputOptionSpec()
+
+    input_groups = node_info.get("input")
+    if not isinstance(input_groups, Mapping):
+        return _ComfyInputOptionSpec()
+
+    for group_name in ("required", "optional"):
+        group = input_groups.get(group_name)
+        if not isinstance(group, Mapping) or input_name not in group:
+            continue
+        return _options_from_input_spec(group[input_name])
+
+    return _ComfyInputOptionSpec()
+
+
+def _options_from_input_spec(input_spec: Any) -> _ComfyInputOptionSpec:
+    if not isinstance(input_spec, (list, tuple)) or not input_spec:
+        return _ComfyInputOptionSpec()
+
+    raw_options = input_spec[0]
+    if not isinstance(raw_options, (list, tuple)):
+        return _ComfyInputOptionSpec(tooltip=_tooltip_from_input_spec(input_spec))
+
+    options = [
+        str(option)
+        for option in raw_options
+        if isinstance(option, (str, int, float, bool))
+    ]
+    if not options:
+        return _ComfyInputOptionSpec(tooltip=_tooltip_from_input_spec(input_spec))
+
+    return _ComfyInputOptionSpec(
+        options=_dedupe_preserving_order(options),
+        tooltip=_tooltip_from_input_spec(input_spec),
+    )
+
+
+def _tooltip_from_input_spec(input_spec: Any) -> str | None:
+    if not isinstance(input_spec, (list, tuple)) or len(input_spec) < 2:
+        return None
+    metadata = input_spec[1]
+    if not isinstance(metadata, Mapping):
+        return None
+    tooltip = metadata.get("tooltip")
+    return tooltip if isinstance(tooltip, str) and tooltip.strip() else None
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
 
 
 # ------------------------------------------------------------------

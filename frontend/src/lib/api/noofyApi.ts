@@ -579,6 +579,8 @@ export interface BindableInputEntry {
   kind: string;
   suggested_widget_type: string;
   widget_types: string[];
+  options?: string[];
+  hint?: string;
 }
 
 export interface BindableNode {

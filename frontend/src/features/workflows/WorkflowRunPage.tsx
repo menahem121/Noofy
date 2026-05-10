@@ -795,6 +795,7 @@ function buildDashboardSchemaForEditing(
         min: numberValidation(input.validation.min),
         max: numberValidation(input.validation.max),
         step: numberValidation(input.validation.step),
+        options: stringArrayValidation(input.validation.options),
         layout,
       });
       continue;
@@ -887,4 +888,10 @@ function toBuilderWidgetGroup(group: string | undefined): WidgetGroup {
 
 function numberValidation(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
+}
+
+function stringArrayValidation(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = value.filter((option): option is string => typeof option === "string" && option.length > 0);
+  return options.length > 0 ? options : undefined;
 }

@@ -10,6 +10,39 @@ import {
 } from "./dashboardBuilderContent";
 
 describe("toBackendPayload", () => {
+  it("writes dropdown choices into input validation", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      widgets: [
+        {
+          id: "ctrl-sampler",
+          valueId: "node-3-sampler_name",
+          binding: { nodeId: "3", inputName: "sampler_name" },
+          widgetType: "select",
+          title: "Sampler",
+          description: "",
+          orientation: "vertical",
+          group: "advanced",
+          defaultValue: "euler",
+          options: ["euler", "euler_ancestral"],
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs[0]).toMatchObject({
+      id: "ctrl-sampler",
+      control: "select",
+      binding: { node_id: "3", input_name: "sampler_name" },
+      default: "euler",
+      validation: { options: ["euler", "euler_ancestral"] },
+    });
+  });
+
   it("writes output records that match output widget bindings", () => {
     const schema: DashboardSchema = {
       version: 1,
@@ -96,6 +129,35 @@ describe("saveDashboardDraft", () => {
 });
 
 describe("workflowFromBindableInputs", () => {
+  it("turns option-enriched ComfyUI inputs into selectable workflow values", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "3",
+        node_type: "KSampler",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "sampler_name",
+            current_value: "euler",
+            kind: "select",
+            suggested_widget_type: "select",
+            widget_types: ["select", "string_field"],
+            options: ["euler", "euler_ancestral"],
+            hint: "The algorithm used when sampling.",
+          },
+        ],
+      },
+    ]);
+
+    expect(workflow.nodes[0].values[0]).toMatchObject({
+      valueKind: "select",
+      rawValue: "euler",
+      options: ["euler", "euler_ancestral"],
+      hint: "The algorithm used when sampling.",
+    });
+  });
+
   it("turns backend image_output records into display image values", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

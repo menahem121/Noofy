@@ -27,6 +27,9 @@ Widget layout uses the shared 32-column dashboard grid. The minimum sizes below 
 ## Notes
 
 - `select` is the dashboard schema type used for dropdowns.
+- Use `select` for ComfyUI node inputs that expose a fixed list of choices, such as `KSampler.sampler_name` and `KSampler.scheduler`.
+- When ComfyUI `/object_info` is available through the backend, Noofy reads the valid choices from the node definition and copies them into the dashboard input validation as `options`.
+- If automatic option extraction is unavailable or incomplete for a node, the Dashboard Builder still lets the creator/importer choose the Dropdown widget and enter choices manually, one per line.
 - `display_image` is the frontend builder/run widget type for image outputs.
 - `result_image` is also accepted by the package schema for output image controls.
 - `load_image_mask` follows the same minimum as `load_image` because it needs room for upload and mask affordances.

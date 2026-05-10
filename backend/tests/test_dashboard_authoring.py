@@ -19,7 +19,11 @@ from typing import Any
 import pytest
 
 from app.engine.diagnostics import LogStore
-from app.workflows.authoring import DashboardAuthoringService, DashboardAuthoringError
+from app.workflows.authoring import (
+    DashboardAuthoringService,
+    DashboardAuthoringError,
+    _classify_graph_inputs,
+)
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
@@ -328,6 +332,58 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
             "widget_types": ["display_image"],
         }
     ]
+
+
+def test_get_bindable_inputs_uses_object_info_options_for_dropdowns(tmp_path: Path) -> None:
+    del tmp_path
+    graph = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 5,
+                "steps": 20,
+                "cfg": 8,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "model": ["4", 0],
+                "latent_image": ["5", 0],
+            },
+        }
+    }
+    nodes = _classify_graph_inputs(
+        graph,
+        object_info={
+            "KSampler": {
+                "input": {
+                    "required": {
+                        "sampler_name": [
+                            ["euler", "euler_ancestral"],
+                            {"tooltip": "The algorithm used when sampling."},
+                        ],
+                        "scheduler": [
+                            ["normal", "karras"],
+                            {"tooltip": "The scheduler controls denoising."},
+                        ],
+                    }
+                }
+            }
+        },
+    )
+
+    ksampler = nodes[0]
+    inputs_by_name = {inp["input_name"]: inp for inp in ksampler["inputs"]}
+    assert inputs_by_name["sampler_name"] == {
+        "input_name": "sampler_name",
+        "current_value": "euler",
+        "kind": "select",
+        "suggested_widget_type": "select",
+        "widget_types": ["select", "string_field"],
+        "options": ["euler", "euler_ancestral"],
+        "hint": "The algorithm used when sampling.",
+    }
+    assert inputs_by_name["scheduler"]["options"] == ["normal", "karras"]
 
 
 def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:

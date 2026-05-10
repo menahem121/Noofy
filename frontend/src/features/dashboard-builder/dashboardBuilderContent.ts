@@ -592,6 +592,8 @@ export function workflowFromBindableInputs(
       kind: string;
       suggested_widget_type: string;
       widget_types: string[];
+      options?: string[];
+      hint?: string;
     }>;
   }>
 ): MockWorkflow {
@@ -630,6 +632,8 @@ export function workflowFromBindableInputs(
       label: inp.input_name,
       valueKind: valueKindFromString(inp.kind),
       rawValue: inp.current_value,
+      hint: inp.hint,
+      options: inp.options,
       technical: ["steps", "cfg", "denoise", "batch_size", "scheduler", "sampler_name", "filename_prefix"].includes(
         inp.input_name
       ),
@@ -659,6 +663,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
         ...(w.min !== undefined && { min: w.min }),
         ...(w.max !== undefined && { max: w.max }),
         ...(w.step !== undefined && { step: w.step }),
+        ...(w.options && w.options.length > 0 && { options: w.options }),
       },
     }));
 
