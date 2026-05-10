@@ -43,6 +43,9 @@ class CredentialStore(Protocol):
     def set_secret(self, provider: ApiKeyProvider, secret: str) -> None:
         """Save a provider secret in the operating system credential store."""
 
+    def get_secret(self, provider: ApiKeyProvider) -> str | None:
+        """Read a provider secret from the operating system credential store."""
+
     def delete_secret(self, provider: ApiKeyProvider) -> None:
         """Remove a provider secret from the operating system credential store."""
 
@@ -134,6 +137,15 @@ class KeyringCredentialStore:
         except Exception as exc:
             raise CredentialStoreUnavailable("The operating system credential store could not save this API key.") from exc
 
+    def get_secret(self, provider: ApiKeyProvider) -> str | None:
+        try:
+            keyring = self._keyring()
+            return keyring.get_password(self.service_name, _account_name(provider))
+        except CredentialStoreUnavailable:
+            raise
+        except Exception as exc:
+            raise CredentialStoreUnavailable("The operating system credential store could not read this API key.") from exc
+
     def delete_secret(self, provider: ApiKeyProvider) -> None:
         try:
             keyring = self._keyring()
@@ -208,6 +220,16 @@ class ApiKeySettingsService:
         self._record("info", "External API key saved", provider)
         return ApiKeyUpdateResult(status="saved", provider=metadata[provider])
 
+    def get_key(self, provider: ApiKeyProvider) -> str | None:
+        metadata = self.metadata_store.read().get(provider)
+        if metadata is None or not metadata.configured:
+            return None
+        try:
+            return self.credential_store.get_secret(provider)
+        except CredentialStoreUnavailable:
+            self._record("warning", "External API key could not be read", provider)
+            return None
+
     def clear_key(self, provider: ApiKeyProvider) -> ApiKeyUpdateResult:
         try:
             self.credential_store.delete_secret(provider)
@@ -250,4 +272,3 @@ def _default_metadata() -> dict[ApiKeyProvider, ApiKeyProviderMetadata]:
 
 def _account_name(provider: ApiKeyProvider) -> str:
     return f"{KEYCHAIN_ACCOUNT_PREFIX}:{provider}"
-

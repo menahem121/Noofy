@@ -1,0 +1,15 @@
+{
+  "id": 12345,
+  "modelId": 67890,
+  "files": [
+    {
+      "id": 111,
+      "name": "civitai-hash-fixture.safetensors",
+      "downloadUrl": "https://civitai.com/api/download/models/111",
+      "sizeKB": 0.01953125,
+      "hashes": {
+        "SHA256": "f6d809c3db344efbc54f7885df0a0f5071efefc57b6831b8a9fcbcce7442dc3b"
+      }
+    }
+  ]
+}

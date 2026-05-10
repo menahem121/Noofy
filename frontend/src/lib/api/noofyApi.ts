@@ -290,6 +290,10 @@ export interface MissingModel {
   filename: string;
   source_url: string | null;
   checksum: string | null;
+  model_type?: string | null;
+  verification_level?: string | null;
+  size_bytes?: number | null;
+  source_urls?: string[];
 }
 
 export interface WorkflowValidationResult {
@@ -343,6 +347,7 @@ export interface WorkflowRunPayload {
 export type WorkflowRunResponse = EngineJob | WorkflowValidationResult;
 
 export interface WorkflowImportResponse {
+  import_session_id?: string | null;
   workflow_id: string;
   status: "imported" | "needs_input_setup" | "cannot_prepare_automatically" | string;
   user_facing_message: string;
@@ -350,6 +355,95 @@ export interface WorkflowImportResponse {
   required_model_count: number;
   custom_node_count: number;
   unresolved_input_count: number;
+  model_summary?: RequiredModelSummary | null;
+}
+
+export type RequiredModelStatus =
+  | "available"
+  | "possible_match"
+  | "missing"
+  | "needs_manual_download"
+  | "download_failed"
+  | "authentication_required"
+  | "rate_limited"
+  | "hash_mismatch"
+  | "not_enough_disk_space";
+
+export interface RequiredModelAvailability {
+  requirement_id: string;
+  node_id: string | null;
+  node_type: string | null;
+  input_name: string | null;
+  filename: string;
+  model_type: string | null;
+  folder: string;
+  verification_level: "sha256_size" | "filename_size" | "filename_only" | string;
+  size_bytes: number | null;
+  source_urls: string[];
+  source_availability: "known" | "resolvable" | "unknown" | string;
+  status: RequiredModelStatus;
+  status_label: string;
+  asset_ownership: string;
+  source_path: string | null;
+  matched_root: string | null;
+  matched_sha256: string | null;
+  matched_size_bytes: number | null;
+  message: string | null;
+}
+
+export interface RequiredModelSummary {
+  workflow_id: string;
+  total_count: number;
+  available_count: number;
+  possible_match_count: number;
+  missing_count: number;
+  needs_manual_download_count: number;
+  ready_to_run: boolean;
+  models: RequiredModelAvailability[];
+}
+
+export interface ModelDownloadSummary {
+  workflow_id: string;
+  status: string;
+  user_facing_message: string;
+  downloaded_count: number;
+  failed_count: number;
+  model_summary: RequiredModelSummary;
+}
+
+export interface ImportModelDownloadJobStart {
+  job_id: string;
+  import_session_id: string;
+  workflow_id: string;
+  status: string;
+  user_facing_message: string;
+}
+
+export interface ImportModelDownloadProgressItem {
+  requirement_id: string;
+  filename: string;
+  status: "queued" | "downloading" | "verifying" | "completed" | "failed" | "canceled" | string;
+  status_label: string;
+  bytes_downloaded: number | null;
+  total_bytes: number | null;
+  message: string | null;
+}
+
+export interface ImportModelDownloadJobStatus {
+  job_id: string;
+  import_session_id: string;
+  workflow_id: string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | string;
+  user_facing_message: string;
+  current_model_filename: string | null;
+  current_model_index: number | null;
+  total_models: number;
+  bytes_downloaded: number | null;
+  total_bytes: number | null;
+  percent: number | null;
+  speed_bytes_per_second: number | null;
+  models: ImportModelDownloadProgressItem[];
+  model_summary: RequiredModelSummary | null;
 }
 
 declare global {
@@ -544,6 +638,48 @@ export async function importWorkflowPackage(file: File, allowUnverifiedCommunity
   );
 }
 
+export async function previewWorkflowPackageImport(file: File, allowUnverifiedCommunityPreparation = false) {
+  const data = await readFileAsArrayBuffer(file);
+  const params = [`filename=${encodeURIComponent(file.name)}`];
+  if (allowUnverifiedCommunityPreparation) {
+    params.push("allow_unverified_community_preparation=true");
+  }
+  return postBytes<WorkflowImportResponse>(
+    `/workflows/import/preview?${params.join("&")}`,
+    data,
+  );
+}
+
+export function downloadImportMissingModels(importSessionId: string) {
+  return postJson<ImportModelDownloadJobStart>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models`,
+  );
+}
+
+export function fetchImportModelDownloadStatus(importSessionId: string, jobId: string) {
+  return getJson<ImportModelDownloadJobStatus>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function cancelImportModelDownload(importSessionId: string, jobId: string) {
+  return postJson<ImportModelDownloadJobStatus>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models/${encodeURIComponent(jobId)}/cancel`,
+  );
+}
+
+export function commitWorkflowImport(importSessionId: string) {
+  return postJson<WorkflowImportResponse>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/commit`,
+  );
+}
+
+export function cancelWorkflowImport(importSessionId: string) {
+  return deleteJson<{ import_session_id: string; status: string }>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}`,
+  );
+}
+
 function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   if (typeof file.arrayBuffer === "function") {
     return file.arrayBuffer();
@@ -569,6 +705,10 @@ export function validateWorkflow(workflowId: string) {
 
 export function fetchWorkflowStatus(workflowId: string) {
   return getJson<WorkflowStatusResponse>(`/workflows/${encodeURIComponent(workflowId)}/status`);
+}
+
+export function fetchWorkflowModelSummary(workflowId: string) {
+  return getJson<RequiredModelSummary>(`/workflows/${encodeURIComponent(workflowId)}/model-summary`);
 }
 
 export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {

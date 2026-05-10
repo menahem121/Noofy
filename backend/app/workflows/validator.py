@@ -104,6 +104,10 @@ class WorkflowPackageValidator:
                         filename=model.filename,
                         source_url=model.source_url,
                         checksum=model.checksum,
+                        model_type=model.model_type,
+                        verification_level=model.verification_level,
+                        size_bytes=model.size_bytes,
+                        source_urls=model.source_urls,
                     )
                 )
         return missing

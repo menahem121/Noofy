@@ -31,6 +31,50 @@ const validWorkflow = {
   errors: [],
 };
 
+const readyModelSummary = {
+  workflow_id: "text_to_image_v0",
+  total_count: 0,
+  available_count: 0,
+  possible_match_count: 0,
+  missing_count: 0,
+  needs_manual_download_count: 0,
+  ready_to_run: true,
+  models: [],
+};
+
+const missingModelSummary = {
+  workflow_id: "text_to_image_v0",
+  total_count: 1,
+  available_count: 0,
+  possible_match_count: 0,
+  missing_count: 1,
+  needs_manual_download_count: 0,
+  ready_to_run: false,
+  models: [
+    {
+      requirement_id: "checkpoint",
+      node_id: "4",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "v1-5-pruned-emaonly-fp16.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "filename_only",
+      size_bytes: null,
+      source_urls: [],
+      source_availability: "unknown",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "community",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Model is missing.",
+    },
+  ],
+};
+
 const workflowStatus = {
   workflow_id: "text_to_image_v0",
   workflow: {
@@ -138,6 +182,7 @@ function mockConfiguredDashboardFetch(
     if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+    if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
     if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
     if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
       return Promise.resolve(
@@ -163,6 +208,10 @@ function renderRunPage(props: Partial<ComponentProps<typeof WorkflowRunPage>> = 
       {...props}
     />,
   );
+}
+
+async function waitForReadyStatus() {
+  expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
 }
 
 function dispatchPointer(target: Window | Node, type: string, init: { pointerId?: number; clientX: number; clientY: number }) {
@@ -259,7 +308,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
@@ -279,6 +328,10 @@ describe("WorkflowRunPage", () => {
 
       if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
         return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(jsonResponse(missingModelSummary));
       }
 
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
@@ -304,8 +357,8 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("This workflow needs one missing model")).toBeInTheDocument();
-    expect(screen.getByText("v1-5-pruned-emaonly-fp16.safetensors")).toBeInTheDocument();
+    expect(await screen.findByText("This workflow needs required models")).toBeInTheDocument();
+    expect(screen.getByText(/v1-5-pruned-emaonly-fp16\.safetensors/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
@@ -386,7 +439,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("Workflow failed")).toBeInTheDocument();
@@ -435,7 +488,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("Waiting for the GPU")).toBeInTheDocument();
@@ -488,7 +541,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("Not enough memory")).toBeInTheDocument();
@@ -553,7 +606,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
     const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "20");
@@ -620,7 +673,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     await waitFor(() => {
@@ -686,7 +739,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("11 / 32 GB")).toBeInTheDocument();
     expect(screen.getByText("VRAM")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
-    expect(screen.getAllByText("Engine ready").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
   it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {

@@ -46,6 +46,9 @@ class RequiredModel(BaseModel):
 
     folder: str
     filename: str
+    node_id: str | None = None
+    node_type: str | None = None
+    input_name: str | None = None
     source_url: str | None = None
     checksum: str | None = None
     model_type: str | None = None

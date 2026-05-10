@@ -1,0 +1,12 @@
+[
+  {
+    "modelId": "creator/noofy-hf-fixture",
+    "siblings": [
+      {
+        "rfilename": "models/hf-fixture.safetensors",
+        "size": 10,
+        "sha256": "7d6ca01126cefc9eabbc5b41836070216f5caeab3112dffbaf1b1f761a3b3c60"
+      }
+    ]
+  }
+]

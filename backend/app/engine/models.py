@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.artifacts import AssetOwnership, ModelVerificationLevel
+
 JobStatus = Literal[
     "queued",
     "queued_pending_memory",
@@ -34,6 +36,117 @@ class MissingModel(BaseModel):
     filename: str
     source_url: str | None = None
     checksum: str | None = None
+    model_type: str | None = None
+    verification_level: ModelVerificationLevel | None = None
+    size_bytes: int | None = None
+    source_urls: list[str] = Field(default_factory=list)
+
+
+class RequiredModelAvailability(BaseModel):
+    requirement_id: str
+    node_id: str | None = None
+    node_type: str | None = None
+    input_name: str | None = None
+    filename: str
+    model_type: str | None = None
+    folder: str
+    verification_level: ModelVerificationLevel
+    size_bytes: int | None = None
+    source_urls: list[str] = Field(default_factory=list)
+    source_availability: Literal["known", "resolvable", "unknown"] = "unknown"
+    status: Literal[
+        "available",
+        "possible_match",
+        "missing",
+        "needs_manual_download",
+        "download_failed",
+        "authentication_required",
+        "rate_limited",
+        "hash_mismatch",
+        "not_enough_disk_space",
+        "canceled",
+    ]
+    status_label: str
+    asset_ownership: AssetOwnership
+    source_path: str | None = None
+    matched_root: str | None = None
+    matched_sha256: str | None = None
+    matched_size_bytes: int | None = None
+    message: str | None = None
+
+
+class RequiredModelSummary(BaseModel):
+    workflow_id: str
+    total_count: int
+    available_count: int
+    possible_match_count: int
+    missing_count: int
+    needs_manual_download_count: int
+    ready_to_run: bool
+    models: list[RequiredModelAvailability] = Field(default_factory=list)
+
+
+class StagedWorkflowImportResponse(BaseModel):
+    import_session_id: str | None = None
+    workflow_id: str
+    status: str
+    user_facing_message: str
+    workflow: dict[str, object]
+    required_model_count: int
+    custom_node_count: int
+    unresolved_input_count: int
+    model_summary: RequiredModelSummary | None = None
+
+
+class ModelDownloadSummary(BaseModel):
+    workflow_id: str
+    status: str
+    user_facing_message: str
+    downloaded_count: int = 0
+    failed_count: int = 0
+    model_summary: RequiredModelSummary
+
+
+class ImportModelDownloadJobStart(BaseModel):
+    job_id: str
+    import_session_id: str
+    workflow_id: str
+    status: str
+    user_facing_message: str
+
+
+class ImportModelDownloadProgressItem(BaseModel):
+    requirement_id: str
+    filename: str
+    status: Literal[
+        "queued",
+        "downloading",
+        "verifying",
+        "completed",
+        "failed",
+        "canceled",
+    ]
+    status_label: str
+    bytes_downloaded: int | None = None
+    total_bytes: int | None = None
+    message: str | None = None
+
+
+class ImportModelDownloadJobStatus(BaseModel):
+    job_id: str
+    import_session_id: str
+    workflow_id: str
+    status: Literal["queued", "running", "completed", "failed", "canceled"]
+    user_facing_message: str
+    current_model_filename: str | None = None
+    current_model_index: int | None = None
+    total_models: int
+    bytes_downloaded: int | None = None
+    total_bytes: int | None = None
+    percent: float | None = None
+    speed_bytes_per_second: float | None = None
+    models: list[ImportModelDownloadProgressItem] = Field(default_factory=list)
+    model_summary: RequiredModelSummary | None = None
 
 
 class WorkflowValidationResult(BaseModel):

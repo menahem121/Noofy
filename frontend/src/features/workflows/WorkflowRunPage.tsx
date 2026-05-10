@@ -19,6 +19,7 @@ import {
   fetchJobProgress,
   fetchJobResult,
   fetchRuntimeStatus,
+  fetchWorkflowModelSummary,
   fetchWorkflowPackage,
   fetchWorkflowStatus,
   isEngineJob,
@@ -30,6 +31,7 @@ import {
   type JobProgress,
   type JobResult,
   type MemoryStatus,
+  type RequiredModelSummary,
   type RuntimeStatus,
   type WorkflowInputDef,
   type WorkflowOutputDef,
@@ -63,6 +65,7 @@ interface RunPageState {
   loading: boolean;
   runtime: RuntimeStatus | null;
   workflowStatus: WorkflowStatusResponse | null;
+  modelSummary: RequiredModelSummary | null;
   packageData: WorkflowPackageResponse | null;
   validation: WorkflowValidationResult | null;
   job: EngineJob | null;
@@ -75,6 +78,7 @@ const initialState: RunPageState = {
   loading: true,
   runtime: null,
   workflowStatus: null,
+  modelSummary: null,
   packageData: null,
   validation: null,
   job: null,
@@ -170,24 +174,26 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [runtime, workflowStatus, packageData] = await Promise.all([
+      const [runtime, workflowStatus, packageData, modelSummary] = await Promise.all([
         fetchRuntimeStatus(),
         fetchWorkflowStatus(workflowId).catch(() => null),
         fetchWorkflowPackage(workflowId).catch(() => null),
+        fetchWorkflowModelSummary(workflowId).catch(() => null),
       ]);
       if (!runtime.reachable) {
-        setState((current) => ({ ...current, loading: false, runtime, workflowStatus, packageData, validation: null }));
+        setState((current) => ({ ...current, loading: false, runtime, workflowStatus, modelSummary, packageData, validation: null }));
         return;
       }
 
       const validation = await validateWorkflow(workflowId);
-      setState((current) => ({ ...current, loading: false, runtime, workflowStatus, packageData, validation }));
+      setState((current) => ({ ...current, loading: false, runtime, workflowStatus, modelSummary, packageData, validation }));
     } catch (error) {
       setState((current) => ({
         ...current,
         loading: false,
         runtime: null,
         workflowStatus: null,
+        modelSummary: null,
         packageData: null,
         validation: null,
         error: error instanceof Error ? error.message : String(error),
@@ -337,7 +343,8 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     }
   }
 
-  const missingModels = state.validation?.missing_models ?? [];
+  const unresolvedModelSummary = state.modelSummary?.models.filter((model) => model.status !== "available") ?? [];
+  const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : state.validation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
   const trust = workflowSummary?.trust;
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
@@ -347,6 +354,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const canRun = Boolean(
     state.workflowStatus?.can_prepare !== false
       && state.validation?.valid
+      && state.modelSummary?.ready_to_run !== false
       && state.runtime?.reachable
       && !isRunning
       && !isWaitingForMemory
@@ -472,8 +480,10 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         <div className="notice notice--warning" role="status">
           <Download size={18} aria-hidden="true" />
           <div>
-            <strong>This workflow needs one missing model</strong>
-            <span>{missingModels.map((model) => model.filename).join(", ")}</span>
+            <strong>This workflow needs required models</strong>
+            <span>
+              {missingModels.map((model) => model.filename).join(", ")} must be available before this workflow can run.
+            </span>
           </div>
         </div>
       ) : null}

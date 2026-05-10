@@ -15,7 +15,7 @@ from app.api.schemas import (
 from app.composition import ApiServices
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
-from app.engine.service import EngineService
+from app.engine.service import EngineService, ImportSessionExpiredError
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import (
     ApiKeySettingsService,
@@ -297,10 +297,104 @@ async def import_workflow(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/workflows/import/preview")
+async def preview_workflow_import(
+    request: Request,
+    engine_service: EngineServiceDep,
+    filename: str | None = None,
+    allow_unverified_community_preparation: bool = False,
+):
+    try:
+        return engine_service.preview_workflow_import(
+            await request.body(),
+            original_filename=filename,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+        )
+    except NoofyImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/download-models")
+async def download_import_missing_models(
+    import_session_id: str,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.start_missing_model_download_for_import(import_session_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workflows/import/{import_session_id}/download-models/{job_id}")
+async def get_import_model_download_status(
+    import_session_id: str,
+    job_id: str,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.import_model_download_status(import_session_id, job_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/download-models/{job_id}/cancel")
+async def cancel_import_model_download(
+    import_session_id: str,
+    job_id: str,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.cancel_import_model_download_job(import_session_id, job_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/commit")
+async def commit_workflow_import(
+    import_session_id: str,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.commit_workflow_import(import_session_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NoofyImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/workflows/import/{import_session_id}")
+async def cancel_workflow_import(
+    import_session_id: str,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.cancel_workflow_import(import_session_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
 @router.get("/workflows/{workflow_id}/package")
 async def get_workflow_package(workflow_id: str, engine_service: EngineServiceDep):
     try:
         return engine_service.get_workflow_package(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/model-summary")
+async def get_workflow_model_summary(workflow_id: str, engine_service: EngineServiceDep):
+    try:
+        return engine_service.model_availability_summary(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

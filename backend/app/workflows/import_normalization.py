@@ -124,6 +124,9 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
         size_bytes_value = model.get("size_bytes")
         size_bytes = size_bytes_value if isinstance(size_bytes_value, int) else None
         model_type = model.get("model_type")
+        node_id = model.get("node_id")
+        node_type = model.get("node_type")
+        input_name = model.get("input_name")
         identity_verified = model.get("identity_verified_by_exporter")
         local_file_available = model.get("local_file_available_at_export")
         bundled = model.get("bundled")
@@ -134,6 +137,9 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
             RequiredModel(
                 folder=folder,
                 filename=filename,
+                node_id=node_id.strip() if isinstance(node_id, str) and node_id.strip() else None,
+                node_type=node_type.strip() if isinstance(node_type, str) and node_type.strip() else None,
+                input_name=input_name.strip() if isinstance(input_name, str) and input_name.strip() else None,
                 source_url=source_urls[0] if source_urls else None,
                 source_urls=source_urls,
                 checksum=checksum,

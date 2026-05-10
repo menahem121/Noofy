@@ -138,6 +138,22 @@ class ImportedWorkflowPackageStore:
         self.custom_node_source_cache = custom_node_source_cache
         self.trust_verifier = trust_verifier or TrustVerifier()
 
+    def preview_archive(
+        self,
+        data: bytes,
+        *,
+        original_filename: str | None = None,
+        allow_unverified_community_preparation: bool = False,
+    ) -> WorkflowPackage:
+        importer = NoofyArchiveImporter(data, original_filename=original_filename)
+        package = importer.normalize()
+        package = self._with_verified_import_trust(package, importer.trust_payload())
+        return _package_with_source_policy(
+            package,
+            community_preparation_opted_in=allow_unverified_community_preparation,
+            policy_status=_source_policy_status_for_import(package),
+        )
+
     def import_archive(
         self,
         data: bytes,

@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "id": 222,
+      "modelVersions": [
+        {
+          "id": 333,
+          "files": [
+            {
+              "id": 444,
+              "name": "civitai-query-fixture.safetensors",
+              "downloadUrl": "https://civitai.com/api/download/models/444",
+              "size": 21,
+              "hashes": {
+                "SHA256": "32d2c3ac008d486590b01cc1d45e65ef6113beed09ec3ef8163af1d04a0359d1"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

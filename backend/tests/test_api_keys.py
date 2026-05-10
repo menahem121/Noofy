@@ -28,6 +28,9 @@ class FakeCredentialStore:
     def set_secret(self, provider: ApiKeyProvider, secret: str) -> None:
         self.secrets[provider] = secret
 
+    def get_secret(self, provider: ApiKeyProvider) -> str | None:
+        return self.secrets.get(provider)
+
     def delete_secret(self, provider: ApiKeyProvider) -> None:
         self.secrets.pop(provider, None)
 
