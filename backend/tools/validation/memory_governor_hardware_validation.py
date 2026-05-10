@@ -12,6 +12,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = REPO_ROOT / ".noofy-runtime" / "data"
 DEFAULT_OUTPUT = REPO_ROOT / ".noofy-runtime" / "validation" / "memory-governor-linux-validation.json"
 WORKFLOW_ID = "memory_governor_empty_image_validation"
