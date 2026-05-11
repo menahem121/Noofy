@@ -14,9 +14,13 @@ def configured_api_token() -> str | None:
     return token or None
 
 
-def is_job_event_stream_request(request: Request) -> bool:
+def is_job_query_token_request(request: Request) -> bool:
     path = request.url.path
-    return request.method == "GET" and path.startswith("/api/jobs/") and path.endswith("/events")
+    return (
+        request.method == "GET"
+        and path.startswith("/api/jobs/")
+        and (path.endswith("/events") or path.endswith("/outputs/view"))
+    )
 
 
 def bearer_token(request: Request) -> str | None:
@@ -28,7 +32,7 @@ def bearer_token(request: Request) -> str | None:
 
 
 def request_token(request: Request) -> str | None:
-    if is_job_event_stream_request(request):
+    if is_job_query_token_request(request):
         return request.query_params.get("token")
     return bearer_token(request)
 

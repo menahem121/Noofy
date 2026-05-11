@@ -121,6 +121,7 @@ def source_checkout_env(
     )
     if include_frontend_api:
         env["VITE_NOOFY_API_BASE_URL"] = api_base
+        env["VITE_DEV_BACKEND_PORT"] = str(backend_port)
     return env
 
 

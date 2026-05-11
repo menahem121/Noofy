@@ -11,6 +11,7 @@ import {
   fetchWorkflows,
   importWorkflowPackage,
   rebuildComfyUI,
+  resolveBackendUrl,
   updateComfyUI,
   updateComfyUILaunchSettings,
 } from "./noofyApi";
@@ -121,6 +122,24 @@ describe("noofyApi", () => {
 
     expect(createJobEventsUrl("job 1")).toBe(
       "http://127.0.0.1:9123/api/jobs/job%201/events?token=runtime%20secret",
+    );
+  });
+
+  it("resolves backend-provided media URLs through the active API base URL", () => {
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiBaseUrl: "http://127.0.0.1:9123/api/",
+      apiToken: "runtime secret",
+    };
+
+    expect(
+      resolveBackendUrl("/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output", {
+        includeToken: true,
+      }),
+    ).toBe(
+      "http://127.0.0.1:9123/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output&token=runtime%20secret",
+    );
+    expect(resolveBackendUrl("https://example.test/image.png", { includeToken: true })).toBe(
+      "https://example.test/image.png",
     );
   });
 

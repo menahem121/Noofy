@@ -588,10 +588,15 @@ function OutputWidgetContent({
           ))}
         </div>
         {control.show_download && firstImageUrl ? (
-          <a className="widget-output-image__download" href={firstImageUrl} download aria-label="Download image">
+          <button
+            className="widget-output-image__download"
+            type="button"
+            aria-label="Download image"
+            onClick={() => void downloadImage(firstImageUrl)}
+          >
             <Download size={14} aria-hidden="true" />
             Download
-          </a>
+          </button>
         ) : null}
       </div>
     );
@@ -637,6 +642,32 @@ function InputWidgetContent({
       onImageUpload={(file) => onImageUpload(input.id, file)}
     />
   );
+}
+
+async function downloadImage(imageUrl: string) {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Image download failed: ${response.status}`);
+  }
+
+  const blobUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = blobUrl;
+  link.download = filenameFromImageUrl(imageUrl);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+}
+
+function filenameFromImageUrl(imageUrl: string) {
+  try {
+    const url = new URL(imageUrl, window.location.href);
+    const pathParts = url.pathname.split("/").filter(Boolean);
+    return url.searchParams.get("filename") || pathParts[pathParts.length - 1] || "noofy-output.png";
+  } catch {
+    return "noofy-output.png";
+  }
 }
 
 function fromBackendLayout(control: DashboardControlDef): GridItemLayout {

@@ -23,6 +23,7 @@ import {
   fetchWorkflowPackage,
   fetchWorkflowStatus,
   isEngineJob,
+  resolveBackendUrl,
   runWorkflow,
   uploadDashboardAsset,
   validateWorkflow,
@@ -161,7 +162,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       const imageUrls: string[] = [];
       for (const image of images) {
         if (image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
-          imageUrls.push(image.view_url);
+          imageUrls.push(resolveBackendUrl(image.view_url, { includeToken: true }));
         }
       }
       if (imageUrls.length > 0) {
@@ -376,6 +377,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const hasDashboard = Boolean(
     state.packageData?.dashboard?.status === "configured" && allControls.length > 0,
   );
+  const showCanvasView = viewMode === "canvas" && (state.loading || hasDashboard);
   const isEditingLayout = draftLayoutOverrides !== null;
 
   function handleEditWidgets() {
@@ -499,7 +501,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     </>
   );
 
-  if (hasDashboard && viewMode === "canvas") {
+  if (showCanvasView) {
     return (
       <AppLayout
         activeRoute="workflows"
@@ -785,7 +787,7 @@ function extractImageUrls(result: JobResult | null) {
     if (!Array.isArray(images)) continue;
     for (const image of images) {
       if (image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
-        urls.push(image.view_url);
+        urls.push(resolveBackendUrl(image.view_url, { includeToken: true }));
       }
     }
   }

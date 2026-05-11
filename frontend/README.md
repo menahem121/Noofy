@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-The dev server runs at `http://127.0.0.1:5173/` and proxies `/api` to the local backend at `http://127.0.0.1:8000`.
+The dev server runs at `http://127.0.0.1:5173/` and proxies `/api` to the local backend at `http://127.0.0.1:8765`.
 
 Override the API base URL with `VITE_NOOFY_API_BASE_URL` when the desktop shell uses a different backend URL.
 

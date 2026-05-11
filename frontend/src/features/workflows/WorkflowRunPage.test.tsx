@@ -157,6 +157,7 @@ const configuredPackageData = {
             type: "display_image",
             label: "Result A",
             output_id: "image_a",
+            show_download: true,
             layout: { x: 16, y: 0, w: 16, h: 8 },
           },
           {
@@ -727,6 +728,22 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("The local AI engine is offline")).not.toBeInTheDocument();
   });
 
+  it("uses the selected canvas shell while workflow data is loading", () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "canvas" }));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      return new Promise<Response>(() => {});
+    });
+
+    renderRunPage();
+
+    expect(screen.getByRole("main", { name: "Workflow dashboard canvas" })).toHaveClass("layout-canvas");
+    expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Inputs" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Preview" })).not.toBeInTheDocument();
+  });
+
   it("shows the compact resource monitor in the top bar while idle", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
@@ -1132,6 +1149,15 @@ describe("WorkflowRunPage", () => {
   });
 
   it("renders each canvas output widget from its bound result node", async () => {
+    const createObjectUrl = vi.fn(() => "blob:noofy-output");
+    const revokeObjectUrl = vi.fn();
+    let clickedDownload = "";
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clickedDownload = this.download;
+    });
+
     const packageData = {
       metadata: {
         id: "text_to_image_v0",
@@ -1173,6 +1199,7 @@ describe("WorkflowRunPage", () => {
                 type: "display_image",
                 label: "Result A",
                 output_id: "image_a",
+                show_download: true,
                 layout: { x: 16, y: 0, w: 16, h: 8 },
               },
               {
@@ -1270,6 +1297,10 @@ describe("WorkflowRunPage", () => {
         );
       }
 
+      if (url.endsWith("/api/jobs/job-canvas/outputs/view?filename=node-9-a.png&subfolder=&type=output")) {
+        return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }));
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -1290,5 +1321,11 @@ describe("WorkflowRunPage", () => {
       "src",
       "/api/jobs/job-canvas/outputs/view?filename=node-10.png&subfolder=&type=output",
     );
+
+    fireEvent.click(screen.getByRole("button", { name: /download image/i }));
+
+    await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
+    expect(clickedDownload).toBe("node-9-a.png");
+    await waitFor(() => expect(revokeObjectUrl).toHaveBeenCalledWith("blob:noofy-output"));
   });
 });

@@ -495,6 +495,34 @@ export function createJobEventsUrl(jobId: string) {
   return `${url}?token=${encodeURIComponent(token)}`;
 }
 
+export function resolveBackendUrl(pathOrUrl: string, options: { includeToken?: boolean } = {}) {
+  const apiBaseUrl = getApiBaseUrl();
+  const isAbsoluteUrl = /^[a-z][a-z0-9+.-]*:/i.test(pathOrUrl) || pathOrUrl.startsWith("//");
+  let resolved = pathOrUrl;
+  let tokenEligible = !isAbsoluteUrl;
+
+  if (!isAbsoluteUrl && pathOrUrl.startsWith(DEFAULT_API_BASE_URL)) {
+    resolved =
+      apiBaseUrl === DEFAULT_API_BASE_URL
+        ? pathOrUrl
+        : `${apiBaseUrl}${pathOrUrl.slice(DEFAULT_API_BASE_URL.length)}`;
+  } else if (!isAbsoluteUrl && pathOrUrl.startsWith("/")) {
+    resolved = `${apiBaseUrl}${pathOrUrl}`;
+  } else if (!isAbsoluteUrl) {
+    resolved = `${apiBaseUrl}/${pathOrUrl}`;
+  } else if (apiBaseUrl !== DEFAULT_API_BASE_URL) {
+    tokenEligible = pathOrUrl === apiBaseUrl || pathOrUrl.startsWith(`${apiBaseUrl}/`);
+  }
+
+  const token = options.includeToken ? getApiToken() : null;
+  if (!token || !tokenEligible) {
+    return resolved;
+  }
+
+  const separator = resolved.includes("?") ? "&" : "?";
+  return `${resolved}${separator}token=${encodeURIComponent(token)}`;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: apiHeaders(),

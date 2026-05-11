@@ -429,7 +429,9 @@ describe("HomePage", () => {
       });
     });
     expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
-    expect((await screen.findAllByText("Imported")).length).toBeGreaterThan(0);
+    const readyCard = (await screen.findByRole("heading", { name: "Ready Workflow" })).closest("article");
+    expect(readyCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
+    expect(readyCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
   });
 
   it("commits the staged import after a completed model download job makes models ready", async () => {
@@ -610,6 +612,8 @@ describe("HomePage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
     });
-    expect((await screen.findAllByText("Imported")).length).toBeGreaterThan(0);
+    const workflowCard = (await screen.findByRole("heading", { name: "Core SD15 Text to Image" })).closest("article");
+    expect(workflowCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
+    expect(workflowCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
   });
 });

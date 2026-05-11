@@ -6113,6 +6113,7 @@ button:disabled {
   position: absolute;
   bottom: 8px;
   right: 8px;
+  border: 0;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -6121,8 +6122,10 @@ button:disabled {
   background: rgba(30, 28, 33, 0.85);
   color: var(--text-secondary);
   font-size: 12px;
+  font-family: inherit;
   text-decoration: none;
   backdrop-filter: blur(4px);
+  cursor: pointer;
 }
 
 .widget-output-placeholder {

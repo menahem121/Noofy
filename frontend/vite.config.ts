@@ -11,7 +11,7 @@ const { version } = JSON.parse(readFileSync("./package.json", "utf-8")) as { ver
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 const tauriDebug = process.env.TAURI_ENV_DEBUG;
-const devBackendPort = process.env.VITE_DEV_BACKEND_PORT ?? "8000";
+const devBackendPort = process.env.VITE_DEV_BACKEND_PORT ?? "8765";
 
 export default defineConfig({
   clearScreen: false,

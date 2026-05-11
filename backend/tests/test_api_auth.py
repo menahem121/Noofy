@@ -21,6 +21,9 @@ class FakeEngineService:
     async def stream_progress_events(self, job_id: str):
         yield 'event: progress\ndata: {"job_id":"' + job_id + '","status":"running"}\n\n'
 
+    async def fetch_output(self, job_id: str, filename: str, subfolder: str, output_type: str):
+        return b"image-bytes", "image/png"
+
     async def shutdown(self) -> None:
         return None
 
@@ -97,3 +100,15 @@ def test_job_event_stream_rejects_missing_or_wrong_query_token(monkeypatch) -> N
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
+
+
+def test_job_output_view_accepts_query_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+        response = client.get(
+            "/api/jobs/job-1/outputs/view?filename=result.png&type=output&token=secret-token"
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"image-bytes"

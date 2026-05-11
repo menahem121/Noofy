@@ -79,19 +79,26 @@ function workflowIconStatus(status: WorkflowStatus) {
 }
 
 function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] {
-  return workflows.map((workflow) => ({
-    id: workflow.id,
-    title: workflow.name,
-    description: friendlyDescription(workflow),
-    category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
-    status: workflowStatusFromSummary(workflow),
-    statusLabel: workflow.status_label ?? workflowStatusLabel(workflowStatusFromSummary(workflow)),
-    trustLabel: workflow.trust?.label ?? trustLevelLabel(workflow.trust_level),
-    trustTone: workflow.trust?.badge_tone ?? trustLevelTone(workflow.trust_level),
-    trustSummary: workflow.trust?.summary,
-    Icon: fallbackWorkflow.Icon,
-    source: "backend",
-  }));
+  return workflows.map((workflow) => {
+    const status = workflowStatusFromSummary(workflow);
+
+    return {
+      id: workflow.id,
+      title: workflow.name,
+      description: friendlyDescription(workflow),
+      category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
+      status,
+      statusLabel:
+        workflow.status === "imported"
+          ? workflowStatusLabel(status)
+          : workflow.status_label ?? workflowStatusLabel(status),
+      trustLabel: workflow.trust?.label ?? trustLevelLabel(workflow.trust_level),
+      trustTone: workflow.trust?.badge_tone ?? trustLevelTone(workflow.trust_level),
+      trustSummary: workflow.trust?.summary,
+      Icon: fallbackWorkflow.Icon,
+      source: "backend",
+    };
+  });
 }
 
 function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
@@ -101,10 +108,6 @@ function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
 
   if (workflow.status === "cannot_prepare_automatically") {
     return "cannot_prepare_automatically";
-  }
-
-  if (workflow.status === "imported") {
-    return "imported";
   }
 
   return "installed";

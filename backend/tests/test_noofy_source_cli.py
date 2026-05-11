@@ -37,6 +37,7 @@ def test_source_checkout_env_sets_managed_runtime_and_frontend_api(tmp_path: Pat
     assert env["COMFYUI_RUNTIME_MODE"] == "managed"
     assert env["NOOFY_BACKEND_PORT"] == "9876"
     assert env["VITE_NOOFY_API_BASE_URL"] == "http://127.0.0.1:9876/api"
+    assert env["VITE_DEV_BACKEND_PORT"] == "9876"
 
 
 def test_backend_python_path_uses_windows_scripts_directory(tmp_path: Path) -> None:
