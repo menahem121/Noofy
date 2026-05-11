@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
 import { EngineSettingsPage } from "./EngineSettingsPage";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -160,6 +161,23 @@ const modelFolderSettings = {
   external_folder_exists: null,
 };
 
+function renderSettingsPage() {
+  return render(
+    <RuntimeStatusProvider
+      initialRuntimeState={{
+        backendStatus: "reachable",
+        engineStatus: "ready",
+        runtime: readyRuntime as never,
+        hasKnownState: true,
+        lastCheckedAt: Date.now(),
+      }}
+      skipInitialRefresh
+    >
+      <EngineSettingsPage onNavigate={vi.fn()} />
+    </RuntimeStatusProvider>,
+  );
+}
+
 describe("EngineSettingsPage", () => {
   const fetchMock = vi.fn();
 
@@ -186,7 +204,7 @@ describe("EngineSettingsPage", () => {
   });
 
   it("persists the dashboard view preference from the settings toggle", async () => {
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const classic = await screen.findByRole("radio", { name: /classic/i });
     fireEvent.click(classic);
@@ -198,7 +216,7 @@ describe("EngineSettingsPage", () => {
   });
 
   it("shows Restart, Stop, and Repair actions in the ComfyUI engine card", async () => {
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const panel = (await screen.findByRole("heading", { name: "ComfyUI Engine" })).closest("article");
     expect(panel).not.toBeNull();
@@ -234,7 +252,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
 
@@ -262,7 +280,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
 
@@ -271,7 +289,7 @@ describe("EngineSettingsPage", () => {
   });
 
   it("loads upstream ComfyUI release options only when explicitly requested", async () => {
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     expect((await screen.findAllByText("v0.20.1")).length).toBeGreaterThan(0);
     const select = await screen.findByRole("combobox", { name: /version/i });
@@ -333,7 +351,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     expect(await screen.findByText("Automatic repair paused")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /v0.19.0.*incompatible/i })).toBeInTheDocument();
@@ -367,7 +385,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const slider = await screen.findByRole("slider", { name: /managed launch mode/i });
     const save = screen.getByRole("button", { name: "Save" });
@@ -394,7 +412,7 @@ describe("EngineSettingsPage", () => {
   });
 
   it("shows the APIs settings card with hidden API key inputs", async () => {
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     expect(await screen.findByRole("heading", { name: "APIs" })).toBeInTheDocument();
     const huggingFaceInput = screen.getByLabelText("Hugging Face API Key");
@@ -431,7 +449,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const input = await screen.findByLabelText("Hugging Face API Key");
     fireEvent.change(input, { target: { value: "hf_test_secret_1234" } });
@@ -466,7 +484,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     expect(await screen.findByRole("heading", { name: "Model Folder" })).toBeInTheDocument();
     expect(screen.getByText("/Users/test/Documents/Noofy Models")).toBeInTheDocument();
@@ -491,7 +509,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const restart = await screen.findByRole("button", { name: "Restart" });
     fireEvent.click(restart);
@@ -528,7 +546,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const restart = await screen.findByRole("button", { name: "Restart" });
     fireEvent.click(restart);
@@ -574,7 +592,7 @@ describe("EngineSettingsPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+    renderSettingsPage();
 
     const rebuild = await screen.findByRole("button", { name: /rebuild environment/i });
     fireEvent.click(rebuild);

@@ -32,6 +32,17 @@ Generated media URLs returned to the frontend are Noofy backend API URLs. ComfyU
 
 Community workflows from the internet are a first-class product direction. Noofy should automatically prepare custom nodes and normal Python dependencies when they can be resolved into isolated workflow capsules. These installs must never mutate the trusted core runtime or another installed workflow. Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible.
 
+## Frontend Runtime State
+
+The frontend owns a session-scoped cache of the last known backend and engine state. Route changes may refresh `GET /api/runtime` in the background, but they must not block normal pages or replace a known-good status with "Checking backend". The UI distinguishes backend reachability from ComfyUI readiness:
+
+- backend unknown, reachable, or unreachable
+- engine ready, starting, or offline
+
+"Checking backend" is only for initial startup before any runtime state is known. A single silent refresh failure preserves the last known good state; forced/action-triggered failures, or repeated confirmed silent failures, may mark the backend offline.
+
+Home also uses a shared session workflow-library cache. Workflow cards stay visible during refreshes and refresh failures; errors are shown as non-blocking notices instead of clearing the library.
+
 ## Local API Security
 
 The backend must bind only to localhost for product builds. The frontend must continue to call only the app backend API, never ComfyUI directly.

@@ -29,7 +29,7 @@ import {
 import { openFolder, selectFolder } from "../../lib/folderDialogs";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
+import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 
 interface EngineSettingsState {
   loading: boolean;
@@ -154,9 +154,18 @@ function actionResultMessage(result: { label: string; status: string }) {
   return ACTION_RESULT_LABELS[result.status] ?? result.status;
 }
 
+function runtimeFromActionResult(result: Record<string, unknown>): RuntimeStatus | null {
+  const comfyui = result.comfyui;
+  if (comfyui && typeof comfyui === "object" && "reachable" in comfyui) {
+    return comfyui as RuntimeStatus;
+  }
+  return null;
+}
+
 export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
   const [state, setState] = useState<EngineSettingsState>(initialState);
   const { viewMode, setViewMode } = useAppPreferences();
+  const runtimeStatus = useRuntimeStatus();
 
   async function refresh() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -178,7 +187,9 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         modelFolderSettings,
         selectedVramMode: launchSettings.vram_mode,
       }));
+      runtimeStatus.setRuntimeFromResponse(runtime);
     } catch (error) {
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setState((current) => ({
         ...current,
         loading: false,
@@ -208,6 +219,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       : null;
     try {
       const result = await action();
+      runtimeStatus.setRuntimeFromResponse(runtimeFromActionResult(result));
       const status = typeof result.status === "string" ? result.status : "unknown";
       const ok = ACTION_OK_STATUSES.has(status);
       setState((current) => ({
@@ -216,6 +228,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       }));
       await refresh();
     } catch (error) {
+      runtimeStatus.markActionFailure(error);
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setState((current) => ({
         ...current,
         action: null,
@@ -260,6 +274,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       }));
       await refresh();
     } catch (error) {
+      runtimeStatus.markActionFailure(error);
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setState((current) => ({
         ...current,
         action: null,
@@ -285,6 +301,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         selectedVersion: versions.latest_tag ? "latest" : current.selectedVersion,
       }));
     } catch (error) {
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setState((current) => ({
         ...current,
         error: error instanceof Error ? error.message : String(error),
@@ -458,7 +475,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     void refresh();
   }, []);
 
-  const status = runtimeStatusCopy(state);
+  const status = runtimeStatus.statusView;
   const environment = state.runtime?.environment;
   const versions = state.versions;
   const currentVersion =

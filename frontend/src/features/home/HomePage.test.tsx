@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { HomePage } from "./HomePage";
+import { WorkflowLibraryProvider } from "./WorkflowLibraryProvider";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -33,10 +36,46 @@ const resourceSnapshot = {
   memory_pressure: "low",
 };
 
+const readyRuntimeState: Partial<RuntimeHealthState> = {
+  backendStatus: "reachable",
+  engineStatus: "ready",
+  runtime: readyRuntime as RuntimeHealthState["runtime"],
+  hasKnownState: true,
+  lastCheckedAt: Date.now(),
+};
+
+const cachedImportedWorkflow = {
+  id: "cached_workflow",
+  name: "Cached Workflow",
+  version: "0.1.0",
+  description: "Previously loaded workflow.",
+  trust_level: "noofy_verified",
+  status: "imported",
+  status_label: "Imported",
+};
+
+const onOpenWorkflow = vi.fn();
+const onNavigate = vi.fn();
+
+function renderHomePage(options: {
+  runtimeState?: Partial<RuntimeHealthState>;
+  skipInitialRefresh?: boolean;
+  workflowState?: ComponentProps<typeof WorkflowLibraryProvider>["initialWorkflowState"];
+} = {}) {
+  return render(
+    <RuntimeStatusProvider
+      initialRuntimeState={options.runtimeState}
+      skipInitialRefresh={options.skipInitialRefresh}
+    >
+      <WorkflowLibraryProvider initialWorkflowState={options.workflowState}>
+        <HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />
+      </WorkflowLibraryProvider>
+    </RuntimeStatusProvider>,
+  );
+}
+
 describe("HomePage", () => {
   const fetchMock = vi.fn();
-  const onOpenWorkflow = vi.fn();
-  const onNavigate = vi.fn();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
@@ -88,7 +127,7 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+    renderHomePage();
 
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
@@ -100,12 +139,59 @@ describe("HomePage", () => {
   it("shows starter content and a clear status when the backend is unavailable", async () => {
     fetchMock.mockRejectedValue(new Error("connect failed"));
 
-    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+    renderHomePage();
 
-    expect(await screen.findByText("Backend is not reachable")).toBeInTheDocument();
-    expect(screen.getAllByText("Offline")).toHaveLength(2);
+    expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend offline")).toHaveLength(2);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Connect backend")).toBeInTheDocument();
+  });
+
+  it("keeps cached workflows and Ready status visible during a silent refresh", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return new Promise<Response>(() => {});
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [cachedImportedWorkflow],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Checking backend")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Cached Workflow" })).toBeInTheDocument();
+    expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
+  });
+
+  it("preserves cached workflows and shows a warning when workflow refresh fails", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.reject(new Error("workflow refresh failed"));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [cachedImportedWorkflow],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Cached Workflow" })).toBeInTheDocument();
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
   it("previews a .noofy workflow import, commits the staged import, and refreshes workflows", async () => {
@@ -271,7 +357,7 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+    renderHomePage();
 
     // Wait for the page to load, then pick a file directly (community preparation is auto-allowed).
     await screen.findByText("Choose File");
@@ -411,7 +497,7 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+    renderHomePage();
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "ready.noofy");
@@ -589,7 +675,7 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+    renderHomePage();
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "core_sd15_txt2img.noofy");

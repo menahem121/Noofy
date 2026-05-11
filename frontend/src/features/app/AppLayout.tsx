@@ -14,6 +14,7 @@ import {
 
 import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 
 // Replace with your real Tipeee / donation URL when ready.
 const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
@@ -34,7 +35,7 @@ export interface AppTopBarProgress {
 
 interface AppLayoutProps {
   activeRoute: AppRouteId;
-  status: AppStatusView;
+  status?: AppStatusView;
   children: ReactNode;
   onNavigate: (route: AppRouteId) => void;
   mainClassName?: string;
@@ -75,6 +76,13 @@ export function AppLayout({
   progress = null,
 }: AppLayoutProps) {
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
+  const runtimeStatus = useOptionalRuntimeStatus();
+  const effectiveStatus = status ?? runtimeStatus?.statusView ?? {
+    label: "Checking backend",
+    description: "Looking for the local app service",
+    tone: "info",
+    loading: true,
+  };
   const isHome = activeRoute === "home";
   const effectiveOpen = isHome ? true : sidebarOpen;
   const resources = useTopBarResources();
@@ -108,9 +116,9 @@ export function AppLayout({
 
         <div className="topbar__actions">
           <ResourceMonitor snapshot={resources} />
-          <div className={`status-pill status-pill--${status.tone}`}>
-            {status.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
-            <span>{status.label}</span>
+          <div className={`status-pill status-pill--${effectiveStatus.tone}`}>
+            {effectiveStatus.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
+            <span>{effectiveStatus.label}</span>
           </div>
           <button
             className="icon-button"
@@ -148,7 +156,7 @@ export function AppLayout({
             </div>
             <div>
               <p>AI Workspace</p>
-              <span>{status.label}</span>
+              <span>{effectiveStatus.label}</span>
             </div>
           </div>
 

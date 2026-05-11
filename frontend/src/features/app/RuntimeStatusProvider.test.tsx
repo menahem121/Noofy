@@ -1,0 +1,209 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  RuntimeStatusProvider,
+  type RuntimeHealthState,
+  runtimeStatusView,
+  useRuntimeStatus,
+} from "./RuntimeStatusProvider";
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const readyRuntime = {
+  mode: "managed",
+  reachable: true,
+  base_url: "http://127.0.0.1:8188",
+  repo_dir: "/tmp/ComfyUI",
+  managed_process_running: true,
+  sidecar_starting: false,
+  pid: 123,
+  error: null,
+  environment: { prepared: true },
+  crash_count: 0,
+  restart_attempt: 0,
+  max_restart_attempts: 3,
+  uptime_seconds: 10,
+  last_crash_at: null,
+};
+
+const startingRuntime = {
+  ...readyRuntime,
+  reachable: false,
+  sidecar_starting: true,
+};
+
+const offlineRuntime = {
+  ...readyRuntime,
+  reachable: false,
+  managed_process_running: false,
+  sidecar_starting: false,
+};
+
+const readyRuntimeState: Partial<RuntimeHealthState> = {
+  backendStatus: "reachable",
+  engineStatus: "ready",
+  runtime: readyRuntime as RuntimeHealthState["runtime"],
+  hasKnownState: true,
+  lastCheckedAt: Date.now() - 60_000,
+};
+
+function wrapper(initialRuntimeState?: Partial<RuntimeHealthState>) {
+  return function TestWrapper({ children }: { children: ReactNode }) {
+    return (
+      <RuntimeStatusProvider initialRuntimeState={initialRuntimeState} skipInitialRefresh>
+        {children}
+      </RuntimeStatusProvider>
+    );
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("RuntimeStatusProvider", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+  });
+
+  it("maps an initial unknown state to Checking backend", () => {
+    expect(runtimeStatusView({
+      backendStatus: "unknown",
+      engineStatus: "unknown",
+      runtime: null,
+      refreshing: true,
+      refreshError: null,
+      lastCheckedAt: null,
+      consecutiveSilentFailures: 0,
+      hasKnownState: false,
+    }).label).toBe("Checking backend");
+  });
+
+  it("keeps Ready visible while a silent refresh is pending", async () => {
+    const pending = deferred<Response>();
+    fetchMock.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    void act(() => {
+      void result.current.refreshRuntime({ silent: true });
+    });
+
+    await waitFor(() => expect(result.current.refreshing).toBe(true));
+    expect(result.current.statusView.label).toBe("Ready");
+  });
+
+  it("keeps a last-known Ready status after one silent refresh failure", async () => {
+    fetchMock.mockRejectedValue(new Error("temporary miss"));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ silent: true });
+    });
+
+    expect(result.current.statusView.label).toBe("Ready");
+    expect(result.current.refreshError).toBe("temporary miss");
+    expect(result.current.consecutiveSilentFailures).toBe(1);
+  });
+
+  it("marks the backend unreachable after two silent refresh failures", async () => {
+    fetchMock.mockRejectedValue(new Error("still down"));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ silent: true });
+      await result.current.refreshRuntime({ force: true, silent: true });
+    });
+
+    expect(result.current.backendStatus).toBe("unreachable");
+    expect(result.current.statusView.label).toBe("Backend offline");
+  });
+
+  it("marks the backend unreachable immediately after an action failure", () => {
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    act(() => {
+      result.current.markActionFailure(new Error("run failed"));
+    });
+
+    expect(result.current.backendStatus).toBe("unreachable");
+    expect(result.current.statusView.label).toBe("Backend offline");
+  });
+
+  it("does not let an older failing refresh overwrite a newer successful one", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    const firstRefresh = result.current.refreshRuntime({ force: true, silent: true });
+    const secondRefresh = result.current.refreshRuntime({ force: true, silent: true });
+    second.resolve(jsonResponse(readyRuntime));
+    await act(async () => {
+      await secondRefresh;
+    });
+    first.reject(new Error("old failure"));
+    await act(async () => {
+      await firstRefresh;
+    });
+
+    expect(result.current.backendStatus).toBe("reachable");
+    expect(result.current.statusView.label).toBe("Ready");
+  });
+
+  it("distinguishes backend reachability from engine readiness", () => {
+    expect(runtimeStatusView({
+      ...readyRuntimeState,
+      backendStatus: "reachable",
+      engineStatus: "starting",
+      runtime: startingRuntime as RuntimeHealthState["runtime"],
+      refreshing: false,
+      refreshError: null,
+      lastCheckedAt: Date.now(),
+      consecutiveSilentFailures: 0,
+      hasKnownState: true,
+    }).label).toBe("Starting");
+    expect(runtimeStatusView({
+      ...readyRuntimeState,
+      backendStatus: "reachable",
+      engineStatus: "offline",
+      runtime: offlineRuntime as RuntimeHealthState["runtime"],
+      refreshing: false,
+      refreshError: null,
+      lastCheckedAt: Date.now(),
+      consecutiveSilentFailures: 0,
+      hasKnownState: true,
+    }).label).toBe("Engine offline");
+  });
+});

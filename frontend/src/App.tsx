@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
+import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
 import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
 import { DashboardBuilderLayoutPage } from "./features/dashboard-builder/DashboardBuilderLayoutPage";
@@ -9,6 +10,7 @@ import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
 import { GalleryPage } from "./features/gallery/GalleryPage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { HomePage } from "./features/home/HomePage";
+import { WorkflowLibraryProvider } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 
@@ -135,5 +137,11 @@ export default function App() {
     );
   }
 
-  return <SidebarProvider>{renderPage()}</SidebarProvider>;
+  return (
+    <RuntimeStatusProvider>
+      <WorkflowLibraryProvider>
+        <SidebarProvider>{renderPage()}</SidebarProvider>
+      </WorkflowLibraryProvider>
+    </RuntimeStatusProvider>
+  );
 }

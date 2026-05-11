@@ -18,7 +18,6 @@ import {
   exportWorkflowUrl,
   fetchJobProgress,
   fetchJobResult,
-  fetchRuntimeStatus,
   fetchWorkflowModelSummary,
   fetchWorkflowPackage,
   fetchWorkflowStatus,
@@ -33,7 +32,6 @@ import {
   type JobResult,
   type MemoryStatus,
   type RequiredModelSummary,
-  type RuntimeStatus,
   type WorkflowInputDef,
   type WorkflowOutputDef,
   type WorkflowPackageResponse,
@@ -51,7 +49,7 @@ import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
+import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { CanvasDashboardView } from "./CanvasDashboardView";
 import { DashboardInputControl } from "./DashboardInputControl";
 
@@ -64,7 +62,6 @@ interface WorkflowRunPageProps {
 
 interface RunPageState {
   loading: boolean;
-  runtime: RuntimeStatus | null;
   workflowStatus: WorkflowStatusResponse | null;
   modelSummary: RequiredModelSummary | null;
   packageData: WorkflowPackageResponse | null;
@@ -77,7 +74,6 @@ interface RunPageState {
 
 const initialState: RunPageState = {
   loading: true,
-  runtime: null,
   workflowStatus: null,
   modelSummary: null,
   packageData: null,
@@ -98,10 +94,11 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const pollTimerRef = useRef<number | null>(null);
 
   const { viewMode } = useAppPreferences();
+  const runtimeStatus = useRuntimeStatus();
   const isRunning = state.progress?.status === "queued" || state.progress?.status === "running";
   const isWaitingForMemory = state.job?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
-  const status = runtimeStatusCopy({ loading: state.loading, runtime: state.runtime });
+  const status = runtimeStatus.statusView;
 
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
 
@@ -175,24 +172,18 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [runtime, workflowStatus, packageData, modelSummary] = await Promise.all([
-        fetchRuntimeStatus(),
+      const [workflowStatus, packageData, modelSummary] = await Promise.all([
         fetchWorkflowStatus(workflowId).catch(() => null),
         fetchWorkflowPackage(workflowId).catch(() => null),
         fetchWorkflowModelSummary(workflowId).catch(() => null),
       ]);
-      if (!runtime.reachable) {
-        setState((current) => ({ ...current, loading: false, runtime, workflowStatus, modelSummary, packageData, validation: null }));
-        return;
-      }
 
       const validation = await validateWorkflow(workflowId);
-      setState((current) => ({ ...current, loading: false, runtime, workflowStatus, modelSummary, packageData, validation }));
+      setState((current) => ({ ...current, loading: false, workflowStatus, modelSummary, packageData, validation }));
     } catch (error) {
       setState((current) => ({
         ...current,
         loading: false,
-        runtime: null,
         workflowStatus: null,
         modelSummary: null,
         packageData: null,
@@ -203,14 +194,15 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   }
 
   useEffect(() => {
+    void runtimeStatus.refreshRuntime({ silent: true });
     void loadRequirements();
     return () => {
       cleanupJobWatchers();
     };
-  }, [workflowId]);
+  }, [workflowId, runtimeStatus.refreshRuntime]);
 
   async function handleRun() {
-    if (!state.validation?.valid || !state.runtime?.reachable || isRunning) {
+    if (!canRun) {
       return;
     }
 
@@ -234,6 +226,8 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         await pollJobOnce(response.job_id);
       }
     } catch (error) {
+      runtimeStatus.markActionFailure(error);
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setState((current) => ({
         ...current,
         error: error instanceof Error ? error.message : String(error),
@@ -352,11 +346,16 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     ? state.workflowStatus.install.status
     : null;
   const memoryStatus = state.result ? null : state.job?.memory_status ?? null;
+  const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
+  const engineKnownUnavailable =
+    runtimeStatus.backendStatus === "reachable" &&
+    (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const canRun = Boolean(
     state.workflowStatus?.can_prepare !== false
       && state.validation?.valid
       && state.modelSummary?.ready_to_run !== false
-      && state.runtime?.reachable
+      && !backendKnownUnreachable
+      && !engineKnownUnavailable
       && !isRunning
       && !isWaitingForMemory
       && !isBlockedByMemory,
@@ -456,15 +455,24 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           <AlertCircle size={18} aria-hidden="true" />
           <div>
             <strong>The workflow is not ready</strong>
-            <span>Start the backend and engine, then try again.</span>
+            <span>{state.error ?? "Start the backend and engine, then try again."}</span>
           </div>
         </div>
       ) : null}
-      {state.runtime && !state.runtime.reachable ? (
+      {runtimeStatus.backendStatus === "unreachable" ? (
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>The local AI engine is offline</strong>
+            <strong>The Noofy backend is offline</strong>
+            <span>{runtimeStatus.refreshError ?? "Start the Noofy backend before running this workflow."}</span>
+          </div>
+        </div>
+      ) : null}
+      {runtimeStatus.backendStatus === "reachable" && runtimeStatus.engineStatus !== "ready" ? (
+        <div className="notice notice--warning" role="status">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>{runtimeStatus.engineStatus === "starting" ? "The local AI engine is starting" : "The local AI engine is offline"}</strong>
             <span>Open Engine Settings to prepare or start the engine before running this workflow.</span>
           </div>
         </div>

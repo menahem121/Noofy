@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { WorkflowRunPage } from "./WorkflowRunPage";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -22,6 +23,24 @@ const readyRuntime = {
   pid: 123,
   error: null,
   environment: { prepared: true },
+};
+
+const readyRuntimeState: Partial<RuntimeHealthState> = {
+  backendStatus: "reachable",
+  engineStatus: "ready",
+  runtime: readyRuntime as RuntimeHealthState["runtime"],
+  hasKnownState: true,
+  lastCheckedAt: Date.now(),
+};
+
+const engineOfflineRuntimeState: Partial<RuntimeHealthState> = {
+  ...readyRuntimeState,
+  engineStatus: "offline",
+  runtime: {
+    ...readyRuntime,
+    reachable: false,
+    managed_process_running: false,
+  } as RuntimeHealthState["runtime"],
 };
 
 const validWorkflow = {
@@ -200,14 +219,19 @@ function mockConfiguredDashboardFetch(
   });
 }
 
-function renderRunPage(props: Partial<ComponentProps<typeof WorkflowRunPage>> = {}) {
+function renderRunPage(
+  props: Partial<ComponentProps<typeof WorkflowRunPage>> = {},
+  runtimeState: Partial<RuntimeHealthState> = readyRuntimeState,
+) {
   return render(
-    <WorkflowRunPage
-      workflowId="text_to_image_v0"
-      onBack={vi.fn()}
-      onNavigate={vi.fn()}
-      {...props}
-    />,
+    <RuntimeStatusProvider initialRuntimeState={runtimeState} skipInitialRefresh>
+      <WorkflowRunPage
+        workflowId="text_to_image_v0"
+        onBack={vi.fn()}
+        onNavigate={vi.fn()}
+        {...props}
+      />
+    </RuntimeStatusProvider>,
   );
 }
 
@@ -367,18 +391,17 @@ describe("WorkflowRunPage", () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/runtime")) {
-        return Promise.resolve(jsonResponse({ ...readyRuntime, reachable: false, managed_process_running: false }));
-      }
-
       if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
         return Promise.resolve(jsonResponse(workflowStatus));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse(validWorkflow));
       }
 
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    renderRunPage();
+    renderRunPage({}, engineOfflineRuntimeState);
 
     expect(await screen.findByText("The local AI engine is offline")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
@@ -757,6 +780,76 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("VRAM")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+  });
+
+  it("keeps Run enabled while a silent runtime refresh is pending", async () => {
+    const staleReadyRuntimeState = {
+      ...readyRuntimeState,
+      lastCheckedAt: Date.now() - 60_000,
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return new Promise<Response>(() => {});
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage({}, staleReadyRuntimeState);
+
+    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
+    expect(screen.queryByText("Checking backend")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+  });
+
+  it("marks the backend offline after a run action fails", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.reject(new Error("backend down"));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.reject(new Error("run request failed"));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByText("The workflow is not ready")).toBeInTheDocument();
+    expect(screen.getByText("run request failed")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend offline").length).toBeGreaterThan(0);
   });
 
   it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {

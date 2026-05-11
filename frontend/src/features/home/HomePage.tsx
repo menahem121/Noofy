@@ -6,7 +6,6 @@ import { openExternalUrl } from "../../lib/openExternalUrl";
 const REDDIT_URL = "https://www.reddit.com/r/noofy";
 
 import {
-  fetchRuntimeStatus,
   fetchWorkflows,
   cancelImportModelDownload,
   cancelWorkflowImport,
@@ -16,12 +15,11 @@ import {
   previewWorkflowPackageImport,
   type ImportModelDownloadJobStatus,
   type RequiredModelAvailability,
-  type RuntimeStatus,
   type WorkflowImportResponse,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
+import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import {
   fallbackWorkflow,
   recentWorkflows,
@@ -29,12 +27,9 @@ import {
   type WorkflowCard,
   type WorkflowStatus,
 } from "./homeContent";
+import { useWorkflowLibrary } from "./WorkflowLibraryProvider";
 
 interface HomeDataState {
-  loading: boolean;
-  runtime: RuntimeStatus | null;
-  workflows: WorkflowSummary[];
-  error: string | null;
   importing: boolean;
   downloadingModels: boolean;
   downloadJob: ImportModelDownloadJobStatus | null;
@@ -45,10 +40,6 @@ interface HomeDataState {
 }
 
 const initialHomeState: HomeDataState = {
-  loading: true,
-  runtime: null,
-  workflows: [],
-  error: null,
   importing: false,
   downloadingModels: false,
   downloadJob: null,
@@ -163,64 +154,41 @@ interface HomePageProps {
 
 export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: HomePageProps) {
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
+  const runtimeStatus = useRuntimeStatus();
+  const workflowLibrary = useWorkflowLibrary();
+  const { refreshRuntime } = runtimeStatus;
+  const { refreshWorkflows, setWorkflowsFromResponse } = workflowLibrary;
 
   useEffect(() => {
-    let mounted = true;
+    void refreshRuntime({ silent: true });
+    void refreshWorkflows();
+  }, [refreshRuntime, refreshWorkflows]);
 
-    async function loadHomeData() {
-      const [runtimeResult, workflowsResult] = await Promise.allSettled([
-        fetchRuntimeStatus(),
-        fetchWorkflows(),
-      ]);
-
-      if (!mounted) {
-        return;
-      }
-
-      const runtime = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
-      const workflows = workflowsResult.status === "fulfilled" ? workflowsResult.value : [];
-      const firstError =
-        runtimeResult.status === "rejected"
-          ? runtimeResult.reason
-          : workflowsResult.status === "rejected"
-            ? workflowsResult.reason
-            : null;
-
-      setHomeData({
-        loading: false,
-        runtime,
-        workflows,
-        error: firstError instanceof Error ? firstError.message : firstError ? String(firstError) : null,
-        importing: false,
-        downloadingModels: false,
-        downloadJob: null,
-        pendingImport: null,
-        allowCommunityPreparation: true,
-        importResult: null,
-        importError: null,
-      });
-    }
-
-    void loadHomeData();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const status = runtimeStatusCopy(homeData);
+  const status = runtimeStatus.statusView;
 
   const workflowCards = useMemo(() => {
-    const backendCards = workflowCardsFromBackend(homeData.workflows);
+    const backendCards = workflowCardsFromBackend(workflowLibrary.workflows);
     const fallbackCards = backendCards.length > 0 ? backendCards : [fallbackWorkflow];
     const starterWithoutDuplicates = starterWorkflows.filter(
       (starter) => !fallbackCards.some((card) => card.id === starter.id),
     );
 
     return [...fallbackCards, ...starterWithoutDuplicates].slice(0, 8);
-  }, [homeData.workflows]);
+  }, [workflowLibrary.workflows]);
 
-  const installedCount = homeData.workflows.length;
+  const installedCount = workflowLibrary.workflows.length;
+  const homeWarning =
+    workflowLibrary.error
+      ? {
+          title: "Workflow library could not refresh",
+          message: "Noofy is keeping your last loaded workflows visible while it retries in the background.",
+        }
+      : runtimeStatus.backendStatus === "unreachable"
+        ? {
+            title: "Backend is not reachable",
+            message: "The page is keeping the last loaded workflows visible until the local backend returns.",
+          }
+        : null;
 
   async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -245,9 +213,9 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
         if (importResult.model_summary.ready_to_run) {
           const committedImport = await commitWorkflowImport(importResult.import_session_id);
           const workflows = await fetchWorkflows();
+          setWorkflowsFromResponse(workflows);
           setHomeData((current) => ({
             ...current,
-            workflows,
             importing: false,
             pendingImport: null,
             downloadJob: null,
@@ -266,9 +234,9 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
         return;
       }
       const workflows = await fetchWorkflows();
+      setWorkflowsFromResponse(workflows);
       setHomeData((current) => ({
         ...current,
-        workflows,
         importing: false,
         pendingImport: null,
         importResult,
@@ -344,9 +312,9 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     try {
       const importResult = await commitWorkflowImport(sessionId);
       const workflows = await fetchWorkflows();
+      setWorkflowsFromResponse(workflows);
       setHomeData((current) => ({
         ...current,
-        workflows,
         importing: false,
         pendingImport: null,
         importResult,
@@ -390,10 +358,10 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
           committingReadyImport = true;
           const importResult = await commitWorkflowImport(sessionId);
           const workflows = await fetchWorkflows();
+          setWorkflowsFromResponse(workflows);
           if (stopped) return;
           setHomeData((current) => ({
             ...current,
-            workflows,
             importing: false,
             downloadingModels: false,
             pendingImport: null,
@@ -429,7 +397,12 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
       stopped = true;
       window.clearInterval(interval);
     };
-  }, [homeData.pendingImport?.import_session_id, homeData.downloadJob?.job_id, homeData.downloadJob?.status]);
+  }, [
+    homeData.pendingImport?.import_session_id,
+    homeData.downloadJob?.job_id,
+    homeData.downloadJob?.status,
+    setWorkflowsFromResponse,
+  ]);
 
   return (
     <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
@@ -447,12 +420,12 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
             </button>
           </section>
 
-          {homeData.error ? (
+          {homeWarning ? (
             <div className="notice notice--warning" role="status">
               <AlertCircle size={18} aria-hidden="true" />
               <div>
-                <strong>Backend is not reachable</strong>
-                <span>The page is showing starter content until the local backend is running.</span>
+                <strong>{homeWarning.title}</strong>
+                <span>{homeWarning.message}</span>
               </div>
             </div>
           ) : null}

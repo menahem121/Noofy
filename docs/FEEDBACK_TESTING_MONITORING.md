@@ -8,7 +8,9 @@ The backend exposes structured diagnostics through the app-owned API.
 
 Current feedback surfaces:
 
+- Frontend runtime status provider: session-scoped last-known backend/engine state for the top bar and run gating. Background refreshes are non-blocking.
 - `GET /api/health`: backend status, ComfyUI reachability, workflow health, and latest error.
+- `GET /api/runtime`: lightweight backend/engine status used for frontend refreshes.
 - `GET /api/logs`: recent global diagnostic events.
 - `GET /api/jobs/{job_id}/logs`: diagnostics for a single workflow job.
 - `GET /api/jobs/{job_id}/progress`: latest normalized progress.
@@ -24,6 +26,8 @@ Diagnostics should be structured events, not ad hoc print output. Events should 
 Runtime, install, smoke-test, Memory Governor, model, update, runner, and workflow subsystems should emit diagnostics through an injected diagnostics sink. They should not construct their own private diagnostic stores. The app composition root owns the shared in-memory `LogStore` and passes it to subsystems so events remain visible through `/api/logs`, `/api/health`, job logs, and other API/UI troubleshooting surfaces.
 
 Emit-only subsystems should depend on the small diagnostics sink contract instead of the concrete store. API-facing code that needs to read or filter events may use the concrete `LogStore` or a reader contract. This keeps runtime code decoupled from storage/exposure details while preserving one shared event stream for the UI.
+
+Frontend availability feedback should be non-blocking after startup. Keep the last known "Ready" state visible while silent health refreshes run. If a background refresh fails once, store the error but do not downgrade the visible status. Downgrade only after repeated silent failures or a real user action failure, such as Run failing because the backend is unreachable.
 
 ## What To Log
 
@@ -64,6 +68,7 @@ When changing behavior, add or update tests that prove:
 
 - the success path works
 - the likely failure path is reported clearly
+- frontend status refreshes do not hide cached workflows or disable ready workflows without a known blocker
 - diagnostics/logs are emitted when useful
 - frontend-facing response shapes remain stable
 - Memory Governor decisions remain deterministic for the same fake memory snapshots, local observation history, and runner states
