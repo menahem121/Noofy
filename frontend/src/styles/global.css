@@ -1950,6 +1950,109 @@ button:disabled {
   color: var(--text-secondary);
 }
 
+.workflow-failure-modal {
+  width: min(980px, 100%);
+  max-height: min(820px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-1);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.workflow-failure-modal__header,
+.workflow-failure-modal__footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px;
+}
+
+.workflow-failure-modal__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workflow-failure-modal__header h2 {
+  margin: 4px 0 8px;
+  font-size: 24px;
+}
+
+.workflow-failure-modal__header p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.workflow-failure-modal__body {
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  padding: 16px 22px;
+}
+
+.workflow-failure-modal__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-failure-modal__meta span {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.workflow-log-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(8, 8, 10, 0.34);
+}
+
+.workflow-log-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workflow-log-section__header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.workflow-log-section__header span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-log-section__content {
+  max-height: 190px;
+  min-height: 92px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workflow-failure-modal__footer {
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .required-models-list {
   display: grid;
   gap: 10px;

@@ -3,7 +3,7 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
-import { WorkflowRunPage } from "./WorkflowRunPage";
+import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -12,6 +12,16 @@ function jsonResponse(data: unknown, status = 200) {
       "Content-Type": "application/json",
     },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 const readyRuntime = {
@@ -32,6 +42,19 @@ const readyRuntimeState: Partial<RuntimeHealthState> = {
   hasKnownState: true,
   lastCheckedAt: Date.now(),
 };
+
+function diagnosticEvent(source: string, message: string, details: Record<string, unknown> = {}) {
+  return {
+    id: Math.floor(Math.random() * 100000),
+    timestamp: "2026-05-08T10:00:00+00:00",
+    level: source.includes("error") ? "error" : "info",
+    message,
+    source,
+    job_id: null,
+    workflow_id: "text_to_image_v0",
+    details,
+  };
+}
 
 const engineOfflineRuntimeState: Partial<RuntimeHealthState> = {
   ...readyRuntimeState,
@@ -265,6 +288,32 @@ describe("WorkflowRunPage", () => {
     delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
+  it("splits diagnostics into ComfyUI engine logs and Noofy logs from existing sources", () => {
+    const { comfyuiLogs, noofyLogs } = splitDiagnosticLogs([
+      diagnosticEvent("comfyui.adapter", "ComfyUI execution failed"),
+      diagnosticEvent("comfyui.stdout", "model load failed"),
+      diagnosticEvent("runtime.manager", "Managed ComfyUI crashed"),
+      diagnosticEvent("runtime.runner_process.stdout", "runner traceback"),
+      diagnosticEvent("future.engine", "runner failed", { runner_id: "runner-1" }),
+      diagnosticEvent("engine.service", "Submitting workflow run", { runner_id: "runner-1" }),
+      diagnosticEvent("memory_governor", "Started memory sampling"),
+      diagnosticEvent("workflow.models", "Model validation failed"),
+    ]);
+
+    expect(comfyuiLogs.map((event) => event.source)).toEqual([
+      "comfyui.adapter",
+      "comfyui.stdout",
+      "runtime.manager",
+      "runtime.runner_process.stdout",
+      "future.engine",
+    ]);
+    expect(noofyLogs.map((event) => event.source)).toEqual([
+      "engine.service",
+      "memory_governor",
+      "workflow.models",
+    ]);
+  });
+
   it("validates requirements, starts a run, polls progress, and shows the result", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -341,6 +390,59 @@ describe("WorkflowRunPage", () => {
       "src",
       "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
     );
+  });
+
+  it("shows optimistic run feedback immediately while submission is pending", async () => {
+    const runRequest = deferred<Response>();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") return runRequest.promise;
+      if (url.endsWith("/api/jobs/job-pending/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-pending",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-pending/result")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-pending", status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
+    expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
+    expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-pending",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
   });
 
   it("blocks the run and explains missing model requirements", async () => {
@@ -458,6 +560,18 @@ describe("WorkflowRunPage", () => {
         );
       }
 
+      if (url.endsWith("/api/jobs/job-2/logs?limit=200")) {
+        return Promise.resolve(
+          jsonResponse({
+            events: [
+              { ...diagnosticEvent("comfyui.adapter", "ComfyUI execution failed"), job_id: "job-2" },
+              { ...diagnosticEvent("runtime.runner_process.stdout", "Traceback from custom node"), job_id: "job-2" },
+              { ...diagnosticEvent("memory_governor", "Started best-effort job memory sampling"), job_id: "job-2" },
+            ],
+          }),
+        );
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -466,8 +580,11 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(await screen.findByText("Workflow failed")).toBeInTheDocument();
-    expect(screen.getByText("model failed")).toBeInTheDocument();
+    expect((await screen.findAllByText("Workflow failed")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("model failed").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
+    expect(screen.getByText(/ComfyUI execution failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Started best-effort job memory sampling/)).toBeInTheDocument();
   });
 
   it("shows a memory waiting state without polling a queue id", async () => {
@@ -818,6 +935,11 @@ describe("WorkflowRunPage", () => {
 
   it("marks the backend offline after a run action fails", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -828,6 +950,18 @@ describe("WorkflowRunPage", () => {
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
       if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
         return Promise.reject(new Error("run request failed"));
+      }
+      if (url.endsWith("/api/logs?limit=200")) {
+        return Promise.resolve(
+          jsonResponse({
+            events: [
+              diagnosticEvent("comfyui.stdout", "CUDA out of memory"),
+              diagnosticEvent("runtime.manager", "Managed ComfyUI crashed", { pid: 123, returncode: 1 }),
+              diagnosticEvent("engine.service", "Submitting workflow run", { runner_id: "runner-1" }),
+              diagnosticEvent("workflow.models", "Model summary refreshed"),
+            ],
+          }),
+        );
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
         return Promise.resolve(
@@ -848,8 +982,21 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("The workflow is not ready")).toBeInTheDocument();
-    expect(screen.getByText("run request failed")).toBeInTheDocument();
+    expect(screen.getAllByText("run request failed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Backend offline").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
+    expect(screen.getByText(/CUDA out of memory/)).toBeInTheDocument();
+    expect(screen.getByText(/Submitting workflow run/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /copy logs/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("ComfyUI engine logs");
+    expect(copied).toContain("Noofy logs");
+    expect(copied).toContain("CUDA out of memory");
+    expect(copied).toContain("Submitting workflow run");
   });
 
   it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {

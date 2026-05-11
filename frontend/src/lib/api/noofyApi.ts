@@ -343,6 +343,21 @@ export interface JobResult {
   error: string | null;
 }
 
+export interface DiagnosticEvent {
+  id: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  source: string;
+  job_id: string | null;
+  workflow_id: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface DiagnosticLogResponse {
+  events: DiagnosticEvent[];
+}
+
 export interface WorkflowRunPayload {
   inputs: Record<string, unknown>;
   options?: Record<string, unknown>;
@@ -753,6 +768,20 @@ export function fetchJobProgress(jobId: string) {
 
 export function fetchJobResult(jobId: string) {
   return getJson<JobResult | EngineJob>(`/jobs/${jobId}/result`);
+}
+
+export function fetchJobLogs(jobId: string, options: { limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return getJson<DiagnosticLogResponse>(`/jobs/${encodeURIComponent(jobId)}/logs${suffix}`);
+}
+
+export function fetchLogs(options: { limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return getJson<DiagnosticLogResponse>(`/logs${suffix}`);
 }
 
 export function cancelJob(jobId: string) {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
+  Clipboard,
   CheckCircle2,
   Download,
   Image,
@@ -10,14 +11,17 @@ import {
   RotateCcw,
   Share2,
   Square,
+  X,
 } from "lucide-react";
 
 import {
   cancelJob,
   createJobEventsUrl,
   exportWorkflowUrl,
+  fetchJobLogs,
   fetchJobProgress,
   fetchJobResult,
+  fetchLogs,
   fetchWorkflowModelSummary,
   fetchWorkflowPackage,
   fetchWorkflowStatus,
@@ -27,6 +31,7 @@ import {
   uploadDashboardAsset,
   validateWorkflow,
   type DashboardControlDef,
+  type DiagnosticEvent,
   type EngineJob,
   type JobProgress,
   type JobResult,
@@ -72,6 +77,16 @@ interface RunPageState {
   error: string | null;
 }
 
+interface RunFailureDialogState {
+  errorMessage: string;
+  jobId: string | null;
+  logsLoading: boolean;
+  logError: string | null;
+  comfyuiLogs: DiagnosticEvent[];
+  noofyLogs: DiagnosticEvent[];
+  copied: boolean;
+}
+
 const initialState: RunPageState = {
   loading: true,
   workflowStatus: null,
@@ -86,16 +101,20 @@ const initialState: RunPageState = {
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const watchableJobStatuses = new Set(["queued", "running"]);
+const optimisticJobId = "__pending_workflow_run__";
+const logLimit = 200;
 
 export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
+  const [isSubmittingRun, setIsSubmittingRun] = useState(false);
+  const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
-  const isRunning = state.progress?.status === "queued" || state.progress?.status === "running";
+  const isRunning = isSubmittingRun || state.progress?.status === "queued" || state.progress?.status === "running";
   const isWaitingForMemory = state.job?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
   const status = runtimeStatus.statusView;
@@ -207,7 +226,15 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     }
 
     cleanupJobWatchers();
-    setState((current) => ({ ...current, job: null, progress: null, result: null, error: null }));
+    setIsSubmittingRun(true);
+    setFailureDialog(null);
+    setState((current) => ({
+      ...current,
+      job: null,
+      progress: optimisticProgress(),
+      result: null,
+      error: null,
+    }));
 
     try {
       const response = await runWorkflow(workflowId, {
@@ -216,22 +243,30 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       });
 
       if (!isEngineJob(response)) {
-        setState((current) => ({ ...current, validation: response }));
+        setIsSubmittingRun(false);
+        setState((current) => ({ ...current, validation: response, progress: null }));
         return;
       }
 
+      setIsSubmittingRun(false);
       setSubmittedJob(response);
       if (isWatchableJob(response)) {
         watchJob(response.job_id);
         await pollJobOnce(response.job_id);
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
+      setIsSubmittingRun(false);
       setState((current) => ({
         ...current,
-        error: error instanceof Error ? error.message : String(error),
+        job: null,
+        progress: null,
+        result: null,
+        error: message,
       }));
+      void openFailureDialog(message, null);
     }
   }
 
@@ -240,6 +275,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     try {
       const progress = await cancelJob(state.job.job_id);
       cleanupJobWatchers();
+      setIsSubmittingRun(false);
       setState((current) => ({ ...current, progress }));
     } catch (error) {
       setState((current) => ({
@@ -258,6 +294,49 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     }
   }
 
+  async function openFailureDialog(errorMessage: string, jobId: string | null) {
+    setFailureDialog({
+      errorMessage,
+      jobId,
+      logsLoading: true,
+      logError: null,
+      comfyuiLogs: [],
+      noofyLogs: [],
+      copied: false,
+    });
+
+    try {
+      const response = jobId ? await fetchJobLogs(jobId, { limit: logLimit }) : await fetchLogs({ limit: logLimit });
+      const splitLogs = splitDiagnosticLogs(response.events);
+      setFailureDialog((current) =>
+        current && current.errorMessage === errorMessage && current.jobId === jobId
+          ? {
+              ...current,
+              logsLoading: false,
+              comfyuiLogs: splitLogs.comfyuiLogs,
+              noofyLogs: splitLogs.noofyLogs,
+            }
+          : current,
+      );
+    } catch (error) {
+      setFailureDialog((current) =>
+        current && current.errorMessage === errorMessage && current.jobId === jobId
+          ? {
+              ...current,
+              logsLoading: false,
+              logError: error instanceof Error ? error.message : String(error),
+            }
+          : current,
+      );
+    }
+  }
+
+  async function handleCopyFailureLogs() {
+    if (!failureDialog) return;
+    await navigator.clipboard.writeText(formatFailureReport(workflowId, failureDialog));
+    setFailureDialog((current) => (current ? { ...current, copied: true } : current));
+  }
+
   function watchJob(jobId: string) {
     if (typeof EventSource === "undefined") {
       pollTimerRef.current = window.setInterval(() => {
@@ -269,7 +348,9 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     const source = new EventSource(createJobEventsUrl(jobId));
     eventSourceRef.current = source;
     source.addEventListener("progress", (event) => {
-      setState((current) => ({ ...current, progress: JSON.parse(event.data) as JobProgress }));
+      const progress = JSON.parse(event.data) as JobProgress;
+      if (terminalStatuses.has(progress.status)) setIsSubmittingRun(false);
+      setState((current) => ({ ...current, progress }));
     });
     source.addEventListener("result", (event) => {
       source.close();
@@ -283,7 +364,11 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         }
         return;
       }
+      setIsSubmittingRun(false);
       setState((current) => ({ ...current, result }));
+      if (result.status === "failed") {
+        void openFailureDialog(result.error ?? "The local engine could not finish this run.", result.job_id);
+      }
     });
     source.onerror = () => {
       source.close();
@@ -295,6 +380,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   }
 
   function setSubmittedJob(job: EngineJob) {
+    setIsSubmittingRun(false);
     setState((current) => ({
       ...current,
       job,
@@ -315,6 +401,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     setState((current) => ({ ...current, progress }));
 
     if (terminalStatuses.has(progress.status)) {
+      setIsSubmittingRun(false);
       cleanupJobWatchers();
       const result = await fetchJobResult(jobId);
       if (isEngineJob(result)) {
@@ -326,6 +413,9 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         return;
       }
       setState((current) => ({ ...current, result }));
+      if (result.status === "failed") {
+        void openFailureDialog(result.error ?? progress.message ?? "The local engine could not finish this run.", jobId);
+      }
     }
   }
 
@@ -509,6 +599,15 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     </>
   );
 
+  const failureDialogElement = failureDialog ? (
+    <WorkflowFailureDialog
+      dialog={failureDialog}
+      workflowId={workflowId}
+      onClose={() => setFailureDialog(null)}
+      onCopy={() => void handleCopyFailureLogs()}
+    />
+  ) : null;
+
   if (showCanvasView) {
     return (
       <AppLayout
@@ -546,6 +645,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
             setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
           }
         />
+        {failureDialogElement}
       </AppLayout>
     );
   }
@@ -632,7 +732,99 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           ) : null}
         </aside>
       </section>
+      {failureDialogElement}
     </AppLayout>
+  );
+}
+
+function WorkflowFailureDialog({
+  dialog,
+  workflowId,
+  onClose,
+  onCopy,
+}: {
+  dialog: RunFailureDialogState;
+  workflowId: string;
+  onClose: () => void;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-failure-title">
+      <section className="workflow-failure-modal">
+        <header className="workflow-failure-modal__header">
+          <div>
+            <p className="eyebrow">Workflow run</p>
+            <h2 id="workflow-failure-title">Workflow failed</h2>
+            <p>{dialog.errorMessage}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="workflow-failure-modal__body">
+          <div className="workflow-failure-modal__meta">
+            <span>Workflow: {workflowId}</span>
+            {dialog.jobId ? <span>Job: {dialog.jobId}</span> : <span>Job: not created yet</span>}
+          </div>
+          {dialog.logError ? (
+            <div className="notice notice--warning notice--compact" role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>Logs could not be loaded</strong>
+                <span>{dialog.logError}</span>
+              </div>
+            </div>
+          ) : null}
+          <DiagnosticLogSection
+            title="ComfyUI engine logs"
+            events={dialog.comfyuiLogs}
+            loading={dialog.logsLoading}
+            emptyMessage="No ComfyUI engine logs were returned for this failure."
+          />
+          <DiagnosticLogSection
+            title="Noofy logs"
+            events={dialog.noofyLogs}
+            loading={dialog.logsLoading}
+            emptyMessage="No Noofy logs were returned for this failure."
+          />
+        </div>
+
+        <footer className="workflow-failure-modal__footer">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Close
+          </button>
+          <button className="primary-button" type="button" onClick={onCopy}>
+            <Clipboard size={16} aria-hidden="true" />
+            {dialog.copied ? "Copied" : "Copy logs"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function DiagnosticLogSection({
+  title,
+  events,
+  loading,
+  emptyMessage,
+}: {
+  title: string;
+  events: DiagnosticEvent[];
+  loading: boolean;
+  emptyMessage: string;
+}) {
+  return (
+    <section className="workflow-log-section" aria-labelledby={sectionId(title)}>
+      <div className="workflow-log-section__header">
+        <h3 id={sectionId(title)}>{title}</h3>
+        <span>{loading ? "Loading" : `${events.length} events`}</span>
+      </div>
+      <pre className="workflow-log-section__content">
+        {loading ? "Loading logs..." : events.length > 0 ? formatDiagnosticEvents(events) : emptyMessage}
+      </pre>
+    </section>
   );
 }
 
@@ -760,15 +952,125 @@ function isWatchableJob(job: EngineJob) {
   return watchableJobStatuses.has(job.status);
 }
 
+function optimisticProgress(): JobProgress {
+  return {
+    job_id: optimisticJobId,
+    status: "queued",
+    value: 0,
+    max: null,
+    current_node: null,
+    message: "Starting workflow...",
+  };
+}
+
 function progressMessage(progress: JobProgress | null, result: JobResult | null) {
   if (result?.status === "completed") return "Result saved by the local workflow.";
   if (result?.status === "failed") return "The local engine could not finish this run.";
   if (progress?.status === "canceled") return "Run canceled.";
   if (progress?.status === "running") return progress.message ?? "Generating image...";
-  if (progress?.status === "queued") return "Preparing workflow...";
+  if (progress?.status === "queued") return progress.message ?? "Preparing workflow...";
   if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for memory.";
   if (progress?.status === "blocked_by_memory") return progress.message ?? "This workflow needs more memory.";
   return "Run the workflow to create your first result.";
+}
+
+export function splitDiagnosticLogs(events: DiagnosticEvent[]) {
+  const comfyuiLogs: DiagnosticEvent[] = [];
+  const noofyLogs: DiagnosticEvent[] = [];
+  for (const event of events) {
+    if (isComfyUIDiagnostic(event)) {
+      comfyuiLogs.push(event);
+    } else {
+      noofyLogs.push(event);
+    }
+  }
+  return { comfyuiLogs, noofyLogs };
+}
+
+function isComfyUIDiagnostic(event: DiagnosticEvent) {
+  const source = event.source.toLowerCase();
+  if (
+    source.startsWith("comfyui.") ||
+    source.startsWith("runtime.comfyui_") ||
+    source === "runtime.manager" ||
+    source === "runtime.environment" ||
+    source === "runtime.environment.stdout" ||
+    source === "runtime.environment.stderr" ||
+    source === "runtime.runner_process" ||
+    source === "runtime.runner_process.stdout" ||
+    source === "runtime.runner_coordinator"
+  ) {
+    return true;
+  }
+
+  if (isKnownNoofyDiagnosticSource(source)) {
+    return false;
+  }
+
+  const searchable = `${event.source} ${event.message} ${JSON.stringify(event.details ?? {})}`.toLowerCase();
+  return (
+    searchable.includes("comfyui") ||
+    searchable.includes("runner_id") ||
+    searchable.includes("base_url") ||
+    searchable.includes("ws_url") ||
+    searchable.includes("\"pid\"") ||
+    searchable.includes("returncode") ||
+    searchable.includes("managed engine") ||
+    searchable.includes("engine startup") ||
+    searchable.includes("engine crash")
+  );
+}
+
+function isKnownNoofyDiagnosticSource(source: string) {
+  return (
+    source === "engine.service" ||
+    source === "memory_governor" ||
+    source.startsWith("workflow.") ||
+    source === "runtime.workspace" ||
+    source === "runtime.node_registry" ||
+    source.startsWith("runtime.dependency_") ||
+    source === "runtime.install_transaction" ||
+    source === "runtime.install_state" ||
+    source === "runtime.storage_gc" ||
+    source === "capsule.installer" ||
+    source.startsWith("settings.") ||
+    source === "trust" ||
+    source.startsWith("trust.")
+  );
+}
+
+function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) {
+  return [
+    "Workflow failure report",
+    `Workflow: ${workflowId}`,
+    `Job: ${dialog.jobId ?? "not created yet"}`,
+    `Error: ${dialog.errorMessage}`,
+    "",
+    "ComfyUI engine logs",
+    formatDiagnosticEvents(dialog.comfyuiLogs) || "No ComfyUI engine logs were returned for this failure.",
+    "",
+    "Noofy logs",
+    formatDiagnosticEvents(dialog.noofyLogs) || "No Noofy logs were returned for this failure.",
+  ].join("\n");
+}
+
+function formatDiagnosticEvents(events: DiagnosticEvent[]) {
+  return events.map(formatDiagnosticEvent).join("\n");
+}
+
+function formatDiagnosticEvent(event: DiagnosticEvent) {
+  const details = event.details && Object.keys(event.details).length > 0
+    ? ` details=${JSON.stringify(event.details)}`
+    : "";
+  const ids = [
+    event.workflow_id ? `workflow=${event.workflow_id}` : null,
+    event.job_id ? `job=${event.job_id}` : null,
+  ].filter(Boolean).join(" ");
+  return `[${event.timestamp}] ${event.level.toUpperCase()} ${event.source}${ids ? ` ${ids}` : ""}: ${event.message}${details}`;
+}
+
+function sectionId(title: string) {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function memoryStatusTitle(state: string) {
