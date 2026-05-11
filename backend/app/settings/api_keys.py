@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
+import secrets
+import stat
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import BaseModel, Field
 
 from app.engine.diagnostics import DiagnosticsSink
@@ -24,6 +31,9 @@ PROVIDER_ALIASES: dict[str, ApiKeyProvider] = {
 
 KEYCHAIN_SERVICE_NAME = "Noofy"
 KEYCHAIN_ACCOUNT_PREFIX = "external-model-platform"
+ENCRYPTED_VAULT_FILENAME = "api-key-vault.json"
+ENCRYPTED_VAULT_CHECK_TEXT = b"noofy-api-key-vault-v1"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class CredentialStoreUnavailable(RuntimeError):
@@ -34,6 +44,10 @@ class CredentialStoreStatus(BaseModel):
     available: bool
     status: str
     error: str | None = None
+    kind: str = "os-keyring"
+    backend: str | None = None
+    display_path: str | None = None
+    guidance: str | None = None
 
 
 class CredentialStore(Protocol):
@@ -123,14 +137,29 @@ class KeyringCredentialStore:
 
     def status(self) -> CredentialStoreStatus:
         try:
-            self._keyring()
-            return CredentialStoreStatus(available=True, status="available")
+            _, backend_id = self._keyring()
+            return CredentialStoreStatus(
+                available=True,
+                status="available",
+                kind="os-keyring",
+                backend=backend_id,
+            )
         except CredentialStoreUnavailable as exc:
-            return CredentialStoreStatus(available=False, status="unavailable", error=str(exc))
+            return CredentialStoreStatus(
+                available=False,
+                status="unavailable",
+                error=str(exc),
+                kind="os-keyring",
+                guidance=(
+                    "Noofy could not find an OS-backed credential store. On headless Linux, "
+                    "configure a Secret Service provider in the same D-Bus session or explicitly "
+                    "opt in to encrypted-vault mode."
+                ),
+            )
 
     def set_secret(self, provider: ApiKeyProvider, secret: str) -> None:
         try:
-            keyring = self._keyring()
+            keyring, _ = self._keyring()
             keyring.set_password(self.service_name, _account_name(provider), secret)
         except CredentialStoreUnavailable:
             raise
@@ -139,7 +168,7 @@ class KeyringCredentialStore:
 
     def get_secret(self, provider: ApiKeyProvider) -> str | None:
         try:
-            keyring = self._keyring()
+            keyring, _ = self._keyring()
             return keyring.get_password(self.service_name, _account_name(provider))
         except CredentialStoreUnavailable:
             raise
@@ -148,7 +177,7 @@ class KeyringCredentialStore:
 
     def delete_secret(self, provider: ApiKeyProvider) -> None:
         try:
-            keyring = self._keyring()
+            keyring, _ = self._keyring()
             keyring.delete_password(self.service_name, _account_name(provider))
         except CredentialStoreUnavailable:
             raise
@@ -177,7 +206,209 @@ class KeyringCredentialStore:
         )
         if any(marker in backend_id for marker in blocked_markers):
             raise CredentialStoreUnavailable("No OS-backed credential store is available.")
-        return keyring
+        return keyring, backend_id
+
+
+class EncryptedVaultCredentialStore:
+    def __init__(
+        self,
+        *,
+        vault_path: Path,
+        passphrase_file: Path,
+        data_dir: Path,
+        repo_root: Path = PROJECT_ROOT,
+        allow_repo_local_secret_storage: bool = False,
+    ) -> None:
+        self.vault_path = vault_path.expanduser()
+        self.passphrase_file = passphrase_file.expanduser()
+        self.data_dir = data_dir.expanduser()
+        self.repo_root = repo_root.expanduser()
+        self.allow_repo_local_secret_storage = allow_repo_local_secret_storage
+
+    def status(self) -> CredentialStoreStatus:
+        try:
+            self._load_or_initialize(create=False)
+            return CredentialStoreStatus(
+                available=True,
+                status="available",
+                kind="encrypted-vault",
+                backend="encrypted-vault",
+                display_path="<app-data>/settings/api-key-vault.json",
+                guidance="Encrypted API key vault is configured.",
+            )
+        except CredentialStoreUnavailable as exc:
+            return CredentialStoreStatus(
+                available=False,
+                status="unavailable",
+                error=str(exc),
+                kind="encrypted-vault",
+                backend="encrypted-vault",
+                display_path="<app-data>/settings/api-key-vault.json",
+                guidance=(
+                    "Encrypted-vault mode requires app data and the passphrase file to live outside "
+                    "the Noofy repo checkout, with a readable passphrase file using 0600 permissions."
+                ),
+            )
+
+    def set_secret(self, provider: ApiKeyProvider, secret: str) -> None:
+        vault, key = self._load_or_initialize(create=True)
+        aesgcm = AESGCM(key)
+        nonce = secrets.token_bytes(12)
+        ciphertext = aesgcm.encrypt(nonce, secret.encode("utf-8"), provider.encode("utf-8"))
+        entries = _vault_entries(vault)
+        entries[provider] = {
+            "nonce": _b64encode(nonce),
+            "ciphertext": _b64encode(ciphertext),
+        }
+        vault["entries"] = entries
+        self._write_vault(vault)
+
+    def get_secret(self, provider: ApiKeyProvider) -> str | None:
+        vault, key = self._load_or_initialize(create=False)
+        entry = _vault_entries(vault).get(provider)
+        if entry is None:
+            return None
+        try:
+            nonce = _b64decode(entry["nonce"])
+            ciphertext = _b64decode(entry["ciphertext"])
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext, provider.encode("utf-8"))
+        except (KeyError, TypeError, ValueError, InvalidTag) as exc:
+            raise CredentialStoreUnavailable("Encrypted API key vault could not be decrypted.") from exc
+        return plaintext.decode("utf-8")
+
+    def delete_secret(self, provider: ApiKeyProvider) -> None:
+        vault, _ = self._load_or_initialize(create=False)
+        entries = _vault_entries(vault)
+        entries.pop(provider, None)
+        vault["entries"] = entries
+        self._write_vault(vault)
+
+    def _load_or_initialize(self, *, create: bool) -> tuple[dict[str, Any], bytes]:
+        self._validate_paths()
+        passphrase = self._read_passphrase()
+        if not self.vault_path.exists():
+            if not create:
+                return self._new_vault(passphrase)
+            vault = self._new_vault(passphrase)[0]
+            return vault, self._derive_key(passphrase, _b64decode(vault["kdf"]["salt"]))
+
+        try:
+            raw = json.loads(self.vault_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise CredentialStoreUnavailable("Encrypted API key vault could not be read.") from exc
+        if not isinstance(raw, dict) or raw.get("schema_version") != "1":
+            raise CredentialStoreUnavailable("Encrypted API key vault has an unsupported format.")
+
+        try:
+            kdf = raw["kdf"]
+            salt = _b64decode(kdf["salt"])
+            key = self._derive_key(passphrase, salt)
+            check = raw["check"]
+            AESGCM(key).decrypt(
+                _b64decode(check["nonce"]),
+                _b64decode(check["ciphertext"]),
+                b"vault-check",
+            )
+        except (KeyError, TypeError, ValueError, InvalidTag) as exc:
+            raise CredentialStoreUnavailable("Encrypted API key vault could not be decrypted.") from exc
+        return raw, key
+
+    def _new_vault(self, passphrase: bytes) -> tuple[dict[str, Any], bytes]:
+        salt = secrets.token_bytes(16)
+        key = self._derive_key(passphrase, salt)
+        nonce = secrets.token_bytes(12)
+        ciphertext = AESGCM(key).encrypt(nonce, ENCRYPTED_VAULT_CHECK_TEXT, b"vault-check")
+        return {
+            "schema_version": "1",
+            "kdf": {
+                "name": "scrypt",
+                "salt": _b64encode(salt),
+                "n": 2**14,
+                "r": 8,
+                "p": 1,
+                "length": 32,
+            },
+            "check": {
+                "nonce": _b64encode(nonce),
+                "ciphertext": _b64encode(ciphertext),
+            },
+            "entries": {},
+        }, key
+
+    def _derive_key(self, passphrase: bytes, salt: bytes) -> bytes:
+        return Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(passphrase)
+
+    def _read_passphrase(self) -> bytes:
+        if not self.passphrase_file.is_absolute():
+            raise CredentialStoreUnavailable("Encrypted API key vault passphrase file must be an absolute path.")
+        if not self.passphrase_file.exists() or not self.passphrase_file.is_file():
+            raise CredentialStoreUnavailable("Encrypted API key vault passphrase file is missing.")
+        if os.name == "posix":
+            mode = stat.S_IMODE(self.passphrase_file.stat().st_mode)
+            if mode & 0o077:
+                raise CredentialStoreUnavailable("Encrypted API key vault passphrase file must use 0600 permissions.")
+        try:
+            passphrase = self.passphrase_file.read_bytes().rstrip(b"\r\n")
+        except Exception as exc:
+            raise CredentialStoreUnavailable("Encrypted API key vault passphrase file could not be read.") from exc
+        if not passphrase:
+            raise CredentialStoreUnavailable("Encrypted API key vault passphrase file is empty.")
+        return passphrase
+
+    def _validate_paths(self) -> None:
+        if self._repo_local_paths_allowed():
+            return
+        if _is_relative_to(self.data_dir.resolve(strict=False), self.repo_root.resolve(strict=False)):
+            raise CredentialStoreUnavailable(
+                "Encrypted API key vault cannot use a Noofy data directory inside the repo checkout."
+            )
+        if _is_relative_to(self.vault_path.resolve(strict=False), self.repo_root.resolve(strict=False)):
+            raise CredentialStoreUnavailable("Encrypted API key vault file cannot be inside the Noofy repo checkout.")
+        if _is_relative_to(self.passphrase_file.resolve(strict=False), self.repo_root.resolve(strict=False)):
+            raise CredentialStoreUnavailable(
+                "Encrypted API key vault passphrase file cannot be inside the Noofy repo checkout."
+            )
+
+    def _repo_local_paths_allowed(self) -> bool:
+        return self.allow_repo_local_secret_storage
+
+    def _write_vault(self, vault: dict[str, Any]) -> None:
+        try:
+            self.vault_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.vault_path.with_suffix(f"{self.vault_path.suffix}.tmp")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(tmp, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(vault, file, indent=2, sort_keys=True)
+            os.replace(tmp, self.vault_path)
+            if os.name == "posix":
+                self.vault_path.chmod(0o600)
+        except Exception as exc:
+            raise CredentialStoreUnavailable("Encrypted API key vault could not be written.") from exc
+
+
+class UnavailableCredentialStore:
+    def __init__(self, message: str, *, kind: str = "unknown") -> None:
+        self.message = message
+        self.kind = kind
+
+    def status(self) -> CredentialStoreStatus:
+        return CredentialStoreStatus(
+            available=False,
+            status="unavailable",
+            error=self.message,
+            kind=self.kind,
+            guidance="Check the API key storage configuration.",
+        )
+
+    def set_secret(self, provider: ApiKeyProvider, secret: str) -> None:
+        raise CredentialStoreUnavailable(self.message)
+
+    def get_secret(self, provider: ApiKeyProvider) -> str | None:
+        raise CredentialStoreUnavailable(self.message)
+
+    def delete_secret(self, provider: ApiKeyProvider) -> None:
+        raise CredentialStoreUnavailable(self.message)
 
 
 class ApiKeySettingsService:
@@ -272,3 +503,59 @@ def _default_metadata() -> dict[ApiKeyProvider, ApiKeyProviderMetadata]:
 
 def _account_name(provider: ApiKeyProvider) -> str:
     return f"{KEYCHAIN_ACCOUNT_PREFIX}:{provider}"
+
+
+def create_credential_store(
+    *,
+    data_dir: Path,
+    settings_dir: Path,
+    env: dict[str, str] | None = None,
+) -> CredentialStore:
+    _env = env if env is not None else dict(os.environ)
+    mode = _env.get("NOOFY_API_KEY_STORE", "os-keyring").strip().lower()
+    if mode in {"", "os-keyring", "keyring"}:
+        return KeyringCredentialStore()
+    if mode == "encrypted-vault":
+        passphrase_file = _env.get("NOOFY_API_KEY_VAULT_PASSPHRASE_FILE")
+        if not passphrase_file:
+            return UnavailableCredentialStore(
+                "Encrypted API key vault requires NOOFY_API_KEY_VAULT_PASSPHRASE_FILE.",
+                kind="encrypted-vault",
+            )
+        return EncryptedVaultCredentialStore(
+            vault_path=settings_dir / ENCRYPTED_VAULT_FILENAME,
+            passphrase_file=Path(passphrase_file),
+            data_dir=data_dir,
+            allow_repo_local_secret_storage=_truthy(_env.get("NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE")),
+        )
+    return UnavailableCredentialStore(
+        "Unknown API key credential store mode.",
+        kind=mode or "unknown",
+    )
+
+
+def _vault_entries(vault: dict[str, Any]) -> dict[str, Any]:
+    entries = vault.get("entries")
+    if isinstance(entries, dict):
+        return entries
+    return {}
+
+
+def _b64encode(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.b64decode(value.encode("ascii"), validate=True)
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False

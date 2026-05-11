@@ -244,6 +244,10 @@ export interface CredentialStoreStatus {
   available: boolean;
   status: string;
   error: string | null;
+  kind?: string;
+  backend?: string | null;
+  display_path?: string | null;
+  guidance?: string | null;
 }
 
 export interface ApiKeySettingsResponse {

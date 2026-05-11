@@ -148,6 +148,9 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `NOOFY_CACHE_DIR` | Overrides only `cache_dir` |
 | `NOOFY_TEMP_DIR` | Overrides only `temp_dir` |
 | `NOOFY_TRUST_KEYS_FILE` | Overrides only the trust keyring file |
+| `NOOFY_API_KEY_STORE` | API key storage mode; default `os-keyring`, explicit headless option `encrypted-vault` |
+| `NOOFY_API_KEY_VAULT_PASSPHRASE_FILE` | Required absolute passphrase-file path for `encrypted-vault`; must be outside the repo checkout by default |
+| `NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE` | Unsafe development override allowing encrypted-vault paths inside the repo checkout |
 | `COMFYUI_REPO_DIR` | Overrides ComfyUI checkout location |
 
 ### Bundled vs user workflows

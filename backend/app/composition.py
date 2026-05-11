@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
-from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService
+from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
 from app.settings.model_folders import (
     ModelFolderSettingsService,
     ModelFolderSettingsStore,
@@ -69,6 +69,10 @@ def create_api_services(
         api_key_service=api_key_service
         or ApiKeySettingsService(
             metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),
+            credential_store=create_credential_store(
+                data_dir=settings.paths.data_dir,
+                settings_dir=settings.paths.settings_dir,
+            ),
             log_store=getattr(engine_service, "log_store", None),
         ),
         model_folder_service=model_folder_service

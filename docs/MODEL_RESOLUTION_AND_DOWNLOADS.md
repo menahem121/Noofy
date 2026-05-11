@@ -50,21 +50,56 @@ Invariants:
 
 External model-platform credentials are settings owned by the backend.
 
-- Storage: OS credential store via `KeyringCredentialStore`
+- Default storage: OS credential store via `KeyringCredentialStore`
   ([backend/app/settings/api_keys.py](../backend/app/settings/api_keys.py)).
   Plaintext/file-backed keyring fallbacks are explicitly blocked.
+- Headless/source-server storage: opt in explicitly with
+  `NOOFY_API_KEY_STORE=encrypted-vault`. This stores encrypted ciphertext under
+  the real Noofy app data directory, for example
+  `~/.local/share/noofy/settings/api-key-vault.json` on Linux. It requires
+  `NOOFY_API_KEY_VAULT_PASSPHRASE_FILE` to point to an operator-owned
+  passphrase file outside the Noofy repo checkout.
 - App data: only non-sensitive metadata (`configured`, `last_four`,
-  `label`) is persisted in Noofy app data.
+  `label`) is persisted in Noofy app data. In encrypted-vault mode the full
+  keys are encrypted before they are written to the app data vault.
 - Full keys must never appear in frontend responses, diagnostics, logs, runner
-  environment variables, packaged runtime files, or test fixtures.
+  environment variables, packaged runtime files, or test fixtures. Decrypted
+  vault content, passphrase content, passphrase file content, and full
+  sensitive storage paths must not appear in normal API/UI responses.
 - Backend services read keys internally when calling providers.
+
+On headless Linux, installing packages is not enough by itself for the default
+OS keyring path. Secret Service also needs a D-Bus session, an unlocked
+keyring daemon, and Noofy must run in that same session. If Python `keyring`
+falls back to `keyring.backends.fail.Keyring`, the UI should keep saving
+disabled and explain that no OS-backed credential store is available.
+
+For EC2/source checkout use without Secret Service, configure encrypted-vault
+mode explicitly:
+
+```bash
+mkdir -p "$HOME/.config/noofy" "$HOME/.local/share/noofy"
+openssl rand -base64 48 > "$HOME/.config/noofy/api-key-vault.passphrase"
+chmod 600 "$HOME/.config/noofy/api-key-vault.passphrase"
+
+export NOOFY_API_KEY_STORE=encrypted-vault
+export NOOFY_DATA_DIR="$HOME/.local/share/noofy"
+export NOOFY_API_KEY_VAULT_PASSPHRASE_FILE="$HOME/.config/noofy/api-key-vault.passphrase"
+make run
+```
+
+Source-checkout helpers may default `NOOFY_DATA_DIR` to `.noofy-runtime/data`
+inside the repo. Encrypted-vault mode rejects repo-local Noofy data dirs, vault
+files, and passphrase files by default. `NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE=1`
+exists only as an explicit unsafe development override.
 
 Endpoints:
 
 - `GET /api/settings/apis` — provider list with `configured`/`last_four` and a
-  `credential_store` status (`available`, `unavailable`).
-- `PUT /api/settings/apis/{provider}/key` — save a key. Returns `503` if the OS
-  credential store is unusable.
+  `credential_store` status (`available`, `unavailable`) plus non-secret
+  fields such as `kind`, `backend`, `display_path`, and `guidance`.
+- `PUT /api/settings/apis/{provider}/key` — save a key. Returns `503` if the
+  configured credential store is unusable.
 - `DELETE /api/settings/apis/{provider}/key` — clear a saved key.
 
 Provider slugs accept `hugging-face`/`hugging_face`/`hf` and `civitai`.
@@ -251,8 +286,10 @@ Cancellation rules:
 - Backend never writes downloads outside the configured Noofy Models folder.
 - Backend never writes downloads into the external (user-owned) ComfyUI folder
   or `third_party/comfyui/`.
-- API keys live only in the OS credential store. Only `configured`/`last_four`
-  ever appear in JSON responses.
+- API keys live only in the configured credential store: OS keyring by default,
+  or explicit encrypted-vault mode for headless/source-server use. Only
+  `configured`/`last_four` and non-secret credential-store status fields ever
+  appear in JSON responses.
 - Provider responses with `401`/`403`/`429` are surfaced with user-safe
   messages; secrets and credential-bearing URL fragments are redacted from
   diagnostics.

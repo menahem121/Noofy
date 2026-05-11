@@ -162,6 +162,17 @@ function runtimeFromActionResult(result: Record<string, unknown>): RuntimeStatus
   return null;
 }
 
+function credentialStoreUnavailableMessage(apiSettings: ApiKeySettingsResponse | null) {
+  const store = apiSettings?.credential_store;
+  if (!store) return "Noofy could not access the operating system credential store.";
+  const parts = [
+    store.error,
+    store.guidance,
+    store.display_path ? `Storage: ${store.display_path}` : null,
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
 export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
   const [state, setState] = useState<EngineSettingsState>(initialState);
   const { viewMode, setViewMode } = useAppPreferences();
@@ -717,7 +728,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               <AlertCircle size={18} aria-hidden="true" />
               <div>
                 <strong>Credential store unavailable</strong>
-                <span>{apiSettings?.credential_store.error ?? "Noofy could not access the operating system credential store."}</span>
+                <span>{credentialStoreUnavailableMessage(apiSettings)}</span>
               </div>
             </div>
           ) : null}

@@ -150,6 +150,10 @@ const apiSettings = {
     available: true,
     status: "available",
     error: null,
+    kind: "os-keyring",
+    backend: "keyring.backends.secretservice.Keyring",
+    display_path: null,
+    guidance: null,
   },
 };
 
@@ -424,6 +428,68 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show Hugging Face API Key" }));
 
     expect(huggingFaceInput).toHaveAttribute("type", "text");
+  });
+
+  it("shows headless credential-store guidance without full storage paths", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) {
+        return Promise.resolve(jsonResponse({
+          ...apiSettings,
+          credential_store: {
+            available: false,
+            status: "unavailable",
+            error: "No OS-backed credential store is available.",
+            kind: "os-keyring",
+            backend: null,
+            display_path: null,
+            guidance: "On headless Linux, configure Secret Service or explicitly opt in to encrypted-vault mode.",
+          },
+        }));
+      }
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSettingsPage();
+
+    expect(await screen.findByText("Credential store unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/headless linux/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Hugging Face API Key")).toBeDisabled();
+  });
+
+  it("shows encrypted-vault repo-local rejection with a display path only", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) {
+        return Promise.resolve(jsonResponse({
+          ...apiSettings,
+          credential_store: {
+            available: false,
+            status: "unavailable",
+            error: "Encrypted API key vault cannot use a Noofy data directory inside the repo checkout.",
+            kind: "encrypted-vault",
+            backend: "encrypted-vault",
+            display_path: "<app-data>/settings/api-key-vault.json",
+            guidance: "Set NOOFY_DATA_DIR to an app data directory outside the repo checkout.",
+          },
+        }));
+      }
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSettingsPage();
+
+    expect(await screen.findByText(/cannot use a Noofy data directory inside the repo checkout/i)).toBeInTheDocument();
+    expect(screen.getByText(/<app-data>\/settings\/api-key-vault\.json/i)).toBeInTheDocument();
+    expect(screen.queryByText(/\/home\/ubuntu\/Noofy/)).not.toBeInTheDocument();
   });
 
   it("saves a Hugging Face API key without fetching it back", async () => {
