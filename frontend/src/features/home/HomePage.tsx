@@ -125,7 +125,7 @@ function trustLevelLabel(level?: string) {
     return "Registry Locked";
   }
   if (level === "quarantined_community") {
-    return "Quarantined Community";
+    return "Community";
   }
   if (level === "unsupported") {
     return "Unsupported";

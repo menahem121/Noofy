@@ -226,7 +226,7 @@ describe("HomePage", () => {
               trust_level: "quarantined_community",
               trust: {
                 level: "quarantined_community",
-                label: "Quarantined Community",
+                label: "Community",
                 summary: "Community workflow prepared only after permission and isolated resolution.",
                 badge_tone: "community",
                 can_prepare_automatically: true,
@@ -310,7 +310,7 @@ describe("HomePage", () => {
               trust_level: "quarantined_community",
               trust: {
                 level: "quarantined_community",
-                label: "Quarantined Community",
+                label: "Community",
                 summary: "Community workflow prepared only after permission and isolated resolution.",
                 badge_tone: "community",
                 can_prepare_automatically: true,
@@ -338,7 +338,7 @@ describe("HomePage", () => {
               trust_level: "quarantined_community",
               trust: {
                 level: "quarantined_community",
-                label: "Quarantined Community",
+                label: "Community",
                 summary: "Community workflow prepared only after permission and isolated resolution.",
                 badge_tone: "community",
                 can_prepare_automatically: true,
@@ -395,7 +395,7 @@ describe("HomePage", () => {
     expect((await screen.findAllByText("Needs input setup")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "EraserV4.5" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Imported")).toBeInTheDocument();
-    expect(screen.getAllByText("Quarantined Community").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Community").length).toBeGreaterThan(0);
   });
 
   it("auto-commits a staged import when all required models are already available", async () => {

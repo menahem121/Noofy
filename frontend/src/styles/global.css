@@ -848,9 +848,9 @@ button:disabled {
 }
 
 .trust-badge--community {
-  color: #fde68a;
-  background: rgba(180, 83, 9, 0.18);
-  border: 1px solid rgba(251, 191, 36, 0.3);
+  color: #e9d5ff;
+  background: rgba(124, 58, 237, 0.18);
+  border: 1px solid rgba(168, 85, 247, 0.32);
 }
 
 .trust-badge--unsupported {

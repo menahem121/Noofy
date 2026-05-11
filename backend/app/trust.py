@@ -69,7 +69,7 @@ TRUST_LEVEL_COPY: dict[TrustLevel, TrustLevelCopy] = {
         source_policy="signed_registry_or_pinned_registry_sources",
     ),
     TrustLevel.QUARANTINED_COMMUNITY: TrustLevelCopy(
-        label="Quarantined Community",
+        label="Community",
         summary="Community workflow prepared only after permission and isolated resolution.",
         badge_tone="community",
         can_prepare_automatically=True,
