@@ -239,6 +239,20 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     try {
       const importResult = await previewWorkflowPackageImport(file, homeData.allowCommunityPreparation);
       if (importResult.import_session_id && importResult.model_summary && importResult.model_summary.total_count > 0) {
+        if (importResult.model_summary.ready_to_run) {
+          const committedImport = await commitWorkflowImport(importResult.import_session_id);
+          const workflows = await fetchWorkflows();
+          setHomeData((current) => ({
+            ...current,
+            workflows,
+            importing: false,
+            pendingImport: null,
+            downloadJob: null,
+            importResult: committedImport,
+            importError: null,
+          }));
+          return;
+        }
         setHomeData((current) => ({
           ...current,
           importing: false,
@@ -363,11 +377,29 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     if (!sessionId || !jobId || !active) return;
 
     let stopped = false;
+    let committingReadyImport = false;
     const poll = async () => {
       try {
         const status = await fetchImportModelDownloadStatus(sessionId, jobId);
         if (stopped) return;
         const finished = ["completed", "failed", "canceled"].includes(status.status);
+        if (finished && status.status === "completed" && status.model_summary?.ready_to_run && !committingReadyImport) {
+          committingReadyImport = true;
+          const importResult = await commitWorkflowImport(sessionId);
+          const workflows = await fetchWorkflows();
+          if (stopped) return;
+          setHomeData((current) => ({
+            ...current,
+            workflows,
+            importing: false,
+            downloadingModels: false,
+            pendingImport: null,
+            downloadJob: null,
+            importResult,
+            importError: null,
+          }));
+          return;
+        }
         setHomeData((current) => ({
           ...current,
           downloadingModels: !finished,
@@ -651,7 +683,7 @@ function RequiredModelsModal({
           ))}
         </div>
 
-        {downloadJob ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
+        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
 
         <footer className="required-models-modal__footer">
           <button className="secondary-button" type="button" disabled={busy || !hasDownloadable} onClick={onDownload}>
@@ -721,9 +753,11 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
         <strong>{label}</strong>
         <span>{percent !== null ? `${percent}%` : job.status}</span>
       </div>
-      <div className="model-download-progress__bar" aria-hidden="true">
-        <span style={{ width: `${Math.max(0, Math.min(percent ?? 0, 100))}%` }} />
-      </div>
+      {percent !== null ? (
+        <div className="model-download-progress__bar" aria-hidden="true">
+          <span style={{ width: `${Math.max(0, Math.min(percent, 100))}%` }} />
+        </div>
+      ) : null}
       <p>
         {[formatModelSize(job.bytes_downloaded), job.total_bytes ? formatModelSize(job.total_bytes) : null]
           .filter(Boolean)
@@ -733,6 +767,19 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
       <span>{job.user_facing_message}</span>
     </div>
   );
+}
+
+function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
+  if (
+    job.status === "queued" ||
+    job.status === "running" ||
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "canceled"
+  ) {
+    return true;
+  }
+  return job.percent !== null || job.bytes_downloaded !== null;
 }
 
 function formatModelSize(size: number | null) {

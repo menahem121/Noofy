@@ -42,8 +42,9 @@ Invariants:
 - `PUT /api/settings/model-folders` — updates either or both folders. Empty
   string for `external_comfyui_models_dir` clears the connected ComfyUI folder.
   Validation rejects locations inside `third_party/comfyui/`, non-folder paths,
-  and unwritable Noofy Models targets. Successful changes return
-  `restart_required: true` so the UI can prompt for a managed-sidecar restart.
+  and unwritable Noofy Models targets. Path root changes return
+  `restart_required: true` so the UI can prompt for a Noofy engine restart;
+  Noofy's own model availability checks use the new roots immediately.
 
 ## API Keys (Hugging Face And Civitai)
 
@@ -109,7 +110,10 @@ search providers for a reliable match. See
 Resolution order:
 
 1. Explicit package `source_urls` (preferred when present).
-2. Hugging Face search (`GET https://huggingface.co/api/models`).
+2. Hugging Face bounded repo search plus file-metadata inspection
+   (`GET https://huggingface.co/api/models`, then selected
+   `GET https://huggingface.co/api/models/{repo_id}` requests with blob
+   metadata).
 3. Civitai by-hash lookup (`GET https://civitai.com/api/v1/model-versions/by-hash/{sha256}`)
    when the package declares a SHA-256.
 4. Civitai query fallback (`GET https://civitai.com/api/v1/models`).
@@ -126,6 +130,18 @@ Matching is intentionally conservative:
 
 - A candidate is only accepted as reliable when the filename matches exactly
   **and** either the SHA-256 matches or the byte size matches.
+- If a provider exposes SHA-256 metadata and it does not match the package
+  SHA-256, Noofy rejects that file even when filename and size match.
+- Hugging Face inspection is bounded by a small number of search terms and
+  unique repos. It does not scan Hugging Face globally.
+- Hugging Face files with exact basename and exact size but no provider
+  SHA-256 can be downloaded only as metadata-limited candidates; the final
+  local file must still pass package size/SHA verification before becoming
+  ready.
+- If multiple reliable provider candidates remain, Noofy tries them in
+  reliability order and only marks the model ready after strict local
+  verification succeeds. A failed candidate is cleaned up before trying the
+  next one.
 - Fuzzy name matches and "first search result" picks are never used for
   automatic downloads.
 - Secret tokens and any leaked URL credentials are redacted from diagnostic

@@ -511,19 +511,30 @@ async def test_download_resolves_hugging_face_exact_filename_and_size(
     ) -> object:
         assert method == "GET"
         fetched_urls.append(url)
-        assert params["search"] == "hf-model.safetensors"
         assert headers == {}
-        return [
-            {
-                "modelId": "creator/repo",
-                "siblings": [
-                    {
-                        "rfilename": "models/hf-model.safetensors",
-                        "size": len(payload),
-                    }
-                ],
-            }
-        ]
+        if url == "https://huggingface.co/api/models":
+            if params["search"] != "hf-model.safetensors":
+                return []
+            return [
+                {
+                    "modelId": "creator/repo",
+                    "siblings": [
+                        {
+                            "rfilename": "models/hf-model.safetensors",
+                        }
+                    ],
+                }
+            ]
+        assert url == "https://huggingface.co/api/models/creator/repo"
+        assert params == {"blobs": "true"}
+        return {
+            "siblings": [
+                {
+                    "rfilename": "models/hf-model.safetensors",
+                    "size": len(payload),
+                }
+            ],
+        }
 
     async def fake_stream(url: str, part_path: Path) -> None:
         assert url == "https://huggingface.co/creator/repo/resolve/main/models/hf-model.safetensors"
@@ -553,7 +564,7 @@ async def test_download_resolves_hugging_face_exact_filename_and_size(
     )
 
     assert result.downloaded_count == 1
-    assert fetched_urls == ["https://huggingface.co/api/models"]
+    assert "https://huggingface.co/api/models/creator/repo" in fetched_urls
     assert (noofy_root / "checkpoints" / "hf-model.safetensors").read_bytes() == payload
 
 
@@ -772,14 +783,14 @@ async def test_hugging_face_uses_api_key_and_is_tried_before_civitai(
     ) -> object:
         calls.append((method, url, params, headers))
         assert method == "GET"
-        assert url == "https://huggingface.co/api/models"
-        assert params == {
-            "search": "hf-fixture.safetensors",
-            "full": "true",
-            "limit": str(availability_module.PROVIDER_SEARCH_LIMIT),
-        }
         assert headers == {"Authorization": "Bearer hf-token"}
-        return _fixture("huggingface_models_response.json")
+        if url == "https://huggingface.co/api/models":
+            if params["search"] != "hf-fixture.safetensors":
+                return []
+            return _fixture("huggingface_models_response.json")
+        assert url == "https://huggingface.co/api/models/creator/noofy-hf-fixture"
+        assert params == {"blobs": "true"}
+        return _fixture("huggingface_models_response.json")[0]
 
     async def fake_stream(url: str, part_path: Path) -> None:
         assert url == "https://huggingface.co/creator/noofy-hf-fixture/resolve/main/models/hf-fixture.safetensors"
@@ -810,7 +821,481 @@ async def test_hugging_face_uses_api_key_and_is_tried_before_civitai(
     )
 
     assert result.downloaded_count == 1
-    assert [call[1] for call in calls] == ["https://huggingface.co/api/models"]
+    assert [call[1] for call in calls if "civitai" in call[1]] == []
+    assert "https://huggingface.co/api/models/creator/noofy-hf-fixture" in [call[1] for call in calls]
+
+
+@pytest.mark.anyio
+async def test_hugging_face_inspects_repo_file_metadata_when_repo_name_differs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"hf repo inspected model"
+    sha = hashlib.sha256(payload).hexdigest()
+    filename = "v1-5-pruned-emaonly-fp16.safetensors"
+    noofy_root = tmp_path / "Noofy Models"
+    inspected_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "stable-diffusion-v1-5":
+                return [{"modelId": "Comfy-Org/stable-diffusion-v1-5-archive"}]
+            return []
+        inspected_urls.append(url)
+        assert url == "https://huggingface.co/api/models/Comfy-Org/stable-diffusion-v1-5-archive"
+        assert params == {"blobs": "true"}
+        return {
+            "siblings": [
+                {
+                    "rfilename": filename,
+                    "size": len(payload),
+                    "lfs": {"sha256": sha, "size": len(payload)},
+                }
+            ]
+        }
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        assert url == f"https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/{filename}"
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename=filename,
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert inspected_urls == ["https://huggingface.co/api/models/Comfy-Org/stable-diffusion-v1-5-archive"]
+    assert (noofy_root / "checkpoints" / filename).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_hugging_face_provider_sha_mismatch_is_rejected_even_when_size_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"expected-model"
+    expected_sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed = False
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "mismatch.safetensors":
+                return [{"modelId": "creator/mismatch-repo"}]
+            return []
+        if "huggingface.co" in url:
+            return {
+                "siblings": [
+                    {
+                        "rfilename": "mismatch.safetensors",
+                        "size": len(payload),
+                        "lfs": {"sha256": "0" * 64, "size": len(payload)},
+                    }
+                ]
+            }
+        if "/by-hash/" in url:
+            return {"files": []}
+        return {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        nonlocal streamed
+        streamed = True
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="mismatch.safetensors",
+                    checksum=f"sha256:{expected_sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert streamed is False
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "needs_manual_download"
+
+
+@pytest.mark.anyio
+async def test_hugging_face_size_only_candidate_downloads_then_verifies_local_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"size-only-hf"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "size-only.safetensors":
+                return [{"modelId": "creator/size-only-repo"}]
+            return []
+        if "huggingface.co" in url:
+            return {
+                "siblings": [
+                    {"rfilename": "size-only.safetensors", "size": len(payload)}
+                ]
+            }
+        if "/by-hash/" in url:
+            return {"files": []}
+        return {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="size-only.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert result.model_summary.models[0].status == "available"
+    assert (noofy_root / "checkpoints" / "size-only.safetensors").read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_hugging_face_candidates_are_downloaded_in_reliability_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"ranked-hf"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "ranked.safetensors":
+                return [
+                    {"modelId": "creator/size-only"},
+                    {"modelId": "creator/sha-and-size"},
+                ]
+            return []
+        if url.endswith("/creator/size-only"):
+            return {
+                "siblings": [
+                    {"rfilename": "ranked.safetensors", "size": len(payload)}
+                ]
+            }
+        if url.endswith("/creator/sha-and-size"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": "ranked.safetensors",
+                        "size": len(payload),
+                        "lfs": {"sha256": sha, "size": len(payload)},
+                    }
+                ]
+            }
+        return {"files": []} if "/by-hash/" in url else {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="ranked.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert streamed_urls == [
+        "https://huggingface.co/creator/sha-and-size/resolve/main/ranked.safetensors"
+    ]
+
+
+@pytest.mark.anyio
+async def test_hugging_face_size_only_candidate_final_sha_mismatch_cleans_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_payload = b"expected"
+    wrong_payload = b"wrong-bytes"
+    expected_sha = hashlib.sha256(expected_payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "final-mismatch.safetensors":
+                return [{"modelId": "creator/final-mismatch-repo"}]
+            return []
+        if "huggingface.co" in url:
+            return {
+                "siblings": [
+                    {"rfilename": "final-mismatch.safetensors", "size": len(wrong_payload)}
+                ]
+            }
+        if "/by-hash/" in url:
+            return {"files": []}
+        return {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(wrong_payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="final-mismatch.safetensors",
+                    checksum=f"sha256:{expected_sha}",
+                    size_bytes=len(wrong_payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "hash_mismatch"
+    assert not (noofy_root / "checkpoints" / "final-mismatch.safetensors").exists()
+    assert not list((noofy_root / ".downloads").glob("*/**/*.part"))
+
+
+@pytest.mark.anyio
+async def test_hugging_face_multiple_equally_reliable_candidates_try_next_after_verification_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"verified"
+    wrong_payload = b"mismatch"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    log_store = LogStore()
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "ambiguous.safetensors":
+                return [
+                    {"modelId": "creator/ambiguous-a"},
+                    {"modelId": "creator/ambiguous-b"},
+                ]
+            return []
+        if "huggingface.co" in url:
+            return {
+                "siblings": [
+                    {
+                        "rfilename": "ambiguous.safetensors",
+                        "size": len(payload),
+                        "lfs": {"sha256": sha, "size": len(payload)},
+                    }
+                ]
+            }
+        if "/by-hash/" in url:
+            return {"files": []}
+        return {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        if url.endswith("ambiguous-a/resolve/main/ambiguous.safetensors"):
+            part_path.write_bytes(wrong_payload)
+        else:
+            part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        log_store=log_store,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+            log_store=log_store,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="ambiguous.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    logs = str(log_store.list_events().model_dump(mode="json"))
+    assert result.downloaded_count == 1
+    assert result.model_summary.models[0].status == "available"
+    assert streamed_urls == [
+        "https://huggingface.co/creator/ambiguous-a/resolve/main/ambiguous.safetensors",
+        "https://huggingface.co/creator/ambiguous-b/resolve/main/ambiguous.safetensors",
+    ]
+    assert (noofy_root / "checkpoints" / "ambiguous.safetensors").read_bytes() == payload
+    assert "ambiguous reliable matches" not in logs
+    assert not list((noofy_root / ".downloads").glob("*/**/*.part"))
+
+
+@pytest.mark.anyio
+async def test_hugging_face_repo_inspection_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    inspected_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            return [
+                {"modelId": f"creator/repo-{params['search']}-{index}"}
+                for index in range(20)
+            ]
+        if "huggingface.co" in url:
+            inspected_urls.append(url)
+            return {"siblings": []}
+        if "/by-hash/" in url:
+            return {"files": []}
+        return {"items": []}
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(
+        availability_module,
+        "_stream_url",
+        lambda url, part_path: pytest.fail("download should not start"),
+    )
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="bounded-v1-5-model.safetensors",
+                    checksum="sha256:" + ("1" * 64),
+                    size_bytes=123,
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.failed_count == 1
+    assert len(inspected_urls) == availability_module.HUGGING_FACE_REPO_INSPECTION_LIMIT
 
 
 @pytest.mark.anyio
@@ -882,11 +1367,9 @@ async def test_download_tries_civitai_when_hugging_face_has_no_reliable_match(
     )
 
     assert result.downloaded_count == 1
-    assert fetched_urls == [
-        "https://huggingface.co/api/models",
-        f"https://civitai.com/api/v1/model-versions/by-hash/{sha}",
-        "https://civitai.com/api/v1/models",
-    ]
+    assert f"https://civitai.com/api/v1/model-versions/by-hash/{sha}" in fetched_urls
+    assert "https://civitai.com/api/v1/models" in fetched_urls
+    assert fetched_urls.index(f"https://civitai.com/api/v1/model-versions/by-hash/{sha}") < fetched_urls.index("https://civitai.com/api/v1/models")
     assert (noofy_root / "loras" / "civitai-model.safetensors").read_bytes() == payload
 
 
@@ -944,10 +1427,12 @@ async def test_civitai_by_hash_is_attempted_before_query_and_uses_api_key(
     )
 
     assert result.downloaded_count == 1
-    assert [call[1] for call in calls] == [
-        "https://huggingface.co/api/models",
-        f"https://civitai.com/api/v1/model-versions/by-hash/{sha}",
+    by_hash_calls = [
+        call for call in calls if call[1] == f"https://civitai.com/api/v1/model-versions/by-hash/{sha}"
     ]
+    assert len(by_hash_calls) == 1
+    assert by_hash_calls[0][3] == {"Authorization": "Bearer civitai-token"}
+    assert "https://civitai.com/api/v1/models" not in [call[1] for call in calls]
 
 
 @pytest.mark.anyio
@@ -1067,11 +1552,9 @@ async def test_civitai_by_hash_falls_back_to_query_when_unreliable(
     )
 
     assert result.downloaded_count == 1
-    assert calls == [
-        "https://huggingface.co/api/models",
-        f"https://civitai.com/api/v1/model-versions/by-hash/{sha}",
-        "https://civitai.com/api/v1/models",
-    ]
+    assert f"https://civitai.com/api/v1/model-versions/by-hash/{sha}" in calls
+    assert "https://civitai.com/api/v1/models" in calls
+    assert calls.index(f"https://civitai.com/api/v1/model-versions/by-hash/{sha}") < calls.index("https://civitai.com/api/v1/models")
 
 
 @pytest.mark.anyio
@@ -1294,5 +1777,10 @@ async def test_provider_search_does_not_download_similar_filename_only_result(
 
     assert streamed is False
     assert result.downloaded_count == 0
-    assert result.model_summary.models[0].status == "missing"
+    assert result.failed_count == 1
+    assert result.status == "completed_with_errors"
+    assert result.user_facing_message == "Some models could not be downloaded."
+    assert result.model_summary.models[0].status == "needs_manual_download"
+    assert result.model_summary.models[0].status_label == "Needs manual download"
+    assert "reliable automatic download source" in (result.model_summary.models[0].message or "")
     assert not (noofy_root / "checkpoints" / "target-model.safetensors").exists()

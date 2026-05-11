@@ -33,6 +33,9 @@ from app.workflows.package import RequiredModel, WorkflowPackage
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1 << 20
 PROVIDER_SEARCH_LIMIT = 20
+HUGGING_FACE_SEARCH_TERM_LIMIT = 6
+HUGGING_FACE_REPOS_PER_SEARCH_TERM = 4
+HUGGING_FACE_REPO_INSPECTION_LIMIT = 8
 PROVIDER_AUTH_REQUIRED_MESSAGE = (
     "This model source requires an API key for the provider account that can access it."
 )
@@ -119,6 +122,8 @@ class ProviderModelCandidate:
         if not filename_matches:
             return 0
         expected_sha = _model_sha256(model)
+        if expected_sha is not None and self.sha256 is not None and self.sha256 != expected_sha:
+            return 0
         sha_matches = expected_sha is not None and self.sha256 == expected_sha
         size_matches = (
             model.size_bytes is not None
@@ -148,27 +153,57 @@ class ProviderModelResolver:
 
     async def resolve(self, model: RequiredModel) -> list[str]:
         if not _provider_resolvable(model):
+            self._record_provider_step(
+                model,
+                provider="provider",
+                step="skipped",
+                candidates=[],
+                note="insufficient package metadata for provider resolution",
+            )
             return []
         candidates: list[ProviderModelCandidate] = []
         hf = await self._search_hugging_face(model)
+        self._record_provider_step(
+            model,
+            provider="hugging_face",
+            step="model_search",
+            candidates=hf,
+        )
         reliable_hf = _reliable_candidates(model, hf)
-        if reliable_hf:
+        if reliable_hf and reliable_hf[0].strength_for(model) >= 4:
+            return [candidate.download_url for candidate in reliable_hf]
+        if reliable_hf and _model_sha256(model) is None:
             return [candidate.download_url for candidate in reliable_hf]
         candidates.extend(hf)
 
         if _model_sha256(model) is not None:
             civitai_by_hash = await self._search_civitai_by_hash(model)
-            reliable_civitai_by_hash = _reliable_candidates(model, civitai_by_hash)
-            if reliable_civitai_by_hash:
-                return [candidate.download_url for candidate in reliable_civitai_by_hash]
+            self._record_provider_step(
+                model,
+                provider="civitai",
+                step="by_hash",
+                candidates=civitai_by_hash,
+            )
             candidates.extend(civitai_by_hash)
+            reliable_civitai_by_hash = _reliable_candidates(model, civitai_by_hash)
+            if (
+                reliable_civitai_by_hash
+                and reliable_civitai_by_hash[0].strength_for(model) >= 4
+            ):
+                return [candidate.download_url for candidate in reliable_civitai_by_hash]
 
         civitai_query = await self._search_civitai_query(model)
-        reliable_civitai_query = _reliable_candidates(model, civitai_query)
-        if reliable_civitai_query:
-            return [candidate.download_url for candidate in reliable_civitai_query]
+        self._record_provider_step(
+            model,
+            provider="civitai",
+            step="query_search",
+            candidates=civitai_query,
+        )
         candidates.extend(civitai_query)
 
+        selected = _reliable_candidates(model, candidates)
+        if selected:
+            return [candidate.download_url for candidate in selected]
         self._record_unresolved(model, candidates)
         return []
 
@@ -178,57 +213,105 @@ class ProviderModelResolver:
         token = self._api_key("hugging_face")
         headers = _auth_headers(token)
         url = "https://huggingface.co/api/models"
-        try:
-            data = await self.fetch_json(
-                "GET",
-                url,
-                {
-                    "search": model.filename,
-                    "full": "true",
-                    "limit": str(PROVIDER_SEARCH_LIMIT),
-                },
-                headers,
-            )
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in {401, 403}:
-                raise ProviderAuthenticationRequired(
-                    "A Hugging Face API key with access is needed for this model."
-                ) from exc
-            if exc.response.status_code == 429:
-                raise ProviderRateLimited(
-                    "Hugging Face rate limit reached; try again later."
-                ) from exc
-            return []
-        if not isinstance(data, list):
-            return []
-        candidates: list[ProviderModelCandidate] = []
-        for repo in data:
-            if not isinstance(repo, dict):
-                continue
-            repo_id = repo.get("modelId") or repo.get("id")
-            if not isinstance(repo_id, str) or not repo_id:
-                continue
-            siblings = repo.get("siblings")
-            if not isinstance(siblings, list):
-                continue
-            for sibling in siblings:
-                if not isinstance(sibling, dict):
-                    continue
-                rfilename = sibling.get("rfilename")
-                if not isinstance(rfilename, str) or Path(rfilename).name.casefold() != model.filename.casefold():
-                    continue
-                size = _int_or_none(sibling.get("size"))
-                sha256 = _sha_from_mapping(sibling)
-                candidates.append(
-                    ProviderModelCandidate(
-                        provider="hugging_face",
-                        download_url=_hugging_face_resolve_url(repo_id, rfilename),
-                        filename=Path(rfilename).name,
-                        size_bytes=size,
-                        sha256=sha256,
-                    )
+        repo_ids: list[str] = []
+        seen_repo_ids: set[str] = set()
+        lightweight_candidates: list[ProviderModelCandidate] = []
+        search_terms = _hugging_face_search_terms(model)
+        inspected_repos = 0
+        metadata_missing_repos = 0
+        metadata_error_repos = 0
+        for search_term in search_terms:
+            try:
+                data = await self.fetch_json(
+                    "GET",
+                    url,
+                    {
+                        "search": search_term,
+                        "full": "true",
+                        "limit": str(PROVIDER_SEARCH_LIMIT),
+                    },
+                    headers,
                 )
-        return candidates
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {401, 403}:
+                    raise ProviderAuthenticationRequired(
+                        "A Hugging Face API key with access is needed for this model."
+                    ) from exc
+                if exc.response.status_code == 429:
+                    raise ProviderRateLimited(
+                        "Hugging Face rate limit reached; try again later."
+                    ) from exc
+                continue
+            if not isinstance(data, list):
+                continue
+            added_for_term = 0
+            for repo in data:
+                if not isinstance(repo, dict):
+                    continue
+                repo_id = repo.get("modelId") or repo.get("id")
+                if not isinstance(repo_id, str) or not repo_id:
+                    continue
+                lightweight_candidates.extend(
+                    _hugging_face_candidates_from_repo_record(model, repo_id, repo)
+                )
+                if repo_id in seen_repo_ids:
+                    continue
+                if added_for_term >= HUGGING_FACE_REPOS_PER_SEARCH_TERM:
+                    continue
+                if len(repo_ids) >= HUGGING_FACE_REPO_INSPECTION_LIMIT:
+                    continue
+                repo_ids.append(repo_id)
+                seen_repo_ids.add(repo_id)
+                added_for_term += 1
+
+        candidates = list(lightweight_candidates)
+        for repo_id in repo_ids[:HUGGING_FACE_REPO_INSPECTION_LIMIT]:
+            inspected_repos += 1
+            try:
+                repo_data = await self.fetch_json(
+                    "GET",
+                    _hugging_face_api_model_url(repo_id),
+                    {"blobs": "true"},
+                    headers,
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {401, 403}:
+                    raise ProviderAuthenticationRequired(
+                        "A Hugging Face API key with access is needed for this model."
+                    ) from exc
+                if exc.response.status_code == 429:
+                    raise ProviderRateLimited(
+                        "Hugging Face rate limit reached; try again later."
+                    ) from exc
+                metadata_error_repos += 1
+                continue
+            if not isinstance(repo_data, dict):
+                metadata_missing_repos += 1
+                continue
+            repo_candidates = _hugging_face_candidates_from_repo_record(
+                model, repo_id, repo_data
+            )
+            if not repo_candidates:
+                metadata_missing_repos += 1
+            candidates.extend(repo_candidates)
+
+        if self.log_store is not None:
+            self.log_store.add(
+                "info",
+                "Hugging Face repo metadata inspection completed",
+                "workflow.models",
+                details={
+                    "filename": model.filename,
+                    "folder": model.folder,
+                    "search_term_count": len(search_terms),
+                    "candidate_repo_count": len(repo_ids),
+                    "inspected_repo_count": inspected_repos,
+                    "inspection_limit": HUGGING_FACE_REPO_INSPECTION_LIMIT,
+                    "metadata_missing_repo_count": metadata_missing_repos,
+                    "metadata_error_repo_count": metadata_error_repos,
+                },
+            )
+        return _dedupe_provider_candidates(candidates)
 
     async def _search_civitai_by_hash(
         self, model: RequiredModel
@@ -247,6 +330,12 @@ class ProviderModelResolver:
                     "A Civitai API key with access is needed for this model."
                 ) from exc
             if exc.response.status_code == 404:
+                self._record_provider_status(
+                    model,
+                    provider="civitai",
+                    step="by_hash",
+                    status="not_found",
+                )
                 return []
             if exc.response.status_code == 429:
                 raise ProviderRateLimited(
@@ -334,6 +423,65 @@ class ProviderModelResolver:
                 "folder": model.folder,
                 "filename": model.filename,
                 "candidate_count": len(candidates),
+            },
+        )
+
+    def _record_provider_step(
+        self,
+        model: RequiredModel,
+        *,
+        provider: str,
+        step: str,
+        candidates: list[ProviderModelCandidate],
+        note: str | None = None,
+    ) -> None:
+        if self.log_store is None:
+            return
+        reliable = _reliable_candidates(model, candidates)
+        self.log_store.add(
+            "info",
+            "Provider model resolver step completed",
+            "workflow.models",
+            details={
+                "provider": provider,
+                "step": step,
+                "folder": model.folder,
+                "filename": model.filename,
+                "expected_size_present": model.size_bytes is not None,
+                "expected_sha256_present": _model_sha256(model) is not None,
+                "candidate_count": len(candidates),
+                "reliable_candidate_count": len(reliable),
+                "missing_size_metadata_count": sum(
+                    candidate.size_bytes is None for candidate in candidates
+                ),
+                "missing_sha256_metadata_count": sum(
+                    candidate.sha256 is None for candidate in candidates
+                ),
+                **({"note": note} if note else {}),
+            },
+        )
+
+    def _record_provider_status(
+        self,
+        model: RequiredModel,
+        *,
+        provider: str,
+        step: str,
+        status: str,
+    ) -> None:
+        if self.log_store is None:
+            return
+        self.log_store.add(
+            "info",
+            "Provider model resolver status",
+            "workflow.models",
+            details={
+                "provider": provider,
+                "step": step,
+                "status": status,
+                "folder": model.folder,
+                "filename": model.filename,
+                "expected_sha256_present": _model_sha256(model) is not None,
             },
         )
 
@@ -448,13 +596,14 @@ class ModelAvailabilityService:
                 total_bytes=model.size_bytes,
             )
             try:
-                if await self._download_model(
+                downloaded = await self._download_model(
                     model,
                     progress_callback=progress_callback,
                     cancel_event=cancel_event,
                     model_index=model_index,
                     total_models=total_models,
-                ):
+                )
+                if downloaded:
                     downloaded_count += 1
                     _emit_model_download_progress(
                         progress_callback,
@@ -464,6 +613,17 @@ class ModelAvailabilityService:
                         total_models=total_models,
                         bytes_downloaded=model.size_bytes,
                         total_bytes=model.size_bytes,
+                    )
+                else:
+                    failed_count += 1
+                    failures[_requirement_id(model)] = _needs_manual_download_failure()
+                    _emit_model_download_progress(
+                        progress_callback,
+                        model=model,
+                        status="failed",
+                        model_index=model_index,
+                        total_models=total_models,
+                        message=failures[_requirement_id(model)].status_label,
                     )
             except ProviderAuthenticationRequired as exc:
                 failed_count += 1
@@ -715,8 +875,31 @@ class ModelAvailabilityService:
             raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
         urls = _prioritized_source_urls(_source_urls(model))
         if not urls:
+            self.log_store.add(
+                "info",
+                "Required model has no explicit source URLs",
+                "workflow.models",
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                    "provider_resolvable": _provider_resolvable(model),
+                    "expected_size_present": model.size_bytes is not None,
+                    "expected_sha256_present": _model_sha256(model) is not None,
+                },
+            )
             urls = await self.provider_resolver.resolve(model)
         if not urls:
+            self.log_store.add(
+                "info",
+                "Required model provider resolution found no reliable automatic source",
+                "workflow.models",
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                    "expected_size_present": model.size_bytes is not None,
+                    "expected_sha256_present": _model_sha256(model) is not None,
+                },
+            )
             return False
         self._validate_owned_model_root()
         self._ensure_disk_space(model.size_bytes)
@@ -731,55 +914,28 @@ class ModelAvailabilityService:
         final_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_path_inside_noofy_models(final_path)
 
-        transaction = self._begin_download_transaction(model)
-        try:
-            await self._download_with_fallback(
-                urls,
-                transaction,
-                progress_callback=progress_callback,
-                cancel_event=cancel_event,
-                model_index=model_index,
-                total_models=total_models,
-            )
-            transaction.write_state(
-                status="verifying",
-                bytes_downloaded=transaction.part_path.stat().st_size,
-            )
-            _emit_model_download_progress(
-                progress_callback,
-                model=model,
-                status="verifying",
-                model_index=model_index,
-                total_models=total_models,
-                bytes_downloaded=transaction.part_path.stat().st_size,
-                total_bytes=model.size_bytes,
-            )
-            if cancel_event is not None and cancel_event.is_set():
-                raise ModelDownloadCanceled("Download canceled.")
-            self._verify_download(model, transaction.part_path)
-            transaction.write_state(
-                status="placing",
-                bytes_downloaded=transaction.part_path.stat().st_size,
-            )
-            self._ensure_path_inside_noofy_models(final_path)
-            os.replace(transaction.part_path, final_path)
-            self._ensure_path_inside_noofy_models(final_path)
-            self._verify_download(model, final_path)
-            self.log_store.add(
-                "info",
-                "Required model downloaded",
-                "workflow.models",
-                details={
-                    "folder": model.folder,
-                    "filename": model.filename,
-                    "size_bytes": final_path.stat().st_size,
-                    "sha256": f"sha256:{_sha256_file(final_path)}",
-                    "target_path": str(final_path),
-                },
-            )
-            return True
-        finally:
-            self._cleanup_transaction(transaction.transaction_dir)
+        await self._download_verified_with_fallback(
+            urls,
+            model,
+            final_path,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            model_index=model_index,
+            total_models=total_models,
+        )
+        self.log_store.add(
+            "info",
+            "Required model downloaded",
+            "workflow.models",
+            details={
+                "folder": model.folder,
+                "filename": model.filename,
+                "size_bytes": final_path.stat().st_size,
+                "sha256": f"sha256:{_sha256_file(final_path)}",
+                "target_path": str(final_path),
+            },
+        )
+        return True
 
     def _begin_download_transaction(self, model: RequiredModel) -> ModelDownloadTransaction:
         downloads_dir = self.noofy_models_dir / ".downloads"
@@ -799,10 +955,11 @@ class ModelAvailabilityService:
         transaction.write_state(status="downloading")
         return transaction
 
-    async def _download_with_fallback(
+    async def _download_verified_with_fallback(
         self,
         urls: list[str],
-        transaction: ModelDownloadTransaction,
+        model: RequiredModel,
+        final_path: Path,
         *,
         progress_callback: ModelDownloadProgressCallback | None = None,
         cancel_event: asyncio.Event | None = None,
@@ -811,6 +968,7 @@ class ModelAvailabilityService:
     ) -> None:
         last_error: Exception | None = None
         for url in urls:
+            transaction = self._begin_download_transaction(model)
             try:
                 provider = _provider_from_url(url)
                 transaction.write_state(
@@ -821,6 +979,7 @@ class ModelAvailabilityService:
                     if transaction.part_path.exists()
                     else 0,
                 )
+
                 def stream_progress(
                     bytes_downloaded: int,
                     total_bytes: int | None,
@@ -833,12 +992,12 @@ class ModelAvailabilityService:
                     )
                     _emit_model_download_progress(
                         progress_callback,
-                        model=transaction.model,
+                        model=model,
                         status="downloading",
                         model_index=model_index,
                         total_models=total_models,
                         bytes_downloaded=bytes_downloaded,
-                        total_bytes=total_bytes or transaction.model.size_bytes,
+                        total_bytes=total_bytes or model.size_bytes,
                     )
 
                 if progress_callback is None and cancel_event is None:
@@ -856,6 +1015,35 @@ class ModelAvailabilityService:
                     provider=provider,
                     bytes_downloaded=transaction.part_path.stat().st_size,
                 )
+                transaction.write_state(
+                    status="verifying",
+                    bytes_downloaded=transaction.part_path.stat().st_size,
+                )
+                _emit_model_download_progress(
+                    progress_callback,
+                    model=model,
+                    status="verifying",
+                    model_index=model_index,
+                    total_models=total_models,
+                    bytes_downloaded=transaction.part_path.stat().st_size,
+                    total_bytes=model.size_bytes,
+                )
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ModelDownloadCanceled("Download canceled.")
+                self._verify_download(model, transaction.part_path)
+                transaction.write_state(
+                    status="placing",
+                    bytes_downloaded=transaction.part_path.stat().st_size,
+                )
+                self._ensure_path_inside_noofy_models(final_path)
+                os.replace(transaction.part_path, final_path)
+                self._ensure_path_inside_noofy_models(final_path)
+                try:
+                    self._verify_download(model, final_path)
+                except Exception:
+                    if final_path.exists():
+                        final_path.unlink()
+                    raise
                 return
             except ModelDownloadCanceled:
                 if transaction.part_path.exists():
@@ -865,6 +1053,8 @@ class ModelAvailabilityService:
                 last_error = exc
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
+            finally:
+                self._cleanup_transaction(transaction.transaction_dir)
         raise ModelAvailabilityError(f"All model sources failed: {last_error}")
 
     def _cleanup_transaction(self, transaction_dir: Path) -> None:
@@ -1044,6 +1234,18 @@ def _download_failure_for_error(error: str) -> ModelDownloadFailure:
     )
 
 
+def _needs_manual_download_failure() -> ModelDownloadFailure:
+    return ModelDownloadFailure(
+        status="needs_manual_download",
+        status_label="Needs manual download",
+        message=(
+            "Noofy could not find a reliable automatic download source for this model. "
+            "The partial download was cleaned up safely. You can continue importing with "
+            "the workflow marked not ready, or cancel the import."
+        ),
+    )
+
+
 def _canceled_download_failure() -> ModelDownloadFailure:
     return ModelDownloadFailure(
         status="canceled",
@@ -1160,6 +1362,123 @@ def _reliable_candidates(
             candidate.download_url,
         ),
     )
+
+
+def _dedupe_provider_candidates(
+    candidates: list[ProviderModelCandidate],
+) -> list[ProviderModelCandidate]:
+    deduped: dict[tuple[str, str, str], ProviderModelCandidate] = {}
+    for candidate in candidates:
+        key = (candidate.provider, candidate.download_url, candidate.filename.casefold())
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = candidate
+            continue
+        deduped[key] = ProviderModelCandidate(
+            provider=candidate.provider,
+            download_url=candidate.download_url,
+            filename=candidate.filename,
+            size_bytes=candidate.size_bytes if candidate.size_bytes is not None else existing.size_bytes,
+            sha256=candidate.sha256 if candidate.sha256 is not None else existing.sha256,
+            source_trust=candidate.source_trust,
+        )
+    return list(deduped.values())
+
+
+def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
+    filename = Path(model.filename).name
+    stem = Path(filename).stem
+    tokens = [
+        token
+        for token in re.split(r"[^a-zA-Z0-9]+", stem.casefold())
+        if token
+    ]
+    stop_tokens = {
+        "safetensors",
+        "ckpt",
+        "pt",
+        "bin",
+        "pruned",
+        "emaonly",
+        "fp16",
+        "fp32",
+        "model",
+    }
+    useful_tokens = [token for token in tokens if token not in stop_tokens]
+    terms = [filename, stem]
+    if useful_tokens:
+        terms.append(" ".join(useful_tokens[:5]))
+        terms.append("-".join(useful_tokens[:5]))
+    if "v1" in tokens and "5" in tokens:
+        terms.extend(["stable diffusion v1 5", "stable-diffusion-v1-5"])
+    if "sd15" in tokens or "sd1" in tokens:
+        terms.extend(["stable diffusion 1.5", "stable-diffusion-v1-5"])
+    unique: list[str] = []
+    for term in terms:
+        term = term.strip(" ._-")
+        if not term or term in unique:
+            continue
+        unique.append(term)
+        if len(unique) >= HUGGING_FACE_SEARCH_TERM_LIMIT:
+            break
+    return unique
+
+
+def _hugging_face_api_model_url(repo_id: str) -> str:
+    repo = "/".join(quote(part, safe="") for part in repo_id.split("/"))
+    return f"https://huggingface.co/api/models/{repo}"
+
+
+def _hugging_face_candidates_from_repo_record(
+    model: RequiredModel, repo_id: str, repo: dict[str, object]
+) -> list[ProviderModelCandidate]:
+    siblings = repo.get("siblings")
+    if not isinstance(siblings, list):
+        return []
+    candidates: list[ProviderModelCandidate] = []
+    for sibling in siblings:
+        if not isinstance(sibling, dict):
+            continue
+        rfilename = sibling.get("rfilename") or sibling.get("path")
+        if not isinstance(rfilename, str):
+            continue
+        if Path(rfilename).name.casefold() != model.filename.casefold():
+            continue
+        size = _hugging_face_file_size(sibling)
+        sha256 = _hugging_face_file_sha256(sibling)
+        candidates.append(
+            ProviderModelCandidate(
+                provider="hugging_face",
+                download_url=_hugging_face_resolve_url(repo_id, rfilename),
+                filename=Path(rfilename).name,
+                size_bytes=size,
+                sha256=sha256,
+            )
+        )
+    return candidates
+
+
+def _hugging_face_file_size(file_record: dict[str, object]) -> int | None:
+    lfs = file_record.get("lfs")
+    if isinstance(lfs, dict):
+        size = _int_or_none(lfs.get("size"))
+        if size is not None:
+            return size
+    return _int_or_none(file_record.get("size"))
+
+
+def _hugging_face_file_sha256(file_record: dict[str, object]) -> str | None:
+    lfs = file_record.get("lfs")
+    if isinstance(lfs, dict):
+        sha = _sha_from_mapping(lfs)
+        if sha is not None:
+            return sha
+        oid = lfs.get("oid")
+        if isinstance(oid, str):
+            normalized = oid.removeprefix("sha256:").casefold()
+            if len(normalized) == 64 and all(ch in "0123456789abcdef" for ch in normalized):
+                return normalized
+    return _sha_from_mapping(file_record)
 
 
 def _hugging_face_resolve_url(repo_id: str, rfilename: str) -> str:

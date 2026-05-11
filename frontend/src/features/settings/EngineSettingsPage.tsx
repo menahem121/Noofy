@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Download, Eye, EyeOff, FolderCog, FolderOpen, KeyRound, Loader2, Play, RotateCcw, Search, Square, Trash2, Wrench, Zap } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Download, Eye, EyeOff, FolderCog, FolderOpen, KeyRound, Loader2, RotateCcw, Search, Square, Trash2, Wrench, Zap } from "lucide-react";
 
 import {
   bootstrapEngine,
@@ -77,7 +77,7 @@ const initialState: EngineSettingsState = {
   actionResult: null,
 };
 
-const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "already_running", "completed", "repair_completed_started"]);
+const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "started", "already_running", "stopped", "completed", "repair_completed_started"]);
 const ACTION_RESULT_LABELS: Record<string, string> = {
   prepared: "Engine environment prepared successfully.",
   already_prepared: "Environment is already prepared.",
@@ -87,6 +87,7 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   python_not_prepared: "Runtime Python is not prepared.",
   dependency_check_failed: "Dependencies could not be verified after install.",
   not_configured: "No managed runtime environment is configured.",
+  started: "Engine started.",
   already_running: "Engine is already running.",
   repair_completed_started: "The managed ComfyUI environment was repaired and started.",
   repair_failed_fallback_active: "Repair failed, so Noofy started a previous working engine.",
@@ -189,7 +190,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
   async function runAction(label: string, action: () => Promise<Record<string, unknown>>) {
     setState((current) => ({ ...current, action: label, error: null, actionResult: null }));
-    let polling = label === "start";
+    let polling = label === "restart";
     const pollRepairStatus = polling
       ? (async () => {
           while (polling) {
@@ -225,6 +226,14 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
       await pollRepairStatus;
       setState((current) => ({ ...current, action: null }));
     }
+  }
+
+  async function restartEngine() {
+    const runtime = state.runtime;
+    if (runtime?.mode === "managed" && (runtime.managed_process_running || runtime.reachable)) {
+      await stopEngine();
+    }
+    return startEngine();
   }
 
   async function runComfyUIUpdate() {
@@ -427,7 +436,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         modelFolderSettings: result.settings,
         modelFolderStatus: {
           message: result.restart_required
-            ? "Model folder saved. Restart the managed engine to use the new location."
+            ? "Model folder saved. Restart the Noofy engine so ComfyUI can scan the new model folder location."
             : "Model folder settings saved.",
           ok: true,
         },
@@ -484,9 +493,9 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
       <section className="page-heading page-heading--compact" aria-labelledby="engine-settings-title">
         <div>
-          <p className="eyebrow">Local AI engine</p>
+          <p className="eyebrow">ComfyUI engine</p>
           <h1 id="engine-settings-title">Engine Settings</h1>
-          <p>Set up and manage the AI engine that runs workflows on this machine.</p>
+          <p>Set up and manage the ComfyUI engine that runs workflows on this machine.</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void refresh()}>
           <RotateCcw size={16} aria-hidden="true" />
@@ -524,7 +533,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
                 <Zap size={18} />
               </div>
               <div>
-                <h2 className="engine-status-card__title">Local AI</h2>
+                <h2 className="engine-status-card__title">ComfyUI Engine</h2>
                 <p className="engine-status-card__subtitle">Noofy runs AI workflows privately on your computer — nothing is sent to the cloud.</p>
               </div>
             </div>
@@ -561,7 +570,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
                 <span className="engine-status-card__step-hint">
                   {state.runtime?.reachable
                     ? "Your workflows can run on this computer right now."
-                    : "Press Start to activate it before running a workflow."}
+                    : "Press Restart to activate it before running a workflow."}
                 </span>
               </div>
               {state.runtime?.managed_process_running && state.runtime.pid ? (
@@ -575,19 +584,10 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               className="primary-button primary-button--compact"
               type="button"
               disabled={state.action !== null}
-              onClick={() => void runAction("bootstrap", bootstrapEngine)}
+              onClick={() => void runAction("restart", restartEngine)}
             >
-              {state.action === "bootstrap" ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Wrench size={16} aria-hidden="true" />}
-              {environment?.prepared ? "Repair Installation" : "Set Up"}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={state.action !== null}
-              onClick={() => void runAction("start", startEngine)}
-            >
-              <Play size={16} aria-hidden="true" />
-              Start
+              {state.action === "restart" ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <RotateCcw size={16} aria-hidden="true" />}
+              Restart
             </button>
             <button
               className="secondary-button"
@@ -597,6 +597,15 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
             >
               <Square size={16} aria-hidden="true" />
               Stop
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={state.action !== null}
+              onClick={() => void runAction("bootstrap", bootstrapEngine)}
+            >
+              {state.action === "bootstrap" ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Wrench size={16} aria-hidden="true" />}
+              {environment?.prepared ? "Repair Installation" : "Set Up"}
             </button>
           </div>
         </article>

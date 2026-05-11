@@ -311,4 +311,305 @@ describe("HomePage", () => {
     expect(screen.getByText("Imported")).toBeInTheDocument();
     expect(screen.getAllByText("Quarantined Community").length).toBeGreaterThan(0);
   });
+
+  it("auto-commits a staged import when all required models are already available", async () => {
+    const readyImport = {
+      import_session_id: "import-session-ready",
+      workflow_id: "ready_workflow",
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: "ready_workflow",
+        name: "Ready Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "ready_workflow",
+        total_count: 1,
+        available_count: 1,
+        possible_match_count: 0,
+        missing_count: 0,
+        needs_manual_download_count: 0,
+        ready_to_run: true,
+        models: [
+          {
+            requirement_id: "checkpoint",
+            node_id: "1",
+            node_type: "CheckpointLoaderSimple",
+            input_name: "ckpt_name",
+            filename: "ready.safetensors",
+            model_type: "Checkpoint",
+            folder: "checkpoints",
+            verification_level: "sha256_size",
+            size_bytes: 1024,
+            source_urls: [],
+            source_availability: "known",
+            status: "available",
+            status_label: "Available",
+            asset_ownership: "noofy_downloaded",
+            source_path: "/models/checkpoints/ready.safetensors",
+            matched_root: "/models",
+            matched_sha256: "abc",
+            matched_size_bytes: 1024,
+            message: null,
+          },
+        ],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/resources")) {
+        return Promise.resolve(jsonResponse(resourceSnapshot));
+      }
+
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "ready_workflow",
+              name: "Ready Workflow",
+              version: "0.1.0",
+              description: "",
+              trust_level: "noofy_verified",
+              status: "imported",
+              status_label: "Imported",
+            },
+          ]),
+        );
+      }
+
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=ready.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(readyImport));
+      }
+
+      if (url.endsWith("/api/workflows/import/import-session-ready/commit") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            ...readyImport,
+            user_facing_message: "Imported",
+            model_summary: null,
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "ready.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-ready/commit", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: undefined,
+      });
+    });
+    expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
+    expect((await screen.findAllByText("Imported")).length).toBeGreaterThan(0);
+  });
+
+  it("commits the staged import after a completed model download job makes models ready", async () => {
+    const missingModel = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "sd15.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "resolvable",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy can try to resolve and download this model before the workflow runs.",
+    };
+    const availableModel = {
+      ...missingModel,
+      status: "available",
+      status_label: "Available",
+      source_availability: "known",
+      message: null,
+    };
+    const pendingImport = {
+      import_session_id: "import-session-download",
+      workflow_id: "core_sd15_txt2img",
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: "core_sd15_txt2img",
+        name: "Core SD15 Text to Image",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "core_sd15_txt2img",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [missingModel],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/resources")) {
+        return Promise.resolve(jsonResponse(resourceSnapshot));
+      }
+
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(
+          jsonResponse(
+            init?.method
+              ? []
+              : [
+                  {
+                    id: "core_sd15_txt2img",
+                    name: "Core SD15 Text to Image",
+                    version: "0.1.0",
+                    description: "",
+                    trust_level: "noofy_verified",
+                    status: "imported",
+                    status_label: "Imported",
+                  },
+                ],
+          ),
+        );
+      }
+
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=core_sd15_txt2img.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+
+      if (
+        url.endsWith("/api/workflows/import/import-session-download/download-models") &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-1",
+            import_session_id: "import-session-download",
+            workflow_id: "core_sd15_txt2img",
+            status: "queued",
+            user_facing_message: "Model download is queued.",
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/workflows/import/import-session-download/download-models/model-download-1")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-1",
+            import_session_id: "import-session-download",
+            workflow_id: "core_sd15_txt2img",
+            status: "completed",
+            user_facing_message: "Model download check finished.",
+            current_model_filename: null,
+            current_model_index: null,
+            total_models: 1,
+            bytes_downloaded: null,
+            total_bytes: null,
+            percent: null,
+            speed_bytes_per_second: null,
+            models: [],
+            model_summary: {
+              workflow_id: "core_sd15_txt2img",
+              total_count: 1,
+              available_count: 1,
+              possible_match_count: 0,
+              missing_count: 0,
+              needs_manual_download_count: 0,
+              ready_to_run: true,
+              models: [availableModel],
+            },
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/workflows/import/import-session-download/commit") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            ...pendingImport,
+            import_session_id: "import-session-download",
+            user_facing_message: "Imported",
+            model_summary: null,
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />);
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "core_sd15_txt2img.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Core SD15 Text to Image" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-download/commit", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: undefined,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
+    });
+    expect((await screen.findAllByText("Imported")).length).toBeGreaterThan(0);
+  });
 });

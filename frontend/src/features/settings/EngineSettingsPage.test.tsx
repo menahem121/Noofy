@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EngineSettingsPage } from "./EngineSettingsPage";
@@ -25,6 +25,14 @@ const readyRuntime = {
     source_kind: "installed",
     local_validation_status: "locally_verified",
   },
+};
+
+const stoppedRuntime = {
+  ...readyRuntime,
+  reachable: false,
+  managed_process_running: false,
+  pid: null,
+  uptime_seconds: null,
 };
 
 const versions = {
@@ -187,6 +195,79 @@ describe("EngineSettingsPage", () => {
     expect(JSON.parse(window.localStorage.getItem("noofy.prefs") ?? "{}")).toMatchObject({
       viewMode: "classic",
     });
+  });
+
+  it("shows Restart, Stop, and Repair actions in the ComfyUI engine card", async () => {
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    const panel = (await screen.findByRole("heading", { name: "ComfyUI Engine" })).closest("article");
+    expect(panel).not.toBeNull();
+
+    const actions = within(panel as HTMLElement).getAllByRole("button");
+    expect(actions.map((button) => button.textContent?.trim())).toEqual([
+      "Restart",
+      "Stop",
+      "Repair Installation",
+    ]);
+    expect(actions[0]).toHaveClass("primary-button");
+    expect(actions[1]).toHaveClass("secondary-button");
+    expect(actions[2]).toHaveClass("secondary-button");
+  });
+
+  it("restarts a running managed engine by stopping and then starting it", async () => {
+    const actionUrls: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
+      if (url.endsWith("/api/engine/comfyui/stop") && init?.method === "POST") {
+        actionUrls.push("stop");
+        return Promise.resolve(jsonResponse({ status: "stopped" }));
+      }
+      if (url.endsWith("/api/engine/comfyui/start") && init?.method === "POST") {
+        actionUrls.push("start");
+        return Promise.resolve(jsonResponse({ status: "started" }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+
+    expect(await screen.findByText("Engine started.")).toBeInTheDocument();
+    expect(actionUrls).toEqual(["stop", "start"]);
+  });
+
+  it("starts the managed engine from Restart when it is stopped", async () => {
+    const actionUrls: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(stoppedRuntime));
+      if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
+      if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders")) return Promise.resolve(jsonResponse(modelFolderSettings));
+      if (url.endsWith("/api/engine/comfyui/stop") && init?.method === "POST") {
+        actionUrls.push("stop");
+        return Promise.resolve(jsonResponse({ status: "stopped" }));
+      }
+      if (url.endsWith("/api/engine/comfyui/start") && init?.method === "POST") {
+        actionUrls.push("start");
+        return Promise.resolve(jsonResponse({ status: "started" }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<EngineSettingsPage onNavigate={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+
+    expect(await screen.findByText("Engine started.")).toBeInTheDocument();
+    expect(actionUrls).toEqual(["start"]);
   });
 
   it("loads upstream ComfyUI release options only when explicitly requested", async () => {
@@ -393,13 +474,13 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /move folder/i }));
 
     expect(await screen.findByText("/Volumes/AI/Noofy Models")).toBeInTheDocument();
-    expect(screen.getByText(/restart the managed engine/i)).toBeInTheDocument();
+    expect(screen.getByText(/restart the noofy engine/i)).toBeInTheDocument();
   });
 
-  it("shows fallback copy when start triggers repair and falls back", async () => {
+  it("shows fallback copy when restart triggers repair and falls back", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(stoppedRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
@@ -412,16 +493,16 @@ describe("EngineSettingsPage", () => {
 
     render(<EngineSettingsPage onNavigate={vi.fn()} />);
 
-    const start = await screen.findByRole("button", { name: /start/i });
-    fireEvent.click(start);
+    const restart = await screen.findByRole("button", { name: "Restart" });
+    fireEvent.click(restart);
 
     expect(await screen.findByText(/previous working engine/i)).toBeInTheDocument();
   });
 
-  it("shows repair progress while start is repairing the managed runtime", async () => {
+  it("shows repair progress while restart is repairing the managed runtime", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(stoppedRuntime));
       if (url.endsWith("/api/engine/comfyui/versions")) return Promise.resolve(jsonResponse(versions));
       if (url.endsWith("/api/engine/comfyui/launch-settings")) return Promise.resolve(jsonResponse(launchSettings));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(apiSettings));
@@ -449,8 +530,8 @@ describe("EngineSettingsPage", () => {
 
     render(<EngineSettingsPage onNavigate={vi.fn()} />);
 
-    const start = await screen.findByRole("button", { name: /start/i });
-    fireEvent.click(start);
+    const restart = await screen.findByRole("button", { name: "Restart" });
+    fireEvent.click(restart);
 
     expect(await screen.findByText("repair: repairing_environment")).toBeInTheDocument();
     expect(await screen.findByText(/repaired and started/i)).toBeInTheDocument();
