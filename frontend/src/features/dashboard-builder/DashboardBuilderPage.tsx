@@ -5,8 +5,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Eye,
-  EyeOff,
   GripVertical,
   ImagePlus,
   LayoutGrid,
@@ -118,7 +116,6 @@ export function DashboardBuilderPage({
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set([workflow.nodes[0]?.id ?? ""]));
-  const [showTechnical, setShowTechnical] = useState(false);
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
 
   useEffect(() => {
@@ -149,13 +146,11 @@ export function DashboardBuilderPage({
 
   const filteredNodes = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query && showTechnical) return workflow.nodes;
+    if (!query) return workflow.nodes;
 
     return workflow.nodes
       .map((node) => {
         const filteredValues = node.values.filter((value) => {
-          if (!showTechnical && value.technical) return false;
-          if (!query) return true;
           return (
             value.label.toLowerCase().includes(query) ||
             node.title.toLowerCase().includes(query) ||
@@ -164,8 +159,8 @@ export function DashboardBuilderPage({
         });
         return { ...node, values: filteredValues };
       })
-      .filter((node) => node.values.length > 0 || (!query && node.values.length === 0));
-  }, [workflow.nodes, search, showTechnical]);
+      .filter((node) => node.values.length > 0);
+  }, [workflow.nodes, search]);
 
   const selectedWidget = useMemo(
     () => (selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
@@ -310,15 +305,6 @@ export function DashboardBuilderPage({
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </label>
-              <button
-                className={`builder-toggle ${showTechnical ? "builder-toggle--active" : ""}`}
-                type="button"
-                onClick={() => setShowTechnical((current) => !current)}
-                aria-pressed={showTechnical}
-              >
-                {showTechnical ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />}
-                {showTechnical ? "Hide technical" : "Show technical"}
-              </button>
             </div>
 
             <div className="builder-pane__scroll">
