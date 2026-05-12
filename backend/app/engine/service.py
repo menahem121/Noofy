@@ -116,7 +116,7 @@ from app.source_policy import ModelSourceTrust, SourcePolicy
 from app.trust import capsule_source_policy, workflow_source_policy, workflow_trust_payload
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
-from app.workflows.exporter import WorkflowExportError, WorkflowExporter
+from app.workflows.exporter import WorkflowExportError, WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
 from app.workflows.loader import WorkflowPackageLoader
@@ -379,6 +379,11 @@ class EngineService:
 
     def export_workflow_comfyui_graph(self, workflow_id: str) -> tuple[bytes, str]:
         package = self.workflow_loader.get_package(workflow_id)
+        package_dir = self._mutable_package_dir(package)
+        if package_dir is not None:
+            graph_file = stored_comfyui_graph_file(package_dir)
+            if graph_file.exists():
+                return graph_file.read_bytes(), f"{safe_store_segment(workflow_id)}.comfyui.json"
         payload = json.dumps(package.comfyui_graph, indent=2, sort_keys=True).encode("utf-8")
         return payload, f"{safe_store_segment(workflow_id)}.comfyui.json"
 
@@ -1969,7 +1974,7 @@ class EngineService:
             "missing_model_count": missing_model_count,
             "needs_setup": needs_setup,
             "can_remove": self._can_remove_workflow(package),
-            "can_export_noofy": self._mutable_package_dir(package) is not None,
+            "can_export_noofy": True,
             "can_export_comfyui_json": True,
             "publisher_id": package.identity.publisher_id if package.identity else package.metadata.author,
             "package_id": package.identity.package_id if package.identity else package.metadata.id,

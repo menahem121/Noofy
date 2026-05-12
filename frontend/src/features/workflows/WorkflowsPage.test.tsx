@@ -28,7 +28,7 @@ const workflows = [
     missing_model_count: 0,
     needs_setup: false,
     can_remove: false,
-    can_export_noofy: false,
+    can_export_noofy: true,
     can_export_comfyui_json: true,
     status: "installed",
     status_label: "Installed",
@@ -168,6 +168,9 @@ describe("WorkflowsPage", () => {
       if (url.endsWith("/api/workflows/imported_cleanup/details")) {
         return Promise.resolve(jsonResponse(details));
       }
+      if (url.endsWith("/api/workflows/imported_cleanup/metadata")) {
+        return Promise.resolve(jsonResponse({ workflow_id: "imported_cleanup", metadata: {} }));
+      }
       if (url.endsWith("/api/workflows/imported_cleanup/package")) {
         return Promise.resolve(jsonResponse(workflowPackage));
       }
@@ -223,6 +226,64 @@ describe("WorkflowsPage", () => {
     expect(screen.getAllByText("cleanup.safetensors").length).toBeGreaterThan(0);
   });
 
+  it("shows workflow details in a closeable side panel", async () => {
+    renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    fireEvent.click(rowTitle.closest("article")!);
+
+    const panel = await screen.findByRole("complementary", { name: "Details for Cleanup Flow" });
+    expect(panel).toHaveClass("workflow-detail-drawer");
+    expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
+    const noofyExport = screen.getByRole("link", { name: "Export .Noofy" });
+    expect(noofyExport).toHaveAttribute(
+      "href",
+      "/api/workflows/imported_cleanup/export",
+    );
+    const comfyExport = screen.getByRole("link", { name: "Export ComfyUI JSON" });
+    expect(comfyExport).toHaveAttribute(
+      "href",
+      "/api/workflows/imported_cleanup/export/comfyui-json",
+    );
+    const exportActions = noofyExport.closest(".workflow-detail-export-actions");
+    expect(exportActions).not.toBeNull();
+    expect(comfyExport.closest(".workflow-detail-export-actions")).toBe(exportActions);
+    expect(Array.from(exportActions!.querySelectorAll("a")).map((link) => link.textContent?.trim())).toEqual([
+      "Export ComfyUI JSON",
+      "Export .Noofy",
+    ]);
+    await waitFor(() => {
+      expect(panel).toHaveClass("workflow-detail-drawer--open");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close workflow details" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("complementary", { name: "Details for Cleanup Flow" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("persists edited metadata when a details field loses focus", async () => {
+    renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    fireEvent.click(rowTitle.closest("article")!);
+
+    const description = await screen.findByLabelText("Description");
+    fireEvent.change(description, { target: { value: "Updated cleanup description." } });
+    fireEvent.blur(description);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining("Updated cleanup description."),
+        }),
+      );
+    });
+  });
+
   it("omits remove workflow for native workflows and routes row actions", async () => {
     renderPage();
 
@@ -230,7 +291,10 @@ describe("WorkflowsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
 
     expect(screen.queryByRole("menuitem", { name: /remove workflow/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /export as .noofy/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export .Noofy" })).toHaveAttribute(
+      "href",
+      "/api/workflows/native_text/export",
+    );
 
     fireEvent.click(screen.getAllByRole("menuitem", { name: "Open" })[0]);
     expect(onOpenWorkflow).toHaveBeenCalledWith("native_text");

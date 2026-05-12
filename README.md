@@ -1,3 +1,11 @@
+<p align="center">
+  <img src="frontend/public/assets/brand/noofy-app-icon.png" alt="Noofy logo" width="96" height="96">
+</p>
+
+<p align="center">
+  <img src="frontend/public/assets/brand/noofy-banner.png" alt="Noofy banner" width="900">
+</p>
+
 # Noofy
 
 **Turn powerful ComfyUI workflows into simple, local, app-like dashboards.**

@@ -163,6 +163,22 @@ export default function App() {
             workflowName: workflowName ?? undefined,
           })
         }
+        onEditWidgets={(schema) =>
+          setRoute({
+            name: "dashboard-builder",
+            workflowId: schema.workflowId,
+            workflowName: schema.workflowName,
+            initialSchema: schema,
+          })
+        }
+        onEditDashboard={(schema) =>
+          setRoute({
+            name: "dashboard-builder-layout",
+            workflowId: schema.workflowId,
+            workflowName: schema.workflowName,
+            initialSchema: schema,
+          })
+        }
         onNavigate={navigate}
       />
     );

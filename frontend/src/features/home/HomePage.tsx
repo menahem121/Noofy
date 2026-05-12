@@ -1,5 +1,23 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowRight, CheckCircle2, Download, FileUp, PackagePlus, Plus, Search, X, Users } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Download,
+  Edit3,
+  FileJson,
+  FileUp,
+  MoreHorizontal,
+  PackageOpen,
+  PackagePlus,
+  Play,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  Users,
+  X,
+} from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 
 // Replace with your real Reddit community URL when ready.
@@ -11,8 +29,12 @@ import {
   cancelWorkflowImport,
   commitWorkflowImport,
   downloadImportMissingModels,
+  exportWorkflowComfyJsonUrl,
+  exportWorkflowUrl,
   fetchImportModelDownloadStatus,
+  fetchWorkflowPackage,
   previewWorkflowPackageImport,
+  removeWorkflow,
   type ImportModelDownloadJobStatus,
   type RequiredModelAvailability,
   type WorkflowImportResponse,
@@ -20,6 +42,8 @@ import {
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
+import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import {
   fallbackWorkflow,
   recentWorkflows,
@@ -86,6 +110,9 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       trustLabel: workflow.trust?.label ?? trustLevelLabel(workflow.trust_level),
       trustTone: workflow.trust?.badge_tone ?? trustLevelTone(workflow.trust_level),
       trustSummary: workflow.trust?.summary,
+      canRemove: Boolean(workflow.can_remove),
+      canExportNoofy: Boolean(workflow.can_export_noofy),
+      canExportComfyJson: workflow.can_export_comfyui_json !== false,
       Icon: fallbackWorkflow.Icon,
       source: "backend",
     };
@@ -149,11 +176,21 @@ function trustLevelTone(level?: string) {
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
+  onEditWidgets?: (schema: DashboardSchema) => void;
+  onEditDashboard?: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
-export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: HomePageProps) {
+export function HomePage({
+  onOpenWorkflow,
+  onConfigureDashboard,
+  onEditWidgets,
+  onEditDashboard,
+  onNavigate,
+}: HomePageProps) {
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  const [cardActionError, setCardActionError] = useState<string | null>(null);
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
   const { refreshRuntime } = runtimeStatus;
@@ -341,6 +378,35 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
     setHomeData((current) => ({ ...current, pendingImport: null, downloadJob: null, importError: null }));
   }
 
+  async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
+    if (!workflow.canRemove) return;
+    const confirmed = window.confirm(`Remove "${workflow.title}" from Noofy?`);
+    if (!confirmed) return;
+    setMenuOpenFor(null);
+    setCardActionError(null);
+    try {
+      await removeWorkflow(workflow.id);
+      await refreshWorkflows();
+    } catch (error) {
+      setCardActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleEditWorkflowCard(workflow: WorkflowCard, open?: (schema: DashboardSchema) => void) {
+    setMenuOpenFor(null);
+    setCardActionError(null);
+    if (!open) {
+      onConfigureDashboard?.(workflow.id, workflow.title);
+      return;
+    }
+    try {
+      const packageData = await fetchWorkflowPackage(workflow.id);
+      open(buildDashboardSchemaForEditing(packageData));
+    } catch (error) {
+      setCardActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   useEffect(() => {
     const sessionId = homeData.pendingImport?.import_session_id;
     const jobId = homeData.downloadJob?.job_id;
@@ -462,6 +528,16 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
               <div>
                 <strong>Workflow could not be imported</strong>
                 <span>{homeData.importError}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {cardActionError ? (
+            <div className="notice notice--error" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Workflow action failed</strong>
+                <span>{cardActionError}</span>
               </div>
             </div>
           ) : null}
@@ -595,8 +671,15 @@ export function HomePage({ onOpenWorkflow, onConfigureDashboard, onNavigate }: H
               <WorkflowCardView
                 key={workflow.id}
                 workflow={workflow}
+                menuOpen={menuOpenFor === workflow.id}
                 onOpenWorkflow={onOpenWorkflow}
                 onConfigureDashboard={onConfigureDashboard}
+                onViewDetails={() => onNavigate("workflows")}
+                onToggleMenu={() => setMenuOpenFor((current) => current === workflow.id ? null : workflow.id)}
+                onCloseMenu={() => setMenuOpenFor(null)}
+                onEditDashboard={() => void handleEditWorkflowCard(workflow, onEditDashboard)}
+                onEditWidgets={() => void handleEditWorkflowCard(workflow, onEditWidgets)}
+                onRemove={() => void handleRemoveWorkflowCard(workflow)}
               />
             ))}
           </section>
@@ -778,19 +861,35 @@ function modelSourceLabel(model: RequiredModelAvailability) {
 
 function WorkflowCardView({
   workflow,
+  menuOpen,
   onOpenWorkflow,
   onConfigureDashboard,
+  onViewDetails,
+  onToggleMenu,
+  onCloseMenu,
+  onEditDashboard,
+  onEditWidgets,
+  onRemove,
 }: {
   workflow: WorkflowCard;
+  menuOpen: boolean;
   onOpenWorkflow: (workflowId: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
+  onViewDetails: () => void;
+  onToggleMenu: () => void;
+  onCloseMenu: () => void;
+  onEditDashboard: () => void;
+  onEditWidgets: () => void;
+  onRemove: () => void;
 }) {
   const StatusIcon = workflowIconStatus(workflow.status);
   const needsSetup =
     workflow.status === "needs_input_setup" || workflow.status === "cannot_prepare_automatically";
   const canOpen = workflow.source === "backend" || workflow.id === "text_to_image_v0";
+  const canShowActions = workflow.source === "backend";
 
   function handleClick() {
+    onCloseMenu();
     if (needsSetup) {
       onConfigureDashboard?.(workflow.id, workflow.title);
       return;
@@ -806,15 +905,69 @@ function WorkflowCardView({
         <div className="workflow-card__icon" aria-hidden="true">
           <workflow.Icon size={22} />
         </div>
-        <div className="workflow-card__badges">
-          <span className="category-badge">{workflow.category}</span>
-          {workflow.trustLabel ? (
-            <span
-              className={`trust-badge trust-badge--${workflow.trustTone ?? "verified"}`}
-              title={workflow.trustSummary}
-            >
-              {workflow.trustLabel}
-            </span>
+        <div className="workflow-card__meta">
+          <div className="workflow-card__badges">
+            <span className="category-badge">{workflow.category}</span>
+            {workflow.trustLabel ? (
+              <span
+                className={`trust-badge trust-badge--${workflow.trustTone ?? "verified"}`}
+                title={workflow.trustSummary}
+              >
+                {workflow.trustLabel}
+              </span>
+            ) : null}
+          </div>
+          {canShowActions ? (
+            <div className="workflow-action-menu workflow-action-menu--card" onClick={(event) => event.stopPropagation()}>
+              <button
+                className="icon-button icon-button--card"
+                type="button"
+                aria-label={`Actions for ${workflow.title}`}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={onToggleMenu}
+              >
+                <MoreHorizontal size={16} aria-hidden="true" />
+              </button>
+              {menuOpen ? (
+                <div className="workflow-action-menu__content" role="menu">
+                  <button role="menuitem" type="button" onClick={handleClick}>
+                    <Play size={14} aria-hidden="true" />
+                    Open
+                  </button>
+                  <button role="menuitem" type="button" onClick={onViewDetails}>
+                    <PackageOpen size={14} aria-hidden="true" />
+                    View details
+                  </button>
+                  <button role="menuitem" type="button" onClick={onEditDashboard}>
+                    <Edit3 size={14} aria-hidden="true" />
+                    Edit dashboard
+                  </button>
+                  <button role="menuitem" type="button" onClick={onEditWidgets}>
+                    <SlidersHorizontal size={14} aria-hidden="true" />
+                    Edit Widgets
+                  </button>
+                  {workflow.canExportNoofy ? (
+                    <a role="menuitem" href={exportWorkflowUrl(workflow.id)} download onClick={onCloseMenu}>
+                      <Download size={14} aria-hidden="true" />
+                      Export .Noofy
+                    </a>
+                  ) : null}
+                  {workflow.canExportComfyJson ? (
+                    <a role="menuitem" href={exportWorkflowComfyJsonUrl(workflow.id)} download onClick={onCloseMenu}>
+                      <FileJson size={14} aria-hidden="true" />
+                      Export ComfyUI JSON
+                    </a>
+                  ) : null}
+                  {workflow.canRemove ? (
+                    <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>
+                      <Trash2 size={14} aria-hidden="true" />
+                      Remove workflow
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

@@ -108,7 +108,7 @@ export function AppLayout({
           </button>
           <button className="brand-button" type="button" onClick={() => onNavigate("home")} aria-label="Go to home">
             <span className="brand-mark" aria-hidden="true">
-              <ShieldCheck size={17} />
+              <img src="/assets/brand/noofy-app-icon.png" alt="" />
             </span>
             <span className="brand-name">Noofy</span>
           </button>

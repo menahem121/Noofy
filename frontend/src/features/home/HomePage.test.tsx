@@ -136,6 +136,71 @@ describe("HomePage", () => {
     expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
   });
 
+  it("shows workflow row actions on backend workflow cards", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "native_text",
+              name: "Native Text",
+              version: "1.0.0",
+              description: "Built in workflow.",
+              trust_level: "noofy_verified",
+              source_label: "Native Noofy",
+              status: "installed",
+              status_label: "Installed",
+              can_remove: false,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+            {
+              id: "imported_cleanup",
+              name: "Cleanup Flow",
+              version: "1.0.0",
+              description: "Clean up images.",
+              trust_level: "quarantined_community",
+              source_label: "Imported",
+              status: "imported",
+              status_label: "Imported",
+              can_remove: true,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+          ]),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByRole("heading", { name: "Cleanup Flow" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+
+    expect(screen.getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "View details" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Edit dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Edit Widgets" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export .Noofy" })).toHaveAttribute(
+      "href",
+      "/api/workflows/imported_cleanup/export",
+    );
+    expect(screen.getByRole("menuitem", { name: "Export ComfyUI JSON" })).toHaveAttribute(
+      "href",
+      "/api/workflows/imported_cleanup/export/comfyui-json",
+    );
+    expect(screen.getByRole("menuitem", { name: "Remove workflow" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
+    expect(screen.queryByRole("menuitem", { name: "Remove workflow" })).not.toBeInTheDocument();
+  });
+
   it("shows starter content and a clear status when the backend is unavailable", async () => {
     fetchMock.mockRejectedValue(new Error("connect failed"));
 

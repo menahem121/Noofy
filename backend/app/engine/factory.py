@@ -72,6 +72,7 @@ from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.user_state import UserStateService
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -408,6 +409,8 @@ def create_default_engine_service() -> EngineService:
             "core_runner_id": CORE_RUNNER_ID,
         },
     )
+    user_state_service = UserStateService(paths.user_state_dir)
+    workflow_library_store = WorkflowLibraryStore(paths.workflow_store_dir / "library")
     service = EngineService(
         loader,
         validator,
@@ -434,8 +437,10 @@ def create_default_engine_service() -> EngineService:
         workflow_exporter=WorkflowExporter(
             workflow_store_dir=paths.workflow_packages_store_dir,
             workflow_loader=loader,
+            user_state_service=user_state_service,
+            workflow_library_store=workflow_library_store,
         ),
         model_roots_ref=model_roots,
-        workflow_library_store=WorkflowLibraryStore(paths.workflow_store_dir / "library"),
+        workflow_library_store=workflow_library_store,
     )
     return service

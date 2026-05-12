@@ -298,6 +298,23 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
     assert "run-history.json" not in names
 
 
+def test_comfyui_json_export_uses_stored_source_graph(tmp_path: Path) -> None:
+    service, workflow_id, package_dir, _ = _service(tmp_path)
+    source_graph = {
+        "10": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 1234},
+        }
+    }
+    source_graph_file = package_dir / "source-files" / "comfyui_graph.json"
+    source_graph_file.write_text(json.dumps(source_graph), encoding="utf-8")
+
+    graph_bytes, filename = service.export_workflow_comfyui_graph(workflow_id)
+
+    assert filename.endswith(".comfyui.json")
+    assert json.loads(graph_bytes) == source_graph
+
+
 def test_native_workflow_cannot_be_removed(tmp_path: Path) -> None:
     log_store = LogStore()
     service = EngineService(
@@ -312,6 +329,7 @@ def test_native_workflow_cannot_be_removed(tmp_path: Path) -> None:
 
     native = service.list_workflows()[0]
     assert native["can_remove"] is False
+    assert native["can_export_noofy"] is True
     with pytest.raises(ValueError):
         service.remove_workflow(str(native["id"]))
 

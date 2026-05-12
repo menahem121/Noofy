@@ -32,6 +32,9 @@ export interface WorkflowCard {
   trustLabel?: string;
   trustTone?: string;
   trustSummary?: string;
+  canRemove?: boolean;
+  canExportNoofy?: boolean;
+  canExportComfyJson?: boolean;
   Icon: LucideIcon;
   source: "backend" | "starter";
 }

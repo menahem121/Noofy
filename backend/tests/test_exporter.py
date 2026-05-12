@@ -15,12 +15,16 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from app.engine.diagnostics import LogStore
-from app.workflows.exporter import WorkflowExporter, WorkflowExportError
+from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.user_state import (
+    OutputPreference,
+    UserStateLayoutOverride,
+    UserStateService,
+    WorkflowUserState,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +112,20 @@ def _make_archive(
     return buf.getvalue()
 
 
-def _setup_with_configured_dashboard(tmp_path: Path):
+def _setup_with_configured_dashboard(
+    tmp_path: Path,
+    *,
+    user_state_service: UserStateService | None = None,
+):
     archive_bytes = _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD)
     log_store = LogStore()
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
     pkg = store.import_archive(archive_bytes, original_filename="export_test.noofy")
     workflow_id = pkg.metadata.id
+    (store.package_dir(pkg) / "dashboard.json").write_text(
+        json.dumps(_CONFIGURED_DASHBOARD),
+        encoding="utf-8",
+    )
 
     loader = WorkflowPackageLoader(
         Path("missing-bundled"),
@@ -122,6 +134,7 @@ def _setup_with_configured_dashboard(tmp_path: Path):
     exporter = WorkflowExporter(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=loader,
+        user_state_service=user_state_service,
     )
     return exporter, workflow_id, archive_bytes
 
@@ -187,12 +200,64 @@ def test_exported_archive_has_separate_dashboard_json(tmp_path: Path) -> None:
     assert "dashboard" not in package_data
 
 
-def test_export_raises_for_bundled_workflow(tmp_path: Path) -> None:
-    loader = WorkflowPackageLoader(Path("app/workflows/packages"))
+def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            dashboard_version="0.1.0",
+            values={"prompt": "latest prompt"},
+            layout_overrides={"c1": UserStateLayoutOverride(x=2, y=3, w=10, h=5)},
+            output_preferences={"c2": OutputPreference(auto_save=True)},
+        )
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+
+    assert dashboard_data["inputs"][0]["default"] == "latest prompt"
+    first_control = dashboard_data["sections"][0]["controls"][0]
+    assert first_control["layout"] == {"x": 2, "y": 3, "w": 10, "h": 5}
+    second_control = dashboard_data["sections"][0]["controls"][1]
+    assert second_control["show_download"] is True
+
+
+def test_export_supports_bundled_workflow_with_user_preferences(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    loader = WorkflowPackageLoader(Path(__file__).resolve().parents[1] / "app/workflows/packages")
     exporter = WorkflowExporter(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=loader,
+        user_state_service=user_state_service,
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id="text_to_image_v0",
+            dashboard_version="0.1.0",
+            values={"prompt": "native export prompt"},
+            layout_overrides={"prompt": UserStateLayoutOverride(x=1, y=2, w=20, h=5)},
+        )
     )
 
-    with pytest.raises(WorkflowExportError, match="no mutable store copy"):
-        exporter.export_archive("text_to_image_v0")
+    archive_bytes, filename = exporter.export_archive("text_to_image_v0")
+
+    assert filename == "text_to_image_v0.noofy"
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        names = set(zf.namelist())
+        package_data = json.loads(zf.read("package.json"))
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
+
+    assert {"package.json", "dashboard.json", "comfyui_graph.json", "capsule.lock.json", "export-report.json"} <= names
+    assert package_data["publisher_id"] == "noofy"
+    assert package_data["package_id"] == "text_to_image_v0"
+    assert "dashboard" not in package_data
+    assert dashboard_data["inputs"][0]["default"] == "native export prompt"
+    assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 1, "y": 2, "w": 20, "h": 5}
+    assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"

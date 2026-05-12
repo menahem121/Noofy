@@ -1,4 +1,4 @@
-import { ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
@@ -27,21 +27,14 @@ import {
   removeWorkflow,
   updateWorkflowMetadata,
   type WorkflowDetails,
-  type WorkflowInputDef,
   type WorkflowMetadataUpdate,
-  type WorkflowOutputDef,
-  type WorkflowPackageResponse,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import type {
-  DashboardSchema,
-  DashboardWidget,
-  WidgetGroup,
-  WidgetType,
-} from "../dashboard-builder/dashboardBuilderContent";
+import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
+import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
@@ -140,6 +133,8 @@ export function WorkflowsPage({
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const detailsPanelFrameRef = useRef<number | null>(null);
+  const detailsPanelCloseTimerRef = useRef<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<WorkflowCategory>("All");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -147,6 +142,7 @@ export function WorkflowsPage({
   const [sourceFilter, setSourceFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [details, setDetails] = useState<Record<string, WorkflowDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
@@ -160,6 +156,17 @@ export function WorkflowsPage({
     void runtimeStatus.refreshRuntime({ silent: true });
     void workflowLibrary.refreshWorkflows();
   }, [runtimeStatus.refreshRuntime, workflowLibrary.refreshWorkflows]);
+
+  useEffect(() => {
+    return () => {
+      if (detailsPanelFrameRef.current !== null) {
+        window.cancelAnimationFrame(detailsPanelFrameRef.current);
+      }
+      if (detailsPanelCloseTimerRef.current !== null) {
+        window.clearTimeout(detailsPanelCloseTimerRef.current);
+      }
+    };
+  }, []);
 
   const workflows = workflowLibrary.workflows;
   const uniqueTags = useMemo(
@@ -209,7 +216,25 @@ export function WorkflowsPage({
   const missingModelsCount = workflows.reduce((total, workflow) => total + (workflow.missing_model_count ?? 0), 0);
 
   async function openDetails(workflow: WorkflowSummary) {
+    if (detailsPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(detailsPanelCloseTimerRef.current);
+      detailsPanelCloseTimerRef.current = null;
+    }
+    if (detailsPanelFrameRef.current !== null) {
+      window.cancelAnimationFrame(detailsPanelFrameRef.current);
+      detailsPanelFrameRef.current = null;
+    }
+    const shouldSlideIn = !selectedWorkflowId || !detailsPanelOpen;
     setSelectedWorkflowId(workflow.id);
+    if (shouldSlideIn) {
+      setDetailsPanelOpen(false);
+      detailsPanelFrameRef.current = window.requestAnimationFrame(() => {
+        detailsPanelFrameRef.current = null;
+        setDetailsPanelOpen(true);
+      });
+    } else {
+      setDetailsPanelOpen(true);
+    }
     setMenuOpenFor(null);
     if (details[workflow.id]) return;
     setDetailsLoading(true);
@@ -251,13 +276,31 @@ export function WorkflowsPage({
     const confirmed = window.confirm(`Remove "${workflow.name}" from Noofy?`);
     if (!confirmed) return;
     await removeWorkflow(workflow.id);
-    setSelectedWorkflowId((current) => (current === workflow.id ? null : current));
+    if (selectedWorkflowId === workflow.id) {
+      setDetailsPanelOpen(false);
+      setSelectedWorkflowId(null);
+    }
     setDetails((current) => {
       const next = { ...current };
       delete next[workflow.id];
       return next;
     });
     await workflowLibrary.refreshWorkflows();
+  }
+
+  function closeDetailsPanel() {
+    if (detailsPanelFrameRef.current !== null) {
+      window.cancelAnimationFrame(detailsPanelFrameRef.current);
+      detailsPanelFrameRef.current = null;
+    }
+    if (detailsPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(detailsPanelCloseTimerRef.current);
+    }
+    setDetailsPanelOpen(false);
+    detailsPanelCloseTimerRef.current = window.setTimeout(() => {
+      detailsPanelCloseTimerRef.current = null;
+      setSelectedWorkflowId(null);
+    }, 260);
   }
 
   async function handleMetadataSave(workflowId: string, payload: WorkflowMetadataUpdate) {
@@ -287,115 +330,121 @@ export function WorkflowsPage({
   }
 
   return (
-    <AppLayout activeRoute="workflows" status={runtimeStatus.statusView} onNavigate={onNavigate}>
-      <section className="page-heading page-heading--compact" aria-labelledby="workflows-title">
-        <div>
-          <h1 id="workflows-title">Workflows</h1>
-          <p>Manage native and imported workflows you can run in Noofy.</p>
-        </div>
-        <div className="button-row">
-          <button className="secondary-button" type="button" onClick={() => setShowExportHelp((value) => !value)}>
-            How to export workflows from ComfyUI
-          </button>
-          <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-            <FileUp size={16} aria-hidden="true" />
-            {importing ? "Importing..." : "Import Workflow"}
-          </button>
-          <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy" onChange={handleImport} />
-        </div>
-      </section>
-
-      <div className="models-summary-bar" role="region" aria-label="Workflow statistics">
-        <div className="models-stat-card">
-          <div className="models-stat-card__value">{workflows.length}</div>
-          <div className="models-stat-card__label">Total workflows</div>
-        </div>
-        <div className="models-stat-card">
-          <div className="models-stat-card__value">{readyCount}</div>
-          <div className="models-stat-card__label">Ready</div>
-        </div>
-        <div className={`models-stat-card${needSetupCount > 0 ? " models-stat-card--warning" : ""}`}>
-          <div className="models-stat-card__value">{needSetupCount}</div>
-          <div className="models-stat-card__label">Need setup</div>
-        </div>
-        <div className={`models-stat-card${missingModelsCount > 0 ? " models-stat-card--warning" : ""}`}>
-          <div className="models-stat-card__value">{missingModelsCount}</div>
-          <div className="models-stat-card__label">Missing models</div>
-        </div>
-      </div>
-
-      {showExportHelp ? (
-        <div className="workflow-help-panel" role="region" aria-label="How to export workflows from ComfyUI">
-          <button className="icon-button" type="button" onClick={() => setShowExportHelp(false)} aria-label="Close export help">
-            <X size={16} aria-hidden="true" />
-          </button>
-          <div>
-            <strong>Export from ComfyUI, then import into Noofy.</strong>
-            <p>
-              Save the workflow from ComfyUI as JSON or package it as a `.noofy` archive. Noofy will import the file,
-              keep its own editable copy, and run it through the backend engine adapter.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {importError ? <div className="notice notice--warning">{importError}</div> : null}
-      {actionError ? <div className="notice notice--warning">{actionError}</div> : null}
-
-      <div className="models-type-tabs" role="tablist" aria-label="Filter by workflow category">
-        {CATEGORY_FILTERS.map((category) => (
-          <button
-            key={category}
-            role="tab"
-            aria-selected={activeCategory === category}
-            className={`models-type-tab${activeCategory === category ? " models-type-tab--active" : ""}`}
-            type="button"
-            onClick={() => setActiveCategory(category)}
-          >
-            {category}
-          </button>
-        ))}
-      </div>
-
-      <div className="models-toolbar">
-        <label className="search-field search-field--models">
-          <Search size={16} aria-hidden="true" />
-          <span className="sr-only">Search workflows</span>
-          <input type="search" placeholder="Search workflows..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        </label>
-
-        <FilterSelect label="Filter by status" value={statusFilter} onChange={setStatusFilter}>
-          <option value="all">All status</option>
-          <option value="ready">Ready</option>
-          <option value="need_setup">Need setup</option>
-          <option value="missing_models">Missing models</option>
-        </FilterSelect>
-        <FilterSelect label="Filter by category" value={categoryFilter} onChange={setCategoryFilter}>
-          <option value="all">All categories</option>
-          {uniqueCategories.map((category) => (
-            <option key={category} value={category}>
-              {category}
-            </option>
-          ))}
-        </FilterSelect>
-        <FilterSelect label="Filter by source" value={sourceFilter} onChange={setSourceFilter}>
-          <option value="all">All sources</option>
-          <option value="Native Noofy">Native Noofy</option>
-          <option value="Imported">Imported</option>
-          <option value="Created by me">Created by me</option>
-        </FilterSelect>
-        <FilterSelect label="Filter by tags" value={tagFilter} onChange={setTagFilter}>
-          <option value="all">All tags</option>
-          {uniqueTags.map((tag) => (
-            <option key={tag} value={tag}>
-              {tag}
-            </option>
-          ))}
-        </FilterSelect>
-      </div>
-
-      <div className={`workflows-layout${selectedWorkflowId ? " workflows-layout--drawer-open" : ""}`}>
+    <AppLayout
+      activeRoute="workflows"
+      status={runtimeStatus.statusView}
+      onNavigate={onNavigate}
+      mainClassName="main-workspace--workflows"
+      contentClassName="workspace-content--workflows"
+    >
+      <div className={`workflows-layout${detailsPanelOpen ? " workflows-layout--drawer-open" : ""}`}>
         <div className="workflows-list-area">
+          <section className="page-heading page-heading--compact page-heading--workflows" aria-labelledby="workflows-title">
+            <div>
+              <h1 id="workflows-title">Workflows</h1>
+              <p>Manage native and imported workflows you can run in Noofy.</p>
+            </div>
+            <div className="button-row workflow-page-actions">
+              <button className="secondary-button" type="button" onClick={() => setShowExportHelp((value) => !value)}>
+                How to export workflows from ComfyUI
+              </button>
+              <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+                <FileUp size={16} aria-hidden="true" />
+                {importing ? "Importing..." : "Import Workflow"}
+              </button>
+              <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy" onChange={handleImport} />
+            </div>
+          </section>
+
+          <div className="models-summary-bar" role="region" aria-label="Workflow statistics">
+            <div className="models-stat-card">
+              <div className="models-stat-card__value">{workflows.length}</div>
+              <div className="models-stat-card__label">Total workflows</div>
+            </div>
+            <div className="models-stat-card">
+              <div className="models-stat-card__value">{readyCount}</div>
+              <div className="models-stat-card__label">Ready</div>
+            </div>
+            <div className={`models-stat-card${needSetupCount > 0 ? " models-stat-card--warning" : ""}`}>
+              <div className="models-stat-card__value">{needSetupCount}</div>
+              <div className="models-stat-card__label">Need setup</div>
+            </div>
+            <div className={`models-stat-card${missingModelsCount > 0 ? " models-stat-card--warning" : ""}`}>
+              <div className="models-stat-card__value">{missingModelsCount}</div>
+              <div className="models-stat-card__label">Missing models</div>
+            </div>
+          </div>
+
+          {showExportHelp ? (
+            <div className="workflow-help-panel" role="region" aria-label="How to export workflows from ComfyUI">
+              <button className="icon-button" type="button" onClick={() => setShowExportHelp(false)} aria-label="Close export help">
+                <X size={16} aria-hidden="true" />
+              </button>
+              <div>
+                <strong>Export from ComfyUI, then import into Noofy.</strong>
+                <p>
+                  Save the workflow from ComfyUI as JSON or package it as a `.noofy` archive. Noofy will import the file,
+                  keep its own editable copy, and run it through the backend engine adapter.
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {importError ? <div className="notice notice--warning">{importError}</div> : null}
+          {actionError ? <div className="notice notice--warning">{actionError}</div> : null}
+
+          <div className="models-type-tabs" role="tablist" aria-label="Filter by workflow category">
+            {CATEGORY_FILTERS.map((category) => (
+              <button
+                key={category}
+                role="tab"
+                aria-selected={activeCategory === category}
+                className={`models-type-tab${activeCategory === category ? " models-type-tab--active" : ""}`}
+                type="button"
+                onClick={() => setActiveCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+
+          <div className="models-toolbar">
+            <label className="search-field search-field--models">
+              <Search size={16} aria-hidden="true" />
+              <span className="sr-only">Search workflows</span>
+              <input type="search" placeholder="Search workflows..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            </label>
+
+            <FilterSelect label="Filter by status" value={statusFilter} onChange={setStatusFilter}>
+              <option value="all">All status</option>
+              <option value="ready">Ready</option>
+              <option value="need_setup">Need setup</option>
+              <option value="missing_models">Missing models</option>
+            </FilterSelect>
+            <FilterSelect label="Filter by category" value={categoryFilter} onChange={setCategoryFilter}>
+              <option value="all">All categories</option>
+              {uniqueCategories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect label="Filter by source" value={sourceFilter} onChange={setSourceFilter}>
+              <option value="all">All sources</option>
+              <option value="Native Noofy">Native Noofy</option>
+              <option value="Imported">Imported</option>
+              <option value="Created by me">Created by me</option>
+            </FilterSelect>
+            <FilterSelect label="Filter by tags" value={tagFilter} onChange={setTagFilter}>
+              <option value="all">All tags</option>
+              {uniqueTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </FilterSelect>
+          </div>
+
           <div className="workflows-table-head" aria-hidden="true">
             <div className="workflow-col workflow-col-main">Workflow</div>
             <div className="workflow-col workflow-col-model">Main model</div>
@@ -436,23 +485,68 @@ export function WorkflowsPage({
         </div>
 
         {selectedSummary ? (
-          <aside className="workflow-detail-drawer" aria-label={`Details for ${selectedSummary.name}`}>
+          <aside
+            className={`workflow-detail-drawer${detailsPanelOpen ? " workflow-detail-drawer--open" : ""}`}
+            aria-label={`Details for ${selectedSummary.name}`}
+          >
             {detailsLoading && !selectedDetails ? (
-              <div className="workflow-detail-drawer__loading">Loading details...</div>
+              <WorkflowDetailsFallback
+                workflow={selectedSummary}
+                message="Loading details..."
+                onClose={closeDetailsPanel}
+              />
             ) : detailsError ? (
-              <div className="workflow-detail-drawer__loading">{detailsError}</div>
+              <WorkflowDetailsFallback
+                workflow={selectedSummary}
+                message={detailsError}
+                onClose={closeDetailsPanel}
+              />
             ) : selectedDetails ? (
               <WorkflowDetailsDrawer
                 workflow={selectedDetails}
-                onClose={() => setSelectedWorkflowId(null)}
+                onClose={closeDetailsPanel}
                 onOpen={() => onOpenWorkflow(selectedDetails.id)}
-                onSave={(payload) => void handleMetadataSave(selectedDetails.id, payload)}
+                onSave={(payload) => handleMetadataSave(selectedDetails.id, payload)}
               />
             ) : null}
           </aside>
         ) : null}
       </div>
     </AppLayout>
+  );
+}
+
+function WorkflowDetailsFallback({
+  workflow,
+  message,
+  onClose,
+}: {
+  workflow: WorkflowSummary;
+  message: string;
+  onClose: () => void;
+}) {
+  const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
+
+  return (
+    <>
+      <div className="detail-panel__header">
+        <div className="detail-panel__title-group">
+          <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
+            <Icon size={20} />
+          </div>
+          <div className="detail-panel__title-text">
+            <h2 className="detail-panel__title">{workflow.name}</h2>
+            <span className={`workflow-status workflow-status--${workflowStatus(workflow)}`}>
+              {workflowStatusLabel(workflow)}
+            </span>
+          </div>
+        </div>
+        <button className="icon-button" type="button" onClick={onClose} aria-label="Close workflow details">
+          <X size={17} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="workflow-detail-drawer__loading">{message}</div>
+    </>
   );
 }
 
@@ -570,7 +664,7 @@ function WorkflowRow({
               {workflow.can_export_noofy ? (
                 <a role="menuitem" href={exportWorkflowUrl(workflow.id)} download onClick={onCloseMenu}>
                   <Download size={14} aria-hidden="true" />
-                  Export as .noofy
+                  Export .Noofy
                 </a>
               ) : null}
               <a role="menuitem" href={exportWorkflowComfyJsonUrl(workflow.id)} download onClick={onCloseMenu}>
@@ -600,28 +694,47 @@ function WorkflowDetailsDrawer({
   workflow: WorkflowDetails;
   onClose: () => void;
   onOpen: () => void;
-  onSave: (payload: WorkflowMetadataUpdate) => void;
+  onSave: (payload: WorkflowMetadataUpdate) => Promise<void> | void;
 }) {
-  const [draft, setDraft] = useState<WorkflowMetadataUpdate>(() => ({
+  const workflowMetadataDraft = useMemo<WorkflowMetadataUpdate>(() => ({
     description: workflow.overview.description,
     author: workflow.overview.author,
     website: workflow.overview.website,
     category: workflow.organization.category,
     tags: workflow.organization.tags,
     icon: workflow.organization.icon,
-  }));
+  }), [workflow]);
+  const [draft, setDraft] = useState<WorkflowMetadataUpdate>(() => workflowMetadataDraft);
+  const [savedDraft, setSavedDraft] = useState<WorkflowMetadataUpdate>(() => workflowMetadataDraft);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const Icon = WORKFLOW_ICONS[(workflow.organization.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
 
   useEffect(() => {
-    setDraft({
-      description: workflow.overview.description,
-      author: workflow.overview.author,
-      website: workflow.overview.website,
-      category: workflow.organization.category,
-      tags: workflow.organization.tags,
-      icon: workflow.organization.icon,
+    setDraft(workflowMetadataDraft);
+    setSavedDraft(workflowMetadataDraft);
+    setSaveError(null);
+  }, [workflowMetadataDraft]);
+
+  async function saveDraft() {
+    if (metadataDraftsEqual(draft, savedDraft)) return true;
+    setSaveError(null);
+    try {
+      await onSave(draft);
+      setSavedDraft(draft);
+      return true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  function handleExportClick(event: MouseEvent<HTMLAnchorElement>, url: string) {
+    if (metadataDraftsEqual(draft, savedDraft)) return;
+    event.preventDefault();
+    void saveDraft().then((saved) => {
+      if (saved) window.location.href = url;
     });
-  }, [workflow]);
+  }
 
   return (
     <>
@@ -642,15 +755,33 @@ function WorkflowDetailsDrawer({
         </button>
       </div>
 
-      <button className="primary-button secondary-button--full workflow-open-cta" type="button" onClick={onOpen}>
-        <Play size={15} aria-hidden="true" />
-        Open Workflow
-      </button>
+      <div className="workflow-detail-primary-actions">
+        <button className="primary-button secondary-button--full workflow-open-cta" type="button" onClick={onOpen}>
+          <Play size={15} aria-hidden="true" />
+          Open Workflow
+        </button>
+      </div>
 
       <DetailSection title="Overview">
-        <EditableField label="Description" value={draft.description ?? ""} multiline onChange={(description) => setDraft((current) => ({ ...current, description }))} />
-        <EditableField label="Author" value={draft.author ?? ""} onChange={(author) => setDraft((current) => ({ ...current, author }))} />
-        <EditableField label="Website" value={draft.website ?? ""} onChange={(website) => setDraft((current) => ({ ...current, website }))} />
+        <EditableField
+          label="Description"
+          value={draft.description ?? ""}
+          multiline
+          onBlur={() => void saveDraft()}
+          onChange={(description) => setDraft((current) => ({ ...current, description }))}
+        />
+        <EditableField
+          label="Author"
+          value={draft.author ?? ""}
+          onBlur={() => void saveDraft()}
+          onChange={(author) => setDraft((current) => ({ ...current, author }))}
+        />
+        <EditableField
+          label="Website"
+          value={draft.website ?? ""}
+          onBlur={() => void saveDraft()}
+          onChange={(website) => setDraft((current) => ({ ...current, website }))}
+        />
         <dl className="detail-list detail-list--compact">
           <div><dt>Source</dt><dd>{workflow.overview.source}</dd></div>
           <div><dt>Version</dt><dd>{workflow.overview.version}</dd></div>
@@ -678,16 +809,25 @@ function WorkflowDetailsDrawer({
       </DetailSection>
 
       <DetailSection title="Organization">
-        <EditableField label="Category" value={draft.category ?? ""} onChange={(category) => setDraft((current) => ({ ...current, category }))} />
+        <EditableField
+          label="Category"
+          value={draft.category ?? ""}
+          onBlur={() => void saveDraft()}
+          onChange={(category) => setDraft((current) => ({ ...current, category }))}
+        />
         <EditableField
           label="Tags"
           value={(draft.tags ?? []).join(", ")}
+          onBlur={() => void saveDraft()}
           onChange={(tags) => setDraft((current) => ({ ...current, tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean) }))}
         />
-        <EditableField label="Icon" value={draft.icon ?? ""} onChange={(icon) => setDraft((current) => ({ ...current, icon }))} />
-        <button className="secondary-button secondary-button--full" type="button" onClick={() => onSave(draft)}>
-          Save details
-        </button>
+        <EditableField
+          label="Icon"
+          value={draft.icon ?? ""}
+          onBlur={() => void saveDraft()}
+          onChange={(icon) => setDraft((current) => ({ ...current, icon }))}
+        />
+        {saveError ? <p className="workflow-edit-error">{saveError}</p> : null}
       </DetailSection>
 
       <DetailSection title="Advanced">
@@ -696,14 +836,41 @@ function WorkflowDetailsDrawer({
           <div><dt>Engine</dt><dd>{workflow.advanced.engine}</dd></div>
           <div><dt>Trust level</dt><dd>{workflow.advanced.trust_label}</dd></div>
         </dl>
-        <div className="detail-panel__actions">
-          {workflow.advanced.can_export_noofy ? (
-            <a className="secondary-button secondary-button--full" href={exportWorkflowUrl(workflow.id)} download>Export as .noofy</a>
-          ) : null}
-          <a className="secondary-button secondary-button--full" href={exportWorkflowComfyJsonUrl(workflow.id)} download>Export ComfyUI JSON</a>
-        </div>
       </DetailSection>
+
+      <div className="workflow-detail-export-actions" aria-label="Workflow export actions">
+        <a
+          className="secondary-button secondary-button--full"
+          href={exportWorkflowComfyJsonUrl(workflow.id)}
+          download
+          onClick={(event) => handleExportClick(event, exportWorkflowComfyJsonUrl(workflow.id))}
+        >
+          Export ComfyUI JSON
+        </a>
+        {workflow.advanced.can_export_noofy ? (
+          <a
+            className="primary-button secondary-button--full"
+            href={exportWorkflowUrl(workflow.id)}
+            download
+            onClick={(event) => handleExportClick(event, exportWorkflowUrl(workflow.id))}
+          >
+            <Download size={15} aria-hidden="true" />
+            Export .Noofy
+          </a>
+        ) : null}
+      </div>
     </>
+  );
+}
+
+function metadataDraftsEqual(left: WorkflowMetadataUpdate, right: WorkflowMetadataUpdate) {
+  return (
+    (left.description ?? "") === (right.description ?? "") &&
+    (left.author ?? "") === (right.author ?? "") &&
+    (left.website ?? "") === (right.website ?? "") &&
+    (left.category ?? "") === (right.category ?? "") &&
+    (left.icon ?? "") === (right.icon ?? "") &&
+    (left.tags ?? []).join("\u0000") === (right.tags ?? []).join("\u0000")
   );
 }
 
@@ -720,124 +887,23 @@ function EditableField({
   label,
   value,
   multiline = false,
+  onBlur,
   onChange,
 }: {
   label: string;
   value: string;
   multiline?: boolean;
+  onBlur?: () => void;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="workflow-edit-field">
       <span>{label}</span>
       {multiline ? (
-        <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} />
+        <textarea value={value} onBlur={onBlur} onChange={(event) => onChange(event.target.value)} rows={3} />
       ) : (
-        <input value={value} onChange={(event) => onChange(event.target.value)} />
+        <input value={value} onBlur={onBlur} onChange={(event) => onChange(event.target.value)} />
       )}
     </label>
   );
-}
-
-function buildDashboardSchemaForEditing(packageData: WorkflowPackageResponse): DashboardSchema {
-  const inputIndex = new Map<string, WorkflowInputDef>();
-  for (const input of packageData.inputs) inputIndex.set(input.id, input);
-  const outputIndex = new Map<string, WorkflowOutputDef>();
-  for (const output of packageData.outputs) outputIndex.set(output.id, output);
-
-  const widgets: DashboardWidget[] = [];
-  for (const section of packageData.dashboard.sections) {
-    for (const control of section.controls) {
-      const layout = control.layout
-        ? {
-            x: control.layout.x,
-            y: control.layout.y,
-            w: control.layout.w,
-            h: control.layout.h,
-            minW: control.layout.min_w,
-            minH: control.layout.min_h,
-          }
-        : undefined;
-
-      if (control.input_id) {
-        const input = inputIndex.get(control.input_id);
-        if (!input) continue;
-        widgets.push({
-          id: control.id,
-          valueId: input.id,
-          binding: { nodeId: input.binding.node_id, inputName: input.binding.input_name },
-          widgetType: toBuilderWidgetType(control.type),
-          title: control.label,
-          description: control.description ?? "",
-          orientation: "vertical",
-          group: toBuilderWidgetGroup(control.group),
-          defaultValue: input.default,
-          min: numberValidation(input.validation.min),
-          max: numberValidation(input.validation.max),
-          step: numberValidation(input.validation.step),
-          options: stringArrayValidation(input.validation.options),
-          layout,
-        });
-      } else if (control.output_id) {
-        const output = outputIndex.get(control.output_id);
-        if (!output) continue;
-        widgets.push({
-          id: control.id,
-          valueId: output.id,
-          binding: { nodeId: output.node_id, inputName: "" },
-          widgetType: "display_image",
-          title: control.label,
-          description: control.description ?? "",
-          orientation: "vertical",
-          group: toBuilderWidgetGroup(control.group),
-          defaultValue: null,
-          showDownload: Boolean(control.show_download),
-          layout,
-        });
-      }
-    }
-  }
-
-  return {
-    version: 1,
-    workflowId: packageData.metadata.id,
-    workflowName: packageData.metadata.name,
-    widgets,
-    layout: {
-      gridColumns: 32,
-      rowHeight: 32,
-      gridGap: 14,
-      responsive: true,
-    },
-  };
-}
-
-function toBuilderWidgetType(type: string): WidgetType {
-  if (type === "result_image") return "display_image";
-  const knownTypes = new Set<WidgetType>([
-    "slider",
-    "int_field",
-    "string_field",
-    "textarea",
-    "toggle",
-    "load_image",
-    "load_image_mask",
-    "display_image",
-    "seed_widget",
-    "lora_loader",
-    "select",
-  ]);
-  return knownTypes.has(type as WidgetType) ? (type as WidgetType) : "string_field";
-}
-
-function toBuilderWidgetGroup(group: string | undefined): WidgetGroup {
-  return group === "advanced" ? "advanced" : "simple";
-}
-
-function numberValidation(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
-
-function stringArrayValidation(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
 }
