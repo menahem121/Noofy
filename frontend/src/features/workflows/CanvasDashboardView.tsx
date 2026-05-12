@@ -327,7 +327,7 @@ export function CanvasDashboardView({
                       Export as Noofy
                     </a>
                     <button className="canvas-options-menu__item" role="menuitem" type="button" disabled>
-                      Export as JSON
+                      Export ComfyUI JSON
                     </button>
                     <button
                       className="canvas-options-menu__item"

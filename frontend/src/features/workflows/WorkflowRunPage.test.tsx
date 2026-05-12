@@ -1064,7 +1064,7 @@ describe("WorkflowRunPage", () => {
       "href",
       "/api/workflows/text_to_image_v0/export",
     );
-    expect(screen.getByRole("menuitem", { name: /export as json/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /export comfyui json/i })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: /edit dashboard layout/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /edit widgets/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i })).toBeInTheDocument();
