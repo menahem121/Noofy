@@ -16,10 +16,12 @@ def configured_api_token() -> str | None:
 
 def is_job_query_token_request(request: Request) -> bool:
     path = request.url.path
-    return (
-        request.method == "GET"
-        and path.startswith("/api/jobs/")
-        and (path.endswith("/events") or path.endswith("/outputs/view"))
+    if request.method != "GET":
+        return False
+    if path.startswith("/api/jobs/") and (path.endswith("/events") or path.endswith("/outputs/view")):
+        return True
+    return path.startswith("/api/gallery/") and (
+        path.endswith("/image") or path.endswith("/thumbnail")
     )
 
 

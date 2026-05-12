@@ -7,6 +7,8 @@ import {
   saveUserState,
   type WorkflowInputDef,
   type WorkflowUserState,
+  type OutputPreference,
+  type OutputPreferences,
 } from "./api/noofyApi";
 import type { GridItemLayout } from "./gridLayout";
 
@@ -20,6 +22,7 @@ function emptyState(workflowId: string, dashboardVersion: string): WorkflowUserS
     dashboard_version: dashboardVersion,
     values: {},
     layout_overrides: {},
+    output_preferences: {},
   };
 }
 
@@ -34,6 +37,7 @@ function pruneState(
 
   const validInputIds = new Set(inputIndex.keys());
   const validLayoutIds = new Set(validControlIds);
+  const validOutputControlIds = new Set(validControlIds);
   const prunedValues: Record<string, unknown> = {};
   for (const id of validInputIds) {
     prunedValues[id] = id in state.values ? state.values[id] : packageDefaults[id];
@@ -43,12 +47,17 @@ function pruneState(
   for (const [id, override] of Object.entries(state.layout_overrides)) {
     if (validLayoutIds.has(id)) prunedOverrides[id] = override;
   }
+  const prunedOutputPreferences: OutputPreferences = {};
+  for (const [id, preference] of Object.entries(state.output_preferences ?? {})) {
+    if (validOutputControlIds.has(id)) prunedOutputPreferences[id] = preference;
+  }
 
   return {
     ...state,
     dashboard_version: currentDashboardVersion,
     values: prunedValues,
     layout_overrides: prunedOverrides,
+    output_preferences: prunedOutputPreferences,
   };
 }
 
@@ -117,6 +126,7 @@ export function useWorkflowUserState(
         const initial: WorkflowUserState = {
           ...emptyState(workflowId, dashboardVersion),
           values: { ...packageDefaults },
+          output_preferences: {},
         };
         setUserState(initial);
         latestStateRef.current = initial;
@@ -183,6 +193,30 @@ export function useWorkflowUserState(
     [workflowId],
   );
 
+  const setOutputPreference = useCallback(
+    (controlId: string, preference: OutputPreference) => {
+      setUserState((current) => {
+        const next = {
+          ...current,
+          output_preferences: {
+            ...(current.output_preferences ?? {}),
+            [controlId]: preference,
+          },
+        };
+        latestStateRef.current = next;
+        scheduleSave(next);
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workflowId],
+  );
+
+  const getOutputPreferencesSnapshot = useCallback(
+    () => ({ ...(latestStateRef.current.output_preferences ?? {}) }),
+    [],
+  );
+
   const resetLayout = useCallback(async () => {
     cancelPendingSave();
     const cleared = await deleteUserStateLayout(workflowId);
@@ -202,6 +236,9 @@ export function useWorkflowUserState(
     restoreDefaults,
     layoutOverrides: userState.layout_overrides as Record<string, GridItemLayout>,
     setLayoutOverride,
+    outputPreferences: userState.output_preferences ?? {},
+    setOutputPreference,
+    getOutputPreferencesSnapshot,
     resetLayout,
     hasLayoutOverrides,
   };

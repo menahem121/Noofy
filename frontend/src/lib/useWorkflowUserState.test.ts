@@ -18,6 +18,7 @@ function emptyRemoteState(workflowId: string): WorkflowUserState {
     dashboard_version: "",
     values: {},
     layout_overrides: {},
+    output_preferences: {},
   };
 }
 
@@ -285,5 +286,36 @@ describe("useWorkflowUserState", () => {
     const body = JSON.parse((putCall![1] as RequestInit).body as string) as WorkflowUserState;
     // layout_overrides must still be present in the PUT payload
     expect(body.layout_overrides["ctrl-1"]).toBeDefined();
+  });
+
+  it("setOutputPreference updates latest snapshot and schedules a save", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(remote));
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(remote)));
+
+    const { result } = renderHook(() =>
+      useWorkflowUserState("wf-1", {}, "1.0", new Map(), ["result"]),
+    );
+    await waitFor(() => expect(result.current.outputPreferences).toEqual({}));
+
+    act(() => {
+      result.current.setOutputPreference("result", { auto_save: true });
+    });
+
+    expect(result.current.getOutputPreferencesSnapshot()).toEqual({ result: { auto_save: true } });
+
+    act(() => {
+      vi.advanceTimersByTime(700);
+    });
+
+    const putCall = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).includes("/user-state") && (init as RequestInit)?.method === "PUT",
+    );
+    expect(putCall).toBeTruthy();
+    const body = JSON.parse((putCall![1] as RequestInit).body as string) as WorkflowUserState;
+    expect(body.output_preferences.result.auto_save).toBe(true);
   });
 });

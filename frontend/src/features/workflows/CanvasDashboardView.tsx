@@ -23,6 +23,7 @@ import {
 
 import {
   type DashboardControlDef,
+  type OutputPreferences,
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
@@ -55,12 +56,14 @@ interface CanvasDashboardViewProps {
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   inputValues: Record<string, unknown>;
+  outputPreferences: OutputPreferences;
   layoutOverrides: Record<string, GridItemLayout>;
   isEditingLayout: boolean;
   runState: CanvasRunState;
   exportNoofyUrl: string;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onRun: () => void;
   onCancel: () => void;
   onRestoreDefaults: () => void;
@@ -77,12 +80,14 @@ export function CanvasDashboardView({
   outputIndex,
   outputImagesByNodeId,
   inputValues,
+  outputPreferences,
   layoutOverrides,
   isEditingLayout,
   runState,
   exportNoofyUrl,
   onChange,
   onImageUpload,
+  onOutputPreferenceChange,
   onRun,
   onCancel,
   onRestoreDefaults,
@@ -418,8 +423,10 @@ export function CanvasDashboardView({
                 outputIndex={outputIndex}
                 outputImagesByNodeId={outputImagesByNodeId}
                 inputValues={inputValues}
+                outputPreferences={outputPreferences}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                onOutputPreferenceChange={onOutputPreferenceChange}
                 onMoveStart={(event) => handleMoveStart(event, control.id, displayLayout)}
                 onResizeStart={(event, handle) => handleResizeStart(event, control.id, displayLayout, handle)}
               />
@@ -474,8 +481,10 @@ function CanvasWidgetCell({
   outputIndex,
   outputImagesByNodeId,
   inputValues,
+  outputPreferences,
   onChange,
   onImageUpload,
+  onOutputPreferenceChange,
   onMoveStart,
   onResizeStart,
 }: {
@@ -487,8 +496,10 @@ function CanvasWidgetCell({
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   inputValues: Record<string, unknown>;
+  outputPreferences: OutputPreferences;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
@@ -514,6 +525,23 @@ function CanvasWidgetCell({
             {control.description ? <p>{control.description}</p> : null}
           </div>
         </div>
+        {isOutput ? (
+          <button
+            className={`auto-save-toggle${outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""}`}
+            type="button"
+            aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
+            aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
+            }}
+          >
+            <span className="auto-save-toggle__track" aria-hidden="true">
+              <span className="auto-save-toggle__knob" />
+            </span>
+            <span>Auto Save</span>
+          </button>
+        ) : null}
       </header>
 
       <div className="widget-canvas-cell__content">

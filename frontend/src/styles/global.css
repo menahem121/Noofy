@@ -3156,6 +3156,25 @@ button:disabled {
   transition: transform 240ms ease;
 }
 
+.gallery-thumb__missing,
+.img-modal__missing {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    var(--surface-2);
+  font-size: 0.8rem;
+}
+
+.img-modal__missing {
+  min-height: 420px;
+}
+
 .gallery-thumb:hover .gallery-thumb__img {
   transform: scale(1.04);
 }
@@ -5686,6 +5705,60 @@ button:disabled {
   border-radius: 9px;
   background: rgba(139, 92, 246, 0.13);
   color: var(--primary-hover);
+}
+
+.auto-save-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.auto-save-toggle:hover {
+  border-color: rgba(156, 163, 175, 0.45);
+  color: var(--text-main);
+}
+
+.auto-save-toggle__track {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.24);
+  transition: background 160ms ease;
+}
+
+.auto-save-toggle__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(229, 231, 235, 0.92);
+  transition: transform 160ms ease;
+}
+
+.auto-save-toggle--on {
+  border-color: rgba(94, 234, 212, 0.35);
+  color: rgba(204, 251, 241, 0.94);
+}
+
+.auto-save-toggle--on .auto-save-toggle__track {
+  background: rgba(20, 184, 166, 0.5);
+}
+
+.auto-save-toggle--on .auto-save-toggle__knob {
+  transform: translateX(12px);
 }
 
 .layout-canvas-widget__title h3 {

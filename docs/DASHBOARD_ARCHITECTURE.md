@@ -84,13 +84,20 @@ Classic mode is a UI preference stored in `localStorage["noofy.prefs"].viewMode`
 
 Creator defaults stay in `dashboard.json`. User-specific state is separate:
 
-- Values and layout overrides live under `{data_dir}/user-state/{workflow_id}.json`.
+- Values, layout overrides, and output widget preferences live under `{data_dir}/user-state/{workflow_id}.json`.
+- `WorkflowUserState.output_preferences` stores per-control Gallery Auto Save preferences. Missing preferences mean Auto Save is off.
 - Image inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/image`.
 - ComfyUI `input/` is staging-only. The backend stages dashboard assets into the runner-visible input directory immediately before execution.
 - Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs.
 - Generated result media is also served through the backend API. Job results contain app-owned output URLs such as `/api/jobs/{job_id}/outputs/view?...`, while the selected `EngineAdapter` performs any engine-specific file retrieval.
 
-`WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values and layout overrides are pruned, new controls use creator defaults, and the cleaned state is saved back.
+`WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back.
+
+## Auto Save Gallery
+
+Auto Save is decided at run submission. The frontend sends the current output preference snapshot with `POST /api/workflows/{id}/run`; the backend validates it against the active dashboard schema and stores it with the job context. Later toggle changes affect future runs only.
+
+Completed jobs save only final images whose `control_id -> output_id -> node_id` mapping matches an Auto Save-enabled output widget from the stored run snapshot. Gallery metadata and idempotency state live in `{data_dir}/outputs/gallery/gallery.db`; full images and thumbnails are stored in flat `images/` and `thumbnails/` folders. `GalleryStore` uses SQLite `BEGIN IMMEDIATE` write transactions as the cross-process serialization point for Gallery metadata and file allocation, so correctness does not depend on an undocumented single-backend-process guarantee for a data directory.
 
 ## Backend API Surface
 
@@ -113,6 +120,7 @@ Important dashboard APIs:
 - `GET/PUT /api/workflows/{id}/user-state`: read/write values and layout overrides.
 - `DELETE /api/workflows/{id}/user-state/values`: restore creator defaults.
 - `DELETE /api/workflows/{id}/user-state/layout`: reset user layout overrides.
+- `GET /api/gallery`, `GET /api/gallery/{item_id}`, `GET /api/gallery/{item_id}/image`, `GET /api/gallery/{item_id}/thumbnail`, `DELETE /api/gallery/{item_id}`, `PUT /api/gallery/{item_id}/favorite`: manage saved Gallery records and media.
 
 ## Code Map
 

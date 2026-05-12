@@ -39,6 +39,8 @@ from app.runtime.supervisor import (
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
+PACKAGE_DIR = Path(__file__).resolve().parents[1] / "app/workflows/packages"
+
 
 class StubRuntimeManager:
     base_url = "http://127.0.0.1:8188"
@@ -127,6 +129,11 @@ class MemoryRetryAdapter(RecordingAdapter):
     async def get_result(self, job_id: str) -> JobResult:
         self.result_calls.append(job_id)
         return JobResult(job_id=job_id, status="failed", error="CUDA out of memory")
+
+
+class FailingGalleryCapture:
+    async def save_completed_job_outputs(self, **kwargs) -> None:
+        raise RuntimeError("gallery disk unavailable")
 
 
 def _core_descriptor() -> RunnerDescriptor:
@@ -338,7 +345,7 @@ def test_supervisor_acquires_ready_bound_workflow_runner() -> None:
 
     supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
 
-    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
     assert supervisor.acquire_runner(package).runner_id == "isolated-1"
     assert supervisor.runner_for_workflow("text_to_image_v0").runner_id == "isolated-1"
 
@@ -350,7 +357,7 @@ def test_supervisor_acquires_warm_bound_workflow_runner() -> None:
     supervisor.upsert_runner(descriptor, RecordingAdapter())
     supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
 
-    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
 
     assert supervisor.acquire_runner(package).runner_id == "isolated-1"
 
@@ -369,7 +376,7 @@ def test_supervisor_falls_back_to_core_when_bound_runner_is_not_ready() -> None:
     supervisor.upsert_runner(descriptor, RecordingAdapter())
     supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
 
-    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
     assert supervisor.acquire_runner(package).runner_id == CORE_RUNNER_ID
 
 
@@ -388,7 +395,7 @@ def test_supervisor_unbind_workflow_runner_restores_core_selection() -> None:
     supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
     supervisor.unbind_workflow_runner("text_to_image_v0")
 
-    package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
     assert supervisor.acquire_runner(package).runner_id == CORE_RUNNER_ID
 
 
@@ -781,7 +788,7 @@ def _build_service(
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), adapter)
     service = EngineService(
-        workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
         workflow_validator=WorkflowPackageValidator(),
         runner_supervisor=supervisor,
         runtime_manager=StubRuntimeManager(),
@@ -827,7 +834,8 @@ def test_engine_service_runner_lease_reports_no_bound_runner() -> None:
 
 def test_engine_service_uses_constructor_dashboard_dependencies() -> None:
     class DashboardAuthoring:
-        def get_bindable_inputs(self, workflow_id: str) -> dict[str, object]:
+        def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
+            del kwargs
             return {"workflow_id": workflow_id, "inputs": []}
 
     class Exporter:
@@ -837,7 +845,7 @@ def test_engine_service_uses_constructor_dashboard_dependencies() -> None:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
     service = EngineService(
-        workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
         workflow_validator=WorkflowPackageValidator(),
         runner_supervisor=supervisor,
         runtime_manager=StubRuntimeManager(),
@@ -1490,6 +1498,114 @@ async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> Non
     assert selected_adapter.run_calls == [("job-after-memory", {"prompt": "hello"})]
     assert supervisor.runner_for_job("job-after-memory").runner_id == "selected-runner"
     assert await service.handoff_queued_workflow_run(queued.queue_id) is None
+
+
+@pytest.mark.anyio
+async def test_handoff_queued_workflow_run_preserves_original_run_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-after-memory",
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+
+    queued = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "submitted prompt"},
+        options={},
+        output_preferences_snapshot={"result": {"auto_save": True}},
+    )
+    original_package = service.workflow_loader.get_package("text_to_image_v0")
+    mutated_package = original_package.model_copy(
+        update={"outputs": [original_package.outputs[0].model_copy(update={"node_id": "999"})]},
+        deep=True,
+    )
+    monkeypatch.setattr(
+        service.workflow_loader,
+        "get_package",
+        lambda workflow_id: mutated_package if workflow_id == "text_to_image_v0" else original_package,
+    )
+
+    supervisor.mark_runner_job_finished("active-runner", "job-active")
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=8_000,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    handed_off = await service.handoff_queued_workflow_run(queued.queue_id)
+
+    assert isinstance(handed_off, EngineJob)
+    snapshot = service._job_run_snapshots["job-after-memory"]
+    assert snapshot.values["prompt"] == "submitted prompt"
+    assert snapshot.output_preferences["result"].auto_save is True
+    assert snapshot.output_widgets[0].node_id == "9"
+
+
+@pytest.mark.anyio
+async def test_gallery_capture_failure_does_not_break_completed_result() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-gallery-fails",
+    )
+    service, _ = _build_service(adapter)
+    service.gallery_capture_service = FailingGalleryCapture()
+
+    job = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "hello"},
+        options={},
+        output_preferences_snapshot={"result": {"auto_save": True}},
+    )
+    result = await service.get_result(job.job_id)
+
+    assert isinstance(result, JobResult)
+    assert result.status == "completed"
+    logs = service.list_logs(level="error").events
+    assert any(event.message == "Gallery capture failed after workflow completion" for event in logs)
 
 
 @pytest.mark.anyio

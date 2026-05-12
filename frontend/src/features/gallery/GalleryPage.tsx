@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Copy,
   Download,
-  FolderOpen,
   Heart,
   Image as ImageIcon,
   Loader2,
@@ -19,8 +18,13 @@ import {
   X,
 } from "lucide-react";
 
-import { fetchGallery, type GalleryImage, type GalleryResponse } from "../../lib/api/noofyApi";
-import { MOCK_GALLERY_RESPONSE } from "./galleryMock";
+import {
+  deleteGalleryItem,
+  fetchGallery,
+  updateGalleryFavorite,
+  type GalleryImage,
+  type GalleryResponse,
+} from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 
@@ -59,6 +63,16 @@ function formatDateTime(iso: string): string {
   });
 }
 
+function formatSettingValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function uniqueWorkflows(images: GalleryImage[]) {
   const seen = new Map<string, string>();
   for (const img of images) {
@@ -76,6 +90,7 @@ function applyFilters(images: GalleryImage[], filters: FilterState & { workflowI
       (img) =>
         img.prompt.toLowerCase().includes(q) ||
         img.workflowName.toLowerCase().includes(q) ||
+        (img.widgetTitle ?? "").toLowerCase().includes(q) ||
         Object.values(img.usedSettings).some((v) => String(v).toLowerCase().includes(q)),
     );
   }
@@ -129,12 +144,12 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     try {
       const data: GalleryResponse = await fetchGallery();
       setGalleryState({ phase: "ready", images: data.images, total: data.total, error: null });
-    } catch {
+    } catch (error) {
       setGalleryState({
-        phase: "ready",
-        images: MOCK_GALLERY_RESPONSE.images,
-        total: MOCK_GALLERY_RESPONSE.total,
-        error: null,
+        phase: "error",
+        images: [],
+        total: 0,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }, []);
@@ -190,21 +205,37 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
   );
 
   function toggleFavorite(id: string) {
+    const nextFavorite = !favorites.has(id);
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    void updateGalleryFavorite(id, nextFavorite).then((updated) => {
+      setGalleryState((prev) => ({
+        ...prev,
+        images: prev.images.map((image) => image.id === id ? updated : image),
+      }));
+    }).catch(() => {
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (nextFavorite) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    });
   }
 
   function handleDelete(id: string) {
-    setGalleryState((prev) => ({
-      ...prev,
-      images: prev.images.filter((img) => img.id !== id),
-      total: prev.total - 1,
-    }));
-    if (selectedImageId === id) setSelectedImageId(null);
+    void deleteGalleryItem(id).then(() => {
+      setGalleryState((prev) => ({
+        ...prev,
+        images: prev.images.filter((img) => img.id !== id),
+        total: Math.max(0, prev.total - 1),
+      }));
+      if (selectedImageId === id) setSelectedImageId(null);
+    });
   }
 
   function handleClearFilters() {
@@ -444,15 +475,22 @@ function GalleryThumbnail({
   onToggleFavorite: () => void;
 }) {
   return (
-    <article className="gallery-thumb" aria-label={image.prompt}>
-      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open image: ${image.prompt}`}>
-        <img
-          className="gallery-thumb__img"
-          src={image.thumbnailUrl}
-          alt={image.prompt}
-          loading="lazy"
-          draggable={false}
-        />
+    <article className="gallery-thumb" aria-label={image.prompt || image.widgetTitle || image.workflowName}>
+      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open image: ${image.prompt || image.widgetTitle || image.workflowName}`}>
+        {image.fileState === "missing" || !image.thumbnailUrl ? (
+          <div className="gallery-thumb__missing">
+            <ImageIcon size={30} aria-hidden="true" />
+            <span>Image unavailable</span>
+          </div>
+        ) : (
+          <img
+            className="gallery-thumb__img"
+            src={image.thumbnailUrl}
+            alt={image.prompt || image.widgetTitle || "Saved gallery image"}
+            loading="lazy"
+            draggable={false}
+          />
+        )}
         <div className="gallery-thumb__overlay" aria-hidden="true">
           <span className="gallery-thumb__open-hint">View image</span>
         </div>
@@ -468,7 +506,7 @@ function GalleryThumbnail({
       </button>
 
       <div className="gallery-thumb__meta">
-        <span className="gallery-thumb__workflow">{image.workflowName}</span>
+        <span className="gallery-thumb__workflow">{image.widgetTitle || image.workflowName}</span>
         <span className="gallery-thumb__date">{formatDate(image.createdAt)}</span>
       </div>
     </article>
@@ -545,12 +583,19 @@ function ImageDetailModal({
 
         {/* Left: image preview with nav arrows */}
         <div className="img-modal__preview-area">
-          <img
-            className="img-modal__img"
-            src={image.imageUrl}
-            alt={image.prompt}
-            draggable={false}
-          />
+          {image.fileState === "missing" || !image.imageUrl ? (
+            <div className="img-modal__missing">
+              <ImageIcon size={44} aria-hidden="true" />
+              <span>Image file unavailable</span>
+            </div>
+          ) : (
+            <img
+              className="img-modal__img"
+              src={image.imageUrl}
+              alt={image.prompt || image.widgetTitle || "Saved gallery image"}
+              draggable={false}
+            />
+          )}
 
           {onPrev && (
             <button
@@ -617,7 +662,7 @@ function ImageDetailModal({
                   {copied ? "Copied!" : "Copy"}
                 </button>
               </div>
-              <p className="img-modal__prompt">{image.prompt}</p>
+              <p className="img-modal__prompt">{image.prompt || "No prompt was saved for this image."}</p>
             </div>
 
             {/* Settings */}
@@ -631,13 +676,19 @@ function ImageDetailModal({
                   .map(([key, value]) => (
                     <div key={key} className="img-modal__setting-row">
                       <dt>{key}</dt>
-                      <dd>{String(value)}</dd>
+                      <dd>{formatSettingValue(value)}</dd>
                     </div>
                   ))}
                 <div className="img-modal__setting-row">
                   <dt>Dimensions</dt>
-                  <dd>{image.width} × {image.height}</dd>
+                  <dd>{image.width && image.height ? `${image.width} x ${image.height}` : "Unknown"}</dd>
                 </div>
+                {image.fileState !== "available" ? (
+                  <div className="img-modal__setting-row">
+                    <dt>File status</dt>
+                    <dd>{image.fileState === "missing" ? "Image file is missing" : "Thumbnail unavailable"}</dd>
+                  </div>
+                ) : null}
               </dl>
             </div>
           </div>
@@ -648,10 +699,6 @@ function ImageDetailModal({
               <button className="primary-button primary-button--compact" type="button" onClick={handleDownload}>
                 <Download size={15} aria-hidden="true" />
                 Download
-              </button>
-              <button className="secondary-button" type="button" aria-label="Reveal in folder" title="Reveal in folder">
-                <FolderOpen size={15} aria-hidden="true" />
-                Reveal in folder
               </button>
             </div>
 
@@ -709,7 +756,7 @@ function GalleryEmptyState({ onNavigate }: { onNavigate: (route: AppRouteId) => 
         <ImageIcon size={44} />
       </div>
       <h2>No images yet</h2>
-      <p>Run a workflow to generate your first images. They will appear here automatically.</p>
+      <p>No saved images yet. Turn on Auto Save on an image result widget to save future generations.</p>
       <button
         className="primary-button"
         type="button"

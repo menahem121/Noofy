@@ -154,6 +154,10 @@ class NoofyPaths:
         return self.data_dir / "dashboard-assets"
 
     @property
+    def gallery_outputs_dir(self) -> Path:
+        return self.outputs_dir / "gallery"
+
+    @property
     def workflow_store_dir(self) -> Path:
         return self.data_dir / "workflow-store"
 
@@ -231,6 +235,9 @@ class NoofyPaths:
             self.user_state_dir,
             self.comfyui_user_dir,
             self.dashboard_assets_dir,
+            self.gallery_outputs_dir,
+            self.gallery_outputs_dir / "images",
+            self.gallery_outputs_dir / "thumbnails",
         ):
             directory.mkdir(parents=True, exist_ok=True)
         from app.settings.model_folders import ensure_model_subfolders

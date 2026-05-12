@@ -23,6 +23,7 @@ RuntimeMode = Literal["external", "managed"]
 class WorkflowRunRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     options: dict[str, Any] = Field(default_factory=dict)
+    output_preferences_snapshot: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ModelInfo(BaseModel):

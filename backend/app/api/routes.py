@@ -4,6 +4,7 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from pydantic import BaseModel, StrictBool
 
 from app.api.schemas import (
     ApiKeyUpdateRequest,
@@ -16,6 +17,7 @@ from app.composition import ApiServices
 from app.core.config import settings
 from app.engine.models import WorkflowRunRequest
 from app.engine.service import EngineService, ImportSessionExpiredError
+from app.gallery import GalleryStore
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import (
     ApiKeySettingsService,
@@ -28,6 +30,10 @@ from app.workflows.importer import NoofyImportError
 from app.workflows.user_state import UserStateService
 
 router = APIRouter()
+
+
+class GalleryFavoriteUpdateRequest(BaseModel):
+    favorite: StrictBool
 
 
 def get_api_services(request: Request) -> ApiServices:
@@ -65,6 +71,12 @@ def get_asset_service(
     return services.asset_service
 
 
+def get_gallery_store(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> GalleryStore:
+    return services.gallery_store
+
+
 def get_api_key_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> ApiKeySettingsService:
@@ -84,6 +96,7 @@ ComfyUISidecarServiceDep = Annotated[
 ]
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
 DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
+GalleryStoreDep = Annotated[GalleryStore, Depends(get_gallery_store)]
 ApiKeyServiceDep = Annotated[ApiKeySettingsService, Depends(get_api_key_service)]
 ModelFolderServiceDep = Annotated[ModelFolderSettingsService, Depends(get_model_folder_service)]
 
@@ -115,6 +128,65 @@ async def list_logs(
     limit: int = 200,
 ):
     return engine_service.list_logs(level=level, limit=limit)
+
+
+# ─── Gallery ────────────────────────────────────────────────────────────────
+
+@router.get("/gallery")
+async def list_gallery(gallery_store: GalleryStoreDep):
+    return gallery_store.list_items()
+
+
+@router.get("/gallery/{item_id}")
+async def get_gallery_item(item_id: str, gallery_store: GalleryStoreDep):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    return item
+
+
+@router.get("/gallery/{item_id}/image")
+async def get_gallery_image(item_id: str, gallery_store: GalleryStoreDep):
+    item = gallery_store.get_item(item_id)
+    path = gallery_store.image_path(item_id)
+    if item is None or path is None:
+        raise HTTPException(status_code=404, detail="Gallery image not found.")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Gallery image file is missing.")
+    return FileResponse(path, media_type=item.mime_type or "application/octet-stream")
+
+
+@router.get("/gallery/{item_id}/thumbnail")
+async def get_gallery_thumbnail(item_id: str, gallery_store: GalleryStoreDep):
+    path = gallery_store.image_path(item_id, thumbnail=True)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Gallery thumbnail not found.")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Gallery thumbnail file is missing.")
+    return FileResponse(path, media_type="image/webp")
+
+
+@router.delete("/gallery/{item_id}")
+async def delete_gallery_item(item_id: str, gallery_store: GalleryStoreDep):
+    try:
+        deleted = gallery_store.delete_item(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    return {"id": item_id, "deleted": True}
+
+
+@router.put("/gallery/{item_id}/favorite")
+async def update_gallery_favorite(
+    item_id: str,
+    request: GalleryFavoriteUpdateRequest,
+    gallery_store: GalleryStoreDep,
+):
+    item = gallery_store.set_favorite(item_id, request.favorite)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    return item
 
 
 @router.get("/diagnostics")
@@ -480,7 +552,12 @@ async def run_workflow(
     engine_service: EngineServiceDep,
 ):
     try:
-        return await engine_service.run_workflow(workflow_id, request.inputs, request.options)
+        return await engine_service.run_workflow(
+            workflow_id,
+            request.inputs,
+            request.options,
+            output_preferences_snapshot=request.output_preferences_snapshot,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

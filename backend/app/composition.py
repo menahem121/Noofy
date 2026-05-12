@@ -6,6 +6,7 @@ from typing import Callable
 from app.core.config import settings
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
+from app.gallery import GalleryCaptureService, GalleryStore
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
 from app.settings.model_folders import (
@@ -24,6 +25,7 @@ class ApiServices:
     comfyui_sidecar_service: object
     user_state_service: UserStateService
     asset_service: DashboardAssetService
+    gallery_store: GalleryStore
     api_key_service: ApiKeySettingsService
     model_folder_service: ModelFolderSettingsService
 
@@ -38,6 +40,7 @@ def create_api_services(
     comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
+    gallery_store: GalleryStore | None = None,
     api_key_service: ApiKeySettingsService | None = None,
     model_folder_service: ModelFolderSettingsService | None = None,
 ) -> ApiServices:
@@ -57,6 +60,10 @@ def create_api_services(
                 extra_model_paths_config=extra_model_paths_config,
             )
 
+    gallery = gallery_store or GalleryStore(settings.paths.gallery_outputs_dir)
+    if getattr(engine_service, "gallery_capture_service", None) is None:
+        engine_service.gallery_capture_service = GalleryCaptureService(gallery)
+
     return ApiServices(
         engine_service=engine_service,
         comfyui_sidecar_service=(
@@ -66,6 +73,7 @@ def create_api_services(
         ),
         user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
         asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
+        gallery_store=gallery,
         api_key_service=api_key_service
         or ApiKeySettingsService(
             metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),

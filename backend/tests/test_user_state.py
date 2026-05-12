@@ -10,6 +10,7 @@ def test_get_returns_default_when_missing(tmp_path: Path) -> None:
     assert result.workflow_id == "wf-1"
     assert result.values == {}
     assert result.layout_overrides == {}
+    assert result.output_preferences == {}
 
 
 def test_save_and_get_roundtrip(tmp_path: Path) -> None:
@@ -37,30 +38,34 @@ def test_save_creates_directory(tmp_path: Path) -> None:
 
 def test_clear_values_empties_values_but_keeps_layout(tmp_path: Path) -> None:
     svc = UserStateService(tmp_path / "state")
-    from app.workflows.user_state import UserStateLayoutOverride
+    from app.workflows.user_state import OutputPreference, UserStateLayoutOverride
     state = WorkflowUserState(
         workflow_id="wf-1",
         values={"prompt": "dog"},
         layout_overrides={"ctrl-1": UserStateLayoutOverride(x=0, y=0, w=4, h=2)},
+        output_preferences={"result": OutputPreference(auto_save=True)},
     )
     svc.save(state)
     cleared = svc.clear_values("wf-1")
     assert cleared.values == {}
     assert "ctrl-1" in cleared.layout_overrides
+    assert cleared.output_preferences["result"].auto_save is True
 
 
 def test_clear_layout_empties_overrides_but_keeps_values(tmp_path: Path) -> None:
     svc = UserStateService(tmp_path / "state")
-    from app.workflows.user_state import UserStateLayoutOverride
+    from app.workflows.user_state import OutputPreference, UserStateLayoutOverride
     state = WorkflowUserState(
         workflow_id="wf-1",
         values={"seed": 42},
         layout_overrides={"ctrl-1": UserStateLayoutOverride(x=0, y=0, w=4, h=2)},
+        output_preferences={"result": OutputPreference(auto_save=True)},
     )
     svc.save(state)
     cleared = svc.clear_layout("wf-1")
     assert cleared.layout_overrides == {}
     assert cleared.values == {"seed": 42}
+    assert cleared.output_preferences["result"].auto_save is True
 
 
 def test_get_returns_default_on_corrupt_file(tmp_path: Path) -> None:

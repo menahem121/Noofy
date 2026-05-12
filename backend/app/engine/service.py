@@ -38,6 +38,12 @@ from app.engine.models import (
     WorkflowHealthSummary,
     WorkflowValidationResult,
 )
+from app.gallery import (
+    GalleryCaptureService,
+    OutputPreference,
+    RunSubmissionSnapshot,
+    build_run_submission_snapshot,
+)
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.comfyui_updates import (
@@ -184,6 +190,7 @@ class EngineService:
         workflow_exporter: WorkflowExporter | None = None,
         model_roots_ref: list[Path] | None = None,
         model_availability_service: ModelAvailabilityService | None = None,
+        gallery_capture_service: GalleryCaptureService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -208,6 +215,7 @@ class EngineService:
             noofy_models_dir=model_roots[0],
             log_store=log_store,
         )
+        self.gallery_capture_service = gallery_capture_service
         self.model_availability_service.cleanup_interrupted_downloads()
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
@@ -219,9 +227,13 @@ class EngineService:
         )
         self._job_workflows: dict[str, str] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        self._job_run_snapshots: dict[str, RunSubmissionSnapshot] = {}
         self._memory_retry_roots: dict[str, str] = {}
         self._memory_retry_attempted_roots: set[str] = set()
-        self._queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        self._queued_workflow_runs: dict[
+            str,
+            tuple[str, dict[str, Any], dict[str, Any], RunSubmissionSnapshot],
+        ] = {}
         self._memory_governor_metrics: dict[str, int] = {}
         self.memory_observation = MemoryObservationCoordinator(
             runner_supervisor=runner_supervisor,
@@ -1167,7 +1179,7 @@ class EngineService:
         queued = self._queued_workflow_runs.pop(queue_id, None)
         if queued is None:
             return None
-        workflow_id, inputs, options = queued
+        workflow_id, inputs, options, run_submission_snapshot = queued
         self.log_store.add(
             "info",
             "Handing off queued workflow run",
@@ -1175,7 +1187,12 @@ class EngineService:
             workflow_id=workflow_id,
             details={"queue_id": queue_id},
         )
-        result = await self.run_workflow(workflow_id, inputs, options)
+        result = await self.run_workflow(
+            workflow_id,
+            inputs,
+            options,
+            run_submission_snapshot=run_submission_snapshot,
+        )
         if isinstance(result, EngineJob):
             result = result.model_copy(update={"queue_id": result.queue_id or queue_id})
         return result
@@ -1426,8 +1443,23 @@ class EngineService:
         options: dict[str, Any],
         *,
         memory_retry_after_cleanup: bool = False,
+        output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
+        run_submission_snapshot: RunSubmissionSnapshot | None = None,
     ):
         package = self.workflow_loader.get_package(workflow_id)
+        if run_submission_snapshot is None:
+            preferences: dict[str, OutputPreference] = {}
+            for control_id, raw_preference in (output_preferences_snapshot or {}).items():
+                if isinstance(raw_preference, OutputPreference):
+                    preferences[control_id] = raw_preference
+                    continue
+                if isinstance(raw_preference, dict):
+                    preferences[control_id] = OutputPreference.model_validate(raw_preference)
+            run_submission_snapshot = build_run_submission_snapshot(
+                package=package,
+                inputs=inputs,
+                output_preferences_snapshot=preferences,
+            )
         unavailable = self._imported_workflow_without_preparable_capsule(package)
         if unavailable is not None:
             self.log_store.add(
@@ -1471,7 +1503,12 @@ class EngineService:
         if memory_decision is not None:
             if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
                 queue_id = f"workflow-run-queue-{workflow_id}-{len(self._queued_workflow_runs) + 1}"
-                self._queued_workflow_runs[queue_id] = (workflow_id, dict(inputs), dict(options))
+                self._queued_workflow_runs[queue_id] = (
+                    workflow_id,
+                    dict(inputs),
+                    dict(options),
+                    run_submission_snapshot.model_copy(deep=True),
+                )
                 self._record_memory_governor_metric("workflow_run_queued_pending_memory")
                 self.log_store.add(
                     "info",
@@ -1535,6 +1572,7 @@ class EngineService:
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
         self._job_workflows[job.job_id] = workflow_id
         self._job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
+        self._job_run_snapshots[job.job_id] = run_submission_snapshot
         self._memory_retry_roots.setdefault(job.job_id, job.job_id)
         self._start_job_memory_sampling(
             job_id=job.job_id,
@@ -1576,7 +1614,25 @@ class EngineService:
         await self._finish_job_memory_sampling(result.job_id)
         self._record_local_memory_observation_for_result(result)
         retry_job = await self._maybe_retry_after_memory_cleanup(result)
-        return retry_job or result
+        if retry_job is not None:
+            return retry_job
+        if self.gallery_capture_service is not None:
+            try:
+                await self.gallery_capture_service.save_completed_job_outputs(
+                    result=result,
+                    snapshot=self._job_run_snapshots.get(result.job_id),
+                    fetch_output=self.fetch_output,
+                )
+            except Exception as exc:
+                self.log_store.add(
+                    "error",
+                    "Gallery capture failed after workflow completion",
+                    "engine.service",
+                    job_id=result.job_id,
+                    workflow_id=self._job_workflows.get(result.job_id),
+                    details={"error": str(exc)},
+                )
+        return result
 
     async def fetch_output(
         self,
@@ -2236,6 +2292,7 @@ class EngineService:
             dict(inputs),
             dict(options),
             memory_retry_after_cleanup=True,
+            run_submission_snapshot=self._job_run_snapshots.get(result.job_id),
         )
         if not isinstance(retry_result, EngineJob):
             return None

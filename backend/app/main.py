@@ -16,6 +16,7 @@ from app.composition import (
 from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 from app.engine.service import EngineService
+from app.gallery import GalleryStore
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeySettingsService
 from app.settings.model_folders import ModelFolderSettingsService
@@ -58,6 +59,7 @@ def create_app(
     comfyui_sidecar_service: ComfyUISidecarService | None = None,
     user_state_service: UserStateService | None = None,
     asset_service: DashboardAssetService | None = None,
+    gallery_store: GalleryStore | None = None,
     api_key_service: ApiKeySettingsService | None = None,
     model_folder_service: ModelFolderSettingsService | None = None,
     service_factory: ApiServicesFactory = create_default_api_services,
@@ -69,6 +71,7 @@ def create_app(
             comfyui_sidecar_service,
             user_state_service,
             asset_service,
+            gallery_store,
             api_key_service,
             model_folder_service,
         )
@@ -81,6 +84,7 @@ def create_app(
             comfyui_sidecar_service,
             user_state_service,
             asset_service,
+            gallery_store,
             api_key_service,
             model_folder_service,
         )
@@ -92,6 +96,7 @@ def create_app(
             comfyui_sidecar_service=comfyui_sidecar_service,
             user_state_service=user_state_service,
             asset_service=asset_service,
+            gallery_store=gallery_store,
             api_key_service=api_key_service,
             model_folder_service=model_folder_service,
         )

@@ -16,12 +16,17 @@ class UserStateLayoutOverride(BaseModel):
     h: int
 
 
+class OutputPreference(BaseModel):
+    auto_save: bool = False
+
+
 class WorkflowUserState(BaseModel):
     schema_version: str = "1"
     workflow_id: str
     dashboard_version: str = ""
     values: dict[str, Any] = Field(default_factory=dict)
     layout_overrides: dict[str, UserStateLayoutOverride] = Field(default_factory=dict)
+    output_preferences: dict[str, OutputPreference] = Field(default_factory=dict)
 
 
 class UserStateService:

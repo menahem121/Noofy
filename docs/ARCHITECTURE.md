@@ -117,6 +117,7 @@ The backend owns a canonical set of per-user directories so the app never relies
 | `workflow_store_dir` | `data_dir/workflow-store` | Internal imported workflow package store |
 | `workflow_packages_store_dir` | `data_dir/workflow-store/packages` | Normalized package copies by publisher/package/version |
 | `outputs_dir` | `data_dir/outputs` | Generated output files |
+| `gallery_outputs_dir` | `data_dir/outputs/gallery` | Saved Gallery `gallery.db`, flat full-size images, and thumbnails |
 | `logs_dir` | `data_dir/logs` | Diagnostic logs |
 | `cache_dir` | `data_dir/cache` | Transient cache |
 | `temp_dir` | `data_dir/temp` | Temporary files |

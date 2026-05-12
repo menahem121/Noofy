@@ -161,6 +161,9 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     restoreDefaults,
     layoutOverrides,
     setLayoutOverride,
+    outputPreferences,
+    setOutputPreference,
+    getOutputPreferencesSnapshot,
   } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardControlIds);
 
   // Build output-images-by-node-id map for canvas output widgets.
@@ -240,6 +243,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       const response = await runWorkflow(workflowId, {
         inputs: inputValues as Record<string, unknown>,
         options: {},
+        output_preferences_snapshot: getOutputPreferencesSnapshot(),
       });
 
       if (!isEngineJob(response)) {
@@ -624,6 +628,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
           inputValues={inputValues}
+          outputPreferences={outputPreferences}
           layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
           isEditingLayout={isEditingLayout}
           runState={{
@@ -634,6 +639,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
+          onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
           onRestoreDefaults={() => void restoreDefaults()}
