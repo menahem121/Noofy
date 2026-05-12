@@ -14,6 +14,21 @@ export interface WorkflowSummary {
   name: string;
   version: string;
   description: string;
+  icon?: string;
+  source_label?: string;
+  main_model?: {
+    name: string;
+    type?: string | null;
+    size_bytes?: number | null;
+  } | null;
+  category?: string;
+  last_opened?: string | null;
+  tags?: string[];
+  missing_model_count?: number;
+  needs_setup?: boolean;
+  can_remove?: boolean;
+  can_export_noofy?: boolean;
+  can_export_comfyui_json?: boolean;
   publisher_id?: string;
   package_id?: string;
   trust_level?: string;
@@ -23,6 +38,67 @@ export interface WorkflowSummary {
   unresolved_input_count?: number;
   custom_node_count?: number;
   required_model_count?: number;
+}
+
+export interface WorkflowDetailsModel {
+  name: string;
+  type?: string | null;
+  size_bytes?: number | null;
+  status: string;
+  status_label: string;
+  folder?: string;
+  source_path?: string | null;
+}
+
+export interface WorkflowRunHistorySummary {
+  last_run_status: string | null;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_duration_seconds: number | null;
+  average_duration_seconds: number | null;
+  last_error: string | null;
+  run_count: number;
+}
+
+export interface WorkflowDetails extends WorkflowSummary {
+  overview: {
+    description: string;
+    author: string;
+    website: string;
+    source: string;
+    version: string;
+  };
+  models_used: WorkflowDetailsModel[];
+  run_history: WorkflowRunHistorySummary;
+  organization: {
+    category: string;
+    tags: string[];
+    icon: string;
+  };
+  advanced: {
+    package_id: string;
+    engine: string;
+    trust_level: string;
+    trust_label: string;
+    can_export_noofy: boolean;
+    can_export_comfyui_json: boolean;
+    can_remove: boolean;
+  };
+}
+
+export interface WorkflowMetadataUpdate {
+  description?: string;
+  author?: string;
+  website?: string;
+  category?: string;
+  tags?: string[];
+  icon?: string;
+}
+
+export interface WorkflowMetadataUpdateResponse {
+  workflow_id: string;
+  metadata: WorkflowMetadataUpdate;
+  workflow: WorkflowSummary;
 }
 
 export interface WorkflowStatusResponse {
@@ -616,6 +692,21 @@ export function fetchWorkflows() {
   return getJson<WorkflowSummary[]>("/workflows");
 }
 
+export function fetchWorkflowDetails(workflowId: string) {
+  return getJson<WorkflowDetails>(`/workflows/${encodeURIComponent(workflowId)}/details`);
+}
+
+export function updateWorkflowMetadata(workflowId: string, payload: WorkflowMetadataUpdate) {
+  return putJson<WorkflowMetadataUpdateResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/metadata`,
+    payload,
+  );
+}
+
+export function removeWorkflow(workflowId: string) {
+  return deleteJson<{ workflow_id: string; removed: boolean }>(`/workflows/${encodeURIComponent(workflowId)}`);
+}
+
 // ─── Workflow package ────────────────────────────────────────────────────────
 
 export interface WorkflowInputDef {
@@ -937,6 +1028,10 @@ export function saveDashboard(
 
 export function exportWorkflowUrl(workflowId: string): string {
   return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export`;
+}
+
+export function exportWorkflowComfyJsonUrl(workflowId: string): string {
+  return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export/comfyui-json`;
 }
 
 // ─── User state ──────────────────────────────────────────────────────────────

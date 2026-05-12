@@ -27,6 +27,7 @@ from app.settings.api_keys import (
 from app.settings.model_folders import ModelFolderSettingsService
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 from app.workflows.importer import NoofyImportError
+from app.workflows.library import WorkflowMetadataUpdate
 from app.workflows.user_state import UserStateService
 
 router = APIRouter()
@@ -463,6 +464,38 @@ async def get_workflow_package(workflow_id: str, engine_service: EngineServiceDe
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/workflows/{workflow_id}/details")
+async def get_workflow_details(workflow_id: str, engine_service: EngineServiceDep):
+    try:
+        return engine_service.workflow_details(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/workflows/{workflow_id}/metadata")
+async def update_workflow_metadata(
+    workflow_id: str,
+    request: WorkflowMetadataUpdate,
+    engine_service: EngineServiceDep,
+):
+    try:
+        return engine_service.update_workflow_metadata(workflow_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/workflows/{workflow_id}")
+async def remove_workflow(workflow_id: str, engine_service: EngineServiceDep):
+    try:
+        return engine_service.remove_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/workflows/{workflow_id}/model-summary")
 async def get_workflow_model_summary(workflow_id: str, engine_service: EngineServiceDep):
     try:
@@ -684,6 +717,19 @@ async def export_workflow(workflow_id: str, engine_service: EngineServiceDep):
     return Response(
         content=archive_bytes,
         media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/workflows/{workflow_id}/export/comfyui-json")
+async def export_workflow_comfyui_json(workflow_id: str, engine_service: EngineServiceDep):
+    try:
+        graph_bytes, filename = engine_service.export_workflow_comfyui_graph(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=graph_bytes,
+        media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

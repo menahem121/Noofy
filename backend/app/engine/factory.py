@@ -70,6 +70,7 @@ from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
+from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -435,5 +436,6 @@ def create_default_engine_service() -> EngineService:
             workflow_loader=loader,
         ),
         model_roots_ref=model_roots,
+        workflow_library_store=WorkflowLibraryStore(paths.workflow_store_dir / "library"),
     )
     return service

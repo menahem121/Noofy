@@ -39,6 +39,10 @@ class WorkflowMetadata(BaseModel):
     version: str
     description: str = ""
     author: str = ""
+    website: str = ""
+    category: str = ""
+    tags: list[str] = Field(default_factory=list)
+    icon: str = ""
 
 
 class RequiredModel(BaseModel):

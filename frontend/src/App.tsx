@@ -13,9 +13,11 @@ import { HomePage } from "./features/home/HomePage";
 import { WorkflowLibraryProvider } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
+import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 
 type AppRoute =
   | { name: "home" }
+  | { name: "workflows" }
   | { name: "gallery" }
   | { name: "history" }
   | { name: "models" }
@@ -34,6 +36,10 @@ export default function App() {
     }
     if (routeId === "models") {
       setRoute({ name: "models" });
+      return;
+    }
+    if (routeId === "workflows") {
+      setRoute({ name: "workflows" });
       return;
     }
     if (routeId === "gallery") {
@@ -112,6 +118,31 @@ export default function App() {
 
     if (route.name === "models") {
       return <ModelsPage onNavigate={navigate} />;
+    }
+
+    if (route.name === "workflows") {
+      return (
+        <WorkflowsPage
+          onNavigate={navigate}
+          onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
+          onEditWidgets={(schema) =>
+            setRoute({
+              name: "dashboard-builder",
+              workflowId: schema.workflowId,
+              workflowName: schema.workflowName,
+              initialSchema: schema,
+            })
+          }
+          onEditDashboard={(schema) =>
+            setRoute({
+              name: "dashboard-builder-layout",
+              workflowId: schema.workflowId,
+              workflowName: schema.workflowName,
+              initialSchema: schema,
+            })
+          }
+        />
+      );
     }
 
     if (route.name === "gallery") {
