@@ -17,6 +17,7 @@ from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 from app.engine.service import EngineService
 from app.gallery import GalleryStore
+from app.model_inventory import ModelDownloadJobService, ModelOwnershipStore, ModelTagStore
 from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeySettingsService
 from app.settings.model_folders import ModelFolderSettingsService
@@ -62,6 +63,9 @@ def create_app(
     gallery_store: GalleryStore | None = None,
     api_key_service: ApiKeySettingsService | None = None,
     model_folder_service: ModelFolderSettingsService | None = None,
+    model_tag_store: ModelTagStore | None = None,
+    model_ownership_store: ModelOwnershipStore | None = None,
+    model_download_service: ModelDownloadJobService | None = None,
     service_factory: ApiServicesFactory = create_default_api_services,
 ) -> FastAPI:
     if services is not None and any(
@@ -74,6 +78,9 @@ def create_app(
             gallery_store,
             api_key_service,
             model_folder_service,
+            model_tag_store,
+            model_ownership_store,
+            model_download_service,
         )
     ):
         raise ValueError("Pass either services or individual service overrides, not both.")
@@ -87,6 +94,9 @@ def create_app(
             gallery_store,
             api_key_service,
             model_folder_service,
+            model_tag_store,
+            model_ownership_store,
+            model_download_service,
         )
     ):
         if engine_service is None:
@@ -99,6 +109,9 @@ def create_app(
             gallery_store=gallery_store,
             api_key_service=api_key_service,
             model_folder_service=model_folder_service,
+            model_tag_store=model_tag_store,
+            model_ownership_store=model_ownership_store,
+            model_download_service=model_download_service,
         )
 
     app = FastAPI(title="Local AI Workflow Backend", version="0.1.0", lifespan=lifespan)

@@ -2392,6 +2392,16 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
 }
 
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .tag-color-presets {
   display: flex;
   gap: 6px;
@@ -2507,6 +2517,14 @@ button:disabled {
 .model-col-source {
   width: 168px;
   flex: 0 0 168px;
+}
+
+.model-col-source small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .model-col-actions {

@@ -1,0 +1,310 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi.testclient import TestClient
+
+from app.engine.diagnostics import LogStore
+from app.engine.models import ModelInfo
+from app.main import create_app
+from app.model_inventory import ModelDownloadStartRequest, ModelOwnershipStore, ModelTagStore
+from app.model_download_jobs import ModelDownloadJobService
+from app.settings.model_folders import ModelFolderSettingsService, ModelFolderSettingsStore, ModelFolderUpdateRequest
+from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
+
+
+def _package(models: list[RequiredModel]) -> WorkflowPackage:
+    return WorkflowPackage(
+        metadata=WorkflowMetadata(id="wf_text", name="Text workflow", version="0.1.0"),
+        engine="comfyui",
+        required_models=models,
+        comfyui_graph={},
+    )
+
+
+class FakeWorkflowLoader:
+    def __init__(self, packages: list[WorkflowPackage]) -> None:
+        self.packages = packages
+
+    def list_packages(self) -> list[WorkflowPackage]:
+        return self.packages
+
+    def get_package(self, workflow_id: str) -> WorkflowPackage:
+        for package in self.packages:
+            if package.metadata.id == workflow_id:
+                return package
+        raise KeyError(workflow_id)
+
+
+class FakeEngineService:
+    def __init__(self, *, noofy_root: Path, external_root: Path | None, packages: list[WorkflowPackage]) -> None:
+        self.log_store = LogStore()
+        roots = [noofy_root]
+        if external_root is not None:
+            roots.append(external_root)
+        self.model_availability_service = ModelAvailabilityService(
+            model_roots=roots,
+            noofy_models_dir=noofy_root,
+            log_store=self.log_store,
+        )
+        self.workflow_loader = FakeWorkflowLoader(packages)
+
+    async def list_available_models(self) -> list[ModelInfo]:
+        return [ModelInfo(folder="vae", filename="engine-only.safetensors")]
+
+    async def shutdown(self) -> None:
+        return None
+
+
+def _client(tmp_path: Path, packages: list[WorkflowPackage]) -> TestClient:
+    noofy_root = tmp_path / "Noofy Models"
+    external_root = tmp_path / "ComfyUI" / "models"
+    external_root.mkdir(parents=True, exist_ok=True)
+    model_folder_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    model_folder_service.update(
+        ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root), external_comfyui_models_dir=str(external_root))
+    )
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=external_root, packages=packages)
+    return TestClient(
+        create_app(
+            engine_service=engine,
+            model_folder_service=model_folder_service,
+            model_tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            model_ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+        )
+    )
+
+
+def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_path: Path) -> None:
+    noofy_model = tmp_path / "Noofy Models" / "checkpoints" / "base.safetensors"
+    noofy_model.parent.mkdir(parents=True)
+    noofy_model.write_bytes(b"base")
+    external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
+    external_model.parent.mkdir(parents=True)
+    external_model.write_bytes(b"style")
+    package = _package(
+        [
+            RequiredModel(folder="checkpoints", filename="base.safetensors", size_bytes=4, verification_level="filename_size"),
+            RequiredModel(folder="controlnet", filename="missing.safetensors", size_bytes=12, source_url="https://example.test/missing.safetensors"),
+        ]
+    )
+
+    with _client(tmp_path, [package]) as client:
+        tag_response = client.post("/api/models/tags", json={"name": "Starter", "color": "#4ade80"})
+        tag_id = tag_response.json()["id"]
+        client.put("/api/models/checkpoints/base.safetensors/tags", json={"tag_ids": [tag_id]})
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    data = response.json()
+    by_key = {model["model_key"]: model for model in data["models"]}
+    assert data["summary"]["total_count"] == 4
+    assert data["summary"]["noofy_count"] == 1
+    assert data["summary"]["external_comfyui_count"] == 1
+    assert data["summary"]["missing_count"] == 1
+    assert by_key["checkpoints/base.safetensors"]["source_label"] == "Noofy Models"
+    assert by_key["checkpoints/base.safetensors"]["ownership"] == "noofy_local"
+    assert by_key["checkpoints/base.safetensors"]["can_delete"] is True
+    assert by_key["checkpoints/base.safetensors"]["tag_ids"] == [tag_id]
+    assert by_key["loras/style.safetensors"]["source_label"] == "ComfyUI models folder"
+    assert by_key["loras/style.safetensors"]["can_delete"] is False
+    assert by_key["vae/engine-only.safetensors"]["source_label"] == "Visible to engine"
+    assert by_key["controlnet/missing.safetensors"]["source_label"] == "Required by workflow"
+    assert by_key["controlnet/missing.safetensors"]["downloadable_references"][0]["workflow_id"] == "wf_text"
+
+
+def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_path: Path) -> None:
+    source = tmp_path / "Downloads" / "demo.safetensors"
+    source.parent.mkdir()
+    source.write_bytes(b"demo")
+
+    with _client(tmp_path, []) as client:
+        imported = client.post(
+            "/api/models/import",
+            json={"source_paths": [str(source)], "folder": "checkpoints"},
+        )
+        collision = client.post(
+            "/api/models/import",
+            json={"source_paths": [str(source)], "folder": "checkpoints"},
+        )
+        invalid = client.post(
+            "/api/models/import",
+            json={"source_paths": [str(source)], "folder": "../bad"},
+        )
+
+    assert imported.status_code == 200
+    assert imported.json()["imported_count"] == 1
+    target = tmp_path / "Noofy Models" / "checkpoints" / "demo.safetensors"
+    assert target.read_bytes() == b"demo"
+    with _client(tmp_path, []) as client:
+        inventory = client.get("/api/models").json()
+    imported_model = {model["model_key"]: model for model in inventory["models"]}["checkpoints/demo.safetensors"]
+    assert imported_model["ownership"] == "noofy_imported"
+    assert imported_model["can_delete"] is True
+    assert collision.status_code == 200
+    assert collision.json()["failed_count"] == 1
+    assert "already exists" in collision.json()["models"][0]["message"]
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"]["message"] == "Unsupported model folder: ../bad"
+
+
+def test_model_inventory_ignores_partial_import_transactions(tmp_path: Path) -> None:
+    partial = tmp_path / "Noofy Models" / ".imports" / "tx" / "partial.safetensors"
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"partial")
+    visible = tmp_path / "Noofy Models" / "checkpoints" / "ready.safetensors"
+    visible.parent.mkdir(parents=True)
+    visible.write_bytes(b"ready")
+
+    with _client(tmp_path, []) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    keys = {model["model_key"] for model in response.json()["models"]}
+    assert "checkpoints/ready.safetensors" in keys
+    assert "checkpoints/partial.safetensors" not in keys
+
+
+def test_model_delete_only_removes_noofy_model_files(tmp_path: Path) -> None:
+    noofy_model = tmp_path / "Noofy Models" / "checkpoints" / "base.safetensors"
+    noofy_model.parent.mkdir(parents=True)
+    noofy_model.write_bytes(b"base")
+    external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
+    external_model.parent.mkdir(parents=True)
+    external_model.write_bytes(b"style")
+
+    with _client(tmp_path, []) as client:
+        deleted = client.delete("/api/models/checkpoints/base.safetensors")
+        missing_external = client.delete("/api/models/loras/style.safetensors")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert not noofy_model.exists()
+    assert missing_external.status_code == 404
+    assert external_model.exists()
+
+
+class FakeDownloadAvailabilityService:
+    def __init__(self, noofy_root: Path, *, fail: bool = False) -> None:
+        self.noofy_root = noofy_root
+        self.fail = fail
+
+    async def download_missing(self, package, *, progress_callback=None, cancel_event=None):
+        if self.fail:
+            raise RuntimeError("provider failed token=secret-token")
+        for index, model in enumerate(package.required_models, start=1):
+            target = self.noofy_root / model.folder / model.filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"model")
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "requirement_id": f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}",
+                        "filename": model.filename,
+                        "status": "completed",
+                        "bytes_downloaded": 5,
+                        "total_bytes": 5,
+                        "model_index": index,
+                    }
+                )
+        return SimpleNamespace(failed_count=0, status="completed")
+
+
+def test_model_download_job_tracks_active_job_and_downloaded_ownership(tmp_path: Path) -> None:
+    async def run() -> None:
+        await _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_path)
+
+    asyncio.run(run())
+
+
+async def _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    settings_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    model = RequiredModel(
+        folder="checkpoints",
+        filename="downloaded.safetensors",
+        size_bytes=5,
+        node_id="1",
+        input_name="model",
+        source_url="https://example.test/downloaded.safetensors",
+    )
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[_package([model])])
+    engine.model_availability_service = FakeDownloadAvailabilityService(noofy_root)
+    ownership_store = ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json")
+    service = ModelDownloadJobService(
+        engine_service=engine,
+        model_folder_service=settings_service,
+        ownership_store=ownership_store,
+        log_store=engine.log_store,
+    )
+
+    started = service.start(
+        ModelDownloadStartRequest(
+            selections=[{"workflow_id": "wf_text", "requirement_id": "1:model:checkpoints/downloaded.safetensors"}]
+        )
+    )
+
+    assert service.active().job is not None
+    job = service._jobs[started.job_id]
+    assert job.task is not None
+    await job.task
+
+    status = service.status(started.job_id)
+    assert status.status == "completed"
+    assert status.percent == 100
+    assert ownership_store.origin_for_model("checkpoints/downloaded.safetensors") == "downloaded"
+
+
+def test_model_download_job_sanitizes_provider_failure_diagnostics(tmp_path: Path) -> None:
+    async def run() -> None:
+        await _assert_download_job_sanitizes_provider_failure_diagnostics(tmp_path)
+
+    asyncio.run(run())
+
+
+async def _assert_download_job_sanitizes_provider_failure_diagnostics(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    settings_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    model = RequiredModel(
+        folder="checkpoints",
+        filename="missing.safetensors",
+        node_id="1",
+        input_name="model",
+        source_url="https://example.test/missing.safetensors",
+    )
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[_package([model])])
+    engine.model_availability_service = FakeDownloadAvailabilityService(noofy_root, fail=True)
+    service = ModelDownloadJobService(
+        engine_service=engine,
+        model_folder_service=settings_service,
+        ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+        log_store=engine.log_store,
+    )
+
+    started = service.start(
+        ModelDownloadStartRequest(
+            selections=[{"workflow_id": "wf_text", "requirement_id": "1:model:checkpoints/missing.safetensors"}]
+        )
+    )
+    job = service._jobs[started.job_id]
+    assert job.task is not None
+    await job.task
+
+    events = engine.log_store.list_events().events
+    assert service.status(started.job_id).status == "failed"
+    assert "secret-token" not in str(events[-1].details)
+    assert "<redacted>" in str(events[-1].details)

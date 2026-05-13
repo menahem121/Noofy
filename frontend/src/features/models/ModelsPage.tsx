@@ -1,88 +1,103 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Box,
   ChevronDown,
-  ChevronRight,
-  Cpu,
+  Download,
   Folder,
-  Hash,
-  Maximize2,
-  MoreHorizontal,
+  Loader2,
   Package,
   Plus,
   RefreshCw,
   Search,
-  SlidersHorizontal,
   Tag,
-  Trash2,
-  Upload,
   X,
-  Zap,
 } from "lucide-react";
 
-import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
+import {
+  createModelTag,
+  fetchRuntimeStatus,
+  importModelFiles,
+  deleteModelFile,
+  updateModelTags,
+  type ModelDownloadSelection,
+  type ModelImportResponse,
+  type ModelInventoryEntry,
+  type ModelInventorySource,
+  type ModelInventoryStatus,
+  type ModelTag,
+  type RuntimeStatus,
+} from "../../lib/api/noofyApi";
+import { openFolder } from "../../lib/folderDialogs";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
+import { ModelImportPanel } from "./ModelImportPanel";
+import { DetailPanel, ModelRow } from "./ModelRows";
+import { uniqueDownloadSelections } from "./modelDownloads";
+import { TAG_COLOR_PRESETS } from "./modelsContent";
 import {
-  INITIAL_TAGS,
-  MOCK_MODELS,
-  MODEL_SOURCE_LABELS,
-  MODEL_STATUS_LABELS,
-  MODEL_TYPE_LABELS,
-  TAG_COLOR_PRESETS,
-  type ModelEntry,
-  type ModelSource,
-  type ModelStatus,
-  type ModelTag,
-  type ModelType,
-} from "./modelsContent";
-
-type ModelTypeFilter = ModelType | "all";
+  formatBytes,
+  hexAlpha,
+  MODEL_TYPE_FILTERS,
+  modelFolderPath,
+  normalizeType,
+  SOURCE_FILTERS,
+  type ModelTypeFilter,
+} from "./modelUi";
+import { useModelDownloadJob } from "./useModelDownloadJob";
+import { useModelInventory } from "./useModelInventory";
 
 interface ModelsPageProps {
   onNavigate: (route: AppRouteId) => void;
 }
 
-const MODEL_TYPE_FILTERS: Array<{ id: ModelTypeFilter; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "checkpoint", label: "Checkpoints" },
-  { id: "lora", label: "LoRAs" },
-  { id: "controlnet", label: "ControlNet" },
-  { id: "upscaler", label: "Upscalers" },
-  { id: "vae", label: "VAE" },
-  { id: "embedding", label: "Embeddings" },
-  { id: "other", label: "Other" },
-];
-
-const TYPE_ICONS: Record<ModelType, typeof Box> = {
-  checkpoint: Box,
-  lora: Zap,
-  controlnet: SlidersHorizontal,
-  upscaler: Maximize2,
-  vae: Cpu,
-  embedding: Hash,
-  other: Package,
-};
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function hexAlpha(hex: string, opacity: number): string {
-  const alpha = Math.round(opacity * 255)
-    .toString(16)
-    .padStart(2, "0");
-  return hex + alpha;
-}
 
 export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const [runtimeState, setRuntimeState] = useState<{ loading: boolean; runtime: RuntimeStatus | null }>({
     loading: true,
     runtime: null,
+  });
+  const { inventoryState, refreshInventory: loadInventory } = useModelInventory();
+
+  const [activeType, setActiveType] = useState<ModelTypeFilter>("all");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | ModelInventoryStatus>("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | ModelInventorySource>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+
+  const [showTagCreate, setShowTagCreate] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState(TAG_COLOR_PRESETS[0]);
+  const [tagAction, setTagAction] = useState<string | null>(null);
+
+  const [showDevDetails, setShowDevDetails] = useState(false);
+  const [showAddTag, setShowAddTag] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importFolder, setImportFolder] = useState("checkpoints");
+  const [importPaths, setImportPaths] = useState<string[]>([]);
+  const [importOverwrite, setImportOverwrite] = useState(false);
+  const [importResult, setImportResult] = useState<ModelImportResponse | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [pageMessage, setPageMessage] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const refreshInventory = useCallback(async (options: { silent?: boolean } = {}) => {
+    const inventory = await loadInventory(options);
+    if (inventory) {
+      if (!inventory.models.some((model) => model.model_key === selectedModelId)) {
+        setSelectedModelId(null);
+      }
+      if (!inventory.folders.categories.includes(importFolder)) {
+        setImportFolder(inventory.folders.categories[0] ?? "checkpoints");
+      }
+    }
+    return inventory;
+  }, [importFolder, loadInventory, selectedModelId]);
+
+  const { downloadJob, downloadError, downloadBusy, startDownload, cancelDownload } = useModelDownloadJob(() => {
+    void refreshInventory({ silent: true });
   });
 
   useEffect(() => {
@@ -94,48 +109,40 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       .catch(() => {
         if (mounted) setRuntimeState({ loading: false, runtime: null });
       });
+    void refreshInventory();
     return () => {
       mounted = false;
     };
+    // Initial page load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const appStatus = runtimeStatusCopy(runtimeState);
-
-  const [models, setModels] = useState<ModelEntry[]>(() => MOCK_MODELS.map((m) => ({ ...m })));
-  const [tags, setTags] = useState<ModelTag[]>(INITIAL_TAGS);
-
-  const [activeType, setActiveType] = useState<ModelTypeFilter>("all");
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | ModelStatus>("all");
-  const [sourceFilter, setSourceFilter] = useState<"all" | ModelSource>("all");
-  const [tagFilter, setTagFilter] = useState<string>("all");
-
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-
-  const [showTagCreate, setShowTagCreate] = useState(false);
-  const [newTagName, setNewTagName] = useState("");
-  const [newTagColor, setNewTagColor] = useState(TAG_COLOR_PRESETS[0]);
-
-  const [showDevDetails, setShowDevDetails] = useState(false);
-  const [showAddTag, setShowAddTag] = useState(false);
+  const inventory = inventoryState.inventory;
+  const models = inventory?.models ?? [];
+  const tags = inventory?.tags ?? [];
 
   const filteredModels = useMemo(() => {
-    return models.filter((m) => {
-      if (activeType !== "all" && m.type !== activeType) return false;
-      if (search && !m.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (statusFilter !== "all" && m.status !== statusFilter) return false;
-      if (sourceFilter !== "all" && m.source !== sourceFilter) return false;
-      if (tagFilter !== "all" && !m.tagIds.includes(tagFilter)) return false;
+    return models.filter((model) => {
+      if (activeType !== "all" && normalizeType(model) !== activeType) return false;
+      if (search) {
+        const haystack = `${model.filename} ${model.folder} ${model.source_label} ${model.workflow_usage
+          .map((workflow) => workflow.workflow_name)
+          .join(" ")}`.toLowerCase();
+        if (!haystack.includes(search.toLowerCase())) return false;
+      }
+      if (statusFilter !== "all" && model.status !== statusFilter) return false;
+      if (sourceFilter !== "all" && model.source !== sourceFilter) return false;
+      if (tagFilter !== "all" && !model.tag_ids.includes(tagFilter)) return false;
       return true;
     });
   }, [models, activeType, search, statusFilter, sourceFilter, tagFilter]);
 
-  const selectedModel = selectedModelId ? (models.find((m) => m.id === selectedModelId) ?? null) : null;
-
-  const totalSizeBytes = useMemo(() => models.reduce((acc, m) => acc + m.sizeBytes, 0), [models]);
-  const missingCount = useMemo(() => models.filter((m) => m.status === "missing").length, [models]);
-  const linkedCount = useMemo(() => models.filter((m) => m.source === "linked").length, [models]);
+  const selectedModel = selectedModelId ? (models.find((model) => model.model_key === selectedModelId) ?? null) : null;
+  const missingDownloadRefs = useMemo(
+    () => uniqueDownloadSelections(models.flatMap((model) => model.downloadable_references)),
+    [models],
+  );
 
   function handleSelectModel(id: string) {
     setSelectedModelId((prev) => (prev === id ? null : id));
@@ -156,40 +163,97 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
     if (checkedIds.size === filteredModels.length && filteredModels.length > 0) {
       setCheckedIds(new Set());
     } else {
-      setCheckedIds(new Set(filteredModels.map((m) => m.id)));
+      setCheckedIds(new Set(filteredModels.map((m) => m.model_key)));
     }
   }
 
-  function handleModelTagToggle(modelId: string, tagId: string) {
-    setModels((prev) =>
-      prev.map((m) => {
-        if (m.id !== modelId) return m;
-        const hasTag = m.tagIds.includes(tagId);
-        return { ...m, tagIds: hasTag ? m.tagIds.filter((t) => t !== tagId) : [...m.tagIds, tagId] };
-      }),
-    );
-  }
-
-  function handleCreateTag() {
+  async function handleCreateTag() {
     if (!newTagName.trim()) return;
-    const id = `tag_${Date.now()}`;
-    setTags((prev) => [...prev, { id, name: newTagName.trim(), color: newTagColor }]);
-    setNewTagName("");
-    setShowTagCreate(false);
+    setTagAction("Creating tag...");
+    setPageError(null);
+    try {
+      await createModelTag({ name: newTagName.trim(), color: newTagColor });
+      setNewTagName("");
+      setShowTagCreate(false);
+      await refreshInventory({ silent: true });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not create the tag.");
+    } finally {
+      setTagAction(null);
+    }
   }
 
-  function handleBulkAddTag(tagId: string) {
-    setModels((prev) =>
-      prev.map((m) =>
-        checkedIds.has(m.id) && !m.tagIds.includes(tagId) ? { ...m, tagIds: [...m.tagIds, tagId] } : m,
-      ),
-    );
+  async function handleModelTagToggle(model: ModelInventoryEntry, tagId: string) {
+    const hasTag = model.tag_ids.includes(tagId);
+    const next = hasTag ? model.tag_ids.filter((id) => id !== tagId) : [...model.tag_ids, tagId];
+    setTagAction("Saving tags...");
+    setPageError(null);
+    try {
+      await updateModelTags(model.model_key, next);
+      await refreshInventory({ silent: true });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not save tags.");
+    } finally {
+      setTagAction(null);
+    }
   }
 
-  function handleBulkRemove() {
-    setModels((prev) => prev.filter((m) => !checkedIds.has(m.id)));
-    if (selectedModelId && checkedIds.has(selectedModelId)) setSelectedModelId(null);
-    setCheckedIds(new Set());
+  async function handleBulkAddTag(tagId: string) {
+    const selected = models.filter((model) => checkedIds.has(model.model_key));
+    setTagAction("Saving tags...");
+    setPageError(null);
+    try {
+      await Promise.all(
+        selected.map((model) =>
+          updateModelTags(model.model_key, model.tag_ids.includes(tagId) ? model.tag_ids : [...model.tag_ids, tagId]),
+        ),
+      );
+      await refreshInventory({ silent: true });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not save tags.");
+    } finally {
+      setTagAction(null);
+    }
+  }
+
+  async function handleImportModels() {
+    if (importPaths.length === 0) return;
+    setImportBusy(true);
+    setImportResult(null);
+    setPageError(null);
+    try {
+      const result = await importModelFiles({ source_paths: importPaths, folder: importFolder, overwrite: importOverwrite });
+      setImportResult(result);
+      await refreshInventory({ silent: true });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not import those model files.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function handleDownload(selections: ModelDownloadSelection[]) {
+    setPageMessage("Starting download...");
+    await startDownload(selections);
+    setPageMessage(null);
+  }
+
+  async function handleDeleteModel(model: ModelInventoryEntry) {
+    if (!model.can_delete) return;
+    const confirmed = window.confirm(`Delete ${model.filename} from Noofy Models? This does not affect external model folders.`);
+    if (!confirmed) return;
+    setDeleteBusy(true);
+    setPageError(null);
+    try {
+      const result = await deleteModelFile(model.model_key);
+      setPageMessage(result.message);
+      setSelectedModelId(null);
+      await refreshInventory({ silent: true });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not delete this model.");
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   const panelOpen = selectedModel !== null;
@@ -203,53 +267,139 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
           <p>Manage the AI models Noofy can use for your workflows.</p>
         </div>
         <div className="button-row">
-          <button className="secondary-button" type="button">
-            <RefreshCw size={15} aria-hidden="true" />
+          <button className="secondary-button" type="button" onClick={() => void refreshInventory()}>
+            {inventoryState.loading ? <Loader2 className="spin" size={15} aria-hidden="true" /> : <RefreshCw size={15} aria-hidden="true" />}
             Scan Folders
           </button>
-          <button className="primary-button" type="button">
+          {inventory?.folders.noofy_models_dir && (
+            <button className="secondary-button" type="button" onClick={() => void openFolder(inventory.folders.noofy_models_dir)}>
+              <Folder size={15} aria-hidden="true" />
+              Open Noofy Models
+            </button>
+          )}
+          <button className="primary-button" type="button" onClick={() => setShowImport((value) => !value)}>
             <Plus size={16} aria-hidden="true" />
             Add Model
           </button>
         </div>
       </section>
 
+      {inventoryState.error && (
+        <div className="notice notice--warning notice--row" role="status">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <div>
+            <strong>Models could not be loaded.</strong>
+            <span>{inventoryState.error}</span>
+          </div>
+        </div>
+      )}
+
+      {(pageError || downloadError) && (
+        <div className="notice notice--warning notice--row" role="status">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <div>
+            <strong>That did not work yet.</strong>
+            <span>{pageError ?? downloadError}</span>
+          </div>
+        </div>
+      )}
+
+      {pageMessage && (
+        <div className="notice notice--row" role="status">
+          <Loader2 className="spin" size={18} aria-hidden="true" />
+          <div>
+            <strong>{pageMessage}</strong>
+            <span>Noofy will update the list when the action finishes.</span>
+          </div>
+        </div>
+      )}
+
       <div className="models-summary-bar" role="region" aria-label="Model statistics">
         <div className="models-stat-card">
-          <div className="models-stat-card__value">{models.length}</div>
+          <div className="models-stat-card__value">{inventory?.summary.total_count ?? "..."}</div>
           <div className="models-stat-card__label">Total models</div>
         </div>
         <div className="models-stat-card">
-          <div className="models-stat-card__value">{formatBytes(totalSizeBytes)}</div>
-          <div className="models-stat-card__label">Installed size</div>
+          <div className="models-stat-card__value">{formatBytes(inventory?.summary.total_known_size_bytes)}</div>
+          <div className="models-stat-card__label">Known size</div>
         </div>
-        <div className={`models-stat-card${missingCount > 0 ? " models-stat-card--warning" : ""}`}>
-          <div className="models-stat-card__value">{missingCount}</div>
+        <div className={`models-stat-card${(inventory?.summary.missing_count ?? 0) > 0 ? " models-stat-card--warning" : ""}`}>
+          <div className="models-stat-card__value">{inventory?.summary.missing_count ?? "..."}</div>
           <div className="models-stat-card__label">Missing from workflows</div>
         </div>
         <div className="models-stat-card">
-          <div className="models-stat-card__value">{linkedCount}</div>
-          <div className="models-stat-card__label">Linked from your computer</div>
+          <div className="models-stat-card__value">{inventory?.summary.external_comfyui_count ?? "..."}</div>
+          <div className="models-stat-card__label">From ComfyUI folder</div>
         </div>
       </div>
 
-      {missingCount > 0 && (
+      {showImport && inventory && (
+        <ModelImportPanel
+          categories={inventory.folders.categories}
+          folder={importFolder}
+          paths={importPaths}
+          overwrite={importOverwrite}
+          busy={importBusy}
+          result={importResult}
+          onFolderChange={setImportFolder}
+          onPathsChange={setImportPaths}
+          onOverwriteChange={setImportOverwrite}
+          onImport={() => void handleImportModels()}
+        />
+      )}
+
+      {importResult?.failed_count ? (
+        <div className="notice notice--warning notice--row" role="status">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <div>
+            <strong>Some files were not imported.</strong>
+            <span>{importResult.models.filter((item) => item.status === "failed").map((item) => `${item.filename ?? item.source_path}: ${item.message}`).join(" ")}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {(inventory?.summary.missing_count ?? 0) > 0 && (
         <div className="notice notice--warning notice--row" role="status">
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
             <strong>
-              {missingCount} model{missingCount !== 1 ? "s are" : " is"} needed by installed workflows.
+              {inventory?.summary.missing_count} model{inventory?.summary.missing_count !== 1 ? "s are" : " is"} needed by installed workflows.
             </strong>
             <span>Some workflows may not run until these models are available.</span>
           </div>
           <div className="button-row" style={{ marginLeft: "auto", flexShrink: 0 }}>
-            <button className="secondary-button secondary-button--small" type="button">
+            <button
+              className="secondary-button secondary-button--small"
+              type="button"
+              onClick={() => void handleDownload(missingDownloadRefs)}
+              disabled={missingDownloadRefs.length === 0 || downloadBusy}
+            >
+              <Download size={13} aria-hidden="true" />
               Download missing
             </button>
-            <button className="secondary-button secondary-button--small" type="button">
-              Choose files
-            </button>
           </div>
+        </div>
+      )}
+
+      {downloadJob && (
+        <div className="notice notice--row" role="status">
+          {["queued", "running"].includes(downloadJob.status) ? (
+            <Loader2 className="spin" size={18} aria-hidden="true" />
+          ) : (
+            <Download size={18} aria-hidden="true" />
+          )}
+          <div>
+            <strong>{downloadJob.user_facing_message}</strong>
+            <span>
+              {downloadJob.current_model_filename ?? "Model download"}{" "}
+              {downloadJob.percent !== null ? `${downloadJob.percent}%` : ""}
+            </span>
+          </div>
+          {["queued", "running"].includes(downloadJob.status) && (
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void cancelDownload()}>
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
@@ -288,7 +438,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             className="filter-select"
             aria-label="Filter by status"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as "all" | ModelStatus)}
+            onChange={(e) => setStatusFilter(e.target.value as "all" | ModelInventoryStatus)}
           >
             <option value="all">All status</option>
             <option value="ready">Ready</option>
@@ -303,12 +453,13 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             className="filter-select"
             aria-label="Filter by source"
             value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value as "all" | ModelSource)}
+            onChange={(e) => setSourceFilter(e.target.value as "all" | ModelInventorySource)}
           >
-            <option value="all">All sources</option>
-            <option value="downloaded">Downloaded by Noofy</option>
-            <option value="imported">Imported</option>
-            <option value="linked">Linked from computer</option>
+            {SOURCE_FILTERS.map((source) => (
+              <option key={source.id} value={source.id}>
+                {source.label}
+              </option>
+            ))}
           </select>
           <ChevronDown size={13} aria-hidden="true" />
         </div>
@@ -321,9 +472,9 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             onChange={(e) => setTagFilter(e.target.value)}
           >
             <option value="all">All tags</option>
-            {tags.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+            {tags.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.name}
               </option>
             ))}
           </select>
@@ -335,7 +486,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
         <button
           className="ghost-button"
           type="button"
-          onClick={() => setShowTagCreate((v) => !v)}
+          onClick={() => setShowTagCreate((value) => !value)}
           aria-expanded={showTagCreate}
         >
           <Tag size={15} aria-hidden="true" />
@@ -352,7 +503,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             value={newTagName}
             onChange={(e) => setNewTagName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreateTag();
+              if (e.key === "Enter") void handleCreateTag();
             }}
             autoFocus
             maxLength={24}
@@ -383,8 +534,8 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
           <button
             className="primary-button primary-button--compact"
             type="button"
-            onClick={handleCreateTag}
-            disabled={!newTagName.trim()}
+            onClick={() => void handleCreateTag()}
+            disabled={!newTagName.trim() || tagAction !== null}
           >
             Create
           </button>
@@ -400,17 +551,14 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
                 key={tag.id}
                 className="secondary-button secondary-button--small"
                 type="button"
-                onClick={() => handleBulkAddTag(tag.id)}
+                onClick={() => void handleBulkAddTag(tag.id)}
+                disabled={tagAction !== null}
               >
                 <Tag size={12} aria-hidden="true" />
                 Add "{tag.name}"
               </button>
             ))}
           </div>
-          <button className="secondary-button secondary-button--small" type="button" onClick={handleBulkRemove}>
-            <Trash2 size={13} aria-hidden="true" />
-            Remove from Noofy
-          </button>
           <button className="ghost-button" type="button" onClick={() => setCheckedIds(new Set())}>
             <X size={14} aria-hidden="true" />
             Clear
@@ -439,20 +587,22 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             </div>
           )}
 
-          {filteredModels.length === 0 ? (
+          {inventoryState.loading && models.length === 0 ? (
+            <div className="models-empty">Loading models...</div>
+          ) : filteredModels.length === 0 ? (
             <div className="models-empty">
               {models.length === 0 ? (
                 <>
                   <Package size={44} aria-hidden="true" />
-                  <h3>No models yet</h3>
-                  <p>Add a model or open a workflow that needs one.</p>
+                  <h3>No models found</h3>
+                  <p>Add a model or import a workflow that needs one.</p>
                   <div className="models-empty__actions">
-                    <button className="primary-button" type="button">
+                    <button className="primary-button" type="button" onClick={() => setShowImport(true)}>
                       <Plus size={16} aria-hidden="true" />
                       Add Model
                     </button>
-                    <button className="secondary-button" type="button" onClick={() => onNavigate("home")}>
-                      Open Workflow
+                    <button className="secondary-button" type="button" onClick={() => onNavigate("workflows")}>
+                      Open Workflows
                     </button>
                   </div>
                 </>
@@ -481,13 +631,15 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
             <div className="models-table" role="list">
               {filteredModels.map((model) => (
                 <ModelRow
-                  key={model.id}
+                  key={model.model_key}
                   model={model}
                   tags={tags}
-                  checked={checkedIds.has(model.id)}
-                  selected={selectedModelId === model.id}
-                  onCheck={(checked) => handleToggleCheck(model.id, checked)}
-                  onSelect={() => handleSelectModel(model.id)}
+                  checked={checkedIds.has(model.model_key)}
+                  selected={selectedModelId === model.model_key}
+                  downloading={downloadBusy}
+                  onCheck={(checked) => handleToggleCheck(model.model_key, checked)}
+                  onSelect={() => handleSelectModel(model.model_key)}
+                  onDownload={() => void handleDownload(uniqueDownloadSelections(model.downloadable_references))}
                 />
               ))}
             </div>
@@ -495,307 +647,28 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
         </div>
 
         {selectedModel && (
-          <aside className="models-detail-panel" aria-label={`Details for ${selectedModel.name}`}>
+          <aside className="models-detail-panel" aria-label={`Details for ${selectedModel.filename}`}>
             <DetailPanel
               model={selectedModel}
               tags={tags}
               showDevDetails={showDevDetails}
               showAddTag={showAddTag}
+              downloadBusy={downloadBusy}
+              deleteBusy={deleteBusy}
               onClose={() => setSelectedModelId(null)}
-              onToggleDevDetails={() => setShowDevDetails((v) => !v)}
-              onToggleAddTag={() => setShowAddTag((v) => !v)}
-              onTagToggle={(tagId) => handleModelTagToggle(selectedModel.id, tagId)}
+              onToggleDevDetails={() => setShowDevDetails((value) => !value)}
+              onToggleAddTag={() => setShowAddTag((value) => !value)}
+              onTagToggle={(tagId) => void handleModelTagToggle(selectedModel, tagId)}
+              onReveal={() => {
+                const path = modelFolderPath(selectedModel);
+                if (path) void openFolder(path);
+              }}
+              onDownload={() => void handleDownload(uniqueDownloadSelections(selectedModel.downloadable_references))}
+              onDelete={() => void handleDeleteModel(selectedModel)}
             />
           </aside>
         )}
       </div>
     </AppLayout>
-  );
-}
-
-function ModelRow({
-  model,
-  tags,
-  checked,
-  selected,
-  onCheck,
-  onSelect,
-}: {
-  model: ModelEntry;
-  tags: ModelTag[];
-  checked: boolean;
-  selected: boolean;
-  onCheck: (checked: boolean) => void;
-  onSelect: () => void;
-}) {
-  const TypeIcon = TYPE_ICONS[model.type];
-  const modelTags = tags.filter((t) => model.tagIds.includes(t.id));
-
-  return (
-    <article
-      className={`model-row${selected ? " model-row--selected" : ""}${checked ? " model-row--checked" : ""}`}
-      role="listitem"
-      onClick={onSelect}
-    >
-      <div
-        className="model-col model-col-check"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onCheck(e.target.checked)}
-          aria-label={`Select ${model.name}`}
-        />
-      </div>
-
-      <div className="model-col model-col-main">
-        <div className="model-type-icon" aria-hidden="true">
-          <TypeIcon size={16} />
-        </div>
-        <div className="model-main-body">
-          <div className="model-name-text">{model.name}</div>
-          <div className="model-type-text">{MODEL_TYPE_LABELS[model.type]}</div>
-        </div>
-      </div>
-
-      <div className="model-col model-col-tags">
-        <div className="model-tags-row">
-          {modelTags.slice(0, 2).map((tag) => (
-            <span
-              key={tag.id}
-              className="tag-pill"
-              style={{
-                backgroundColor: hexAlpha(tag.color, 0.12),
-                borderColor: hexAlpha(tag.color, 0.3),
-                color: tag.color,
-              }}
-            >
-              {tag.name}
-            </span>
-          ))}
-          {modelTags.length > 2 && (
-            <span className="tag-pill tag-pill--more">+{modelTags.length - 2}</span>
-          )}
-        </div>
-      </div>
-
-      <div className="model-col model-col-size">{formatBytes(model.sizeBytes)}</div>
-
-      <div className="model-col model-col-status">
-        <span className={`model-status model-status--${model.status}`}>
-          <span className="model-status__dot" aria-hidden="true" />
-          {MODEL_STATUS_LABELS[model.status]}
-        </span>
-      </div>
-
-      <div className="model-col model-col-source">{MODEL_SOURCE_LABELS[model.source]}</div>
-
-      <div
-        className="model-col model-col-actions"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          className="icon-button"
-          type="button"
-          aria-label={`Open details for ${model.name}`}
-          title="View details"
-          onClick={onSelect}
-        >
-          <MoreHorizontal size={16} aria-hidden="true" />
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function DetailPanel({
-  model,
-  tags,
-  showDevDetails,
-  showAddTag,
-  onClose,
-  onToggleDevDetails,
-  onToggleAddTag,
-  onTagToggle,
-}: {
-  model: ModelEntry;
-  tags: ModelTag[];
-  showDevDetails: boolean;
-  showAddTag: boolean;
-  onClose: () => void;
-  onToggleDevDetails: () => void;
-  onToggleAddTag: () => void;
-  onTagToggle: (tagId: string) => void;
-}) {
-  const TypeIcon = TYPE_ICONS[model.type];
-  const modelTags = tags.filter((t) => model.tagIds.includes(t.id));
-  const availableTags = tags.filter((t) => !model.tagIds.includes(t.id));
-
-  return (
-    <>
-      <div className="detail-panel__header">
-        <div className="detail-panel__title-group">
-          <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
-            <TypeIcon size={20} />
-          </div>
-          <div className="detail-panel__title-text">
-            <h2 className="detail-panel__title">{model.name}</h2>
-            <span className="detail-panel__type">{MODEL_TYPE_LABELS[model.type]}</span>
-          </div>
-        </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close details panel">
-          <X size={17} aria-hidden="true" />
-        </button>
-      </div>
-
-      <div className="detail-panel__section">
-        <span className={`model-status model-status--${model.status}`}>
-          <span className="model-status__dot" aria-hidden="true" />
-          {MODEL_STATUS_LABELS[model.status]}
-        </span>
-      </div>
-
-      <div className="detail-panel__section">
-        <div className="detail-panel__section-label">Tags</div>
-        <div className="detail-panel__tags">
-          {modelTags.map((tag) => (
-            <span
-              key={tag.id}
-              className="tag-pill"
-              style={{
-                backgroundColor: hexAlpha(tag.color, 0.12),
-                borderColor: hexAlpha(tag.color, 0.3),
-                color: tag.color,
-              }}
-            >
-              {tag.name}
-              <button
-                type="button"
-                className="tag-pill__remove"
-                onClick={() => onTagToggle(tag.id)}
-                aria-label={`Remove tag ${tag.name}`}
-              >
-                <X size={10} aria-hidden="true" />
-              </button>
-            </span>
-          ))}
-          <button
-            className="tag-pill tag-pill--add"
-            type="button"
-            onClick={onToggleAddTag}
-            aria-expanded={showAddTag}
-          >
-            <Plus size={11} aria-hidden="true" />
-            Add tag
-          </button>
-        </div>
-        {showAddTag && (
-          <div className="detail-panel__tag-dropdown">
-            {availableTags.length > 0 ? (
-              availableTags.map((tag) => (
-                <button
-                  key={tag.id}
-                  type="button"
-                  className="detail-panel__tag-option"
-                  onClick={() => {
-                    onTagToggle(tag.id);
-                    onToggleAddTag();
-                  }}
-                >
-                  <span
-                    className="detail-panel__tag-dot"
-                    style={{ background: tag.color }}
-                    aria-hidden="true"
-                  />
-                  {tag.name}
-                </button>
-              ))
-            ) : (
-              <p className="detail-panel__tag-empty">No more tags available. Create one above.</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="detail-panel__section">
-        <dl className="detail-list detail-list--compact">
-          <div>
-            <dt>Size</dt>
-            <dd>{formatBytes(model.sizeBytes)}</dd>
-          </div>
-          <div>
-            <dt>Source</dt>
-            <dd>{MODEL_SOURCE_LABELS[model.source]}</dd>
-          </div>
-          <div>
-            <dt>Last used</dt>
-            <dd>{model.lastUsed ?? "Never"}</dd>
-          </div>
-          {model.usedByWorkflows.length > 0 && (
-            <div>
-              <dt>Used by</dt>
-              <dd>{model.usedByWorkflows.join(", ")}</dd>
-            </div>
-          )}
-        </dl>
-      </div>
-
-      <div className="detail-panel__section">
-        <div className="detail-panel__section-label">Actions</div>
-        <div className="detail-panel__actions">
-          <button className="secondary-button secondary-button--full" type="button">
-            <Upload size={14} aria-hidden="true" />
-            Replace file
-          </button>
-          <button className="secondary-button secondary-button--full" type="button">
-            <Folder size={14} aria-hidden="true" />
-            Reveal location
-          </button>
-          <button className="secondary-button secondary-button--full secondary-button--danger" type="button">
-            <Trash2 size={14} aria-hidden="true" />
-            Remove from Noofy
-          </button>
-        </div>
-      </div>
-
-      <div className="detail-developer">
-        <button
-          className="detail-developer__toggle"
-          type="button"
-          onClick={onToggleDevDetails}
-          aria-expanded={showDevDetails}
-        >
-          {showDevDetails ? (
-            <ChevronDown size={14} aria-hidden="true" />
-          ) : (
-            <ChevronRight size={14} aria-hidden="true" />
-          )}
-          Developer details
-        </button>
-        {showDevDetails && (
-          <dl className="detail-list detail-list--compact detail-developer__content">
-            <div>
-              <dt>File path</dt>
-              <dd className="detail-dev-value">{model.filePath}</dd>
-            </div>
-            {model.hash && (
-              <div>
-                <dt>Hash</dt>
-                <dd className="detail-dev-value">{model.hash.slice(0, 16)}…</dd>
-              </div>
-            )}
-            <div>
-              <dt>ComfyUI folder</dt>
-              <dd>{model.comfyFolder}</dd>
-            </div>
-            <div>
-              <dt>Verification</dt>
-              <dd>{model.hash ? "Hash stored" : "Not verified"}</dd>
-            </div>
-          </dl>
-        )}
-      </div>
-    </>
   );
 }

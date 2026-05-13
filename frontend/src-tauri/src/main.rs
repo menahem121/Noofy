@@ -81,6 +81,28 @@ fn select_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn select_model_files() -> Result<Vec<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .add_filter(
+            "Model files",
+            &[
+                "safetensors",
+                "ckpt",
+                "pt",
+                "pth",
+                "bin",
+                "gguf",
+                "onnx",
+            ],
+        )
+        .pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect())
+}
+
+#[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     let folder = PathBuf::from(path);
     if !folder.is_dir() {
@@ -100,6 +122,7 @@ fn main() {
             noofy_runtime_config,
             open_external_url,
             select_folder,
+            select_model_files,
             open_folder
         ])
         .setup(move |app| {

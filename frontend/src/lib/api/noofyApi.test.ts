@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelModelDownload,
+  createModelTag,
   createJobEventsUrl,
+  deleteModelFile,
+  fetchActiveModelDownload,
+  fetchModelDownloadStatus,
+  fetchModelInventory,
   fetchComfyUILaunchSettings,
   fetchComfyUIUpdateStatus,
   fetchComfyUIVersions,
@@ -10,10 +16,13 @@ import {
   fetchTrustPolicy,
   fetchWorkflows,
   importWorkflowPackage,
+  importModelFiles,
   rebuildComfyUI,
   resolveBackendUrl,
+  startModelDownload,
   updateComfyUI,
   updateComfyUILaunchSettings,
+  updateModelTags,
 } from "./noofyApi";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -269,6 +278,83 @@ describe("noofyApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/workflows/import?filename=community.noofy&allow_unverified_community_preparation=true",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("uses backend-owned model inventory, tag, import, and download endpoints", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ ok: true, models: [], tags: [], summary: {}, folders: {} })));
+
+    await fetchModelInventory();
+    await importModelFiles({ source_paths: ["/tmp/model.safetensors"], folder: "checkpoints" });
+    await createModelTag({ name: "SDXL", color: "#60a5fa" });
+    await updateModelTags("checkpoints/model.safetensors", ["tag_1"]);
+    await startModelDownload([{ workflow_id: "wf", requirement_id: "1:model:checkpoints/model.safetensors" }]);
+    await fetchActiveModelDownload();
+    await fetchModelDownloadStatus("job-1");
+    await cancelModelDownload("job-1");
+    await deleteModelFile("checkpoints/model.safetensors");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/models", {
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/models/import", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ source_paths: ["/tmp/model.safetensors"], folder: "checkpoints" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/models/tags", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: "SDXL", color: "#60a5fa" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/models/checkpoints%2Fmodel.safetensors/tags", {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ tag_ids: ["tag_1"] }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/models/downloads", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        selections: [{ workflow_id: "wf", requirement_id: "1:model:checkpoints/model.safetensors" }],
+      }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/models/downloads/active", {
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(7, "/api/models/downloads/job-1", {
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(8, "/api/models/downloads/job-1/cancel", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(9, "/api/models/checkpoints%2Fmodel.safetensors", {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+  });
+
+  it("surfaces structured backend error messages", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: { code: "model_import_error", message: "A model already exists." } }, 400));
+
+    await expect(importModelFiles({ source_paths: ["/tmp/model.safetensors"], folder: "checkpoints" })).rejects.toThrow(
+      "A model already exists.",
     );
   });
 });

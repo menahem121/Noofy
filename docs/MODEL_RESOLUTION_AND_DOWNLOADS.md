@@ -28,8 +28,13 @@ Noofy treats that folder as a user-owned secondary root for availability checks.
 Invariants:
 
 - Noofy-owned downloads always go to the configured Noofy Models folder.
+- User-selected imports are copied into the configured Noofy Models folder. The
+  source file is not modified.
 - Noofy never writes models into the external ComfyUI folder or into
   `third_party/comfyui/`.
+- Delete actions are allowed only for files that resolve inside the configured
+  Noofy Models folder. External ComfyUI folder files and engine-visible
+  references are never deleted by the Models page.
 - The managed ComfyUI sidecar sees the Noofy Models folder (and the optional
   external ComfyUI folder) through a generated `extra-model-paths.yaml` under
   the runtime store. Noofy Models is registered as the default category root.
@@ -45,6 +50,41 @@ Invariants:
   and unwritable Noofy Models targets. Path root changes return
   `restart_required: true` so the UI can prompt for a Noofy engine restart;
   Noofy's own model availability checks use the new roots immediately.
+
+### Models Page Inventory API
+
+The Models page is backed by Noofy API endpoints, not by direct ComfyUI calls.
+
+- `GET /api/models` — returns a UI-ready inventory with summary counts, active
+  model folders, persisted model tags, local files from the Noofy Models folder,
+  read-only files from the optional external ComfyUI models folder, engine-visible
+  fallback rows, and missing model requirements from installed workflows. Each
+  row includes stable `model_key`, source, ownership (`noofy_downloaded`,
+  `noofy_imported`, `noofy_local`, `external_reference`, `engine_reference`, or
+  `workflow_requirement`), `can_delete`, workflow usage, download references,
+  and persisted tag IDs.
+- `POST /api/models/import` — copies one or more local file paths into a selected
+  Noofy Models category. The backend validates the category, rejects path escapes,
+  rejects filename collisions unless `overwrite` is true, and never writes into
+  the external ComfyUI folder. Large files are first copied under `.imports/`
+  and then atomically moved into the selected category so interrupted imports do
+  not appear as installed models.
+- `DELETE /api/models/{model_key}` — deletes only an existing regular file that
+  resolves inside the configured Noofy Models folder. It also clears local app
+  tag and ownership metadata for that model key. It cannot delete external
+  ComfyUI folder files, engine-visible references, or missing requirements.
+- `POST /api/models/tags` and `PUT /api/models/{model_key}/tags` — persist
+  local app tags and model/tag assignments under Noofy settings data. Tags are
+  app-local organization metadata and are not exported in workflow packages.
+- `POST /api/models/downloads`, `GET /api/models/downloads/active`,
+  `GET /api/models/downloads/{job_id}`, and
+  `POST /api/models/downloads/{job_id}/cancel` — start, resume/poll, and cancel
+  standalone missing-model downloads selected from installed workflow
+  requirements. These jobs reuse the same provider resolver, transaction,
+  verification, and cleanup rules as staged workflow imports. Active jobs are
+  in-process state with a short completed-job TTL; the active endpoint lets the
+  Models page recover polling after a page refresh while the backend process is
+  still running.
 
 ## API Keys (Hugging Face And Civitai)
 

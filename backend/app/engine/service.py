@@ -221,6 +221,7 @@ class EngineService:
         )
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
+        self.model_ownership_store = None
         self.model_availability_service.cleanup_interrupted_downloads()
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
@@ -798,6 +799,7 @@ class EngineService:
             else:
                 job.status = "completed"
                 job.user_facing_message = result.user_facing_message
+                self._mark_import_downloads_as_noofy_downloaded(pending.package)
         except Exception:
             job.status = "failed"
             job.user_facing_message = "The model download failed. The partial download was cleaned up safely."
@@ -815,6 +817,27 @@ class EngineService:
             pending.updated_at = now
             if pending.active_download_job_id == job.job_id:
                 pending.active_download_job_id = None
+
+    def _mark_import_downloads_as_noofy_downloaded(self, package: WorkflowPackage) -> None:
+        ownership_store = getattr(self, "model_ownership_store", None)
+        if ownership_store is None:
+            return
+        noofy_models_dir = getattr(self.model_availability_service, "noofy_models_dir", None)
+        if noofy_models_dir is None:
+            return
+        root = Path(noofy_models_dir)
+        for model in package.required_models:
+            target = root / model.folder / model.filename
+            try:
+                resolved = target.resolve(strict=False)
+                root_resolved = root.resolve(strict=False)
+            except OSError:
+                continue
+            if resolved != root_resolved and root_resolved not in resolved.parents:
+                continue
+            if target.is_file():
+                filename = model.filename.replace("\\", "/")
+                ownership_store.mark_downloaded(f"{model.folder}/{filename}")
 
     def _import_download_job_status(
         self, job: _ImportModelDownloadJob

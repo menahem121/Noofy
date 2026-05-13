@@ -11,6 +11,10 @@ The app owns the engine contract. UI code should depend on this contract, not on
 - `getResult(jobId)`: return final outputs, errors, and generated files.
 - `fetchOutput(jobId, filename, subfolder, type)`: serve generated output media through the backend API.
 - `listAvailableModels()`: report models available to the active engine.
+- `listModelInventory()`: report frontend-ready model inventory through the app backend, combining Noofy-owned model files, optional external ComfyUI model files, engine-visible fallback models, workflow-required missing models, local tags, source ownership labels, and Noofy-only delete eligibility.
+- `importModelFiles(sourcePaths, folder, overwrite?)`: copy user-selected local files into the configured Noofy Models folder through backend path validation. The frontend must not write model files directly and Noofy must not import into the external ComfyUI folder.
+- `deleteModelFile(modelKey)`: delete a regular model file only when the backend resolves it inside the configured Noofy Models folder. External ComfyUI folder files, engine-visible references, and missing workflow requirements are not deletable through this operation.
+- `downloadRequiredModels(selections)`: download selected missing workflow requirements through backend provider resolution and verified download transactions.
 - `getModelAvailabilitySummary(workflowId)`: return identity-verified required-model availability for an imported workflow, including local matches across the Noofy Models folder and the optional connected ComfyUI folder.
 - `validateWorkflow(workflowId)`: validate package structure, bindings, and model availability. For imported workflows, validation uses the model availability summary so identity-verified local files take effect, not just raw engine `object_info`.
 - `uploadWorkflowImage(workflowId, file)`: stage or upload a workflow image input through the selected runner.
@@ -32,6 +36,12 @@ For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI si
 ComfyUI sidecar lifecycle, launch settings, bootstrap, update, rebuild, and repair operations are runtime management concerns owned by `ComfyUISidecarService`, not workflow execution operations on the engine contract.
 
 Workflow image uploads and generated output reads are adapter operations. The route layer and `EngineService` select the workflow/job-bound runner first, then dispatch through that runner's adapter. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
+
+The Models page is an app-management surface. The frontend calls Noofy backend
+model endpoints only; it must not call ComfyUI `/models`, Hugging Face, or
+Civitai directly. The backend owns source labels, ownership labels, delete
+eligibility, path containment, tag persistence, provider credentials, and
+verified download transactions.
 
 ## Job Lifecycle
 
