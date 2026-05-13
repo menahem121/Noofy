@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ChevronDown,
-  ChevronRight,
   Clock,
-  Download,
   ExternalLink,
   MoreHorizontal,
   Package,
@@ -12,26 +10,29 @@ import {
   PackagePlus,
   Play,
   RefreshCw,
-  RotateCcw,
   Search,
+  ShieldAlert,
   X,
 } from "lucide-react";
 
-import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
-import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 import {
-  EVENT_STATUS_LABELS,
-  EVENT_TYPE_LABELS,
-  MOCK_HISTORY,
+  fetchHistory,
+  fetchHistoryEvent,
+  fetchRuntimeStatus,
+  HISTORY_EVENT_STATUS_LABELS,
+  HISTORY_EVENT_TYPE_LABELS,
   type HistoryEvent,
+  type HistoryEventDetail,
   type HistoryEventStatus,
   type HistoryEventType,
-} from "./historyMock";
+  type RuntimeStatus,
+} from "../../lib/api/noofyApi";
+import { AppLayout, type AppRouteId } from "../app/AppLayout";
+import { runtimeStatusCopy } from "../app/status";
 
 type EventTypeFilter = HistoryEventType | "all";
 type StatusFilter = HistoryEventStatus | "all";
-type SortOption = "newest" | "oldest" | "longest" | "most_memory";
+type SortOption = "newest" | "oldest";
 type DateRangeFilter = "all" | "today" | "week" | "month";
 
 interface HistoryPageProps {
@@ -40,11 +41,19 @@ interface HistoryPageProps {
 
 interface PageState {
   loading: boolean;
+  loadingMore: boolean;
   events: HistoryEvent[];
+  total: number;
+  nextCursor: string | null;
+  hasMore: boolean;
   error: string | null;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+interface DetailState {
+  loading: boolean;
+  event: HistoryEventDetail | null;
+  error: string | null;
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -60,15 +69,11 @@ function formatDateTime(iso: string): string {
 }
 
 function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  const rounded = Math.round(seconds);
+  if (rounded < 60) return `${rounded}s`;
+  const m = Math.floor(rounded / 60);
+  const s = rounded % 60;
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
-}
-
-function formatMemory(mb: number): string {
-  if (mb < 1024) return `${mb} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
 }
 
 function getDateGroupLabel(iso: string): string {
@@ -96,35 +101,68 @@ function dateGroupSortOrder(label: string): number {
   return 2;
 }
 
+function dateRangeBounds(range: DateRangeFilter): { createdAfter?: string; createdBefore?: string } {
+  if (range === "all") return {};
+  const now = new Date();
+  const start = new Date(now);
+  if (range === "today") {
+    start.setHours(0, 0, 0, 0);
+  } else if (range === "week") {
+    start.setDate(start.getDate() - 7);
+  } else {
+    start.setDate(start.getDate() - 30);
+  }
+  return { createdAfter: start.toISOString(), createdBefore: now.toISOString() };
+}
+
 const EVENT_ICONS: Record<HistoryEventType, typeof Play> = {
   run: Play,
-  workflow_installed: PackagePlus,
+  run_blocked: ShieldAlert,
+  workflow_imported: PackagePlus,
   workflow_removed: PackageMinus,
+  import_failed: ShieldAlert,
 };
 
 const EVENT_ICON_TONE: Record<HistoryEventType, string> = {
   run: "run",
-  workflow_installed: "installed",
+  run_blocked: "removed",
+  workflow_imported: "installed",
   workflow_removed: "removed",
+  import_failed: "removed",
 };
 
 const STATUS_TONES: Record<HistoryEventStatus, string> = {
   completed: "success",
   failed: "error",
   canceled: "muted",
+  blocked: "warning",
   installed: "success",
   removed: "muted",
-  preparing: "warning",
-  ready: "success",
 };
-
-// ── Page ─────────────────────────────────────────────────────────────────────
 
 export function HistoryPage({ onNavigate }: HistoryPageProps) {
   const [runtimeState, setRuntimeState] = useState<{ loading: boolean; runtime: RuntimeStatus | null }>({
     loading: true,
     runtime: null,
   });
+  const [pageState, setPageState] = useState<PageState>({
+    loading: true,
+    loadingMore: false,
+    events: [],
+    total: 0,
+    nextCursor: null,
+    hasMore: false,
+    error: null,
+  });
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<EventTypeFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [dateRange, setDateRange] = useState<DateRangeFilter>("all");
+  const [sortOption, setSortOption] = useState<SortOption>("newest");
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [detailState, setDetailState] = useState<DetailState>({ loading: false, event: null, error: null });
+  const historyRequestId = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -140,73 +178,98 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     };
   }, []);
 
-  const appStatus = runtimeStatusCopy(runtimeState);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 220);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
-  const [pageState, setPageState] = useState<PageState>({ loading: true, events: [], error: null });
+  const loadHistory = useCallback(
+    async (options: { cursor?: string | null; append?: boolean } = {}) => {
+      const requestId = historyRequestId.current + 1;
+      historyRequestId.current = requestId;
+      const append = Boolean(options.append);
+      setPageState((prev) => ({
+        ...prev,
+        loading: !append,
+        loadingMore: append,
+        error: null,
+        events: append ? prev.events : [],
+      }));
+      try {
+        const bounds = dateRangeBounds(dateRange);
+        const data = await fetchHistory({
+          limit: 50,
+          cursor: options.cursor,
+          type: typeFilter,
+          status: statusFilter,
+          q: debouncedSearch,
+          sort: sortOption,
+          ...bounds,
+        });
+        if (requestId !== historyRequestId.current) return;
+        setPageState((prev) => ({
+          loading: false,
+          loadingMore: false,
+          events: append ? [...prev.events, ...data.events] : data.events,
+          total: data.total,
+          nextCursor: data.nextCursor,
+          hasMore: data.hasMore,
+          error: null,
+        }));
+      } catch (error) {
+        if (requestId !== historyRequestId.current) return;
+        setPageState((prev) => ({
+          ...prev,
+          loading: false,
+          loadingMore: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    },
+    [dateRange, debouncedSearch, sortOption, statusFilter, typeFilter],
+  );
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setPageState({ loading: false, events: MOCK_HISTORY, error: null });
-    }, 520);
-    return () => clearTimeout(timer);
-  }, []);
+    void loadHistory();
+    setSelectedEventId(null);
+    setDetailState({ loading: false, event: null, error: null });
+  }, [loadHistory]);
 
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<EventTypeFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [dateRange, setDateRange] = useState<DateRangeFilter>("all");
-  const [sortOption, setSortOption] = useState<SortOption>("newest");
+  useEffect(() => {
+    if (!selectedEventId) {
+      setDetailState({ loading: false, event: null, error: null });
+      return;
+    }
+    let canceled = false;
+    setDetailState({ loading: true, event: null, error: null });
+    fetchHistoryEvent(selectedEventId)
+      .then((event) => {
+        if (!canceled) setDetailState({ loading: false, event, error: null });
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setDetailState({
+            loading: false,
+            event: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [selectedEventId]);
 
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [showDevDetails, setShowDevDetails] = useState(false);
+  const appStatus = runtimeStatusCopy(runtimeState);
 
-  const selectedEvent = selectedEventId
+  const selectedListEvent = selectedEventId
     ? (pageState.events.find((e) => e.id === selectedEventId) ?? null)
     : null;
-
-  const filteredEvents = useMemo(() => {
-    const now = new Date();
-    let result = pageState.events.filter((evt) => {
-      if (typeFilter !== "all" && evt.type !== typeFilter) return false;
-      if (statusFilter !== "all" && evt.status !== statusFilter) return false;
-
-      if (dateRange !== "all") {
-        const diffDays = (now.getTime() - new Date(evt.createdAt).getTime()) / 86400000;
-        if (dateRange === "today" && diffDays >= 1) return false;
-        if (dateRange === "week" && diffDays >= 7) return false;
-        if (dateRange === "month" && diffDays >= 30) return false;
-      }
-
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        const haystack = [
-          evt.workflowName,
-          evt.prompt ?? "",
-          evt.title,
-          EVENT_STATUS_LABELS[evt.status],
-          EVENT_TYPE_LABELS[evt.type],
-          evt.outputRef ?? "",
-        ].join(" ").toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-
-      return true;
-    });
-
-    result = [...result].sort((a, b) => {
-      if (sortOption === "newest") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      if (sortOption === "oldest") return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      if (sortOption === "longest") return (b.durationSeconds ?? 0) - (a.durationSeconds ?? 0);
-      if (sortOption === "most_memory") return (b.peakVramMb ?? 0) - (a.peakVramMb ?? 0);
-      return 0;
-    });
-
-    return result;
-  }, [pageState.events, typeFilter, statusFilter, dateRange, search, sortOption]);
+  const selectedEvent = detailState.event ?? selectedListEvent;
 
   const groupedEvents = useMemo(() => {
     const groups = new Map<string, HistoryEvent[]>();
-    for (const evt of filteredEvents) {
+    for (const evt of pageState.events) {
       const label = getDateGroupLabel(evt.createdAt);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label)!.push(evt);
@@ -218,24 +281,23 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
       const bTop = groups.get(b)![0].createdAt;
       return new Date(bTop).getTime() - new Date(aTop).getTime();
     });
-  }, [filteredEvents]);
+  }, [pageState.events]);
 
   const hasActiveFilters =
     typeFilter !== "all" || statusFilter !== "all" || dateRange !== "all" || search.trim() !== "";
-
-  function handleRetry() {
-    setPageState({ loading: true, events: [], error: null });
-    setTimeout(() => {
-      setPageState({ loading: false, events: MOCK_HISTORY, error: null });
-    }, 520);
-  }
+  const panelOpen = selectedEvent !== null;
 
   function handleSelectEvent(id: string) {
     setSelectedEventId((prev) => (prev === id ? null : id));
-    setShowDevDetails(false);
   }
 
-  const panelOpen = selectedEvent !== null;
+  function clearFilters() {
+    setSearch("");
+    setDebouncedSearch("");
+    setTypeFilter("all");
+    setStatusFilter("all");
+    setDateRange("all");
+  }
 
   return (
     <AppLayout activeRoute="history" status={appStatus} onNavigate={onNavigate}>
@@ -243,7 +305,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
         <div>
           <p className="eyebrow">Activity log</p>
           <h1 id="history-title">History</h1>
-          <p>Review your workflow runs, installs, and changes.</p>
+          <p>Review your workflow runs, imports, and changes.</p>
         </div>
       </section>
 
@@ -252,8 +314,10 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
           [
             { id: "all", label: "All" },
             { id: "run", label: "Runs" },
-            { id: "workflow_installed", label: "Installs" },
+            { id: "run_blocked", label: "Blocked" },
+            { id: "workflow_imported", label: "Imports" },
             { id: "workflow_removed", label: "Removals" },
+            { id: "import_failed", label: "Failed imports" },
           ] as Array<{ id: EventTypeFilter; label: string }>
         ).map(({ id, label }) => (
           <button
@@ -262,10 +326,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
             aria-selected={typeFilter === id}
             className={`history-type-tab${typeFilter === id ? " history-type-tab--active" : ""}`}
             type="button"
-            onClick={() => {
-              setTypeFilter(id);
-              setSelectedEventId(null);
-            }}
+            onClick={() => setTypeFilter(id)}
           >
             {label}
           </button>
@@ -295,6 +356,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
             <option value="canceled">Canceled</option>
+            <option value="blocked">Blocked</option>
             <option value="installed">Installed</option>
             <option value="removed">Removed</option>
           </select>
@@ -327,8 +389,6 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
           >
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
-            <option value="longest">Longest duration</option>
-            <option value="most_memory">Highest memory</option>
           </select>
           <ChevronDown size={13} aria-hidden="true" />
         </div>
@@ -337,28 +397,19 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
       {pageState.loading ? (
         <HistoryLoading />
       ) : pageState.error ? (
-        <HistoryError error={pageState.error} onRetry={handleRetry} />
-      ) : pageState.events.length === 0 ? (
+        <HistoryError error={pageState.error} onRetry={() => void loadHistory()} />
+      ) : pageState.events.length === 0 && !hasActiveFilters ? (
         <HistoryEmpty onNavigate={onNavigate} />
       ) : (
         <div className={`history-layout${panelOpen ? " history-layout--panel-open" : ""}`}>
           <div className="history-list-area">
-            {filteredEvents.length === 0 ? (
+            {pageState.events.length === 0 ? (
               <div className="history-no-results">
                 <Search size={36} aria-hidden="true" />
                 <h3>No events match your filters</h3>
                 <p>Try adjusting your search or filters above.</p>
                 {hasActiveFilters && (
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    onClick={() => {
-                      setSearch("");
-                      setTypeFilter("all");
-                      setStatusFilter("all");
-                      setDateRange("all");
-                    }}
-                  >
+                  <button className="ghost-button" type="button" onClick={clearFilters}>
                     Clear all filters
                   </button>
                 )}
@@ -384,6 +435,16 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
                     </div>
                   </div>
                 ))}
+                {pageState.hasMore && (
+                  <button
+                    className="secondary-button secondary-button--full"
+                    type="button"
+                    disabled={pageState.loadingMore}
+                    onClick={() => void loadHistory({ cursor: pageState.nextCursor, append: true })}
+                  >
+                    {pageState.loadingMore ? "Loading..." : "Load more"}
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -392,9 +453,9 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
             <aside className="history-detail-panel" aria-label={`Details for ${selectedEvent.title}`}>
               <EventDetailPanel
                 event={selectedEvent}
-                showDevDetails={showDevDetails}
+                loading={detailState.loading}
+                error={detailState.error}
                 onClose={() => setSelectedEventId(null)}
-                onToggleDevDetails={() => setShowDevDetails((v) => !v)}
                 onNavigate={onNavigate}
               />
             </aside>
@@ -404,8 +465,6 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     </AppLayout>
   );
 }
-
-// ── Event row ─────────────────────────────────────────────────────────────────
 
 function HistoryEventRow({
   event,
@@ -443,7 +502,7 @@ function HistoryEventRow({
         <div className="history-event-title">{event.title}</div>
         <div className="history-event-summary">
           {summaryParts.map((part, i) => (
-            <span key={i} className="history-event-summary__part">
+            <span key={part} className="history-event-summary__part">
               {i > 0 && <span className="history-event-summary__dot" aria-hidden="true" />}
               {part}
             </span>
@@ -462,10 +521,7 @@ function HistoryEventRow({
         <HistoryStatusBadge status={event.status} />
       </div>
 
-      <div
-        className="history-event-actions"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="history-event-actions" onClick={(e) => e.stopPropagation()}>
         <button
           className="icon-button"
           type="button"
@@ -482,42 +538,40 @@ function HistoryEventRow({
 
 function buildSummaryParts(event: HistoryEvent): string[] {
   const parts: string[] = [`Workflow: ${event.workflowName}`];
-  if (event.durationSeconds !== undefined) parts.push(`Duration: ${formatDuration(event.durationSeconds)}`);
-  if (event.peakRamMb !== undefined) parts.push(`RAM: ${formatMemory(event.peakRamMb)}`);
-  if (event.peakVramMb !== undefined) parts.push(`VRAM: ${formatMemory(event.peakVramMb)}`);
+  if (event.durationSeconds !== undefined && event.durationSeconds !== null) {
+    parts.push(`Duration: ${formatDuration(event.durationSeconds)}`);
+  }
+  if (event.source) parts.push(`Source: ${event.source}`);
   if (event.errorSummary) parts.push(event.errorSummary);
   return parts;
 }
-
-// ── Status badge ──────────────────────────────────────────────────────────────
 
 function HistoryStatusBadge({ status }: { status: HistoryEventStatus }) {
   return (
     <span className={`history-status history-status--${STATUS_TONES[status]}`}>
       <span className="history-status__dot" aria-hidden="true" />
-      {EVENT_STATUS_LABELS[status]}
+      {HISTORY_EVENT_STATUS_LABELS[status]}
     </span>
   );
 }
 
-// ── Detail panel ──────────────────────────────────────────────────────────────
-
 function EventDetailPanel({
   event,
-  showDevDetails,
+  loading,
+  error,
   onClose,
-  onToggleDevDetails,
   onNavigate,
 }: {
-  event: HistoryEvent;
-  showDevDetails: boolean;
+  event: HistoryEvent | HistoryEventDetail;
+  loading: boolean;
+  error: string | null;
   onClose: () => void;
-  onToggleDevDetails: () => void;
   onNavigate: (route: AppRouteId) => void;
 }) {
   const EventIcon = EVENT_ICONS[event.type];
-  const isRun = event.type === "run";
-  const isRemoval = event.type === "workflow_removed";
+  const isDetail = "usedSettings" in event;
+  const usedSettings = isDetail ? event.usedSettings : {};
+  const prompt = isDetail ? event.prompt : null;
 
   return (
     <>
@@ -531,7 +585,7 @@ function EventDetailPanel({
           </div>
           <div className="detail-panel__title-text">
             <h2 className="detail-panel__title">{event.title}</h2>
-            <span className="detail-panel__type">{EVENT_TYPE_LABELS[event.type]}</span>
+            <span className="detail-panel__type">{HISTORY_EVENT_TYPE_LABELS[event.type]}</span>
           </div>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="Close details panel">
@@ -551,10 +605,24 @@ function EventDetailPanel({
         <HistoryStatusBadge status={event.status} />
       </div>
 
-      {event.prompt && (
+      {loading && (
+        <div className="detail-panel__section">
+          <div className="detail-panel__section-label">Details</div>
+          <p className="history-detail-prompt">Loading details...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="detail-panel__section">
+          <div className="detail-panel__section-label">Details unavailable</div>
+          <p className="history-detail-error">{error}</p>
+        </div>
+      )}
+
+      {prompt && (
         <div className="detail-panel__section">
           <div className="detail-panel__section-label">Prompt</div>
-          <p className="history-detail-prompt">{event.prompt}</p>
+          <p className="history-detail-prompt">{prompt}</p>
         </div>
       )}
 
@@ -576,22 +644,10 @@ function EventDetailPanel({
               <dd>{formatDateTime(event.completedAt)}</dd>
             </div>
           )}
-          {event.durationSeconds !== undefined && (
+          {event.durationSeconds !== undefined && event.durationSeconds !== null && (
             <div>
               <dt>Duration</dt>
               <dd>{formatDuration(event.durationSeconds)}</dd>
-            </div>
-          )}
-          {event.peakRamMb !== undefined && (
-            <div>
-              <dt>Peak RAM</dt>
-              <dd>{formatMemory(event.peakRamMb)}</dd>
-            </div>
-          )}
-          {event.peakVramMb !== undefined && (
-            <div>
-              <dt>Peak VRAM</dt>
-              <dd>{formatMemory(event.peakVramMb)}</dd>
             </div>
           )}
           {event.source && (
@@ -609,11 +665,11 @@ function EventDetailPanel({
         </dl>
       </div>
 
-      {event.usedSettings && Object.keys(event.usedSettings).length > 0 && (
+      {Object.keys(usedSettings).length > 0 && (
         <div className="detail-panel__section">
           <div className="detail-panel__section-label">Settings used</div>
           <dl className="history-settings-list">
-            {Object.entries(event.usedSettings).map(([key, val]) => (
+            {Object.entries(usedSettings).map(([key, val]) => (
               <div key={key} className="history-setting-row">
                 <dt>{key}</dt>
                 <dd>{String(val)}</dd>
@@ -625,7 +681,7 @@ function EventDetailPanel({
 
       {event.errorSummary && (
         <div className="detail-panel__section">
-          <div className="detail-panel__section-label">What went wrong</div>
+          <div className="detail-panel__section-label">What happened</div>
           <p className="history-detail-error">{event.errorSummary}</p>
         </div>
       )}
@@ -633,69 +689,27 @@ function EventDetailPanel({
       <div className="detail-panel__section">
         <div className="detail-panel__section-label">Actions</div>
         <div className="detail-panel__actions">
-          {isRun && event.outputRef && (
-            <button className="secondary-button secondary-button--full" type="button">
+          {event.outputUrl && (
+            <a className="secondary-button secondary-button--full" href={event.outputUrl} target="_blank" rel="noreferrer">
               <ExternalLink size={14} aria-hidden="true" />
               Open result
-            </button>
+            </a>
           )}
-          {!isRemoval && (
+          {event.canOpenWorkflow && (
             <button
               className="secondary-button secondary-button--full"
               type="button"
-              onClick={() => onNavigate("home")}
+              onClick={() => onNavigate("workflows")}
             >
               <Package size={14} aria-hidden="true" />
               Open workflow
             </button>
           )}
-          {isRun && event.usedSettings && (
-            <button className="secondary-button secondary-button--full" type="button">
-              <RotateCcw size={14} aria-hidden="true" />
-              Reuse settings
-            </button>
-          )}
-          {isRemoval && (
-            <button className="secondary-button secondary-button--full" type="button">
-              <Download size={14} aria-hidden="true" />
-              Reinstall
-            </button>
-          )}
         </div>
       </div>
-
-      {event.developerDetails && (
-        <div className="detail-developer">
-          <button
-            className="detail-developer__toggle"
-            type="button"
-            onClick={onToggleDevDetails}
-            aria-expanded={showDevDetails}
-          >
-            {showDevDetails ? (
-              <ChevronDown size={14} aria-hidden="true" />
-            ) : (
-              <ChevronRight size={14} aria-hidden="true" />
-            )}
-            Developer details
-          </button>
-          {showDevDetails && (
-            <dl className="detail-list detail-list--compact detail-developer__content">
-              {Object.entries(event.developerDetails).map(([key, val]) => (
-                <div key={key}>
-                  <dt>{key}</dt>
-                  <dd className="detail-dev-value">{val}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </div>
-      )}
     </>
   );
 }
-
-// ── Loading state ─────────────────────────────────────────────────────────────
 
 function HistoryLoading() {
   return (
@@ -707,8 +721,6 @@ function HistoryLoading() {
   );
 }
 
-// ── Empty state ───────────────────────────────────────────────────────────────
-
 function HistoryEmpty({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
   return (
     <div className="history-empty">
@@ -716,15 +728,13 @@ function HistoryEmpty({ onNavigate }: { onNavigate: (route: AppRouteId) => void 
         <Clock size={36} />
       </div>
       <h2>No history yet</h2>
-      <p>Run a workflow or install one to start building your history.</p>
-      <button className="primary-button" type="button" onClick={() => onNavigate("home")}>
+      <p>Run or import a workflow to start building your history.</p>
+      <button className="primary-button" type="button" onClick={() => onNavigate("workflows")}>
         Open Workflows
       </button>
     </div>
   );
 }
-
-// ── Error state ───────────────────────────────────────────────────────────────
 
 function HistoryError({ error, onRetry }: { error: string; onRetry: () => void }) {
   const [showDetail, setShowDetail] = useState(false);

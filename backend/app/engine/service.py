@@ -30,6 +30,7 @@ from app.gallery import (
     GalleryCaptureService,
     RunSubmissionSnapshot,
 )
+from app.history import HistoryService
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import user_facing_install_message
 from app.trust import capsule_source_policy
@@ -129,6 +130,7 @@ class EngineService:
         run_job_service: RunJobService | None = None,
         run_orchestrator: RunOrchestrator | None = None,
         run_result_service: RunResultService | None = None,
+        history_service: HistoryService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -155,6 +157,7 @@ class EngineService:
         )
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
+        self.history_service = history_service
         self.model_ownership_store = None
         self.workflow_library_service: WorkflowLibraryService = workflow_library_service or WorkflowLibraryService(
             workflow_loader=self.workflow_loader,
@@ -162,6 +165,7 @@ class EngineService:
             log_store=self.log_store,
             workflow_library_store=self.workflow_library_store,
             imported_package_store=self.imported_package_store,
+            history_service=self.history_service,
         )
         if self.imported_package_store is not None:
             self.workflow_import_orchestrator: WorkflowImportOrchestrator | None = (
@@ -172,6 +176,7 @@ class EngineService:
                     model_availability_service=self.model_availability_service,
                     log_store=self.log_store,
                     model_ownership_store=self.model_ownership_store,
+                    history_service=self.history_service,
                 )
             )
         else:
@@ -223,6 +228,7 @@ class EngineService:
             maybe_retry_after_memory_cleanup=self.memory_service.maybe_retry_after_memory_cleanup,
             gallery_capture_service=self.gallery_capture_service,
             workflow_library_store=self.workflow_library_store,
+            history_service=self.history_service,
         )
         self.run_orchestrator: RunOrchestrator = run_orchestrator or RunOrchestrator(
             workflow_loader=self.workflow_loader,
@@ -243,6 +249,7 @@ class EngineService:
             memory_status_payload=self.memory_service.memory_status_payload,
             record_memory_metric=self.memory_service.record_metric,
             start_memory_sampling=self.memory_service.start_job_sampling,
+            history_service=self.history_service,
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow

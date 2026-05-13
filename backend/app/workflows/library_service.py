@@ -6,6 +6,7 @@ from typing import Any
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
 from app.engine.models import RequiredModelSummary
+from app.history import HistoryService
 from app.trust import workflow_source_policy, workflow_trust_payload
 from app.workflows.exporter import stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
@@ -26,12 +27,14 @@ class WorkflowLibraryService:
         log_store: DiagnosticsSink,
         workflow_library_store: WorkflowLibraryStore | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
+        history_service: HistoryService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.model_availability_service = model_availability_service
         self.log_store = log_store
         self.workflow_library_store = workflow_library_store
         self.imported_package_store = imported_package_store
+        self.history_service = history_service
 
     def list_workflows(self) -> list[dict[str, object]]:
         return [
@@ -146,9 +149,12 @@ class WorkflowLibraryService:
         package_dir = self._mutable_package_dir(package)
         if package_dir is None or not package_dir.exists() or not self._can_remove_workflow(package):
             raise ValueError("Native Noofy workflows cannot be removed.")
+        workflow_snapshot = self.workflow_summary(package)
         shutil.rmtree(package_dir)
         if self.workflow_library_store is not None:
             self.workflow_library_store.remove_workflow(workflow_id)
+        if self.history_service is not None:
+            self.history_service.record_workflow_removed(workflow_snapshot)
         self.log_store.add(
             "info",
             "Workflow removed from library",

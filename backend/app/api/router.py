@@ -7,6 +7,7 @@ from app.api.routes import (
     comfyui,
     diagnostics,
     gallery,
+    history,
     health,
     models,
     runners,
@@ -21,6 +22,7 @@ router = APIRouter()
 router.include_router(health.router)
 router.include_router(diagnostics.router)
 router.include_router(gallery.router)
+router.include_router(history.router)
 router.include_router(settings.router)
 router.include_router(runtime.router)
 router.include_router(comfyui.router)

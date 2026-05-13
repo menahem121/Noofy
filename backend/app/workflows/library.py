@@ -112,6 +112,18 @@ class WorkflowLibraryStore:
             run_count=len(records),
         )
 
+    def list_run_history_records(self) -> list[WorkflowRunHistoryRecord]:
+        records: list[WorkflowRunHistoryRecord] = []
+        if not self.run_history_dir.exists():
+            return records
+        for path in sorted(self.run_history_dir.glob("*.json")):
+            try:
+                history = _WorkflowRunHistoryFile.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+            records.extend(history.records)
+        return sorted(records, key=lambda record: record.finished_at)
+
     def record_run_result(
         self,
         *,

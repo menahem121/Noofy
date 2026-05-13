@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from app.composition import ApiServices
 from app.engine.service import EngineService
 from app.gallery import GalleryStore
+from app.history import HistoryService
 from app.models.downloads import ModelDownloadJobService
 from app.models.inventory import ModelInventoryService
 from app.models.tags import ModelTagStore
@@ -198,3 +199,14 @@ def get_run_result_service(
 
 
 RunResultServiceDep = Annotated[RunResultService, Depends(get_run_result_service)]
+
+
+def get_history_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> HistoryService:
+    if services.history_service is None:
+        raise RuntimeError("HistoryService is not configured.")
+    return services.history_service
+
+
+HistoryServiceDep = Annotated[HistoryService, Depends(get_history_service)]

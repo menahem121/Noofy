@@ -12,6 +12,7 @@ from app.engine.models import (
     ImportModelDownloadProgressItem,
     StagedWorkflowImportResponse,
 )
+from app.history import HistoryService
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.model_availability import ModelAvailabilityService
@@ -77,12 +78,14 @@ class WorkflowImportOrchestrator:
         model_availability_service: ModelAvailabilityService,
         log_store: DiagnosticsSink,
         model_ownership_store: object | None = None,
+        history_service: HistoryService | None = None,
     ) -> None:
         self.imported_package_store = imported_package_store
         self.workflow_library_service = workflow_library_service
         self.model_availability_service = model_availability_service
         self.log_store = log_store
         self.model_ownership_store = model_ownership_store
+        self.history_service = history_service
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
 
@@ -93,14 +96,19 @@ class WorkflowImportOrchestrator:
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
     ) -> dict[str, object]:
-        package = self.imported_package_store.import_archive(
-            data,
-            original_filename=original_filename,
-            allow_unverified_community_preparation=allow_unverified_community_preparation,
-        )
+        try:
+            package = self.imported_package_store.import_archive(
+                data,
+                original_filename=original_filename,
+                allow_unverified_community_preparation=allow_unverified_community_preparation,
+            )
+        except Exception as exc:
+            if self.history_service is not None:
+                self.history_service.record_import_failed(filename=original_filename, error=str(exc))
+            raise
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
-        return {
+        response = {
             "workflow_id": package.metadata.id,
             "status": status,
             "user_facing_message": message,
@@ -109,6 +117,9 @@ class WorkflowImportOrchestrator:
             "custom_node_count": len(package.custom_nodes),
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
         }
+        if self.history_service is not None:
+            self.history_service.record_workflow_imported(response["workflow"])
+        return response
 
     def preview_workflow_import(
         self,

@@ -9,6 +9,7 @@ from app.engine.adapter import EngineAdapter
 from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import EngineJob, WorkflowValidationResult
 from app.gallery import OutputPreference, RunSubmissionSnapshot, build_run_submission_snapshot
+from app.history import HistoryService, workflow_display_name
 from app.runtime.memory.memory_governor import (
     MachineMemoryObserver,
     MachineMemorySnapshot,
@@ -58,6 +59,7 @@ class RunOrchestrator:
         memory_status_payload: MemoryStatusPayload,
         record_memory_metric: RecordMemoryMetric,
         start_memory_sampling: StartMemorySampling,
+        history_service: HistoryService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -77,6 +79,7 @@ class RunOrchestrator:
         self.memory_status_payload = memory_status_payload
         self.record_memory_metric = record_memory_metric
         self.start_memory_sampling = start_memory_sampling
+        self.history_service = history_service
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -138,6 +141,7 @@ class RunOrchestrator:
         )
         unavailable = self.unavailable_package_reason(package)
         if unavailable is not None:
+            self._record_run_blocked(package, unavailable)
             self.log_store.add(
                 "warning",
                 "Workflow run blocked because no preparable capsule is available",
@@ -155,6 +159,7 @@ class RunOrchestrator:
 
         validation = await self.validate_package(package, adapter)
         if not validation.valid:
+            self._record_run_blocked(package, "; ".join(validation.errors) or "Workflow validation failed")
             self.log_store.add(
                 "warning",
                 "Workflow run blocked by validation failure",
@@ -268,6 +273,7 @@ class RunOrchestrator:
             )
         if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
             self.record_memory_metric("workflow_run_blocked_by_memory")
+            self._record_run_blocked_by_workflow_id(workflow_id, memory_decision.user_message)
             self.log_store.add(
                 "warning",
                 "Workflow run blocked by memory policy",
@@ -291,6 +297,29 @@ class RunOrchestrator:
         if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
             return await self.evict_idle_runners(memory_decision)
         return None
+
+    def _record_run_blocked(self, package: WorkflowPackage, reason: str) -> None:
+        if self.history_service is None:
+            return
+        self.history_service.record_run_blocked(
+            workflow_id=package.metadata.id,
+            workflow_name=workflow_display_name(package),
+            reason=reason,
+        )
+
+    def _record_run_blocked_by_workflow_id(self, workflow_id: str, reason: str | None) -> None:
+        if self.history_service is None:
+            return
+        try:
+            package = self.workflow_loader.get_package(workflow_id)
+            workflow_name = workflow_display_name(package)
+        except Exception:
+            workflow_name = workflow_id
+        self.history_service.record_run_blocked(
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            reason=reason or "Workflow run blocked",
+        )
 
     async def _submit_run(
         self,

@@ -12,6 +12,7 @@ from app.engine.service import (
     _workflow_runner_launch_spec,
     _workflow_source_files_dir,
 )
+from app.history import ActivityLogStore, HistoryService
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.comfyui.comfyui_updates import (
@@ -411,6 +412,12 @@ def create_default_engine_service() -> EngineService:
     )
     user_state_service = UserStateService(paths.user_state_dir)
     workflow_library_store = WorkflowLibraryStore(paths.workflow_store_dir / "library")
+    history_service = HistoryService(
+        store=ActivityLogStore(paths.data_dir / "history" / "activity.db", log_store=log_store),
+        workflow_library_store=workflow_library_store,
+        workflow_loader=loader,
+        log_store=log_store,
+    )
     service = EngineService(
         loader,
         validator,
@@ -442,5 +449,6 @@ def create_default_engine_service() -> EngineService:
         ),
         model_roots_ref=model_roots,
         workflow_library_store=workflow_library_store,
+        history_service=history_service,
     )
     return service
