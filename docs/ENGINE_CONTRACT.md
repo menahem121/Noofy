@@ -35,7 +35,7 @@ For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI si
 
 ComfyUI sidecar lifecycle, launch settings, bootstrap, update, rebuild, and repair operations are runtime management concerns owned by `ComfyUISidecarService`, not workflow execution operations on the engine contract.
 
-Workflow image uploads and generated output reads are adapter operations. The route layer and `EngineService` select the workflow/job-bound runner first, then dispatch through that runner's adapter. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
+Workflow image uploads and generated output reads are adapter operations. The route layer and run/result services select the workflow/job-bound runner first, then dispatch through that runner's adapter. `EngineService` may still delegate these operations during migration, but it is not the long-term owner. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
 
 The Models page is an app-management surface. The frontend calls Noofy backend
 model endpoints only; it must not call ComfyUI `/models`, Hugging Face, or

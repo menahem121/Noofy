@@ -55,22 +55,22 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Workflow import helpers | [archive_validation.py](../backend/app/workflows/archive_validation.py), [import_normalization.py](../backend/app/workflows/import_normalization.py), [package_persistence.py](../backend/app/workflows/package_persistence.py), [import_runtime_profile.py](../backend/app/workflows/import_runtime_profile.py), [import_policy.py](../backend/app/workflows/import_policy.py), [import_capsule_lock.py](../backend/app/workflows/import_capsule_lock.py), [store_paths.py](../backend/app/workflows/store_paths.py) |
 | Capsule lock + install-state schemas | [backend/app/workflows/capsule.py](../backend/app/workflows/capsule.py), [backend/app/runtime/install_state.py](../backend/app/runtime/install_state.py) |
 | Layered fingerprints (dependency-env, runner, capsule) | [backend/app/runtime/fingerprints.py](../backend/app/runtime/fingerprints.py) |
-| Runtime profile catalog | [backend/app/runtime/profiles.py](../backend/app/runtime/profiles.py), [backend/app/runtime/profile_catalog.json](../backend/app/runtime/profile_catalog.json) |
+| Runtime profile catalog | [backend/app/runtime/profiles/profiles.py](../backend/app/runtime/profiles/profiles.py), [backend/app/runtime/profiles/profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) |
 | Pinned core-node manifest | [backend/app/runtime/core_node_manifest.json](../backend/app/runtime/core_node_manifest.json) |
-| Dependency lock + `uv` resolver, wheel cache | [backend/app/runtime/dependency_lock.py](../backend/app/runtime/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependency_env.py) |
-| Custom-node node-registry / non-bundled source resolution | [backend/app/runtime/node_registry.py](../backend/app/runtime/node_registry.py), [backend/app/runtime/custom_nodes.py](../backend/app/runtime/custom_nodes.py) |
-| Workspace materialization (custom nodes, model view) | [backend/app/runtime/workspace_preparer.py](../backend/app/runtime/workspace_preparer.py), [backend/app/runtime/workspace_store.py](../backend/app/runtime/workspace_store.py) |
-| Shared model store + runner-visible model views | [backend/app/runtime/model_store.py](../backend/app/runtime/model_store.py) |
+| Dependency lock + `uv` resolver, wheel cache | [backend/app/runtime/dependencies/dependency_lock.py](../backend/app/runtime/dependencies/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependencies/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependencies/dependency_env.py) |
+| Custom-node node-registry / non-bundled source resolution | [backend/app/runtime/node_registry.py](../backend/app/runtime/node_registry.py), [backend/app/runtime/dependencies/custom_nodes.py](../backend/app/runtime/dependencies/custom_nodes.py) |
+| Workspace materialization (custom nodes, model view) | [backend/app/runtime/storage/workspace_preparer.py](../backend/app/runtime/storage/workspace_preparer.py), [backend/app/runtime/storage/workspace_store.py](../backend/app/runtime/storage/workspace_store.py) |
+| Shared model store + runner-visible model views | [backend/app/runtime/models/model_store.py](../backend/app/runtime/models/model_store.py) |
 | Transactional install + promotion + quarantine + startup sweep | [backend/app/runtime/capsule_installer.py](../backend/app/runtime/capsule_installer.py), [install_transactions.py](../backend/app/runtime/install_transactions.py) |
-| Runner process lifecycle, isolation, smoke tests | [backend/app/runtime/runner_process.py](../backend/app/runtime/runner_process.py), [isolation.py](../backend/app/runtime/isolation.py), [smoke_test.py](../backend/app/runtime/smoke_test.py) |
-| Runner selection, leases, idle-warm, switching | [backend/app/runtime/supervisor.py](../backend/app/runtime/supervisor.py), [runner_coordinator.py](../backend/app/runtime/runner_coordinator.py) |
-| Memory Governor (estimates, co-residence, eviction, retry) | [backend/app/runtime/memory_governor.py](../backend/app/runtime/memory_governor.py); strategy in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md) |
-| Reference index + GC + retention windows | [backend/app/runtime/storage_gc.py](../backend/app/runtime/storage_gc.py), [model_gc.py](../backend/app/runtime/model_gc.py) |
+| Runner process lifecycle, isolation, smoke tests | [backend/app/runtime/runners/runner_process.py](../backend/app/runtime/runners/runner_process.py), [isolation.py](../backend/app/runtime/dependencies/isolation.py), [smoke_test.py](../backend/app/runtime/smoke_test.py) |
+| Runner selection, leases, idle-warm, switching | [backend/app/runtime/runners/supervisor.py](../backend/app/runtime/runners/supervisor.py), [runner_coordinator.py](../backend/app/runtime/runners/runner_coordinator.py) |
+| Memory Governor (estimates, co-residence, eviction, retry) | [backend/app/runtime/memory/memory_governor.py](../backend/app/runtime/memory/memory_governor.py), [backend/app/runtime/memory/service.py](../backend/app/runtime/memory/service.py); strategy in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md) |
+| Reference index + GC + retention windows | [backend/app/runtime/storage/storage_gc.py](../backend/app/runtime/storage/storage_gc.py), [model_gc.py](../backend/app/runtime/models/model_gc.py) |
 | Engine adapter + job registry | [backend/app/engine/](../backend/app/engine/) |
 
 Manual validation and hardware smoke harnesses are tools, not product runtime modules. They live under [backend/tools/validation/](../backend/tools/validation/) and are invoked through Makefile validation targets.
 
-`EngineService` requests a runner from `RunnerSupervisor` for every workflow operation. There is no implicit global adapter endpoint; jobs are tracked through `job_id -> runner_id` in the engine job registry.
+Run and workflow services request a runner from `RunnerSupervisor` for every workflow operation. There is no implicit global adapter endpoint; jobs are tracked through `job_id -> runner_id` in the engine job registry. `EngineService` remains only as a temporary migration facade where internal callers have not moved to the owning domain service yet.
 
 ## Workflow Capsules
 
@@ -97,7 +97,7 @@ A profile pins, at minimum:
 - Allowlisted launch-config surface (preview method, VRAM mode, attention backend, precision, enabled-nodes set, extra-paths mode, Noofy-controlled env vars)
 - Supported OS/architecture/backend matrix and install policy version
 
-Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation directly from `third_party/comfyui/` is rejected for product use and only allowed as a development/package input. Definitions live in [profile_catalog.json](../backend/app/runtime/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles.py).
+Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation directly from `third_party/comfyui/` is rejected for product use and only allowed as a development/package input. Definitions live in [profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles/profiles.py).
 
 ## Layered Fingerprints
 

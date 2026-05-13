@@ -46,7 +46,7 @@ The validation command:
   resulting allocator telemetry
 - prepares an isolated runner workspace through `CapsuleInstaller`
 - starts the managed runner through `RunnerProcessSupervisor`
-- runs a real model-free ComfyUI workflow through `EngineService`
+- runs a real model-free ComfyUI workflow through the backend run path
 - records Memory Governor diagnostics, local learning, process-tree RSS, NVML
   per-process VRAM attribution, and sample windows
 

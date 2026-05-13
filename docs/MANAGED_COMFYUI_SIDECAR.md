@@ -13,7 +13,7 @@ In the shipped desktop app:
 - The user launches only this desktop app.
 - The desktop shell starts the app-owned FastAPI backend.
 - The backend or desktop shell starts ComfyUI as a hidden local subprocess.
-- ComfyUI listens on localhost as an internal engine service.
+- ComfyUI listens on localhost as an internal managed sidecar service.
 - The frontend talks only to FastAPI.
 - FastAPI talks to ComfyUI through `ComfyUIEngineAdapter`.
 - The app owns ComfyUI lifecycle: start, stop, health, port selection, logs, crash recovery, and user-facing errors.

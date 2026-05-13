@@ -18,17 +18,17 @@ the current Noofy architecture and covered by the repo test suite.
 
 ## Implementation Map
 
-`backend/app/runtime/comfyui_updates.py` owns the update, rebuild, repair,
+`backend/app/runtime/comfyui/comfyui_updates.py` owns the update, rebuild, repair,
 activation, fallback, and status orchestration. Narrow helper modules own the
 implementation details that do not need to live in the orchestration service:
 
-- `comfyui_update_releases.py`: upstream release DTOs, GitHub release fetching,
+- `backend/app/runtime/comfyui/comfyui_update_releases.py`: upstream release DTOs, GitHub release fetching,
   archive download IO, and stable release sorting.
-- `comfyui_update_archive.py`: release archive extraction, archive-member path
+- `backend/app/runtime/comfyui/comfyui_update_archive.py`: release archive extraction, archive-member path
   safety, and release tag normalization.
-- `comfyui_update_records.py`: active/previous-active metadata, local validation
+- `backend/app/runtime/comfyui/comfyui_update_records.py`: active/previous-active metadata, local validation
   records, and JSON persistence.
-- `comfyui_update_smoke.py`: required route checks, prompt/WebSocket smoke, and
+- `backend/app/runtime/comfyui/comfyui_update_smoke.py`: required route checks, prompt/WebSocket smoke, and
   runtime-directory contamination checks.
 
 ## Storage Contract

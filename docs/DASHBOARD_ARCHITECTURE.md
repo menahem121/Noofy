@@ -127,7 +127,7 @@ Important dashboard APIs:
 - Backend package/dashboard models: [backend/app/workflows/package.py](../backend/app/workflows/package.py)
 - Import/authoring/export: [backend/app/workflows/importer.py](../backend/app/workflows/importer.py), [backend/app/workflows/authoring.py](../backend/app/workflows/authoring.py), [backend/app/workflows/exporter.py](../backend/app/workflows/exporter.py)
 - User state and assets: [backend/app/workflows/user_state.py](../backend/app/workflows/user_state.py), [backend/app/workflows/assets.py](../backend/app/workflows/assets.py)
-- API routes: [backend/app/api/routes.py](../backend/app/api/routes.py)
+- API routes: [backend/app/api/routes/](../backend/app/api/routes/)
 - Canvas run view: [frontend/src/features/workflows/CanvasDashboardView.tsx](../frontend/src/features/workflows/CanvasDashboardView.tsx)
 - Shared canvas presentation: [frontend/src/features/dashboard-canvas/DashboardCanvasPresentation.tsx](../frontend/src/features/dashboard-canvas/DashboardCanvasPresentation.tsx)
 - Builder: [frontend/src/features/dashboard-builder/](../frontend/src/features/dashboard-builder/)

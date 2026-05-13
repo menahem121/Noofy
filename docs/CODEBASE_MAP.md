@@ -26,24 +26,23 @@ Entry: [backend/app/AGENTS.md](../backend/app/AGENTS.md)
 
 | Package | Owns | Read-first |
 |---------|------|------------|
-| `api/` | HTTP routing, deps, errors, request/response translation | `api/routes.py` |
-| `engine/` | `EngineAdapter` contract, `ComfyUIEngineAdapter` | `engine/adapter.py`, `engine/service.py` |
+| `api/` | HTTP routing, deps, errors, request/response translation | `api/router.py`, `api/routes/` |
+| `engine/` | `EngineAdapter` contract, `ComfyUIEngineAdapter`; temporary `EngineService` facade for remaining migration seams | `engine/adapter.py`, `engine/comfyui_adapter.py`, `engine/service.py` |
+| `runs/` | Workflow run orchestration, job status, cancellation, outputs, run logs/results | `runs/orchestrator.py`, `runs/job_service.py`, `runs/result_service.py` |
 | `runtime/` | ComfyUI sidecar, runners, deps, memory, storage, hardware, profiles | `runtime/AGENTS.md` |
 | `workflows/` | Workflow packages, import, authoring, library, user state, assets, exporting | `workflows/AGENTS.md` |
-| `models/` (root files now) | App model inventory, downloads, imports, tags, ownership | `model_inventory.py`, `model_download_jobs.py` |
-| `settings/` | User settings and API keys | `settings/api_keys.py`, `settings/model_folders.py` |
+| `models/` | App model inventory, downloads, imports, tags, ownership, model folders | `models/AGENTS.md`, `models/inventory.py`, `models/downloads.py`, `models/folders.py` |
+| `settings/` | User settings and API keys | `settings/api_keys.py` |
 | `gallery.py` | Gallery persistence | `gallery.py` |
 | `core/` | Config loading, auth middleware, logging, path resolution | `core/config.py`, `core/paths.py` |
 | `trust.py` / `source_policy.py` | Trust roots, source policy | `trust.py` |
 | `composition.py` | App-wide wiring/DI | `composition.py` |
 
-**Migration target** (see [NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md](NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md)):
+**Architecture status** (see [NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md](NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md)):
 
-- `engine/diagnostics.py` → future `diagnostics/` package (Phase 2)
-- Root `model_*.py` files → future `models/` package (Phase 5)
-- `api/routes.py` → split into `api/routes/` by domain (Phase 1)
-- `engine/service.py` → split into domain services (Phase 3)
-- `runtime/` flat files → subdomain packages (Phase 4)
+- Diagnostics, API routes, model services, run services, and most runtime domains now live in their owning packages.
+- `engine/service.py` remains only as a temporary migration facade for callers that have not moved directly to domain services.
+- Do not add new compatibility helpers for unreleased internal paths; update imports to the owning package instead.
 
 ---
 
@@ -69,7 +68,7 @@ Entry: [frontend/src/AGENTS.md](../frontend/src/AGENTS.md)
 
 **Core rule**: Frontend must call `/api/*` on the Noofy backend only. Never call ComfyUI endpoints directly.
 
-**Migration target** (Phase 6): Split `lib/api/noofyApi.ts` into `api/` domain modules.
+**Architecture status**: `lib/api/noofyApi.ts` is a temporary barrel over domain API modules. New frontend imports should prefer the owning domain module when practical.
 
 ---
 

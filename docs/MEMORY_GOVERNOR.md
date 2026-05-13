@@ -47,10 +47,11 @@ and workflow decisions.
 
 ## Current Behavior
 
-The Memory Governor is implemented in `backend/app/runtime/memory_governor.py`
-and integrated by `backend/app/engine/service.py`.
+The Memory Governor is implemented in
+`backend/app/runtime/memory/memory_governor.py` and integrated by
+`backend/app/runtime/memory/service.py` and `backend/app/runs/orchestrator.py`.
 
-Before submitting a workflow run through the engine service, Noofy:
+Before submitting a workflow run through the backend run path, Noofy:
 
 1. Builds a workflow memory estimate from local evidence, creator observations,
    declared requirements, installed model size, or heuristics.
@@ -231,12 +232,14 @@ real pressure/budget/backend signals and local empirical learning.
 This document intentionally stays at the architecture and operating-policy
 level. The source of truth for exact behavior is:
 
-- `backend/app/runtime/memory_governor.py`
-- `backend/app/runtime/system_memory.py`
+- `backend/app/runtime/memory/memory_governor.py`
+- `backend/app/runtime/memory/system_memory.py`
+- `backend/app/runtime/memory/service.py`
 - `backend/app/engine/memory_observation.py`
-- `backend/app/engine/service.py`
+- `backend/app/runs/orchestrator.py`
+- `backend/app/runs/result_service.py`
 - `backend/tests/test_memory_governor.py`
-- runner/engine service tests covering queueing, eviction, retry, and API shape
+- runner/run-service tests covering queueing, eviction, retry, and API shape
 
 Current status: complete enough for practical v1 workflow admission, with the
 explicit platform accuracy limits documented here.
@@ -262,7 +265,7 @@ For production-like Ubuntu CUDA hardware validation, use
 [`MEMORY_GOVERNOR_LINUX_VALIDATION.md`](MEMORY_GOVERNOR_LINUX_VALIDATION.md).
 That path prepares the managed ComfyUI runtime under app data, verifies runner
 side PyTorch CUDA telemetry, and runs a model-free managed workflow through the
-EngineService path.
+backend run path.
 
 Apple Silicon validation has been run on macOS 15.6 with an Apple M2 and 8 GB
 unified memory. That pass confirmed Darwin RAM sampling through `sysctl` /
@@ -270,7 +273,7 @@ unified memory. That pass confirmed Darwin RAM sampling through `sysctl` /
 runner-side PyTorch MPS current/driver/recommended memory telemetry when the
 APIs are available, process-tree RSS sampling during a managed runner workflow,
 local observation persistence, and model-free `EmptyImage -> SaveImage`
-execution through the EngineService path. The local validation artifact is
+execution through the backend run path. The local validation artifact is
 written under `.noofy-runtime/validation/memory-governor-mps-validation.json`.
 This validates MPS signal availability and unified-memory behavior, not peak
 behavior for large model loads.

@@ -20,7 +20,7 @@ ComfyUI-style category subfolders inside it.
   resolves there.
 - Subfolders are the standard ComfyUI categories such as `checkpoints`, `loras`,
   `vae`, `clip`, `controlnet`, `upscale_models`, etc. The full list lives in
-  [backend/app/settings/model_folders.py](../backend/app/settings/model_folders.py).
+  [backend/app/models/folders.py](../backend/app/models/folders.py).
 
 Users can also connect an existing ComfyUI `models/` folder for read/reuse only.
 Noofy treats that folder as a user-owned secondary root for availability checks.
@@ -259,7 +259,7 @@ Frontend behavior:
 ### Session TTL
 
 Pending import sessions live for **1 hour** of inactivity
-(`IMPORT_SESSION_TTL` in [backend/app/engine/service.py](../backend/app/engine/service.py)).
+(`IMPORT_SESSION_TTL` in [backend/app/workflows/import_orchestrator.py](../backend/app/workflows/import_orchestrator.py)).
 
 - Active download jobs keep their session alive across the polling window.
 - Expired sessions are removed opportunistically and return `410` from any
@@ -338,10 +338,10 @@ Cancellation rules:
 ## Code Map
 
 - Model availability/resolver/downloads: [backend/app/workflows/model_availability.py](../backend/app/workflows/model_availability.py)
-- Model folder settings: [backend/app/settings/model_folders.py](../backend/app/settings/model_folders.py)
+- Model folder settings: [backend/app/models/folders.py](../backend/app/models/folders.py)
 - API key settings: [backend/app/settings/api_keys.py](../backend/app/settings/api_keys.py)
-- Staged import / background job orchestration: [backend/app/engine/service.py](../backend/app/engine/service.py)
-- API routes: [backend/app/api/routes.py](../backend/app/api/routes.py)
+- Staged import / background job orchestration: [backend/app/workflows/import_orchestrator.py](../backend/app/workflows/import_orchestrator.py)
+- API routes: [backend/app/api/routes/](../backend/app/api/routes/)
 - Frontend API client: [frontend/src/lib/api/noofyApi.ts](../frontend/src/lib/api/noofyApi.ts)
 - Import preview modal / progress UI: [frontend/src/features/home/HomePage.tsx](../frontend/src/features/home/HomePage.tsx)
 - Settings screen (model folder + APIs cards): [frontend/src/features/settings/EngineSettingsPage.tsx](../frontend/src/features/settings/EngineSettingsPage.tsx)
