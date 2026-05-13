@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import cast
 
 from app.engine.diagnostics import DiagnosticsSink
 from app.engine.models import ModelInfo
@@ -182,8 +184,9 @@ class ModelInventoryService:
         list_available = getattr(self.engine_service, "list_available_models", None)
         if not callable(list_available):
             return
+        list_available_models = cast(Callable[[], Awaitable[list[object]]], list_available)
         try:
-            models = await list_available()
+            models = await list_available_models()
         except Exception:
             return
         for model in models:
