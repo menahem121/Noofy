@@ -1,0 +1,622 @@
+import { deleteJson, getApiBaseUrl, getApiToken, getJson, postBytes, postJson, putJson, resolveBackendUrl } from "./client";
+import type { EngineJob } from "./jobs";
+
+export interface WorkflowTrustSummary {
+  level: string;
+  label: string;
+  summary: string;
+  badge_tone: "verified" | "locked" | "community" | "unsupported" | string;
+  can_prepare_automatically: boolean;
+  requires_explicit_opt_in: boolean;
+  source_policy: string;
+  signature_status: string;
+}
+
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  icon?: string;
+  source_label?: string;
+  main_model?: {
+    name: string;
+    type?: string | null;
+    size_bytes?: number | null;
+  } | null;
+  category?: string;
+  last_opened?: string | null;
+  tags?: string[];
+  missing_model_count?: number;
+  needs_setup?: boolean;
+  can_remove?: boolean;
+  can_export_noofy?: boolean;
+  can_export_comfyui_json?: boolean;
+  publisher_id?: string;
+  package_id?: string;
+  trust_level?: string;
+  trust?: WorkflowTrustSummary;
+  status?: string;
+  status_label?: string;
+  unresolved_input_count?: number;
+  custom_node_count?: number;
+  required_model_count?: number;
+}
+
+export interface WorkflowDetailsModel {
+  name: string;
+  type?: string | null;
+  size_bytes?: number | null;
+  status: string;
+  status_label: string;
+  folder?: string;
+  source_path?: string | null;
+}
+
+export interface WorkflowRunHistorySummary {
+  last_run_status: string | null;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_duration_seconds: number | null;
+  average_duration_seconds: number | null;
+  last_error: string | null;
+  run_count: number;
+}
+
+export interface WorkflowDetails extends WorkflowSummary {
+  overview: {
+    description: string;
+    author: string;
+    website: string;
+    source: string;
+    version: string;
+  };
+  models_used: WorkflowDetailsModel[];
+  run_history: WorkflowRunHistorySummary;
+  organization: {
+    category: string;
+    tags: string[];
+    icon: string;
+  };
+  advanced: {
+    package_id: string;
+    engine: string;
+    trust_level: string;
+    trust_label: string;
+    can_export_noofy: boolean;
+    can_export_comfyui_json: boolean;
+    can_remove: boolean;
+  };
+}
+
+export interface WorkflowMetadataUpdate {
+  description?: string;
+  author?: string;
+  website?: string;
+  category?: string;
+  tags?: string[];
+  icon?: string;
+}
+
+export interface WorkflowMetadataUpdateResponse {
+  workflow_id: string;
+  metadata: WorkflowMetadataUpdate;
+  workflow: WorkflowSummary;
+}
+
+export interface WorkflowStatusResponse {
+  workflow_id: string;
+  workflow: WorkflowSummary;
+  install: Record<string, unknown>;
+  required_actions: unknown[];
+  compatibility_guidance: unknown[];
+  runner: Record<string, unknown> | null;
+  runner_status: string;
+  can_prepare: boolean;
+  can_cancel_preparation: boolean;
+  can_cancel_job: boolean;
+}
+
+export interface TrustPolicyResponse {
+  schema_version: string;
+  signature_payload_schema_version: string;
+  development_hmac_allowed?: boolean;
+  trusted_key_count: number;
+  trusted_keys: Array<{
+    key_id: string;
+    algorithm: string;
+    purpose: string;
+    revoked?: boolean;
+    not_before?: string | null;
+    expires_at?: string | null;
+    policy_versions?: string[];
+  }>;
+  trust_levels: Record<string, {
+    label: string;
+    summary: string;
+    source_policy: string;
+    requires_explicit_opt_in: boolean;
+    can_prepare_automatically: boolean;
+  }>;
+  imported_trusted_claims_require_verified_evidence: boolean;
+  secrets_exposed: boolean;
+}
+
+export interface MissingModel {
+  folder: string;
+  filename: string;
+  source_url: string | null;
+  checksum: string | null;
+  model_type?: string | null;
+  verification_level?: string | null;
+  size_bytes?: number | null;
+  source_urls?: string[];
+}
+
+export interface WorkflowValidationResult {
+  workflow_id: string;
+  valid: boolean;
+  missing_models: MissingModel[];
+  errors: string[];
+}
+
+export interface OutputPreference {
+  auto_save: boolean;
+}
+
+export type OutputPreferences = Record<string, OutputPreference>;
+
+export interface WorkflowRunPayload {
+  inputs: Record<string, unknown>;
+  options?: Record<string, unknown>;
+  output_preferences_snapshot?: OutputPreferences;
+}
+
+export type WorkflowRunResponse = EngineJob | WorkflowValidationResult;
+
+export type RequiredModelStatus =
+  | "available"
+  | "possible_match"
+  | "missing"
+  | "needs_manual_download"
+  | "download_failed"
+  | "authentication_required"
+  | "rate_limited"
+  | "hash_mismatch"
+  | "not_enough_disk_space";
+
+export interface RequiredModelAvailability {
+  requirement_id: string;
+  node_id: string | null;
+  node_type: string | null;
+  input_name: string | null;
+  filename: string;
+  model_type: string | null;
+  folder: string;
+  verification_level: "sha256_size" | "filename_size" | "filename_only" | string;
+  size_bytes: number | null;
+  source_urls: string[];
+  source_availability: "known" | "resolvable" | "unknown" | string;
+  status: RequiredModelStatus;
+  status_label: string;
+  asset_ownership: string;
+  source_path: string | null;
+  matched_root: string | null;
+  matched_sha256: string | null;
+  matched_size_bytes: number | null;
+  message: string | null;
+}
+
+export interface RequiredModelSummary {
+  workflow_id: string;
+  total_count: number;
+  available_count: number;
+  possible_match_count: number;
+  missing_count: number;
+  needs_manual_download_count: number;
+  ready_to_run: boolean;
+  models: RequiredModelAvailability[];
+}
+
+export interface ModelDownloadSummary {
+  workflow_id: string;
+  status: string;
+  user_facing_message: string;
+  downloaded_count: number;
+  failed_count: number;
+  model_summary: RequiredModelSummary;
+}
+
+export interface ImportModelDownloadJobStart {
+  job_id: string;
+  import_session_id: string;
+  workflow_id: string;
+  status: string;
+  user_facing_message: string;
+}
+
+export interface ImportModelDownloadProgressItem {
+  requirement_id: string;
+  filename: string;
+  status: "queued" | "downloading" | "verifying" | "completed" | "failed" | "canceled" | string;
+  status_label: string;
+  bytes_downloaded: number | null;
+  total_bytes: number | null;
+  message: string | null;
+}
+
+export interface ImportModelDownloadJobStatus {
+  job_id: string;
+  import_session_id: string;
+  workflow_id: string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | string;
+  user_facing_message: string;
+  current_model_filename: string | null;
+  current_model_index: number | null;
+  total_models: number;
+  bytes_downloaded: number | null;
+  total_bytes: number | null;
+  percent: number | null;
+  speed_bytes_per_second: number | null;
+  models: ImportModelDownloadProgressItem[];
+  model_summary: RequiredModelSummary | null;
+}
+
+export interface WorkflowImportResponse {
+  import_session_id?: string | null;
+  workflow_id: string;
+  status: "imported" | "needs_input_setup" | "cannot_prepare_automatically" | string;
+  user_facing_message: string;
+  workflow: WorkflowSummary;
+  required_model_count: number;
+  custom_node_count: number;
+  unresolved_input_count: number;
+  model_summary?: RequiredModelSummary | null;
+}
+
+// ─── Workflow package ─────────────────────────────────────────────────────────
+
+export interface WorkflowInputDef {
+  id: string;
+  label: string;
+  control: string;
+  binding: { node_id: string; input_name: string };
+  default: unknown;
+  validation: Record<string, unknown>;
+}
+
+export interface WorkflowOutputDef {
+  id: string;
+  label: string;
+  node_id: string;
+  type: string;
+}
+
+export interface DashboardControlDef {
+  id: string;
+  type: string;
+  label: string;
+  input_id?: string;
+  output_id?: string;
+  description?: string;
+  group?: string;
+  show_download?: boolean;
+  layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
+}
+
+export interface DashboardSectionDef {
+  id: string;
+  title: string;
+  controls: DashboardControlDef[];
+}
+
+export interface DashboardSchemaDef {
+  version: string;
+  status: string;
+  sections: DashboardSectionDef[];
+}
+
+export interface WorkflowPackageResponse {
+  metadata: { id: string; name: string; version: string; description: string };
+  inputs: WorkflowInputDef[];
+  outputs: WorkflowOutputDef[];
+  dashboard: DashboardSchemaDef;
+  import_metadata?: { status: string };
+}
+
+// ─── Dashboard authoring ──────────────────────────────────────────────────────
+
+export interface BindableInputEntry {
+  input_name: string;
+  current_value: unknown;
+  kind: string;
+  suggested_widget_type: string;
+  widget_types: string[];
+  options?: string[];
+  hint?: string;
+}
+
+export interface BindableNode {
+  node_id: string;
+  node_type: string;
+  is_image_node: boolean;
+  is_lora_node: boolean;
+  inputs: BindableInputEntry[];
+}
+
+export interface BindableInputsResponse {
+  workflow_id: string;
+  enrichment: "heuristic" | "object_info";
+  nodes: BindableNode[];
+}
+
+export interface UnresolvedInput {
+  node_id: string;
+  node_type: string;
+  input_name: string;
+  current_value: unknown;
+  reason: string;
+}
+
+export interface UnresolvedInputsResponse {
+  workflow_id: string;
+  unresolved_inputs: UnresolvedInput[];
+}
+
+export interface DashboardSavePayload {
+  inputs: unknown[];
+  dashboard: unknown;
+}
+
+export interface DashboardValidationResponse {
+  workflow_id: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface DashboardSaveResponse {
+  workflow_id: string;
+  status: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+// ─── User state ───────────────────────────────────────────────────────────────
+
+export interface UserStateLayoutOverride {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface WorkflowUserState {
+  schema_version: string;
+  workflow_id: string;
+  dashboard_version: string;
+  values: Record<string, unknown>;
+  layout_overrides: Record<string, UserStateLayoutOverride>;
+  output_preferences: OutputPreferences;
+}
+
+// ─── Dashboard assets ─────────────────────────────────────────────────────────
+
+export interface DashboardAssetUploadResponse {
+  asset_id: string;
+  original_filename: string;
+}
+
+export interface DashboardAssetMetadata {
+  asset_id: string;
+  original_filename: string;
+  content_type: string;
+}
+
+// ─── Workflow functions ───────────────────────────────────────────────────────
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === "function") {
+    return file.arrayBuffer();
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) { resolve(reader.result); return; }
+      reject(new Error("Workflow file could not be read."));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Workflow file could not be read."));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+export function fetchWorkflows() {
+  return getJson<WorkflowSummary[]>("/workflows");
+}
+
+export function fetchWorkflowDetails(workflowId: string) {
+  return getJson<WorkflowDetails>(`/workflows/${encodeURIComponent(workflowId)}/details`);
+}
+
+export function fetchWorkflowPackage(workflowId: string): Promise<WorkflowPackageResponse> {
+  return getJson<WorkflowPackageResponse>(`/workflows/${encodeURIComponent(workflowId)}/package`);
+}
+
+export function fetchWorkflowStatus(workflowId: string) {
+  return getJson<WorkflowStatusResponse>(`/workflows/${encodeURIComponent(workflowId)}/status`);
+}
+
+export function fetchWorkflowModelSummary(workflowId: string) {
+  return getJson<RequiredModelSummary>(`/workflows/${encodeURIComponent(workflowId)}/model-summary`);
+}
+
+export function fetchTrustPolicy() {
+  return getJson<TrustPolicyResponse>("/trust/policy");
+}
+
+export function updateWorkflowMetadata(workflowId: string, payload: WorkflowMetadataUpdate) {
+  return putJson<WorkflowMetadataUpdateResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/metadata`,
+    payload,
+  );
+}
+
+export function removeWorkflow(workflowId: string) {
+  return deleteJson<{ workflow_id: string; removed: boolean }>(`/workflows/${encodeURIComponent(workflowId)}`);
+}
+
+export function validateWorkflow(workflowId: string) {
+  return postJson<WorkflowValidationResult>(`/workflows/${workflowId}/validate`);
+}
+
+export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {
+  return postJson<WorkflowRunResponse>(`/workflows/${workflowId}/run`, payload);
+}
+
+export async function importWorkflowPackage(file: File, allowUnverifiedCommunityPreparation = false) {
+  const data = await readFileAsArrayBuffer(file);
+  const params = [`filename=${encodeURIComponent(file.name)}`];
+  if (allowUnverifiedCommunityPreparation) params.push("allow_unverified_community_preparation=true");
+  return postBytes<WorkflowImportResponse>(`/workflows/import?${params.join("&")}`, data);
+}
+
+export async function previewWorkflowPackageImport(file: File, allowUnverifiedCommunityPreparation = false) {
+  const data = await readFileAsArrayBuffer(file);
+  const params = [`filename=${encodeURIComponent(file.name)}`];
+  if (allowUnverifiedCommunityPreparation) params.push("allow_unverified_community_preparation=true");
+  return postBytes<WorkflowImportResponse>(`/workflows/import/preview?${params.join("&")}`, data);
+}
+
+export function downloadImportMissingModels(importSessionId: string) {
+  return postJson<ImportModelDownloadJobStart>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models`,
+  );
+}
+
+export function fetchImportModelDownloadStatus(importSessionId: string, jobId: string) {
+  return getJson<ImportModelDownloadJobStatus>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function cancelImportModelDownload(importSessionId: string, jobId: string) {
+  return postJson<ImportModelDownloadJobStatus>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/download-models/${encodeURIComponent(jobId)}/cancel`,
+  );
+}
+
+export function commitWorkflowImport(importSessionId: string) {
+  return postJson<WorkflowImportResponse>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/commit`,
+  );
+}
+
+export function cancelWorkflowImport(importSessionId: string) {
+  return deleteJson<{ import_session_id: string; status: string }>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}`,
+  );
+}
+
+// ─── Dashboard authoring functions ───────────────────────────────────────────
+
+export function fetchBindableInputs(workflowId: string): Promise<BindableInputsResponse> {
+  return getJson<BindableInputsResponse>(`/workflows/${encodeURIComponent(workflowId)}/bindable-inputs`);
+}
+
+export function fetchUnresolvedInputs(workflowId: string): Promise<UnresolvedInputsResponse> {
+  return getJson<UnresolvedInputsResponse>(`/workflows/${encodeURIComponent(workflowId)}/unresolved-inputs`);
+}
+
+export function validateDashboard(
+  workflowId: string,
+  payload: DashboardSavePayload,
+): Promise<DashboardValidationResponse> {
+  return postJson<DashboardValidationResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/dashboard/validate`,
+    payload,
+  );
+}
+
+export function saveDashboard(
+  workflowId: string,
+  payload: DashboardSavePayload,
+): Promise<DashboardSaveResponse> {
+  return putJson<DashboardSaveResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/dashboard`,
+    payload,
+  );
+}
+
+export function exportWorkflowUrl(workflowId: string): string {
+  return resolveBackendUrl(`/workflows/${encodeURIComponent(workflowId)}/export`, { includeToken: true });
+}
+
+export function exportWorkflowComfyJsonUrl(workflowId: string): string {
+  return resolveBackendUrl(`/workflows/${encodeURIComponent(workflowId)}/export/comfyui-json`, { includeToken: true });
+}
+
+// ─── User state functions ─────────────────────────────────────────────────────
+
+export function fetchUserState(workflowId: string): Promise<WorkflowUserState> {
+  return getJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state`);
+}
+
+export function saveUserState(workflowId: string, state: WorkflowUserState): Promise<WorkflowUserState> {
+  return putJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state`, state);
+}
+
+export function deleteUserStateValues(workflowId: string): Promise<WorkflowUserState> {
+  return deleteJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state/values`);
+}
+
+export function deleteUserStateLayout(workflowId: string): Promise<WorkflowUserState> {
+  return deleteJson<WorkflowUserState>(`/workflows/${encodeURIComponent(workflowId)}/user-state/layout`);
+}
+
+// ─── Dashboard asset functions ────────────────────────────────────────────────
+
+export async function uploadDashboardAsset(
+  workflowId: string,
+  file: File,
+): Promise<DashboardAssetUploadResponse> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/image`,
+    { method: "POST", headers, body: formData },
+  );
+  if (!response.ok) throw new Error(`Asset upload failed: ${response.status}`);
+  return response.json() as Promise<DashboardAssetUploadResponse>;
+}
+
+export async function fetchAssetBlobUrl(assetId: string): Promise<string> {
+  const token = getApiToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${getApiBaseUrl()}/assets/${encodeURIComponent(assetId)}`, { headers });
+  if (!response.ok) throw new Error(`Asset not found: ${response.status}`);
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+export function fetchAssetMetadata(assetId: string): Promise<DashboardAssetMetadata> {
+  return getJson<DashboardAssetMetadata>(`/assets/${encodeURIComponent(assetId)}/metadata`);
+}
+
+export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/uploads/image`,
+    { method: "POST", headers, body: formData },
+  );
+  if (!response.ok) throw new Error(`Image upload failed: ${response.status}`);
+  return response.json() as Promise<{ filename: string }>;
+}

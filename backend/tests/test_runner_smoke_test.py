@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
-from app.runtime.isolation import CapsuleLock, SmokeStageResult, SmokeStageStatus
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
+from app.diagnostics import LogStore
+from app.runtime.dependencies.isolation import CapsuleLock, SmokeStageResult, SmokeStageStatus
+from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import (
     RunnerSmokeTester,
     RunnerSmokeTestError,
@@ -16,9 +16,9 @@ from app.runtime.smoke_test import (
     _execute_prompt_and_wait,
     _fetch_object_info,
 )
-from app.runtime.supervisor import RunnerKind
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.runners.supervisor import RunnerKind
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )

@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import BaseModel, Field
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 
 ApiKeyProvider = Literal["hugging_face", "civitai"]
 

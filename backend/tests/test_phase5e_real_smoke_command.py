@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.validation import phase5e_real_smoke as real_smoke
-from app.runtime.isolation import SmokeStageResult, SmokeStageStatus, SmokeTestReport
+from app.runtime.dependencies.isolation import SmokeStageResult, SmokeStageStatus, SmokeTestReport
 
 
 def _fake_comfyui_source(tmp_path: Path) -> Path:

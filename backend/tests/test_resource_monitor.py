@@ -1,8 +1,8 @@
 import subprocess
 
 from app.engine.models import ResourceMetric
-from app.runtime.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
-from app.runtime.resource_monitor import SystemResourceObserver, build_resource_snapshot
+from app.runtime.memory.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
+from app.runtime.memory.resource_monitor import SystemResourceObserver, build_resource_snapshot
 
 
 def test_linux_cpu_metric_reads_proc_stat_delta() -> None:

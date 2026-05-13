@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
-from app.runtime.dependency_lock import (
+from app.diagnostics import LogStore
+from app.runtime.dependencies.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DependencyPolicyErrorCode,
     DependencyRelationship,
@@ -14,7 +14,7 @@ from app.runtime.dependency_lock import (
     ResolverMetadata,
     with_computed_lock_hash,
 )
-from app.runtime.dependency_resolver import (
+from app.runtime.dependencies.dependency_resolver import (
     DependencyResolutionError,
     DependencyResolutionRequest,
     MaterializedWheel,
@@ -23,13 +23,13 @@ from app.runtime.dependency_resolver import (
     custom_node_dependency_source_dirs,
     parse_uv_compiled_requirements,
 )
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
-from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
-from app.runtime.isolation import CapsuleLock, InstallStatus
+from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallRequest
+from app.runtime.dependencies.isolation import CapsuleLock, InstallStatus
 from app.source_policy import SourcePolicy
 
 

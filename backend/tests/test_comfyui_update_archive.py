@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.comfyui_update_archive import extract_github_zip, safe_tag
+from app.runtime.comfyui.comfyui_update_archive import extract_github_zip, safe_tag
 
 
 def test_safe_tag_normalizes_path_unsafe_release_names() -> None:

@@ -8,7 +8,7 @@ from app.runtime.fingerprints import (
     runner_workspace_fingerprint,
     sha256_fingerprint,
 )
-from app.runtime.isolation import CustomNodeLock, ModelLock, TrustLevel, TrustMetadata
+from app.runtime.dependencies.isolation import CustomNodeLock, ModelLock, TrustLevel, TrustMetadata
 
 
 def _model(model_id: str, sha_char: str) -> ModelLock:

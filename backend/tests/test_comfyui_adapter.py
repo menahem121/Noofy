@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.models import JobProgress
 from app.workflows.loader import WorkflowPackageLoader

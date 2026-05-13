@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.service import EngineService, _smoke_execution_fixture_for_capsule
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     InstallState,
     InstallStatus,
     SmokeStageResult,
@@ -22,10 +22,10 @@ from app.runtime.isolation import (
     SmokeTestReport,
     SmokeTestStatus,
 )
-from app.runtime.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
-from app.runtime.model_store import ModelStore
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessStatus
-from app.runtime.supervisor import (
+from app.runtime.memory.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
+from app.runtime.models.model_store import ModelStore
+from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessStatus
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     RunnerDescriptor,
@@ -36,8 +36,8 @@ from app.runtime.supervisor import (
     RunnerStatus,
     RunnerSupervisor,
 )
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator

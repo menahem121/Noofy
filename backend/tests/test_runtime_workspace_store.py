@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     DependencyEnvManifest,
     InstallStatus,
     RunnerWorkspaceManifest,
     SmokeTestStatus,
 )
-from app.runtime.workspace_store import (
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     ManifestStoreError,
     RunnerWorkspaceManifestStore,

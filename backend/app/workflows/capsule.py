@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.runtime.isolation import CapsuleLock
+from app.runtime.dependencies.isolation import CapsuleLock
 from app.workflows.store_paths import imported_workflow_id
 
 CAPSULE_LOCK_FILENAME = "capsule.lock.json"

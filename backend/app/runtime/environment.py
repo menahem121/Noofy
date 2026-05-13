@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.engine.models import (
     RuntimeBootstrapResult,
     RuntimeDependencyStatus,

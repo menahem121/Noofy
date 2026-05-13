@@ -11,19 +11,19 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from app.runtime.custom_nodes import (
+from app.runtime.dependencies.custom_nodes import (
     CustomNodeMaterializationError,
     CustomNodeMaterializationErrorCode,
 )
-from app.engine.diagnostics import DiagnosticsSink
-from app.runtime.dependency_lock import DependencyPolicyError
-from app.runtime.dependency_env import DependencyEnvironmentInstallError
+from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.dependency_lock import DependencyPolicyError
+from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallError
 from app.runtime.install_state import (
     InstallStateStore,
     now_iso,
     user_facing_install_message,
 )
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     InstallState,
     InstallStatus,
@@ -34,7 +34,7 @@ from app.runtime.isolation import (
     SmokeTestReport,
     TrustLevel,
 )
-from app.runtime.model_store import (
+from app.runtime.models.model_store import (
     LocalModelCandidateError,
     LocalModelRequirement,
     ModelDownloadError,
@@ -42,7 +42,7 @@ from app.runtime.model_store import (
 )
 from app.runtime.profiles import RuntimeProfileResolutionError
 from app.runtime.smoke_test import RunnerSmokeTestError
-from app.runtime.workspace_preparer import (
+from app.runtime.storage.workspace_preparer import (
     PreparedRuntimeWorkspace,
     RuntimeWorkspacePreparer,
 )

@@ -410,7 +410,8 @@ export function verifyBackendSourceFiles(backendRoot = backendSourceRoot) {
     [path.join(backendRoot, "app", "__init__.py"), "Backend package marker"],
     [path.join(backendRoot, "app", "__main__.py"), "Backend module entrypoint"],
     [path.join(backendRoot, "app", "main.py"), "Backend FastAPI app module"],
-    [path.join(backendRoot, "app", "api", "routes.py"), "Backend API routes"],
+    [path.join(backendRoot, "app", "api", "router.py"), "Backend API router"],
+    [path.join(backendRoot, "app", "api", "routes", "__init__.py"), "Backend API routes package"],
     [path.join(backendRoot, "pyproject.toml"), "Backend project metadata"],
   ]) {
     requireFile(filePath, label);

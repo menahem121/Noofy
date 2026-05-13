@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from app.runtime.isolation import CapsuleLock
+from app.runtime.dependencies.isolation import CapsuleLock
 from app.workflows.package import WorkflowPackage
 
 

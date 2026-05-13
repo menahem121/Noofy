@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.runtime.install_transactions import InstallTransactionStore
 
 

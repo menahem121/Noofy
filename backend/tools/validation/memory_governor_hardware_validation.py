@@ -41,7 +41,7 @@ async def async_main(argv: list[str] | None = None) -> int:
 
     from app.engine.models import EngineJob
     from app.engine.service import create_default_engine_service
-    from app.runtime.memory_governor import RunnerMemoryTelemetryReader, MemorySampleWindow
+    from app.runtime.memory.memory_governor import RunnerMemoryTelemetryReader, MemorySampleWindow
 
     service = create_default_engine_service()
     summary: dict[str, Any] = {

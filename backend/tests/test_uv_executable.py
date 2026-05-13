@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.runtime.uv_executable import _venv_uv_path, resolve_noofy_uv_executable
 
 # ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ def test_resolved_uv_is_executable_and_reports_version() -> None:
 
 def test_dependency_env_installer_uses_provided_uv_executable(tmp_path: Path) -> None:
     """When uv_executable is passed, it must appear as command[0]."""
-    from app.runtime.dependency_env import (
+    from app.runtime.dependencies.dependency_env import (
         UvDependencyEnvironmentInstaller,
         DependencyEnvironmentInstallRequest,
     )
@@ -214,7 +214,7 @@ def test_dependency_env_installer_uses_provided_uv_executable(tmp_path: Path) ->
 
 def test_dependency_lock_resolver_stores_provided_uv_executable(tmp_path: Path) -> None:
     """uv_executable is stored and will be used for all subprocess calls."""
-    from app.runtime.dependency_resolver import UvDependencyLockResolver
+    from app.runtime.dependencies.dependency_resolver import UvDependencyLockResolver
 
     controlled_uv = "/noofy/venv/bin/uv"
 
@@ -232,7 +232,7 @@ def test_dependency_lock_resolver_uses_uv_executable_in_commands(
     tmp_path: Path,
 ) -> None:
     """Resolver must pass uv_executable as command[0] when it invokes uv."""
-    from app.runtime.dependency_resolver import UvDependencyLockResolver
+    from app.runtime.dependencies.dependency_resolver import UvDependencyLockResolver
 
     controlled_uv = "/noofy/venv/bin/uv"
     seen_executables: list[str] = []

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.runtime.dependency_lock import DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
+from app.runtime.dependencies.dependency_lock import DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
 from app.runtime.fingerprints import (
     FINGERPRINT_SCHEMA_VERSION,
     capsule_fingerprint,
@@ -10,7 +10,7 @@ from app.runtime.fingerprints import (
     runner_workspace_fingerprint,
     sha256_fingerprint,
 )
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     CustomNodeLock,
     HardwareObservations,

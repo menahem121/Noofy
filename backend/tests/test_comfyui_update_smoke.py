@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.runtime.comfyui_update_smoke import (
+from app.runtime.comfyui.comfyui_update_smoke import (
     assert_no_runtime_dirs_in_source,
     required_route_status_usable,
 )

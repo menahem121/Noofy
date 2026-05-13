@@ -20,8 +20,8 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.engine.diagnostics import DiagnosticsSink
-from app.runtime.isolation import SHA256_PATTERN, CustomNodeLock, TrustLevel
+from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.isolation import SHA256_PATTERN, CustomNodeLock, TrustLevel
 from app.source_policy import SourcePolicy
 
 NODE_REGISTRY_SCHEMA_VERSION = "0.1.0"

@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.runtime.isolation import CapsuleLock, CustomNodeLock, ModelLock, TrustMetadata
+from app.runtime.dependencies.isolation import CapsuleLock, CustomNodeLock, ModelLock, TrustMetadata
 
 FINGERPRINT_SCHEMA_VERSION = "0.1.0"
 

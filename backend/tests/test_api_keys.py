@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.main import create_app
 from app.settings.api_keys import (
     ApiKeyMetadataStore,

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import (
     DashboardSchema,

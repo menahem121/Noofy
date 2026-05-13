@@ -8,7 +8,7 @@ import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
 import { WorkflowsPage } from "./WorkflowsPage";
 
-const globalCss = readFileSync(resolve(process.cwd(), "src/styles/global.css"), "utf8");
+const globalCss = readFileSync(resolve(process.cwd(), "src/styles/workflows.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.runtime.system_memory import (
+from app.runtime.memory.system_memory import (
     linux_system_ram_mb,
     parse_darwin_available_memory_bytes,
 )

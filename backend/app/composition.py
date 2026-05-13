@@ -7,16 +7,27 @@ from app.core.config import settings
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.gallery import GalleryCaptureService, GalleryStore
-from app.model_inventory import ModelDownloadJobService, ModelInventoryService, ModelOwnershipStore, ModelTagStore
-from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
+from app.models.downloads import ModelDownloadJobService
+from app.models.inventory import ModelInventoryService
+from app.models.ownership import ModelOwnershipStore
+from app.models.tags import ModelTagStore
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
-from app.settings.model_folders import (
+from app.models.folders import (
     ModelFolderSettingsService,
     ModelFolderSettingsStore,
     default_noofy_models_dir,
     write_extra_model_paths_config,
 )
+from app.runs.job_service import RunJobService
+from app.runs.orchestrator import RunOrchestrator
+from app.runs.result_service import RunResultService
+from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
 from app.workflows.assets import DashboardAssetService
+from app.workflows.authoring import DashboardAuthoringService
+from app.workflows.exporter import WorkflowExporter
+from app.workflows.import_orchestrator import WorkflowImportOrchestrator
+from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.user_state import UserStateService
 
 
@@ -33,6 +44,14 @@ class ApiServices:
     model_ownership_store: ModelOwnershipStore
     model_inventory_service: ModelInventoryService
     model_download_service: ModelDownloadJobService
+    workflow_library_service: WorkflowLibraryService | None
+    dashboard_authoring_service: DashboardAuthoringService | None
+    workflow_exporter: WorkflowExporter | None
+    workflow_import_orchestrator: WorkflowImportOrchestrator | None
+    workflow_runner_lifecycle_service: WorkflowRunnerLifecycleService | None
+    run_job_service: RunJobService | None
+    run_orchestrator: RunOrchestrator | None
+    run_result_service: RunResultService | None
 
 
 def create_default_api_services() -> ApiServices:
@@ -72,11 +91,24 @@ def create_api_services(
     gallery = gallery_store or GalleryStore(settings.paths.gallery_outputs_dir)
     if getattr(engine_service, "gallery_capture_service", None) is None:
         engine_service.gallery_capture_service = GalleryCaptureService(gallery)
+    run_result_service = getattr(engine_service, "run_result_service", None)
+    if run_result_service is not None:
+        run_result_service.gallery_capture_service = getattr(
+            engine_service,
+            "gallery_capture_service",
+            None,
+        )
 
     tags = model_tag_store or ModelTagStore(settings.paths.settings_dir / "model-tags.json")
     ownership = model_ownership_store or ModelOwnershipStore(settings.paths.settings_dir / "model-ownership.json")
     if getattr(engine_service, "model_ownership_store", None) is None:
         setattr(engine_service, "model_ownership_store", ownership)
+    workflow_import_orchestrator = getattr(engine_service, "workflow_import_orchestrator", None)
+    if (
+        workflow_import_orchestrator is not None
+        and getattr(workflow_import_orchestrator, "model_ownership_store", None) is None
+    ):
+        setattr(workflow_import_orchestrator, "model_ownership_store", ownership)
     folders = model_folder_service or ModelFolderSettingsService(
         store=ModelFolderSettingsStore(settings.paths.settings_dir / "model-folders.json"),
         default_noofy_models_dir=default_noofy_models_dir(settings.paths.data_dir),
@@ -120,6 +152,14 @@ def create_api_services(
             ownership_store=ownership,
             log_store=getattr(engine_service, "log_store", None),
         ),
+        workflow_library_service=getattr(engine_service, "workflow_library_service", None),
+        dashboard_authoring_service=getattr(engine_service, "dashboard_authoring", None),
+        workflow_exporter=getattr(engine_service, "workflow_exporter", None),
+        workflow_import_orchestrator=workflow_import_orchestrator,
+        workflow_runner_lifecycle_service=getattr(engine_service, "workflow_runner_lifecycle_service", None),
+        run_job_service=getattr(engine_service, "run_job_service", None),
+        run_orchestrator=getattr(engine_service, "run_orchestrator", None),
+        run_result_service=getattr(engine_service, "run_result_service", None),
     )
 
 

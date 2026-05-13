@@ -1,0 +1,350 @@
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
+
+from app.diagnostics import DiagnosticsSink
+from app.engine.adapter import EngineAdapter
+from app.engine.memory_observation import memory_input_profile_fingerprint
+from app.engine.models import EngineJob, WorkflowValidationResult
+from app.gallery import OutputPreference, RunSubmissionSnapshot, build_run_submission_snapshot
+from app.runtime.memory.memory_governor import (
+    MachineMemoryObserver,
+    MachineMemorySnapshot,
+    MemoryDecisionAction,
+    MemoryGovernorDecision,
+)
+from app.runtime.runners.supervisor import RunnerDescriptor, RunnerSupervisor
+from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.package import WorkflowPackage
+
+ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
+UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
+ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
+WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
+EvictIdleRunners = Callable[[MemoryGovernorDecision], Awaitable[EngineJob | None]]
+MemoryStatusPayload = Callable[..., dict[str, Any]]
+RecordMemoryMetric = Callable[[str], None]
+StartMemorySampling = Callable[..., None]
+
+
+class RunOrchestrator:
+    """Validate and submit user workflow runs.
+
+    Memory admission and retry state are still supplied by EngineService
+    callbacks. This keeps the current memory-governor behavior intact while
+    moving the user-facing run path into the runs domain.
+    """
+
+    def __init__(
+        self,
+        *,
+        workflow_loader: WorkflowPackageLoader,
+        runner_supervisor: RunnerSupervisor,
+        log_store: DiagnosticsSink,
+        memory_observer: MachineMemoryObserver | None,
+        job_workflows: dict[str, str],
+        job_started_at: dict[str, datetime],
+        job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]],
+        job_run_snapshots: dict[str, RunSubmissionSnapshot],
+        memory_retry_roots: dict[str, str],
+        queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any], RunSubmissionSnapshot]],
+        validate_package: ValidatePackage,
+        unavailable_package_reason: UnavailablePackageReason,
+        apply_input_bindings: ApplyInputBindings,
+        workflow_run_memory_decision: WorkflowRunMemoryDecision,
+        evict_idle_runners: EvictIdleRunners,
+        memory_status_payload: MemoryStatusPayload,
+        record_memory_metric: RecordMemoryMetric,
+        start_memory_sampling: StartMemorySampling,
+    ) -> None:
+        self.workflow_loader = workflow_loader
+        self.runner_supervisor = runner_supervisor
+        self.log_store = log_store
+        self.memory_observer = memory_observer
+        self.job_workflows = job_workflows
+        self.job_started_at = job_started_at
+        self.job_run_requests = job_run_requests
+        self.job_run_snapshots = job_run_snapshots
+        self.memory_retry_roots = memory_retry_roots
+        self.queued_workflow_runs = queued_workflow_runs
+        self.validate_package = validate_package
+        self.unavailable_package_reason = unavailable_package_reason
+        self.apply_input_bindings = apply_input_bindings
+        self.workflow_run_memory_decision = workflow_run_memory_decision
+        self.evict_idle_runners = evict_idle_runners
+        self.memory_status_payload = memory_status_payload
+        self.record_memory_metric = record_memory_metric
+        self.start_memory_sampling = start_memory_sampling
+
+    async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
+        package = self.workflow_loader.get_package(workflow_id)
+        unavailable = self.unavailable_package_reason(package)
+        if unavailable is not None:
+            self.log_store.add(
+                "warning",
+                "Workflow validation blocked because no preparable capsule is available",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[unavailable],
+            )
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+        validation = await self.validate_package(package, adapter)
+        if validation.valid:
+            self.log_store.add(
+                "info",
+                "Workflow validation passed",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"runner_id": runner.runner_id},
+            )
+        else:
+            self.log_store.add(
+                "warning",
+                "Workflow validation failed",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={
+                    "runner_id": runner.runner_id,
+                    "missing_models": [model.model_dump() for model in validation.missing_models],
+                    "errors": validation.errors,
+                },
+            )
+        return validation
+
+    async def run_workflow(
+        self,
+        workflow_id: str,
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        *,
+        memory_retry_after_cleanup: bool = False,
+        output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
+        run_submission_snapshot: RunSubmissionSnapshot | None = None,
+    ):
+        package = self.workflow_loader.get_package(workflow_id)
+        run_submission_snapshot = self._run_submission_snapshot(
+            package=package,
+            inputs=inputs,
+            output_preferences_snapshot=output_preferences_snapshot,
+            run_submission_snapshot=run_submission_snapshot,
+        )
+        unavailable = self.unavailable_package_reason(package)
+        if unavailable is not None:
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked because no preparable capsule is available",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[unavailable],
+            )
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+
+        validation = await self.validate_package(package, adapter)
+        if not validation.valid:
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by validation failure",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={
+                    "runner_id": runner.runner_id,
+                    "missing_models": [model.model_dump() for model in validation.missing_models],
+                    "errors": validation.errors,
+                },
+            )
+            return validation
+
+        graph = self.apply_input_bindings(package, inputs)
+        memory_decision = self.workflow_run_memory_decision(
+            package=package,
+            workflow_id=workflow_id,
+            runner=runner,
+            input_profile_fingerprint=memory_input_profile_fingerprint(inputs, options),
+            memory_retry_after_cleanup=memory_retry_after_cleanup,
+        )
+        memory_result = await self._handle_memory_decision(
+            workflow_id=workflow_id,
+            inputs=inputs,
+            options=options,
+            runner=runner,
+            memory_decision=memory_decision,
+            run_submission_snapshot=run_submission_snapshot,
+        )
+        if memory_result is not None:
+            return memory_result
+
+        return await self._submit_run(
+            package=package,
+            workflow_id=workflow_id,
+            graph=graph,
+            inputs=inputs,
+            options=options,
+            runner=runner,
+            adapter=adapter,
+            memory_decision=memory_decision,
+            memory_retry_after_cleanup=memory_retry_after_cleanup,
+            run_submission_snapshot=run_submission_snapshot,
+        )
+
+    def _run_submission_snapshot(
+        self,
+        *,
+        package: WorkflowPackage,
+        inputs: dict[str, Any],
+        output_preferences_snapshot: dict[str, dict[str, Any]] | None,
+        run_submission_snapshot: RunSubmissionSnapshot | None,
+    ) -> RunSubmissionSnapshot:
+        if run_submission_snapshot is not None:
+            return run_submission_snapshot
+        preferences: dict[str, OutputPreference] = {}
+        for control_id, raw_preference in (output_preferences_snapshot or {}).items():
+            if isinstance(raw_preference, OutputPreference):
+                preferences[control_id] = raw_preference
+                continue
+            if isinstance(raw_preference, dict):
+                preferences[control_id] = OutputPreference.model_validate(raw_preference)
+        return build_run_submission_snapshot(
+            package=package,
+            inputs=inputs,
+            output_preferences_snapshot=preferences,
+        )
+
+    async def _handle_memory_decision(
+        self,
+        *,
+        workflow_id: str,
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        runner: RunnerDescriptor,
+        memory_decision: MemoryGovernorDecision | None,
+        run_submission_snapshot: RunSubmissionSnapshot,
+    ) -> EngineJob | None:
+        if memory_decision is None:
+            return None
+        if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
+            queue_id = f"workflow-run-queue-{workflow_id}-{len(self.queued_workflow_runs) + 1}"
+            self.queued_workflow_runs[queue_id] = (
+                workflow_id,
+                dict(inputs),
+                dict(options),
+                run_submission_snapshot.model_copy(deep=True),
+            )
+            self.record_memory_metric("workflow_run_queued_pending_memory")
+            self.log_store.add(
+                "info",
+                "Workflow run queued pending memory",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={
+                    "queue_id": queue_id,
+                    "runner_id": runner.runner_id,
+                    "memory_decision_id": memory_decision.decision_id,
+                    "reason": memory_decision.reason_code,
+                },
+            )
+            return EngineJob(
+                job_id=queue_id,
+                workflow_id=workflow_id,
+                engine="noofy",
+                status="queued_pending_memory",
+                queue_id=queue_id,
+                message=memory_decision.user_message,
+                memory_decision=memory_decision.model_dump(mode="json"),
+                memory_status=self.memory_status_payload(memory_decision, queue_id=queue_id),
+            )
+        if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
+            self.record_memory_metric("workflow_run_blocked_by_memory")
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by memory policy",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={
+                    "runner_id": runner.runner_id,
+                    "memory_decision_id": memory_decision.decision_id,
+                    "reason": memory_decision.reason_code,
+                },
+            )
+            return EngineJob(
+                job_id=f"blocked-memory-{workflow_id}",
+                workflow_id=workflow_id,
+                engine="noofy",
+                status="blocked_by_memory",
+                message=memory_decision.user_message,
+                memory_decision=memory_decision.model_dump(mode="json"),
+                memory_status=self.memory_status_payload(memory_decision),
+            )
+        if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
+            return await self.evict_idle_runners(memory_decision)
+        return None
+
+    async def _submit_run(
+        self,
+        *,
+        package: WorkflowPackage,
+        workflow_id: str,
+        graph: dict[str, Any],
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        runner: RunnerDescriptor,
+        adapter: EngineAdapter,
+        memory_decision: MemoryGovernorDecision | None,
+        memory_retry_after_cleanup: bool,
+        run_submission_snapshot: RunSubmissionSnapshot,
+    ) -> EngineJob:
+        self.log_store.add(
+            "info",
+            "Submitting workflow run",
+            "runs.orchestrator",
+            workflow_id=workflow_id,
+            details={"runner_id": runner.runner_id, "input_keys": sorted(inputs.keys())},
+        )
+        memory_sampling_started_at = datetime.now(UTC).isoformat()
+        pre_submit_snapshot: MachineMemorySnapshot | None = (
+            self.memory_observer.snapshot() if self.memory_observer is not None else None
+        )
+        job = await adapter.run_workflow(package, graph, inputs, options)
+        self.runner_supervisor.register_job(job.job_id, runner.runner_id)
+        self.job_workflows[job.job_id] = workflow_id
+        self.job_started_at[job.job_id] = datetime.now(UTC)
+        self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
+        self.job_run_snapshots[job.job_id] = run_submission_snapshot
+        self.memory_retry_roots.setdefault(job.job_id, job.job_id)
+        self.start_memory_sampling(
+            job_id=job.job_id,
+            workflow_id=workflow_id,
+            runner_id=runner.runner_id,
+            initial_snapshot=pre_submit_snapshot,
+            retry_after_cleanup=memory_retry_after_cleanup,
+            telemetry_observed_after=memory_sampling_started_at,
+        )
+        if memory_decision is not None:
+            job = job.model_copy(
+                update={
+                    "memory_decision": memory_decision.model_dump(mode="json"),
+                    "memory_status": self.memory_status_payload(memory_decision),
+                }
+            )
+        self.log_store.add(
+            "info",
+            "Workflow run queued",
+            "runs.orchestrator",
+            job_id=job.job_id,
+            workflow_id=workflow_id,
+            details={"runner_id": runner.runner_id},
+        )
+        return job

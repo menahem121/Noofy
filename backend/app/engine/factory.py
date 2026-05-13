@@ -5,7 +5,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.diagnostics import DiagnosticsSink, LogStore
+from app.diagnostics import DiagnosticsSink, LogStore
 from app.engine.service import (
     EngineService,
     _smoke_execution_fixture_for_capsule,
@@ -13,26 +13,26 @@ from app.engine.service import (
     _workflow_source_files_dir,
 )
 from app.runtime.capsule_installer import CapsuleInstaller
-from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
-from app.runtime.comfyui_updates import (
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
+from app.runtime.comfyui.comfyui_updates import (
     ComfyUIUpdateService,
     resolve_active_runtime_selection,
 )
-from app.runtime.custom_nodes import CustomNodeWorkspaceMaterializer
-from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
-from app.runtime.dependency_lock import core_dependency_lock_from_capsule
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.dependency_resolver import UvDependencyLockResolver
+from app.runtime.dependencies.custom_nodes import CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.dependency_env import UvDependencyEnvironmentInstaller
+from app.runtime.dependencies.dependency_lock import core_dependency_lock_from_capsule
+from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependencies.dependency_resolver import UvDependencyLockResolver
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_state import InstallStateStore
 from app.runtime.install_transactions import InstallTransactionStore
-from app.runtime.launch_settings import ComfyUILaunchSettingsStore
+from app.runtime.comfyui.launch_settings import ComfyUILaunchSettingsStore
 from app.runtime.manager import RuntimeManager
-from app.runtime.memory_governor import (
+from app.runtime.memory.memory_governor import (
     LocalMemoryLearningStore,
     default_memory_observer,
 )
-from app.runtime.model_store import ModelStore, http_streaming_downloader
+from app.runtime.models.model_store import ModelStore, http_streaming_downloader
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     NodeRegistryResolver,
@@ -42,10 +42,10 @@ from app.runtime.profiles import (
     DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
     load_runtime_profile_catalog,
 )
-from app.runtime.runner_coordinator import AdapterFactory, RunnerProcessCoordinator
-from app.runtime.runner_process import RunnerProcessSupervisor
+from app.runtime.runners.runner_coordinator import AdapterFactory, RunnerProcessCoordinator
+from app.runtime.runners.runner_process import RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     RunnerDescriptor,
@@ -54,12 +54,12 @@ from app.runtime.supervisor import (
     RunnerSupervisor,
 )
 from app.runtime.uv_executable import resolve_noofy_uv_executable
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
-from app.settings.model_folders import (
+from app.models.folders import (
     ModelFolderSettingsStore,
     default_noofy_models_dir,
     ensure_model_subfolders,

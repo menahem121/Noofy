@@ -1,5 +1,5 @@
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
-from app.runtime.custom_nodes import (
+from app.runtime.dependencies.custom_nodes import (
     CORE_NODE_MANIFEST_SCHEMA_VERSION,
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION,
@@ -16,13 +16,13 @@ from app.runtime.custom_nodes import (
     validate_custom_node_source_relative_paths,
     with_computed_custom_node_workspace_hash,
 )
-from app.runtime.dependency_env import (
+from app.runtime.dependencies.dependency_env import (
     DependencyEnvironmentInstallError,
     DependencyEnvironmentInstallRequest,
     DependencyEnvironmentInstaller,
     UvDependencyEnvironmentInstaller,
 )
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DEPENDENCY_LOCK_SCHEMA_VERSION,
     DependencyDeclaration,
@@ -44,8 +44,8 @@ from app.runtime.dependency_lock import (
     with_computed_lock_hash,
     core_dependency_lock_from_capsule,
 )
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.dependency_resolver import (
+from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependencies.dependency_resolver import (
     DependencyResolutionError,
     DependencyResolutionRequest,
     MaterializedWheel,
@@ -81,7 +81,7 @@ from app.runtime.install_transactions import (
     InstallTransactionStore,
     StartupSweepReport,
 )
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     DependencyEnvManifest,
     InstallState,
@@ -94,7 +94,7 @@ from app.runtime.isolation import (
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager, select_free_port
-from app.runtime.model_store import (
+from app.runtime.models.model_store import (
     AsyncDownloader,
     LocalModelCandidateError,
     LocalModelRequirement,
@@ -106,8 +106,8 @@ from app.runtime.model_store import (
     model_view_fingerprint,
     probe_symlink_capability,
 )
-from app.runtime.model_gc import ModelReferenceCleanupPolicy, model_reference_cleanup_policy
-from app.runtime.runner_process import (
+from app.runtime.models.model_gc import ModelReferenceCleanupPolicy, model_reference_cleanup_policy
+from app.runtime.runners.runner_process import (
     RunnerLaunchSpec,
     RunnerProcessHandle,
     RunnerProcessStatus,
@@ -119,7 +119,7 @@ from app.runtime.smoke_test import (
     SmokeExecutionFixture,
     SmokePromptTimeoutError,
 )
-from app.runtime.storage_gc import (
+from app.runtime.storage.storage_gc import (
     DEFAULT_CUSTOM_NODE_SOURCE_CACHE_CAP_BYTES,
     DEFAULT_FAILED_TRANSACTION_RETENTION_DAYS,
     DEFAULT_LARGE_MODEL_CONFIRMATION_BYTES,
@@ -137,10 +137,10 @@ from app.runtime.storage_gc import (
     RuntimeStorageReferenceIndex,
     RuntimeStorageRoots,
 )
-from app.runtime.runner_coordinator import (
+from app.runtime.runners.runner_coordinator import (
     RunnerProcessCoordinator,
 )
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     DuplicateJobRegistrationError,
@@ -160,7 +160,7 @@ from app.runtime.supervisor import (
     RunnerStatus,
     RunnerSupervisor,
 )
-from app.runtime.memory_governor import (
+from app.runtime.memory.memory_governor import (
     BackendAllocatorMemorySample,
     MachineMemoryObserver,
     CommandRunner,
@@ -212,13 +212,13 @@ from app.runtime.memory_governor import (
     retry_after_memory_cleanup_decision,
     wait_for_memory_release,
 )
-from app.runtime.workspace_store import (
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     ManifestStoreError,
     RunnerWorkspaceManifestStore,
     RuntimeManifestStore,
 )
-from app.runtime.workspace_preparer import (
+from app.runtime.storage.workspace_preparer import (
     PreparedRuntimeWorkspace,
     RuntimeWorkspacePreparer,
 )

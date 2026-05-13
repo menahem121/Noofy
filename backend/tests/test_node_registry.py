@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.engine.diagnostics import LogStore
-from app.runtime.isolation import TrustLevel
+from app.diagnostics import LogStore
+from app.runtime.dependencies.isolation import TrustLevel
 from app.runtime.node_registry import (
     CachedCustomNodeSource,
     CustomNodeSourceCache,

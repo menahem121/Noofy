@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.custom_nodes import (
+from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CoreNodeManifest,
     CoreNodeManifestCatalog,
@@ -12,7 +12,7 @@ from app.runtime.custom_nodes import (
     CustomNodeWorkspaceMaterializer,
     validate_custom_node_source_relative_paths,
 )
-from app.runtime.isolation import CapsuleLock
+from app.runtime.dependencies.isolation import CapsuleLock
 
 
 RUNTIME_PROFILE_HASH = "sha256:" + ("9" * 64)

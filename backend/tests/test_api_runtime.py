@@ -7,11 +7,11 @@ from fastapi.testclient import TestClient
 from app.api.schemas import ComfyUILaunchSettings
 from app.composition import create_api_services
 from app.core.config import settings as real_settings
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
 from app import main as main_module
 from app.main import create_app
-from app.runtime.launch_settings import comfyui_launch_response
+from app.runtime.comfyui.launch_settings import comfyui_launch_response
 
 
 class FakeEngineService:

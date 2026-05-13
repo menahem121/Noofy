@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import ModelInfo
 from app.main import create_app
-from app.model_inventory import ModelDownloadStartRequest, ModelOwnershipStore, ModelTagStore
-from app.model_download_jobs import ModelDownloadJobService
-from app.settings.model_folders import ModelFolderSettingsService, ModelFolderSettingsStore, ModelFolderUpdateRequest
+from app.models.inventory import ModelDownloadStartRequest, ModelOwnershipStore, ModelTagStore
+from app.models.downloads import ModelDownloadJobService
+from app.models.folders import ModelFolderSettingsService, ModelFolderSettingsStore, ModelFolderUpdateRequest
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
 

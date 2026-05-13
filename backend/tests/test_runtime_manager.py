@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.manager import RuntimeManager, select_free_port

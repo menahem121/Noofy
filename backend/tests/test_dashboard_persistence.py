@@ -11,7 +11,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader

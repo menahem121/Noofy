@@ -1,0 +1,54 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --app-bg: #211E26;
+  --deep-bg: #1c1b1d;
+  --surface-1: #2e2d31;
+  --surface-2: #37363b;
+  --surface-3: #424047;
+  --border-soft: #4b4852;
+  --border-strong: #686371;
+  --primary: #8b5cf6;
+  --primary-hover: #9f7aea;
+  --primary-pressed: #6d42d8;
+  --purple-soft: #352a4a;
+  --text-primary: #f4f0fa;
+  --text-secondary: #c9c2d4;
+  --text-muted: #8f879b;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #f87171;
+  --info: #60a5fa;
+  --topbar-height: 64px;
+  --sidebar-width: 260px;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #56545e;
+}
+

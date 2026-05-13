@@ -9,7 +9,7 @@ from app.runtime.fingerprints import (
     runner_workspace_fingerprint,
     sha256_fingerprint,
 )
-from app.runtime.isolation import TrustLevel
+from app.runtime.dependencies.isolation import TrustLevel
 from app.runtime.profiles import load_runtime_profile_catalog
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 

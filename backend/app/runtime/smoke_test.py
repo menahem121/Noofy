@@ -19,15 +19,15 @@ from uuid import uuid4
 
 import httpx
 
-from app.engine.diagnostics import DiagnosticsSink
-from app.runtime.isolation import (
+from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     SmokeStageResult,
     SmokeStageStatus,
     SmokeTestReport,
 )
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.workspace_preparer import PreparedRuntimeWorkspace
+from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
+from app.runtime.storage.workspace_preparer import PreparedRuntimeWorkspace
 
 RunnerSmokeLaunchSpecFactory = Callable[
     [CapsuleLock, PreparedRuntimeWorkspace], RunnerLaunchSpec

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DependencyPolicyError,
     DependencyPolicyErrorCode,

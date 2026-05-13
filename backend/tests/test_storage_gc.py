@@ -5,9 +5,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.artifacts import AssetOwnership, ModelVerificationLevel
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.dependency_lock import (
     DependencyRelationship,
     DependencySourceKind,
     ResolvedDependencyLock,
@@ -15,21 +15,21 @@ from app.runtime.dependency_lock import (
     ResolverMetadata,
     with_computed_lock_hash,
 )
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.isolation import (
+from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependencies.isolation import (
     InstallState,
     InstallStatus,
     InstalledModelReference,
     SmokeTestStatus,
 )
-from app.runtime.storage_gc import (
+from app.runtime.storage.storage_gc import (
     RuntimeStorageArtifactKind,
     RuntimeStorageGarbageCollector,
     RuntimeStorageGcAction,
     RuntimeStorageGcConfig,
     RuntimeStorageRoots,
 )
-from app.runtime.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
+from app.runtime.runners.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
 
 
 def _roots(tmp_path: Path) -> RuntimeStorageRoots:

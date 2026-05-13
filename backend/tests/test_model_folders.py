@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.settings.model_folders import (
+from app.models.folders import (
     COMFYUI_MODEL_CATEGORIES,
     ModelFolderSettingsService,
     ModelFolderSettingsStore,

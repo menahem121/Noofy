@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
-from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
-from app.runtime.launch_settings import ComfyUILaunchSettings, ComfyUILaunchSettingsStore
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
+from app.runtime.comfyui.launch_settings import ComfyUILaunchSettings, ComfyUILaunchSettingsStore
 
 
 class FakeRuntimeManager:

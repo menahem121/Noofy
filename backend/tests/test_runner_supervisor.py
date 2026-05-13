@@ -4,10 +4,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
-from app.runtime.memory_governor import (
+from app.runtime.memory.memory_governor import (
     BackendAllocatorMemorySample,
     GpuProcessMemorySample,
     LocalMemoryLearningStore,
@@ -18,7 +18,7 @@ from app.runtime.memory_governor import (
     MemorySampleWindow,
     ProcessTreeMemorySample,
 )
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     DuplicateJobRegistrationError,

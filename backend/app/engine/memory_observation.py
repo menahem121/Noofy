@@ -7,9 +7,9 @@ import json
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from app.engine.diagnostics import DiagnosticsStore
+from app.diagnostics import DiagnosticsStore
 from app.engine.models import JobResult
-from app.runtime.memory_governor import (
+from app.runtime.memory.memory_governor import (
     GpuProcessMemorySample,
     LocalMemoryLearningStore,
     LocalMemoryObservation,
@@ -23,7 +23,7 @@ from app.runtime.memory_governor import (
     RunnerMemoryTelemetryReader,
     likely_memory_error,
 )
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     JobRunnerNotFoundError,
     RunnerMemoryClass,
     RunnerSupervisor,

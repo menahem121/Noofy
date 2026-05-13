@@ -240,7 +240,7 @@ class NoofyPaths:
             self.gallery_outputs_dir / "thumbnails",
         ):
             directory.mkdir(parents=True, exist_ok=True)
-        from app.settings.model_folders import ensure_model_subfolders
+        from app.models.folders import ensure_model_subfolders
 
         ensure_model_subfolders(self.models_dir)
 

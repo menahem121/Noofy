@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     ResolvedDependencyLock,
     ResolverMetadata,
     with_computed_lock_hash,
 )
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
 
 
 def _lock() -> ResolvedDependencyLock:

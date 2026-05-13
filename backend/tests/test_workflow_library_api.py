@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.models import EngineJob, JobResult, ModelInfo, RequiredModelAvailability, RequiredModelSummary
 from app.engine.service import EngineService
-from app.runtime.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
+from app.runtime.runners.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate

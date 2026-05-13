@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.runtime.isolation import TrustLevel
+from app.runtime.dependencies.isolation import TrustLevel
 from app.runtime.node_registry import (
     NodeRegistryResolutionError,
     NodeRegistryResolutionErrorCode,

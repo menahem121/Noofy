@@ -11,8 +11,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.engine.diagnostics import DiagnosticsSink
-from app.runtime.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
+from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     CustomNodeSourceResolutionRequest,
@@ -434,6 +434,7 @@ class NoofyArchiveImporter:
                 "Workflow package is not a valid .noofy archive."
             ) from exc
         self.members = self._validated_members()
+        self._json_cache: dict[str, dict[str, Any]] = {}
 
     def normalize(self) -> WorkflowPackage:
         package_json = self._read_json("package.json")
@@ -566,7 +567,11 @@ class NoofyArchiveImporter:
         return imported_archive_trust_payload(
             package_json=self._read_json("package.json"),
             comfyui_graph=self._read_json("comfyui_graph.json"),
-            dashboard_json=self._read_json("dashboard.json"),
+            dashboard_json=(
+                self._read_json("dashboard.json")
+                if "dashboard.json" in self.members
+                else {}
+            ),
             capsule_json=self._read_json("capsule.lock.json"),
             export_report=self._read_json("export-report.json"),
         )
@@ -582,6 +587,9 @@ class NoofyArchiveImporter:
                 shutil.copyfileobj(source, dest)
 
     def _read_json(self, name: str) -> dict[str, Any]:
+        cached = self._json_cache.get(name)
+        if cached is not None:
+            return cached
         info = self.members.get(name)
         if info is None:
             raise NoofyImportError(f"Workflow package is missing {name}.")
@@ -593,6 +601,7 @@ class NoofyArchiveImporter:
             raise NoofyImportError(f"{name} is not valid UTF-8 JSON.") from exc
         if not isinstance(payload, dict):
             raise NoofyImportError(f"{name} must contain a JSON object.")
+        self._json_cache[name] = payload
         return payload
 
     def _validated_members(self) -> dict[str, zipfile.ZipInfo]:

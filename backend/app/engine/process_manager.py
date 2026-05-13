@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.runtime.manager import RuntimeManager
 
 

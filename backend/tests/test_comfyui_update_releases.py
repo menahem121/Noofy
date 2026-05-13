@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.runtime.comfyui_update_releases import (
+from app.runtime.comfyui.comfyui_update_releases import (
     UpstreamComfyUIRelease,
     stable_sorted_releases,
     version_sort_key,

@@ -6,10 +6,10 @@ import sys
 
 import pytest
 
-from app.engine.diagnostics import LogStore
-from app.runtime import runner_memory_probe
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
-from app.runtime.supervisor import RunnerKind, RunnerMemoryClass, RunnerStatus
+from app.diagnostics import LogStore
+from app.runtime.runners import runner_memory_probe
+from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
+from app.runtime.runners.supervisor import RunnerKind, RunnerMemoryClass, RunnerStatus
 
 
 class FakeProcess:
@@ -143,9 +143,9 @@ def test_runner_startup_sweep_removes_stale_pid_file(
     pid_dir = tmp_path / "runner-pids"
     pid_dir.mkdir()
     (pid_dir / "runner-old.pid").write_text("4321", encoding="utf-8")
-    monkeypatch.setattr("app.runtime.runner_process._is_pid_alive", lambda pid: True)
+    monkeypatch.setattr("app.runtime.runners.runner_process._is_pid_alive", lambda pid: True)
     monkeypatch.setattr(
-        "app.runtime.runner_process._terminate_stale_pid",
+        "app.runtime.runners.runner_process._terminate_stale_pid",
         lambda pid: killed.append(pid),
     )
     supervisor = RunnerProcessSupervisor(pid_dir=pid_dir, log_store=LogStore())

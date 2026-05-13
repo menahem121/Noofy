@@ -14,6 +14,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "check:no-comfyui-calls": "node ../scripts/check-no-comfyui-calls.mjs",
     "test": "vitest --run --environment jsdom && npm run test:runtime-scripts",
     "test:runtime-scripts": "node --test scripts/*.node.mjs",
     "test:watch": "vitest"

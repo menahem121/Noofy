@@ -6,7 +6,7 @@ from app.runtime.install_state import (
     InstallStateStore,
     user_facing_install_message,
 )
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     AssetOwnership,
     InstalledModelReference,
     InstallStatus,

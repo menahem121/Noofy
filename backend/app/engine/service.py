@@ -1,39 +1,25 @@
-import asyncio
-import hashlib
-import json
 import re
-import shutil
-import uuid
-from dataclasses import dataclass
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import ValidationError
 
-from app.artifacts import AssetOwnership
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
-from app.engine.diagnostics import DiagnosticsStore
-from app.engine.memory_observation import (
-    MemoryObservationCoordinator,
-    memory_input_profile_fingerprint,
-)
+from app.diagnostics import DiagnosticsStore
 from app.engine.models import (
     BackendHealthReport,
     DiagnosticLogResponse,
     EngineJob,
     ImportModelDownloadJobStart,
     ImportModelDownloadJobStatus,
-    ImportModelDownloadProgressItem,
     JobProgress,
     JobResult,
     LogLevel,
     MachineResourceSnapshot,
     ModelInfo,
-    ModelDownloadSummary,
     RequiredModelSummary,
     RuntimeBootstrapResult,
     StagedWorkflowImportResponse,
@@ -42,131 +28,73 @@ from app.engine.models import (
 )
 from app.gallery import (
     GalleryCaptureService,
-    OutputPreference,
     RunSubmissionSnapshot,
-    build_run_submission_snapshot,
 )
-from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
-from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
-from app.runtime.comfyui_updates import (
+from app.runtime.capsule_installer import CapsuleInstaller
+from app.runtime.install_state import user_facing_install_message
+from app.trust import capsule_source_policy
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
+from app.runtime.comfyui.comfyui_updates import (
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
     ComfyUIUpdateService,
 )
-from app.runtime.install_state import (
-    InstallStateStore,
-    user_facing_install_message,
-)
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
-    DependencyEnvManifest,
     InstallState,
     InstallStatus,
-    RunnerWorkspaceManifest,
-    SmokeTestStatus,
-    TrustLevel,
 )
-from app.runtime.launch_settings import (
+from app.runtime.comfyui.launch_settings import (
     ComfyUILaunchSettings,
     ComfyUILaunchSettingsResponse,
     ComfyUILaunchSettingsStore,
     ComfyUILaunchSettingsUpdateResult,
 )
 from app.runtime.manager import RuntimeManager
-from app.runtime.memory_governor import (
+from app.runtime.memory.memory_governor import (
     LocalMemoryLearningStore,
     MachineMemoryObserver,
     MachineMemorySnapshot,
-    MemoryAdmissionRequest,
     MemoryBackend,
-    MemoryDecisionAction,
-    MemoryGovernorDecision,
-    MemoryReleaseStatus,
     ProcessTreeMemoryObserver,
     RunnerMemoryTelemetryReader,
-    RunnerMemorySnapshot,
-    WorkflowMemoryEstimateRequest,
-    build_workflow_memory_estimate,
-    decide_memory_admission,
-    likely_memory_error,
-    memory_user_status_for_decision,
-    record_memory_governor_decision,
-    retry_after_memory_cleanup_decision,
-    wait_for_memory_release,
 )
-from app.runtime.model_store import LocalModelRequirement
-from app.runtime.resource_monitor import SystemResourceObserver, build_resource_snapshot
-from app.runtime.runner_coordinator import RunnerProcessCoordinator
-from app.runtime.runner_process import RunnerLaunchSpec
-from app.runtime.smoke_test import SmokeExecutionFixture
-from app.runtime.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
-from app.runtime.supervisor import (
-    CORE_RUNNER_FINGERPRINT,
+from app.runtime.memory.service import MemoryGovernorService
+from app.runtime.memory.resource_monitor import SystemResourceObserver, build_resource_snapshot
+from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runners.lifecycle_service import (
+    WorkflowRunnerLifecycleService,
+    _smoke_execution_fixture_for_capsule,  # re-exported for factory.py / tests
+    _workflow_runner_launch_spec,          # re-exported for factory.py
+    _workflow_source_files_dir,            # re-exported for factory.py
+)
+from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
     JobRunnerNotFoundError,
     RunnerDescriptor,
-    RunnerKind,
-    RunnerMemoryClass,
-    QueuedRunnerStartKind,
-    RunnerSelectionAction,
-    RunnerStatus,
     RunnerSupervisor,
 )
-from app.source_policy import ModelSourceTrust, SourcePolicy
-from app.trust import capsule_source_policy, workflow_source_policy, workflow_trust_payload
+from app.runs.job_service import RunJobService
+from app.runs.orchestrator import RunOrchestrator
+from app.runs.result_service import RunResultService
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
-from app.workflows.exporter import WorkflowExportError, WorkflowExporter, stored_comfyui_graph_file
+from app.workflows.exporter import WorkflowExportError, WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
+from app.workflows.import_orchestrator import (
+    IMPORT_SESSION_TTL,
+    ImportSessionExpiredError,
+    WorkflowImportOrchestrator,
+    _ImportModelDownloadJob,  # temporary migration re-export for tests
+    _PendingWorkflowImport,  # temporary migration re-export for tests
+)
+from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import WorkflowPackage
-from app.workflows.store_paths import imported_workflow_id, mutable_package_dir, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
-
-_PREPARABLE_TRUST_LEVELS = {
-    TrustLevel.NOOFY_VERIFIED,
-    TrustLevel.REGISTRY_LOCKED,
-    TrustLevel.QUARANTINED_COMMUNITY,
-}
-IMPORT_SESSION_TTL = timedelta(hours=1)
-
-
-class ImportSessionExpiredError(KeyError):
-    """Raised when a staged workflow import has expired."""
-
-
-@dataclass
-class _PendingWorkflowImport:
-    data: bytes
-    original_filename: str | None
-    allow_unverified_community_preparation: bool
-    package: WorkflowPackage
-    created_at: datetime
-    updated_at: datetime
-    active_download_job_id: str | None = None
-
-
-@dataclass
-class _ImportModelDownloadJob:
-    job_id: str
-    import_session_id: str
-    workflow_id: str
-    cancel_event: asyncio.Event
-    task: asyncio.Task | None
-    status: str
-    user_facing_message: str
-    started_at: datetime
-    updated_at: datetime
-    total_models: int
-    model_summary: RequiredModelSummary | None = None
-    models: dict[str, ImportModelDownloadProgressItem] | None = None
-    current_model_filename: str | None = None
-    current_model_index: int | None = None
-    bytes_downloaded: int | None = None
-    total_bytes: int | None = None
-    speed_bytes_per_second: float | None = None
 
 
 class EngineService:
@@ -195,6 +123,12 @@ class EngineService:
         model_availability_service: ModelAvailabilityService | None = None,
         gallery_capture_service: GalleryCaptureService | None = None,
         workflow_library_store: WorkflowLibraryStore | None = None,
+        workflow_library_service: WorkflowLibraryService | None = None,
+        workflow_import_orchestrator: WorkflowImportOrchestrator | None = None,
+        workflow_runner_lifecycle_service: WorkflowRunnerLifecycleService | None = None,
+        run_job_service: RunJobService | None = None,
+        run_orchestrator: RunOrchestrator | None = None,
+        run_result_service: RunResultService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -205,7 +139,7 @@ class EngineService:
         self.capsule_installer = capsule_installer
         self.runner_process_coordinator = runner_process_coordinator
         self.imported_package_store = imported_package_store
-        self.memory_observer = memory_observer
+        self._memory_observer = memory_observer
         self.memory_learning_store = memory_learning_store
         self.comfyui_update_service = comfyui_update_service
         self.comfyui_launch_settings_store = comfyui_launch_settings_store
@@ -222,171 +156,162 @@ class EngineService:
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
         self.model_ownership_store = None
+        self.workflow_library_service: WorkflowLibraryService = workflow_library_service or WorkflowLibraryService(
+            workflow_loader=self.workflow_loader,
+            model_availability_service=self.model_availability_service,
+            log_store=self.log_store,
+            workflow_library_store=self.workflow_library_store,
+            imported_package_store=self.imported_package_store,
+        )
+        if self.imported_package_store is not None:
+            self.workflow_import_orchestrator: WorkflowImportOrchestrator | None = (
+                workflow_import_orchestrator
+                or WorkflowImportOrchestrator(
+                    imported_package_store=self.imported_package_store,
+                    workflow_library_service=self.workflow_library_service,
+                    model_availability_service=self.model_availability_service,
+                    log_store=self.log_store,
+                    model_ownership_store=self.model_ownership_store,
+                )
+            )
+        else:
+            self.workflow_import_orchestrator = workflow_import_orchestrator
+        self.run_job_service: RunJobService = run_job_service or RunJobService(
+            runner_supervisor=runner_supervisor,
+            log_store=log_store,
+        )
         self.model_availability_service.cleanup_interrupted_downloads()
-        self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
-        self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
         self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
             runtime_manager=runtime_manager,
             update_service=comfyui_update_service,
             launch_settings_store=comfyui_launch_settings_store,
             on_endpoint_changed=self._reconfigure_core_runner_endpoint,
         )
+
+        # Shared state dicts — passed by reference to sub-services so they
+        # all see the same live data without coordinator coupling.
         self._job_workflows: dict[str, str] = {}
         self._job_started_at: dict[str, datetime] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._job_run_snapshots: dict[str, RunSubmissionSnapshot] = {}
-        self._memory_retry_roots: dict[str, str] = {}
-        self._memory_retry_attempted_roots: set[str] = set()
-        self._queued_workflow_runs: dict[
-            str,
-            tuple[str, dict[str, Any], dict[str, Any], RunSubmissionSnapshot],
-        ] = {}
-        self._memory_governor_metrics: dict[str, int] = {}
-        self.memory_observation = MemoryObservationCoordinator(
+
+        # Memory-governor stateful service — owns retry roots, queued run
+        # queue, sampling, and learning-store updates.
+        self.memory_service = MemoryGovernorService(
             runner_supervisor=runner_supervisor,
+            runner_process_coordinator=runner_process_coordinator,
             log_store=log_store,
             memory_observer=memory_observer,
             process_tree_memory_observer=process_tree_memory_observer or ProcessTreeMemoryObserver(),
             runner_memory_telemetry_reader=runner_memory_telemetry_reader or RunnerMemoryTelemetryReader(),
             memory_learning_store=memory_learning_store,
-            record_metric=self._record_memory_governor_metric,
+            job_workflows=self._job_workflows,
+            job_run_requests=self._job_run_requests,
+            job_run_snapshots=self._job_run_snapshots,
+        )
+        # Temporary migration alias used by diagnostics and tests.
+        self.memory_observation = self.memory_service.memory_observation
+
+        self.run_result_service: RunResultService = run_result_service or RunResultService(
+            job_service=self.run_job_service,
+            log_store=log_store,
+            job_workflows=self._job_workflows,
+            job_started_at=self._job_started_at,
+            job_run_snapshots=self._job_run_snapshots,
+            finish_memory_sampling=self.memory_service.finish_job_sampling,
+            record_memory_observation=self.memory_service.record_local_memory_observation,
+            maybe_retry_after_memory_cleanup=self.memory_service.maybe_retry_after_memory_cleanup,
+            gallery_capture_service=self.gallery_capture_service,
+            workflow_library_store=self.workflow_library_store,
+        )
+        self.run_orchestrator: RunOrchestrator = run_orchestrator or RunOrchestrator(
+            workflow_loader=self.workflow_loader,
+            runner_supervisor=self.runner_supervisor,
+            log_store=self.log_store,
+            memory_observer=self.memory_observer,
+            job_workflows=self._job_workflows,
+            job_started_at=self._job_started_at,
+            job_run_requests=self._job_run_requests,
+            job_run_snapshots=self._job_run_snapshots,
+            memory_retry_roots=self.memory_service._memory_retry_roots,
+            queued_workflow_runs=self.memory_service.queued_workflow_runs,
+            validate_package=self._validate_package,
+            unavailable_package_reason=self._imported_workflow_without_preparable_capsule,
+            apply_input_bindings=self._apply_input_bindings,
+            workflow_run_memory_decision=self.memory_service.decision_for_workflow_run,
+            evict_idle_runners=self.memory_service.evict_idle_runners_for_workflow_run,
+            memory_status_payload=self.memory_service.memory_status_payload,
+            record_memory_metric=self.memory_service.record_metric,
+            start_memory_sampling=self.memory_service.start_job_sampling,
+        )
+        # Wire the retry callback now that RunOrchestrator exists.
+        self.memory_service.run_workflow = self.run_orchestrator.run_workflow
+
+        self.workflow_runner_lifecycle_service: WorkflowRunnerLifecycleService = (
+            workflow_runner_lifecycle_service
+            or WorkflowRunnerLifecycleService(
+                workflow_loader=self.workflow_loader,
+                runner_supervisor=self.runner_supervisor,
+                log_store=self.log_store,
+                capsule_loader=self.capsule_loader,
+                capsule_installer=self.capsule_installer,
+                runner_process_coordinator=self.runner_process_coordinator,
+                runtime_manager=self.runtime_manager,
+                memory_service=self.memory_service,
+                imported_package_store=self.imported_package_store,
+            )
         )
 
+    @property
+    def memory_observer(self) -> MachineMemoryObserver | None:
+        memory_service = getattr(self, "memory_service", None)
+        if memory_service is not None:
+            return memory_service.memory_observer
+        return self._memory_observer
+
+    @memory_observer.setter
+    def memory_observer(self, value: MachineMemoryObserver | None) -> None:
+        self._memory_observer = value
+        memory_service = getattr(self, "memory_service", None)
+        if memory_service is not None:
+            memory_service.memory_observer = value
+
+    # Temporary migration proxies while tests move to WorkflowImportOrchestrator.
+    @property
+    def _pending_workflow_imports(self) -> dict:
+        if self.workflow_import_orchestrator is None:
+            return {}
+        return self.workflow_import_orchestrator._pending_workflow_imports
+
+    @property
+    def _import_model_download_jobs(self) -> dict:
+        if self.workflow_import_orchestrator is None:
+            return {}
+        return self.workflow_import_orchestrator._import_model_download_jobs
+
+    def _pending_import_or_raise(self, import_session_id: str) -> _PendingWorkflowImport:
+        if self.workflow_import_orchestrator is None:
+            raise KeyError("Workflow import is not configured.")
+        return self.workflow_import_orchestrator._pending_import_or_raise(import_session_id)
+
     def list_workflows(self) -> list[dict[str, object]]:
-        return [
-            self._workflow_summary(package)
-            for package in self.workflow_loader.list_packages()
-        ]
+        return self.workflow_library_service.list_workflows()
 
     def workflow_details(self, workflow_id: str) -> dict[str, object]:
-        package = self.workflow_loader.get_package(workflow_id)
-        summary = self._workflow_summary(package)
-        model_summary = None
-        try:
-            model_summary = self.model_availability_service.summarize(package)
-        except Exception as exc:
-            self.log_store.add(
-                "warning",
-                "Workflow details model summary unavailable",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"error": str(exc)},
-            )
-
-        models = []
-        if model_summary is not None:
-            models = [
-                {
-                    "name": model.filename,
-                    "type": model.model_type or model.folder,
-                    "size_bytes": model.size_bytes,
-                    "status": model.status,
-                    "status_label": model.status_label,
-                    "folder": model.folder,
-                    "source_path": model.source_path,
-                }
-                for model in model_summary.models
-            ]
-        else:
-            models = [
-                {
-                    "name": model.filename,
-                    "type": model.model_type or model.folder,
-                    "size_bytes": model.size_bytes,
-                    "status": "unknown",
-                    "status_label": "Unknown",
-                    "folder": model.folder,
-                    "source_path": None,
-                }
-                for model in package.required_models
-            ]
-
-        metadata = self._library_metadata(package)
-        return {
-            **summary,
-            "overview": {
-                "description": metadata["description"],
-                "author": metadata["author"],
-                "website": metadata["website"],
-                "source": summary["source_label"],
-                "version": package.metadata.version,
-            },
-            "models_used": models,
-            "run_history": self._run_history_summary(package),
-            "organization": {
-                "category": metadata["category"],
-                "tags": metadata["tags"],
-                "icon": metadata["icon"],
-            },
-            "advanced": {
-                "package_id": summary["package_id"],
-                "engine": package.engine,
-                "trust_level": package.identity.trust_level if package.identity else "noofy_verified",
-                "trust_label": package.identity.trust_level.replace("_", " ").title() if package.identity else "Noofy Verified",
-                "can_export_noofy": summary["can_export_noofy"],
-                "can_export_comfyui_json": True,
-                "can_remove": summary["can_remove"],
-            },
-        }
+        return self.workflow_library_service.workflow_details(workflow_id)
 
     def update_workflow_metadata(
         self,
         workflow_id: str,
         update: WorkflowMetadataUpdate,
     ) -> dict[str, object]:
-        package = self.workflow_loader.get_package(workflow_id)
-        metadata = (
-            self.workflow_library_store.update_metadata(workflow_id, update)
-            if self.workflow_library_store is not None
-            else update
-        )
-        package_dir = self._mutable_package_dir(package)
-        if package_dir is not None and package_dir.exists():
-            self._update_internal_package_metadata(package_dir, update)
-        self.log_store.add(
-            "info",
-            "Workflow library metadata updated",
-            "workflow.library",
-            workflow_id=workflow_id,
-            details={
-                "fields": sorted(update.model_dump(exclude_unset=True).keys()),
-                "mutable_package_updated": package_dir is not None and package_dir.exists(),
-            },
-        )
-        return {
-            "workflow_id": workflow_id,
-            "metadata": metadata.model_dump(mode="json", exclude_none=True)
-            if hasattr(metadata, "model_dump")
-            else update.model_dump(mode="json", exclude_none=True),
-            "workflow": self._workflow_summary(self.workflow_loader.get_package(workflow_id)),
-        }
+        return self.workflow_library_service.update_workflow_metadata(workflow_id, update)
 
     def remove_workflow(self, workflow_id: str) -> dict[str, object]:
-        package = self.workflow_loader.get_package(workflow_id)
-        package_dir = self._mutable_package_dir(package)
-        if package_dir is None or not package_dir.exists() or not self._can_remove_workflow(package):
-            raise ValueError("Native Noofy workflows cannot be removed.")
-        shutil.rmtree(package_dir)
-        if self.workflow_library_store is not None:
-            self.workflow_library_store.remove_workflow(workflow_id)
-        self.log_store.add(
-            "info",
-            "Workflow removed from library",
-            "workflow.library",
-            workflow_id=workflow_id,
-            details={"package_dir": str(package_dir)},
-        )
-        return {"workflow_id": workflow_id, "removed": True}
+        return self.workflow_library_service.remove_workflow(workflow_id)
 
     def export_workflow_comfyui_graph(self, workflow_id: str) -> tuple[bytes, str]:
-        package = self.workflow_loader.get_package(workflow_id)
-        package_dir = self._mutable_package_dir(package)
-        if package_dir is not None:
-            graph_file = stored_comfyui_graph_file(package_dir)
-            if graph_file.exists():
-                return graph_file.read_bytes(), f"{safe_store_segment(workflow_id)}.comfyui.json"
-        payload = json.dumps(package.comfyui_graph, indent=2, sort_keys=True).encode("utf-8")
-        return payload, f"{safe_store_segment(workflow_id)}.comfyui.json"
+        return self.workflow_library_service.export_workflow_comfyui_graph(workflow_id)
 
     def list_runners(self) -> list[RunnerDescriptor]:
         return self.runner_supervisor.list_runners()
@@ -525,24 +450,13 @@ class EngineService:
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
     ) -> dict[str, object]:
-        if self.imported_package_store is None:
+        if self.workflow_import_orchestrator is None:
             raise NoofyImportError("Workflow import is not configured.")
-        package = self.imported_package_store.import_archive(
+        return self.workflow_import_orchestrator.import_workflow_archive(
             data,
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
-        status = package.import_metadata.status if package.import_metadata else "imported"
-        message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
-        return {
-            "workflow_id": package.metadata.id,
-            "status": status,
-            "user_facing_message": message,
-            "workflow": self._workflow_summary(package),
-            "required_model_count": len(package.required_models),
-            "custom_node_count": len(package.custom_nodes),
-            "unresolved_input_count": len(package.unresolved_runtime_inputs),
-        }
 
     def preview_workflow_import(
         self,
@@ -551,946 +465,95 @@ class EngineService:
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
     ) -> StagedWorkflowImportResponse:
-        self._cleanup_expired_import_sessions()
-        if self.imported_package_store is None:
+        if self.workflow_import_orchestrator is None:
             raise NoofyImportError("Workflow import is not configured.")
-        package = self.imported_package_store.preview_archive(
+        return self.workflow_import_orchestrator.preview_workflow_import(
             data,
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
-        )
-        model_summary = self.model_availability_summary_for_package(package)
-        if not package.required_models:
-            committed = self.import_workflow_archive(
-                data,
-                original_filename=original_filename,
-                allow_unverified_community_preparation=allow_unverified_community_preparation,
-            )
-            return StagedWorkflowImportResponse(
-                import_session_id=None,
-                model_summary=None,
-                **committed,
-            )
-        session_id = f"import-{uuid.uuid4().hex}"
-        now = datetime.now(UTC)
-        self._pending_workflow_imports[session_id] = _PendingWorkflowImport(
-            data=data,
-            original_filename=original_filename,
-            allow_unverified_community_preparation=allow_unverified_community_preparation,
-            package=package,
-            created_at=now,
-            updated_at=now,
-        )
-        status = package.import_metadata.status if package.import_metadata else "imported"
-        message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
-        self.log_store.add(
-            "info",
-            "Workflow import preview created",
-            "workflow.import",
-            workflow_id=package.metadata.id,
-            details={
-                "import_session_id": session_id,
-                "required_model_count": len(package.required_models),
-            },
-        )
-        return StagedWorkflowImportResponse(
-            import_session_id=session_id,
-            workflow_id=package.metadata.id,
-            status=status,
-            user_facing_message=message,
-            workflow=self._workflow_summary(package),
-            required_model_count=len(package.required_models),
-            custom_node_count=len(package.custom_nodes),
-            unresolved_input_count=len(package.unresolved_runtime_inputs),
-            model_summary=model_summary,
         )
 
     def start_missing_model_download_for_import(
         self, import_session_id: str
     ) -> ImportModelDownloadJobStart:
-        pending = self._pending_import_or_raise(import_session_id)
-        if pending.active_download_job_id is not None:
-            active = self._import_model_download_jobs.get(pending.active_download_job_id)
-            if active is not None and active.status in {"queued", "running"}:
-                return ImportModelDownloadJobStart(
-                    job_id=active.job_id,
-                    import_session_id=import_session_id,
-                    workflow_id=pending.package.metadata.id,
-                    status=active.status,
-                    user_facing_message=active.user_facing_message,
-                )
-
-        before = self.model_availability_summary_for_package(pending.package)
-        missing_models = [model for model in before.models if model.status == "missing"]
-        job_id = f"model-download-{uuid.uuid4().hex}"
-        now = datetime.now(UTC)
-        job = _ImportModelDownloadJob(
-            job_id=job_id,
-            import_session_id=import_session_id,
-            workflow_id=pending.package.metadata.id,
-            cancel_event=asyncio.Event(),
-            task=None,
-            status="queued",
-            user_facing_message="Model download is queued.",
-            started_at=now,
-            updated_at=now,
-            total_models=len(missing_models),
-            model_summary=before,
-            models={
-                item.requirement_id: ImportModelDownloadProgressItem(
-                    requirement_id=item.requirement_id,
-                    filename=item.filename,
-                    status="queued",
-                    status_label="Queued",
-                    total_bytes=item.size_bytes,
-                )
-                for item in missing_models
-            },
-        )
-        self._import_model_download_jobs[job_id] = job
-        pending.active_download_job_id = job_id
-        pending.updated_at = now
-        job.task = asyncio.create_task(self._run_import_model_download_job(job_id))
-        return ImportModelDownloadJobStart(
-            job_id=job_id,
-            import_session_id=import_session_id,
-            workflow_id=pending.package.metadata.id,
-            status=job.status,
-            user_facing_message=job.user_facing_message,
-        )
+        if self.workflow_import_orchestrator is None:
+            raise KeyError("Workflow import is not configured.")
+        return self.workflow_import_orchestrator.start_missing_model_download_for_import(import_session_id)
 
     def import_model_download_status(
         self, import_session_id: str, job_id: str
     ) -> ImportModelDownloadJobStatus:
-        self._pending_import_or_raise(import_session_id)
-        job = self._import_model_download_jobs.get(job_id)
-        if job is None or job.import_session_id != import_session_id:
-            raise KeyError(f"Unknown model download job: {job_id}")
-        return self._import_download_job_status(job)
+        if self.workflow_import_orchestrator is None:
+            raise KeyError("Workflow import is not configured.")
+        return self.workflow_import_orchestrator.import_model_download_status(import_session_id, job_id)
 
     def cancel_import_model_download_job(
         self, import_session_id: str, job_id: str
     ) -> ImportModelDownloadJobStatus:
-        self._pending_import_or_raise(import_session_id)
-        job = self._import_model_download_jobs.get(job_id)
-        if job is None or job.import_session_id != import_session_id:
-            raise KeyError(f"Unknown model download job: {job_id}")
-        if job.status in {"queued", "running"}:
-            job.cancel_event.set()
-            job.status = "canceled"
-            job.user_facing_message = "Canceling model download..."
-            job.updated_at = datetime.now(UTC)
-        return self._import_download_job_status(job)
+        if self.workflow_import_orchestrator is None:
+            raise KeyError("Workflow import is not configured.")
+        return self.workflow_import_orchestrator.cancel_import_model_download_job(import_session_id, job_id)
 
     def commit_workflow_import(self, import_session_id: str) -> StagedWorkflowImportResponse:
-        pending = self._pending_import_or_raise(import_session_id)
-        if self._has_active_import_download(pending):
-            raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
-        self._pending_workflow_imports.pop(import_session_id, None)
-        preview = self.imported_package_store.preview_archive(
-            pending.data,
-            original_filename=pending.original_filename,
-            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
-        )
-        model_summary = self.model_availability_summary_for_package(preview)
-        committed = self.import_workflow_archive(
-            pending.data,
-            original_filename=pending.original_filename,
-            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
-        )
-        return StagedWorkflowImportResponse(
-            import_session_id=None,
-            model_summary=model_summary,
-            **committed,
-        )
+        if self.workflow_import_orchestrator is None:
+            raise NoofyImportError("Workflow import is not configured.")
+        return self.workflow_import_orchestrator.commit_workflow_import(import_session_id)
 
     def cancel_workflow_import(self, import_session_id: str) -> dict[str, object]:
-        try:
-            pending = self._pending_import_or_raise(import_session_id)
-        except ImportSessionExpiredError:
-            raise
-        except KeyError:
-            pending = None
-        if pending is not None and pending.active_download_job_id is not None:
-            job = self._import_model_download_jobs.get(pending.active_download_job_id)
-            if job is not None and job.status in {"queued", "running"}:
-                job.cancel_event.set()
-        removed = self._pending_workflow_imports.pop(import_session_id, None)
-        return {
-            "import_session_id": import_session_id,
-            "status": "canceled" if removed is not None else "not_found",
-        }
+        if self.workflow_import_orchestrator is None:
+            return {"import_session_id": import_session_id, "status": "not_found"}
+        return self.workflow_import_orchestrator.cancel_workflow_import(import_session_id)
 
     def model_availability_summary(self, workflow_id: str) -> RequiredModelSummary:
-        return self.model_availability_summary_for_package(
-            self.workflow_loader.get_package(workflow_id)
-        )
+        return self.workflow_library_service.model_availability_summary(workflow_id)
 
     def model_availability_summary_for_package(
         self, package: WorkflowPackage
     ) -> RequiredModelSummary:
-        return self.model_availability_service.summarize(package)
-
-    async def _run_import_model_download_job(self, job_id: str) -> None:
-        job = self._import_model_download_jobs[job_id]
-        pending = self._pending_workflow_imports.get(job.import_session_id)
-        if pending is None:
-            job.status = "failed"
-            job.user_facing_message = "The import session expired. Import the workflow again."
-            job.updated_at = datetime.now(UTC)
-            return
-        job.status = "running"
-        job.user_facing_message = "Downloading required models..."
-        job.updated_at = datetime.now(UTC)
-        pending.updated_at = job.updated_at
-        last_progress_at = job.updated_at
-        last_progress_bytes = 0
-
-        def progress_callback(event: dict[str, object]) -> None:
-            nonlocal last_progress_at, last_progress_bytes
-            now = datetime.now(UTC)
-            requirement_id = str(event["requirement_id"])
-            filename = str(event["filename"])
-            status = str(event["status"])
-            bytes_downloaded = event.get("bytes_downloaded")
-            total_bytes = event.get("total_bytes")
-            model_index = event.get("model_index")
-            message = event.get("message")
-            if isinstance(model_index, int):
-                job.current_model_index = model_index
-            job.current_model_filename = filename
-            if isinstance(bytes_downloaded, int):
-                elapsed = max((now - last_progress_at).total_seconds(), 0.001)
-                delta = max(bytes_downloaded - last_progress_bytes, 0)
-                job.speed_bytes_per_second = delta / elapsed
-                last_progress_bytes = bytes_downloaded
-                last_progress_at = now
-                job.bytes_downloaded = bytes_downloaded
-            if isinstance(total_bytes, int):
-                job.total_bytes = total_bytes
-            label = _download_progress_status_label(status)
-            if job.models is None:
-                job.models = {}
-            job.models[requirement_id] = ImportModelDownloadProgressItem(
-                requirement_id=requirement_id,
-                filename=filename,
-                status=status,  # type: ignore[arg-type]
-                status_label=label,
-                bytes_downloaded=bytes_downloaded if isinstance(bytes_downloaded, int) else None,
-                total_bytes=total_bytes if isinstance(total_bytes, int) else None,
-                message=str(message) if message else None,
-            )
-            job.updated_at = now
-            pending.updated_at = now
-
-        try:
-            result = await self.model_availability_service.download_missing(
-                pending.package,
-                progress_callback=progress_callback,
-                cancel_event=job.cancel_event,
-            )
-            job.model_summary = result.model_summary
-            if result.status == "canceled" or job.cancel_event.is_set():
-                job.status = "canceled"
-                job.user_facing_message = result.user_facing_message
-            elif result.failed_count:
-                job.status = "failed"
-                job.user_facing_message = result.user_facing_message
-            else:
-                job.status = "completed"
-                job.user_facing_message = result.user_facing_message
-                self._mark_import_downloads_as_noofy_downloaded(pending.package)
-        except Exception:
-            job.status = "failed"
-            job.user_facing_message = "The model download failed. The partial download was cleaned up safely."
-            job.model_summary = self.model_availability_summary_for_package(pending.package)
-            self.log_store.add(
-                "warning",
-                "Import model download job failed",
-                "workflow.models",
-                workflow_id=pending.package.metadata.id,
-                details={"job_id": job.job_id},
-            )
-        finally:
-            now = datetime.now(UTC)
-            job.updated_at = now
-            pending.updated_at = now
-            if pending.active_download_job_id == job.job_id:
-                pending.active_download_job_id = None
-
-    def _mark_import_downloads_as_noofy_downloaded(self, package: WorkflowPackage) -> None:
-        ownership_store = getattr(self, "model_ownership_store", None)
-        if ownership_store is None:
-            return
-        noofy_models_dir = getattr(self.model_availability_service, "noofy_models_dir", None)
-        if noofy_models_dir is None:
-            return
-        root = Path(noofy_models_dir)
-        for model in package.required_models:
-            target = root / model.folder / model.filename
-            try:
-                resolved = target.resolve(strict=False)
-                root_resolved = root.resolve(strict=False)
-            except OSError:
-                continue
-            if resolved != root_resolved and root_resolved not in resolved.parents:
-                continue
-            if target.is_file():
-                filename = model.filename.replace("\\", "/")
-                ownership_store.mark_downloaded(f"{model.folder}/{filename}")
-
-    def _import_download_job_status(
-        self, job: _ImportModelDownloadJob
-    ) -> ImportModelDownloadJobStatus:
-        percent = None
-        if job.bytes_downloaded is not None and job.total_bytes:
-            percent = min(100.0, round((job.bytes_downloaded / job.total_bytes) * 100, 1))
-        return ImportModelDownloadJobStatus(
-            job_id=job.job_id,
-            import_session_id=job.import_session_id,
-            workflow_id=job.workflow_id,
-            status=job.status,  # type: ignore[arg-type]
-            user_facing_message=job.user_facing_message,
-            current_model_filename=job.current_model_filename,
-            current_model_index=job.current_model_index,
-            total_models=job.total_models,
-            bytes_downloaded=job.bytes_downloaded,
-            total_bytes=job.total_bytes,
-            percent=percent,
-            speed_bytes_per_second=job.speed_bytes_per_second,
-            models=list((job.models or {}).values()),
-            model_summary=job.model_summary,
-        )
-
-    def _pending_import_or_raise(self, import_session_id: str) -> _PendingWorkflowImport:
-        expired = self._cleanup_expired_import_sessions()
-        if import_session_id in expired:
-            raise ImportSessionExpiredError(
-                "The import session expired. Please import the workflow again."
-            )
-        pending = self._pending_workflow_imports.get(import_session_id)
-        if pending is None:
-            raise KeyError(f"Unknown workflow import session: {import_session_id}")
-        pending.updated_at = datetime.now(UTC)
-        return pending
-
-    def _cleanup_expired_import_sessions(self) -> set[str]:
-        now = datetime.now(UTC)
-        expired: list[str] = []
-        for session_id, pending in self._pending_workflow_imports.items():
-            if self._has_active_import_download(pending):
-                pending.updated_at = now
-                continue
-            if now - pending.updated_at > IMPORT_SESSION_TTL:
-                expired.append(session_id)
-        for session_id in expired:
-            pending = self._pending_workflow_imports.pop(session_id)
-            self.log_store.add(
-                "info",
-                "Expired workflow import preview session removed",
-                "workflow.import",
-                workflow_id=pending.package.metadata.id,
-                details={"import_session_id": session_id},
-            )
-        return set(expired)
-
-    def _has_active_import_download(self, pending: _PendingWorkflowImport) -> bool:
-        if pending.active_download_job_id is None:
-            return False
-        job = self._import_model_download_jobs.get(pending.active_download_job_id)
-        return job is not None and job.status in {"queued", "running"}
+        return self.workflow_library_service.model_availability_summary_for_package(package)
 
     # ------------------------------------------------------------------
     # Capsule install pipeline (Phase 3)
     # ------------------------------------------------------------------
 
     def get_install_state(self, workflow_id: str) -> dict[str, object]:
-        """Return the user-facing install state for a workflow.
-
-        Workflows that ship a Noofy Verified capsule lock surface an
-        InstallState record; workflows without a lock return an
-        unsupported-shaped payload so the UI can render gracefully.
-        """
-        if self.capsule_loader is None or self.capsule_installer is None:
-            return self._unsupported_install_payload(workflow_id)
-        capsule_lock = self._preparable_capsule_lock(workflow_id)
-        if capsule_lock is None:
-            return self._unsupported_install_payload(workflow_id)
-
-        state = self.capsule_installer.get_state(capsule_lock)
-        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
+        return self.workflow_runner_lifecycle_service.get_install_state(workflow_id)
 
     def get_install_state_developer_details(self, workflow_id: str) -> dict[str, object]:
-        if self.capsule_loader is None or self.capsule_installer is None:
-            return {"workflow_id": workflow_id, "developer_details": {}}
-        capsule_lock = self._preparable_capsule_lock(workflow_id)
-        if capsule_lock is None:
-            return {"workflow_id": workflow_id, "developer_details": {}}
-        state = self.capsule_installer.get_state(capsule_lock)
-        return {
-            "workflow_id": workflow_id,
-            "developer_details": _install_developer_details(state),
-        }
+        return self.workflow_runner_lifecycle_service.get_install_state_developer_details(workflow_id)
 
     async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
-        if self.capsule_loader is None or self.capsule_installer is None:
-            self.log_store.add(
-                "warning",
-                "Workflow prepare requested but capsule installer is not configured",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_install_payload(workflow_id)
-
-        capsule_lock = self._preparable_capsule_lock(workflow_id)
-        if capsule_lock is None:
-            self.log_store.add(
-                "warning",
-                "Workflow prepare requested but no verified bundled capsule is available",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_install_payload(workflow_id)
-
-        package = self.workflow_loader.get_package(workflow_id)
-        local_model_requirements = _local_model_requirements(package, capsule_lock)
-        capsule_lock = capsule_lock.model_copy(
-            update={
-                "source_policy": _effective_prepare_source_policy(
-                    package,
-                    capsule_lock,
-                    local_model_requirements=local_model_requirements,
-                )
-            }
-        )
-        model_resolution_error = _unresolved_model_requirement_message(package, capsule_lock)
-        if model_resolution_error is not None:
-            state = self.capsule_installer.install_state_store.update(
-                capsule_lock.runtime.capsule_fingerprint,
-                status=InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
-                last_error=model_resolution_error,
-                model_references=[],
-            )
-            self.log_store.add(
-                "warning",
-                "Workflow prepare blocked by unresolved model requirements",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
-                    "error": model_resolution_error,
-                },
-            )
-            return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
-
-        try:
-            state = await self.capsule_installer.prepare(
-                capsule_lock,
-                local_model_requirements=local_model_requirements,
-                workflow_execution_smoke_allowed=not package.unresolved_runtime_inputs,
-            )
-        except CapsuleInstallError as exc:
-            self.log_store.add(
-                "error",
-                "Capsule preparation failed",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
-                    "error": str(exc),
-                },
-            )
-            return self._install_payload(workflow_id, exc.state, capsule_lock=capsule_lock)
-        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
+        return await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
-        """Start and bind an isolated runner for a prepared verified workflow."""
-        if self.runner_process_coordinator is None:
-            self.log_store.add(
-                "warning",
-                "Workflow runner start requested but runner coordinator is not configured",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_runner_payload(workflow_id, "runner_coordinator_not_configured")
-        if self.capsule_installer is None:
-            self.log_store.add(
-                "warning",
-                "Workflow runner start requested but capsule installer is not configured",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_runner_payload(workflow_id, "capsule_installer_not_configured")
-
-        capsule_lock = self._preparable_capsule_lock(workflow_id)
-        if capsule_lock is None:
-            self.log_store.add(
-                "warning",
-                "Workflow runner start requested but no verified bundled capsule is available",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_runner_payload(workflow_id, "verified_capsule_not_available")
-
-        install_state = self.capsule_installer.get_state(capsule_lock)
-        if install_state.status is not InstallStatus.READY:
-            self.log_store.add(
-                "warning",
-                "Workflow runner start blocked because workflow is not ready",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
-                    "install_status": install_state.status.value,
-                },
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "install_not_ready",
-                "runner": None,
-                "pid": None,
-                "install_status": install_state.status.value,
-                "error": install_state.last_error,
-            }
-
-        try:
-            spec = self._runner_launch_spec(capsule_lock, install_state)
-        except ValueError as exc:
-            self.log_store.add(
-                "error",
-                "Workflow runner start blocked by missing runtime artifacts",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
-                    "error": str(exc),
-                },
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "failed",
-                "runner": None,
-                "pid": None,
-                "install_status": install_state.status.value,
-                "error": str(exc),
-            }
-        decision = self.runner_supervisor.runner_selection_for(
-            runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
-            memory_class=spec.memory_class,
-        )
-        if decision.action is RunnerSelectionAction.REUSE and decision.runner_id is not None:
-            descriptor = self.runner_supervisor.bind_workflow_runner(workflow_id, decision.runner_id)
-            self.log_store.add(
-                "info",
-                "Workflow runner reused",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "runner_id": descriptor.runner_id,
-                    "runner_process_compatibility_key": descriptor.runner_process_compatibility_key,
-                },
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": descriptor.status.value,
-                "runner": descriptor.model_dump(),
-                "pid": descriptor.pid,
-                "install_status": InstallStatus.READY.value,
-                "error": None,
-            }
-        if decision.action is RunnerSelectionAction.QUEUE_PENDING_SWITCH:
-            queued_behind = (
-                self.runner_supervisor.get_runner(decision.queued_behind_runner_id)
-                if decision.queued_behind_runner_id is not None
-                else None
-            )
-            queued = self.runner_supervisor.enqueue_runner_start(
-                workflow_id=workflow_id,
-                kind=QueuedRunnerStartKind.PENDING_SWITCH,
-                queued_behind_runner_id=decision.queued_behind_runner_id,
-                reason=decision.reason,
-            )
-            self.log_store.add(
-                "info",
-                "Workflow runner start queued pending switch",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "queue_id": queued.queue_id,
-                    "queued_behind_runner_id": decision.queued_behind_runner_id,
-                    "reason": decision.reason,
-                },
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
-                "queue_id": queued.queue_id,
-                "runner": queued_behind.model_dump() if queued_behind is not None else None,
-                "pid": queued_behind.pid if queued_behind is not None else None,
-                "install_status": InstallStatus.READY.value,
-                "error": None,
-                "memory_status": {
-                    "state": "waiting_for_gpu",
-                    "message": "This workflow is waiting until the current GPU work finishes.",
-                    "risk_level": "medium",
-                    "queue_id": queued.queue_id,
-                    "can_cancel": True,
-                    "can_retry_after_cleanup": False,
-                },
-            }
-        try:
-            memory_decision = self._memory_governor_decision_for_runner_start(
-                workflow_id=workflow_id,
-                capsule_lock=capsule_lock,
-                install_state=install_state,
-                spec=spec,
-            )
-            if memory_decision is not None:
-                self._record_memory_governor_metric(f"runner_start_decision_{memory_decision.action.value}")
-                if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
-                    queued_behind = (
-                        self.runner_supervisor.get_runner(memory_decision.queued_behind_runner_id)
-                        if memory_decision.queued_behind_runner_id is not None
-                        else None
-                    )
-                    queued = self.runner_supervisor.enqueue_runner_start(
-                        workflow_id=workflow_id,
-                        kind=QueuedRunnerStartKind.PENDING_MEMORY,
-                        queued_behind_runner_id=memory_decision.queued_behind_runner_id,
-                        reason=memory_decision.reason_code,
-                    )
-                    self._record_memory_governor_metric("runner_start_queued_pending_memory")
-                    return {
-                        "workflow_id": workflow_id,
-                        "status": RunnerStatus.QUEUED_PENDING_MEMORY.value,
-                        "queue_id": queued.queue_id,
-                        "runner": queued_behind.model_dump() if queued_behind is not None else None,
-                        "pid": queued_behind.pid if queued_behind is not None else None,
-                        "install_status": InstallStatus.READY.value,
-                        "error": None,
-                        "memory_decision": memory_decision.model_dump(mode="json"),
-                        "memory_status": self._memory_status_payload(memory_decision, queue_id=queued.queue_id),
-                    }
-                if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
-                    self._record_memory_governor_metric("runner_start_blocked_by_memory")
-                    return {
-                        "workflow_id": workflow_id,
-                        "status": RunnerStatus.BLOCKED_BY_MEMORY.value,
-                        "runner": None,
-                        "pid": None,
-                        "install_status": InstallStatus.READY.value,
-                        "error": memory_decision.user_message,
-                        "memory_decision": memory_decision.model_dump(mode="json"),
-                        "memory_status": self._memory_status_payload(memory_decision),
-                    }
-                if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
-                    for evict_runner_id in memory_decision.evict_runner_ids:
-                        stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
-                        self._record_memory_governor_metric("idle_runner_evicted_for_memory")
-                        self.log_store.add(
-                            "info",
-                            "Evicted idle runner before Memory Governor admitted workflow runner",
-                            "engine.service",
-                            workflow_id=workflow_id,
-                            details={
-                                "evicted_runner_id": evict_runner_id,
-                                "stop_status": stopped.status.value,
-                                "memory_decision_id": memory_decision.decision_id,
-                                "reason": memory_decision.reason_code,
-                            },
-                        )
-                    release_check = self._wait_for_memory_release_after_cleanup(memory_decision)
-                    if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
-                        self.log_store.add(
-                            "warning",
-                            "Memory cleanup did not release enough memory",
-                            "engine.service",
-                            workflow_id=workflow_id,
-                            details={
-                                "memory_decision_id": memory_decision.decision_id,
-                                "release_status": release_check.status.value,
-                                "reason": release_check.reason_code,
-                                "required_free_vram_mb": release_check.required_free_vram_mb,
-                                "required_free_ram_mb": release_check.required_free_ram_mb,
-                            },
-                        )
-                        return {
-                            "workflow_id": workflow_id,
-                            "status": RunnerStatus.MEMORY_CLEANUP_FAILED.value,
-                            "runner": None,
-                            "pid": None,
-                            "install_status": InstallStatus.READY.value,
-                            "error": "Noofy freed memory, but the machine still does not have enough available memory.",
-                            "memory_decision": memory_decision.model_dump(mode="json"),
-                            "memory_status": {
-                                **self._memory_status_payload(memory_decision),
-                                "state": "memory_cleanup_failed",
-                                "message": "Noofy freed memory, but the machine still does not have enough available memory.",
-                            },
-                            "memory_release_check": release_check.model_dump(mode="json"),
-                        }
-            elif decision.action is RunnerSelectionAction.SWITCH and decision.evict_runner_id is not None:
-                stopped = await self.runner_process_coordinator.stop_runner(decision.evict_runner_id)
-                self.log_store.add(
-                    "info",
-                    "Evicted idle runner before workflow runner switch",
-                    "engine.service",
-                    workflow_id=workflow_id,
-                    details={
-                        "evicted_runner_id": decision.evict_runner_id,
-                        "stop_status": stopped.status.value,
-                        "reason": decision.reason,
-                    },
-                )
-            handle = await self.runner_process_coordinator.start_runner(spec, workflow_id=workflow_id)
-        except Exception as exc:
-            self.log_store.add(
-                "error",
-                "Workflow runner start failed",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "runner_id": spec.runner_id,
-                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
-                    "error": str(exc),
-                },
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "failed",
-                "runner": None,
-                "pid": None,
-                "install_status": InstallStatus.READY.value,
-                "error": str(exc),
-            }
-
-        self.log_store.add(
-            "info",
-            "Workflow runner started and bound",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={
-                "runner_id": handle.runner_id,
-                "base_url": handle.descriptor.base_url,
-                "fingerprint": handle.descriptor.fingerprint,
-            },
-        )
-        return {
-            "workflow_id": workflow_id,
-            "status": handle.descriptor.status.value,
-            "runner": handle.descriptor.model_dump(),
-            "pid": handle.pid,
-            "install_status": InstallStatus.READY.value,
-            "error": None,
-            "memory_decision": memory_decision.model_dump(mode="json") if memory_decision is not None else None,
-            "memory_status": self._memory_status_payload(memory_decision) if memory_decision is not None else None,
-        }
+        return await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
 
     async def handoff_next_queued_runner_start(
         self,
         *,
         released_runner_id: str | None = None,
     ) -> dict[str, object] | None:
-        queued = self.runner_supervisor.pop_next_queued_runner_start(
+        return await self.workflow_runner_lifecycle_service.handoff_next_queued_runner_start(
             released_runner_id=released_runner_id,
         )
-        if queued is None:
-            return None
-        self.log_store.add(
-            "info",
-            "Handing off queued workflow runner start",
-            "engine.service",
-            workflow_id=queued.workflow_id,
-            details={
-                "queue_id": queued.queue_id,
-                "kind": queued.kind.value,
-                "released_runner_id": released_runner_id,
-                "queued_behind_runner_id": queued.queued_behind_runner_id,
-                "reason": queued.reason,
-            },
-        )
-        result = await self.start_workflow_runner(queued.workflow_id)
-        result["started_from_queue_id"] = queued.queue_id
-        return result
 
     def cancel_queued_runner_start(self, queue_id: str) -> dict[str, object]:
-        queued = self.runner_supervisor.cancel_queued_runner_start(queue_id)
-        if queued is None:
-            return {
-                "queue_id": queue_id,
-                "status": "not_found",
-                "workflow_id": None,
-            }
-        self.log_store.add(
-            "info",
-            "Canceled queued workflow runner start",
-            "engine.service",
-            workflow_id=queued.workflow_id,
-            details={
-                "queue_id": queued.queue_id,
-                "kind": queued.kind.value,
-                "queued_behind_runner_id": queued.queued_behind_runner_id,
-            },
-        )
-        return queued.model_dump(mode="json")
+        return self.workflow_runner_lifecycle_service.cancel_queued_runner_start(queue_id)
 
     async def handoff_queued_workflow_run(self, queue_id: str) -> dict[str, object] | EngineJob | WorkflowValidationResult | None:
-        queued = self._queued_workflow_runs.pop(queue_id, None)
-        if queued is None:
-            return None
-        workflow_id, inputs, options, run_submission_snapshot = queued
-        self.log_store.add(
-            "info",
-            "Handing off queued workflow run",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={"queue_id": queue_id},
-        )
-        result = await self.run_workflow(
-            workflow_id,
-            inputs,
-            options,
-            run_submission_snapshot=run_submission_snapshot,
-        )
-        if isinstance(result, EngineJob):
-            result = result.model_copy(update={"queue_id": result.queue_id or queue_id})
-        return result
+        return await self.memory_service.handoff_queued_workflow_run(queue_id)
 
     async def stop_workflow_runner(self, workflow_id: str) -> dict[str, object]:
-        """Stop the isolated runner currently bound to a workflow."""
-        if self.runner_process_coordinator is None:
-            self.log_store.add(
-                "warning",
-                "Workflow runner stop requested but runner coordinator is not configured",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return self._unsupported_runner_payload(workflow_id, "runner_coordinator_not_configured")
-
-        descriptor = self.runner_supervisor.runner_for_workflow(workflow_id)
-        if descriptor is None:
-            return {
-                "workflow_id": workflow_id,
-                "status": "not_running",
-                "runner": None,
-                "pid": None,
-                "error": None,
-            }
-        if descriptor.kind is RunnerKind.CORE_COMFYUI:
-            self.log_store.add(
-                "warning",
-                "Refusing to stop core runner through workflow runner endpoint",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"runner_id": descriptor.runner_id},
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "failed",
-                "runner": descriptor.model_dump(),
-                "pid": None,
-                "error": "workflow is bound to the core runner",
-            }
-
-        status = await self.runner_process_coordinator.stop_runner(descriptor.runner_id)
-        self.runner_supervisor.unbind_workflow_runner(workflow_id)
-        self.log_store.add(
-            "info",
-            "Workflow runner stopped and unbound",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={"runner_id": descriptor.runner_id, "status": status.status.value},
-        )
-        return {
-            "workflow_id": workflow_id,
-            "status": status.status.value,
-            "runner": {
-                "runner_id": status.runner_id,
-                "kind": descriptor.kind.value,
-                "base_url": status.base_url,
-                "ws_url": status.ws_url,
-                "fingerprint": descriptor.fingerprint,
-                "status": status.status.value,
-            },
-            "pid": status.pid,
-            "error": status.error,
-        }
+        return await self.workflow_runner_lifecycle_service.stop_workflow_runner(workflow_id)
 
     def open_workflow_runner_lease(self, workflow_id: str) -> dict[str, object]:
-        """Record that a workflow view is open and should keep its runner warm."""
-        self.workflow_loader.get_package(workflow_id)
-        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
-        if runner is None:
-            self.log_store.add(
-                "info",
-                "Workflow runner lease opened without a bound runner",
-                "engine.service",
-                workflow_id=workflow_id,
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "no_runner",
-                "lease_id": None,
-                "runner": None,
-            }
-
-        lease_id = self.runner_supervisor.open_workflow_lease(workflow_id, runner.runner_id)
-        updated = self.runner_supervisor.get_runner(runner.runner_id)
-        self.log_store.add(
-            "info",
-            "Workflow runner lease opened",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={
-                "runner_id": updated.runner_id,
-                "lease_id": lease_id,
-                "open_workflow_lease_count": updated.open_workflow_lease_count,
-            },
-        )
-        return {
-            "workflow_id": workflow_id,
-            "status": updated.status.value,
-            "lease_id": lease_id,
-            "runner": updated.model_dump(),
-        }
+        return self.workflow_runner_lifecycle_service.open_workflow_runner_lease(workflow_id)
 
     def close_workflow_runner_lease(self, workflow_id: str, lease_id: str) -> dict[str, object]:
-        """Record that a workflow view closed and may enter cooldown."""
-        self.workflow_loader.get_package(workflow_id)
-        updated = self.runner_supervisor.close_workflow_lease(lease_id)
-        if updated is None:
-            self.log_store.add(
-                "warning",
-                "Workflow runner lease close requested for an unknown lease",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"lease_id": lease_id},
-            )
-            return {
-                "workflow_id": workflow_id,
-                "status": "lease_not_found",
-                "lease_id": lease_id,
-                "runner": None,
-            }
-
-        self.log_store.add(
-            "info",
-            "Workflow runner lease closed",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={
-                "runner_id": updated.runner_id,
-                "lease_id": lease_id,
-                "open_workflow_lease_count": updated.open_workflow_lease_count,
-                "closed_view_cooldown_expires_at": updated.closed_view_cooldown_expires_at,
-            },
+        return self.workflow_runner_lifecycle_service.close_workflow_runner_lease(
+            workflow_id,
+            lease_id,
         )
-        return {
-            "workflow_id": workflow_id,
-            "status": updated.status.value,
-            "lease_id": lease_id,
-            "runner": updated.model_dump(),
-        }
 
     # ------------------------------------------------------------------
     # Dashboard authoring (M2)
@@ -1555,45 +618,7 @@ class EngineService:
         )
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
-        package = self.workflow_loader.get_package(workflow_id)
-        unavailable = self._imported_workflow_without_preparable_capsule(package)
-        if unavailable is not None:
-            self.log_store.add(
-                "warning",
-                "Workflow validation blocked because no preparable capsule is available",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"error": unavailable},
-            )
-            return WorkflowValidationResult(
-                workflow_id=workflow_id,
-                valid=False,
-                errors=[unavailable],
-            )
-        runner = self.runner_supervisor.acquire_runner(package)
-        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
-        validation = await self._validate_package(package, adapter)
-        if validation.valid:
-            self.log_store.add(
-                "info",
-                "Workflow validation passed",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"runner_id": runner.runner_id},
-            )
-        else:
-            self.log_store.add(
-                "warning",
-                "Workflow validation failed",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "runner_id": runner.runner_id,
-                    "missing_models": [model.model_dump() for model in validation.missing_models],
-                    "errors": validation.errors,
-                },
-            )
-        return validation
+        return await self.run_orchestrator.validate_workflow(workflow_id)
 
     async def run_workflow(
         self,
@@ -1605,205 +630,25 @@ class EngineService:
         output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
         run_submission_snapshot: RunSubmissionSnapshot | None = None,
     ):
-        package = self.workflow_loader.get_package(workflow_id)
-        if run_submission_snapshot is None:
-            preferences: dict[str, OutputPreference] = {}
-            for control_id, raw_preference in (output_preferences_snapshot or {}).items():
-                if isinstance(raw_preference, OutputPreference):
-                    preferences[control_id] = raw_preference
-                    continue
-                if isinstance(raw_preference, dict):
-                    preferences[control_id] = OutputPreference.model_validate(raw_preference)
-            run_submission_snapshot = build_run_submission_snapshot(
-                package=package,
-                inputs=inputs,
-                output_preferences_snapshot=preferences,
-            )
-        unavailable = self._imported_workflow_without_preparable_capsule(package)
-        if unavailable is not None:
-            self.log_store.add(
-                "warning",
-                "Workflow run blocked because no preparable capsule is available",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={"error": unavailable},
-            )
-            return WorkflowValidationResult(
-                workflow_id=workflow_id,
-                valid=False,
-                errors=[unavailable],
-            )
-        runner = self.runner_supervisor.acquire_runner(package)
-        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
-
-        validation = await self._validate_package(package, adapter)
-        if not validation.valid:
-            self.log_store.add(
-                "warning",
-                "Workflow run blocked by validation failure",
-                "engine.service",
-                workflow_id=workflow_id,
-                details={
-                    "runner_id": runner.runner_id,
-                    "missing_models": [model.model_dump() for model in validation.missing_models],
-                    "errors": validation.errors,
-                },
-            )
-            return validation
-
-        graph = self._apply_input_bindings(package, inputs)
-        memory_decision = self._memory_governor_decision_for_workflow_run(
-            package=package,
-            workflow_id=workflow_id,
-            runner=runner,
-            input_profile_fingerprint=memory_input_profile_fingerprint(inputs, options),
+        return await self.run_orchestrator.run_workflow(
+            workflow_id,
+            inputs,
+            options,
             memory_retry_after_cleanup=memory_retry_after_cleanup,
+            output_preferences_snapshot=output_preferences_snapshot,
+            run_submission_snapshot=run_submission_snapshot,
         )
-        if memory_decision is not None:
-            if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
-                queue_id = f"workflow-run-queue-{workflow_id}-{len(self._queued_workflow_runs) + 1}"
-                self._queued_workflow_runs[queue_id] = (
-                    workflow_id,
-                    dict(inputs),
-                    dict(options),
-                    run_submission_snapshot.model_copy(deep=True),
-                )
-                self._record_memory_governor_metric("workflow_run_queued_pending_memory")
-                self.log_store.add(
-                    "info",
-                    "Workflow run queued pending memory",
-                    "engine.service",
-                    workflow_id=workflow_id,
-                    details={
-                        "queue_id": queue_id,
-                        "runner_id": runner.runner_id,
-                        "memory_decision_id": memory_decision.decision_id,
-                        "reason": memory_decision.reason_code,
-                    },
-                )
-                return EngineJob(
-                    job_id=queue_id,
-                    workflow_id=workflow_id,
-                    engine="noofy",
-                    status="queued_pending_memory",
-                    queue_id=queue_id,
-                    message=memory_decision.user_message,
-                    memory_decision=memory_decision.model_dump(mode="json"),
-                    memory_status=self._memory_status_payload(memory_decision, queue_id=queue_id),
-                )
-            if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
-                self._record_memory_governor_metric("workflow_run_blocked_by_memory")
-                self.log_store.add(
-                    "warning",
-                    "Workflow run blocked by memory policy",
-                    "engine.service",
-                    workflow_id=workflow_id,
-                    details={
-                        "runner_id": runner.runner_id,
-                        "memory_decision_id": memory_decision.decision_id,
-                        "reason": memory_decision.reason_code,
-                    },
-                )
-                return EngineJob(
-                    job_id=f"blocked-memory-{workflow_id}",
-                    workflow_id=workflow_id,
-                    engine="noofy",
-                    status="blocked_by_memory",
-                    message=memory_decision.user_message,
-                    memory_decision=memory_decision.model_dump(mode="json"),
-                    memory_status=self._memory_status_payload(memory_decision),
-                )
-            if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
-                cleanup_failed = await self._evict_idle_runners_for_workflow_run(memory_decision)
-                if cleanup_failed is not None:
-                    return cleanup_failed
-
-        self.log_store.add(
-            "info",
-            "Submitting workflow run",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={"runner_id": runner.runner_id, "input_keys": sorted(inputs.keys())},
-        )
-        memory_sampling_started_at = datetime.now(UTC).isoformat()
-        pre_submit_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
-        job = await adapter.run_workflow(package, graph, inputs, options)
-        self.runner_supervisor.register_job(job.job_id, runner.runner_id)
-        self._job_workflows[job.job_id] = workflow_id
-        self._job_started_at[job.job_id] = datetime.now(UTC)
-        self._job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
-        self._job_run_snapshots[job.job_id] = run_submission_snapshot
-        self._memory_retry_roots.setdefault(job.job_id, job.job_id)
-        self._start_job_memory_sampling(
-            job_id=job.job_id,
-            workflow_id=workflow_id,
-            runner_id=runner.runner_id,
-            initial_snapshot=pre_submit_snapshot,
-            retry_after_cleanup=memory_retry_after_cleanup,
-            telemetry_observed_after=memory_sampling_started_at,
-        )
-        if memory_decision is not None:
-            job = job.model_copy(
-                update={
-                    "memory_decision": memory_decision.model_dump(mode="json"),
-                    "memory_status": self._memory_status_payload(memory_decision),
-                }
-            )
-        self.log_store.add(
-            "info",
-            "Workflow run queued",
-            "engine.service",
-            job_id=job.job_id,
-            workflow_id=workflow_id,
-            details={"runner_id": runner.runner_id},
-        )
-        return job
 
     async def get_progress(self, job_id: str) -> JobProgress:
-        adapter = self._adapter_for_job(job_id)
-        return await adapter.get_progress(job_id)
+        return await self.run_job_service.get_progress(job_id)
 
     async def cancel_job(self, job_id: str) -> JobProgress:
-        self.log_store.add("info", "Cancel requested", "engine.service", job_id=job_id)
-        adapter = self._adapter_for_job(job_id)
-        return await adapter.cancel_job(job_id)
+        return await self.run_job_service.cancel_job(job_id)
 
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
-        adapter = self._adapter_for_job(job_id)
-        result = await adapter.get_result(job_id)
-        await self._finish_job_memory_sampling(result.job_id)
-        self._record_local_memory_observation_for_result(result)
-        retry_job = await self._maybe_retry_after_memory_cleanup(result)
-        if retry_job is not None:
-            return retry_job
-        if self.gallery_capture_service is not None:
-            try:
-                await self.gallery_capture_service.save_completed_job_outputs(
-                    result=result,
-                    snapshot=self._job_run_snapshots.get(result.job_id),
-                    fetch_output=self.fetch_output,
-                )
-            except Exception as exc:
-                self.log_store.add(
-                    "error",
-                    "Gallery capture failed after workflow completion",
-                    "engine.service",
-                    job_id=result.job_id,
-                    workflow_id=self._job_workflows.get(result.job_id),
-                    details={"error": str(exc)},
-                )
-        if self.workflow_library_store is not None:
-            workflow_id = self._job_workflows.get(result.job_id)
-            started_at = self._job_started_at.pop(result.job_id, None)
-            if workflow_id is not None and started_at is not None:
-                self.workflow_library_store.record_run_result(
-                    workflow_id=workflow_id,
-                    job_id=result.job_id,
-                    status=result.status,
-                    started_at=started_at,
-                    error=result.error,
-                )
-        return result
+        self.run_result_service.gallery_capture_service = self.gallery_capture_service
+        self.run_result_service.workflow_library_store = self.workflow_library_store
+        return await self.run_result_service.get_result(job_id)
 
     async def fetch_output(
         self,
@@ -1812,20 +657,11 @@ class EngineService:
         subfolder: str,
         output_type: str,
     ) -> tuple[bytes, str]:
-        adapter = self._adapter_for_job(job_id)
-        return await adapter.fetch_output(job_id, filename, subfolder, output_type)
+        return await self.run_job_service.fetch_output(job_id, filename, subfolder, output_type)
 
     async def stream_progress_events(self, job_id: str):
-        while True:
-            progress = await self.get_progress(job_id)
-            yield f"event: progress\ndata: {progress.model_dump_json()}\n\n"
-
-            if progress.status in {"completed", "failed", "canceled"}:
-                result = await self.get_result(job_id)
-                yield f"event: result\ndata: {result.model_dump_json()}\n\n"
-                return
-
-            await asyncio.sleep(1)
+        async for event in self.run_result_service.stream_progress_events(job_id):
+            yield event
 
     async def list_available_models(self):
         adapter = self._core_adapter()
@@ -1835,7 +671,7 @@ class EngineService:
         return self.log_store.list_events(level=level, limit=limit)
 
     def list_job_logs(self, job_id: str, *, level: LogLevel | None = None, limit: int = 200) -> DiagnosticLogResponse:
-        return self.log_store.list_events(job_id=job_id, level=level, limit=limit)
+        return self.run_job_service.list_job_logs(job_id, level=level, limit=limit)
 
     async def health(self) -> BackendHealthReport:
         packages = self.workflow_loader.list_packages()
@@ -1967,322 +803,24 @@ class EngineService:
         }
 
     def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
-        status = package.import_metadata.status if package.import_metadata else "installed"
-        user_facing_status = (
-            package.import_metadata.user_facing_message
-            if package.import_metadata
-            else "Installed"
-        )
-        metadata = self._library_metadata(package)
-        history = self._run_history_summary(package)
-        model_counts = self._model_count_summary(package)
-        missing_model_count = model_counts["missing_model_count"]
-        needs_setup = status in {
-            "needs_input_setup",
-            "cannot_prepare_automatically",
-            "blocked_by_policy",
-            "unsupported",
-        } or bool(package.unresolved_runtime_inputs)
-        return {
-            "id": package.metadata.id,
-            "name": package.metadata.name,
-            "version": package.metadata.version,
-            "icon": metadata["icon"],
-            "source_label": self._source_label(package),
-            "main_model": self._main_model_summary(package),
-            "description": metadata["description"],
-            "category": metadata["category"],
-            "last_opened": history["last_started_at"],
-            "tags": metadata["tags"],
-            "missing_model_count": missing_model_count,
-            "needs_setup": needs_setup,
-            "can_remove": self._can_remove_workflow(package),
-            "can_export_noofy": True,
-            "can_export_comfyui_json": True,
-            "publisher_id": package.identity.publisher_id if package.identity else package.metadata.author,
-            "package_id": package.identity.package_id if package.identity else package.metadata.id,
-            "trust_level": package.identity.trust_level if package.identity else "noofy_verified",
-            "trust": workflow_trust_payload(package),
-            "source_policy": (
-                package.source_policy.model_dump(mode="json")
-                if package.source_policy is not None
-                else workflow_source_policy(package).model_dump(mode="json")
-            ),
-            "status": status,
-            "status_label": user_facing_status,
-            "unresolved_input_count": len(package.unresolved_runtime_inputs),
-            "custom_node_count": len(package.custom_nodes),
-            "required_model_count": len(package.required_models),
-        }
-
-    def _library_metadata(self, package: WorkflowPackage) -> dict[str, object]:
-        stored = (
-            self.workflow_library_store.metadata(package.metadata.id)
-            if self.workflow_library_store is not None
-            else None
-        )
-        description = (
-            stored.description
-            if stored is not None and stored.description is not None
-            else package.metadata.description
-        )
-        author = (
-            stored.author
-            if stored is not None and stored.author is not None
-            else package.metadata.author
-        )
-        website = (
-            stored.website
-            if stored is not None and stored.website is not None
-            else package.metadata.website
-        )
-        category = (
-            stored.category
-            if stored is not None and stored.category is not None
-            else package.metadata.category
-        ) or self._infer_workflow_category(package)
-        tags = (
-            stored.tags
-            if stored is not None and stored.tags is not None
-            else package.metadata.tags
-        )
-        icon = (
-            stored.icon
-            if stored is not None and stored.icon is not None
-            else package.metadata.icon
-        ) or self._infer_workflow_icon(category)
-        return {
-            "description": description or "",
-            "author": author or "",
-            "website": website or "",
-            "category": category,
-            "tags": tags,
-            "icon": icon,
-        }
-
-    def _run_history_summary(self, package: WorkflowPackage) -> dict[str, object]:
-        if self.workflow_library_store is None:
-            return {
-                "last_run_status": None,
-                "last_started_at": None,
-                "last_finished_at": None,
-                "last_duration_seconds": None,
-                "average_duration_seconds": None,
-                "last_error": None,
-                "run_count": 0,
-            }
-        return self.workflow_library_store.run_history_summary(package.metadata.id).model_dump(mode="json")
-
-    def _source_label(self, package: WorkflowPackage) -> str:
-        if package.import_metadata is not None:
-            return "Imported"
-        if package.identity and package.identity.source == "user_created":
-            return "Created by me"
-        return "Native Noofy"
-
-    def _main_model_summary(self, package: WorkflowPackage) -> dict[str, object] | None:
-        if not package.required_models:
-            return {"name": "No model detected", "type": None, "size_bytes": None}
-        if len(package.required_models) > 1:
-            checkpoint = next(
-                (
-                    model for model in package.required_models
-                    if _is_primary_model_type(model.model_type, model.folder)
-                ),
-                None,
-            )
-            selected = checkpoint or max(
-                package.required_models,
-                key=lambda model: model.size_bytes or 0,
-            )
-            if selected.size_bytes is None and checkpoint is None:
-                return {"name": "Multiple models", "type": None, "size_bytes": None}
-        else:
-            selected = package.required_models[0]
-        return {
-            "name": selected.filename,
-            "type": selected.model_type or selected.folder,
-            "size_bytes": selected.size_bytes,
-        }
-
-    def _model_count_summary(self, package: WorkflowPackage) -> dict[str, object]:
-        if not package.required_models:
-            return {"missing_model_count": 0, "ready_to_run": True}
-        try:
-            summary = self.model_availability_service.summarize(package)
-        except Exception as exc:
-            self.log_store.add(
-                "warning",
-                "Workflow list model summary unavailable",
-                "engine.service",
-                workflow_id=package.metadata.id,
-                details={"error": str(exc)},
-            )
-            return {
-                "missing_model_count": len(package.required_models),
-                "ready_to_run": False,
-            }
-        return {
-            "missing_model_count": summary.missing_count + summary.needs_manual_download_count,
-            "ready_to_run": summary.ready_to_run,
-        }
-
-    def _infer_workflow_category(self, package: WorkflowPackage) -> str:
-        name = f"{package.metadata.name} {package.metadata.description}".casefold()
-        combined = f"{name} {self._graph_keyword_text(package.comfyui_graph)}"
-        if "upscale" in combined or "esrgan" in combined:
-            return "Upscaling"
-        if "inpaint" in combined:
-            return "Inpainting"
-        if "outpaint" in combined:
-            return "Outpainting"
-        if "canny" in combined or "lineart" in combined:
-            return "Canny / Line Control"
-        if "depth" in combined:
-            return "Depth Control"
-        if "pose" in combined or "openpose" in combined:
-            return "Pose Control"
-        if "background" in combined and "remove" in combined:
-            return "Background Removal"
-        if "background" in combined:
-            return "Background Replacement"
-        if "restore" in combined or "restoration" in combined:
-            return "Restoration"
-        if any(input_def.control.startswith("load_image") for input_def in package.inputs):
-            return "Img2img"
-        return "Txt2img"
-
-    def _graph_keyword_text(self, graph: dict[str, Any]) -> str:
-        parts: list[str] = []
-        for node in graph.values():
-            if not isinstance(node, dict):
-                continue
-            class_type = node.get("class_type")
-            if isinstance(class_type, str):
-                parts.append(class_type)
-            title = node.get("_meta", {}).get("title") if isinstance(node.get("_meta"), dict) else None
-            if isinstance(title, str):
-                parts.append(title)
-        return " ".join(parts).casefold()
-
-    def _infer_workflow_icon(self, category: str) -> str:
-        if category in {"Upscaling", "Restoration"}:
-            return "maximize"
-        if "Control" in category:
-            return "sliders"
-        if "Background" in category:
-            return "image"
-        return "sparkles"
-
-    def _can_remove_workflow(self, package: WorkflowPackage) -> bool:
-        return package.import_metadata is not None and self._mutable_package_dir(package) is not None
-
-    def _mutable_package_dir(self, package: WorkflowPackage) -> Path | None:
-        if package.identity is None:
-            return None
-        root_dir = (
-            self.imported_package_store.root_dir
-            if self.imported_package_store is not None
-            else settings.paths.workflow_packages_store_dir
-        )
-        candidate = mutable_package_dir(root_dir, package)
-        if candidate is not None and candidate.exists():
-            return candidate
-        return None
-
-    def _update_internal_package_metadata(
-        self,
-        package_dir: Path,
-        update: WorkflowMetadataUpdate,
-    ) -> None:
-        package_file = package_dir / "package.json"
-        if not package_file.exists():
-            return
-        data = json.loads(package_file.read_text(encoding="utf-8"))
-        metadata = data.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        patch = update.model_dump(mode="json", exclude_unset=True)
-        for key, value in patch.items():
-            if value is None:
-                continue
-            if isinstance(value, str):
-                value = value.strip()
-            metadata[key] = value
-            if key == "description":
-                data["description"] = value
-            elif key == "author":
-                data["author"] = value
-            elif key == "website":
-                data["website"] = value
-            elif key == "category":
-                data["category"] = value
-            elif key == "tags":
-                data["tags"] = value
-            elif key == "icon":
-                data["icon"] = value
-        data["metadata"] = metadata
-        tmp = package_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(package_file)
+        return self.workflow_library_service.workflow_summary(package)
 
     def _phase3_verified_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
-        return self._preparable_capsule_lock(workflow_id)
+        return self.workflow_runner_lifecycle_service._preparable_capsule_lock(workflow_id)
 
     def _preparable_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
-        if self.capsule_loader is None:
-            return None
-        try:
-            capsule_lock = self.capsule_loader.get_bundled_capsule_lock(workflow_id)
-        except KeyError:
-            try:
-                capsule_lock = self.capsule_loader.get_capsule_lock(workflow_id)
-            except KeyError:
-                return None
-        if capsule_lock.workflow.package_id != workflow_id and _imported_workflow_id(capsule_lock) != workflow_id:
-            return None
-        if capsule_lock.workflow.trust_level not in _PREPARABLE_TRUST_LEVELS:
-            return None
-        if capsule_lock.trust.level not in _PREPARABLE_TRUST_LEVELS:
-            return None
-        return capsule_lock
+        return self.workflow_runner_lifecycle_service._preparable_capsule_lock(workflow_id)
 
     def _imported_workflow_without_preparable_capsule(
         self, package: WorkflowPackage
     ) -> str | None:
-        if package.import_metadata is None:
-            return None
-        if self._preparable_capsule_lock(package.metadata.id) is not None:
-            return None
-        return (
-            "This imported workflow cannot run on this machine because Noofy could "
-            "not resolve a supported managed runtime profile for it."
-        )
+        return self.workflow_runner_lifecycle_service.imported_workflow_without_preparable_capsule(package)
 
     def _unsupported_install_payload(self, workflow_id: str) -> dict[str, object]:
-        return {
-            "workflow_id": workflow_id,
-            "capsule_fingerprint": None,
-            "status": InstallStatus.UNSUPPORTED.value,
-            "user_facing_message": user_facing_install_message(InstallStatus.UNSUPPORTED),
-            "installed_at": None,
-            "last_used_at": None,
-            "dependency_env_path": None,
-            "runner_workspace_path": None,
-            "smoke_test_status": "not_run",
-            "smoke_test_report": {},
-            "last_error": None,
-        }
+        return self.workflow_runner_lifecycle_service._unsupported_install_payload(workflow_id)
 
     def _unsupported_runner_payload(self, workflow_id: str, reason: str) -> dict[str, object]:
-        return {
-            "workflow_id": workflow_id,
-            "status": "unsupported",
-            "runner": None,
-            "pid": None,
-            "install_status": InstallStatus.UNSUPPORTED.value,
-            "error": reason,
-        }
+        return self.workflow_runner_lifecycle_service._unsupported_runner_payload(workflow_id, reason)
 
     def _adapter_for_job(self, job_id: str) -> EngineAdapter:
         try:
@@ -2377,506 +915,19 @@ class EngineService:
             self.runtime_manager.ws_url,
         )
 
-    def _runner_launch_spec(self, capsule_lock: CapsuleLock, install_state: InstallState) -> RunnerLaunchSpec:
-        dependency_env_path, runner_workspace_path = self._prepared_runtime_paths(install_state, capsule_lock)
-        if install_state.smoke_test_status is not SmokeTestStatus.PASSED:
-            raise ValueError(
-                "Prepared runtime smoke test has not passed: "
-                f"{install_state.smoke_test_status.value}"
-            )
-        return _workflow_runner_launch_spec(
-            capsule_lock,
-            dependency_env_path=dependency_env_path,
-            runner_workspace_path=runner_workspace_path,
-            runtime_manager=self.runtime_manager,
-        )
-
-    def _memory_governor_decision_for_runner_start(
-        self,
-        *,
-        workflow_id: str,
-        capsule_lock: CapsuleLock,
-        install_state: InstallState,
-        spec: RunnerLaunchSpec,
-    ) -> MemoryGovernorDecision | None:
-        if self.memory_observer is None:
-            return None
-        machine_snapshot = self.memory_observer.snapshot()
-        local_evidence = (
-            self.memory_learning_store.summary_for(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
-                machine_profile_id=machine_snapshot.machine_profile_id,
-                backend=machine_snapshot.backend,
-            )
-            if self.memory_learning_store is not None
-            else None
-        )
-        model_size_mb = _installed_model_size_mb(install_state)
-        estimate = build_workflow_memory_estimate(
-            WorkflowMemoryEstimateRequest(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=spec.runner_process_compatibility_key or spec.fingerprint,
-                declared_memory_class=spec.memory_class,
-                local_evidence=local_evidence,
-                creator_observed_peak_vram_mb=capsule_lock.hardware_observations.observed_peak_vram_mb
-                or capsule_lock.hardware_observations.recommended_vram_mb,
-                creator_observed_peak_ram_mb=capsule_lock.hardware_observations.observed_peak_ram_mb
-                or capsule_lock.hardware_observations.recommended_ram_mb,
-                required_model_size_mb=model_size_mb,
-            )
-        )
-        runner_snapshots = [
-            RunnerMemorySnapshot.from_descriptor(runner)
-            for runner in self.runner_supervisor.list_runners()
-            if runner.kind is RunnerKind.ISOLATED_COMFYUI
-        ]
-        decision = decide_memory_admission(
-            MemoryAdmissionRequest(
-                workflow_estimate=estimate,
-                machine_snapshot=machine_snapshot,
-                resident_runners=runner_snapshots,
-            )
-        )
-        record_memory_governor_decision(self.log_store, decision)
-        return decision
-
-    def _memory_governor_decision_for_workflow_run(
-        self,
-        *,
-        package: WorkflowPackage,
-        workflow_id: str,
-        runner: RunnerDescriptor,
-        input_profile_fingerprint: str | None = None,
-        memory_retry_after_cleanup: bool = False,
-    ) -> MemoryGovernorDecision | None:
-        if self.memory_observer is None:
-            return None
-        machine_snapshot = self.memory_observer.snapshot()
-        local_evidence = (
-            self.memory_learning_store.summary_for(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=runner.runner_process_compatibility_key,
-                machine_profile_id=machine_snapshot.machine_profile_id,
-                backend=machine_snapshot.backend,
-                input_profile_fingerprint=input_profile_fingerprint,
-            )
-            if self.memory_learning_store is not None
-            else None
-        )
-        estimate = build_workflow_memory_estimate(
-            WorkflowMemoryEstimateRequest(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=runner.runner_process_compatibility_key,
-                declared_memory_class=runner.memory_class,
-                input_profile_fingerprint=input_profile_fingerprint,
-                local_evidence=local_evidence,
-                creator_observed_peak_vram_mb=_observed_hardware_int(package, "observed_peak_vram_mb")
-                or _observed_hardware_int(package, "recommended_vram_mb"),
-                creator_observed_peak_ram_mb=_observed_hardware_int(package, "observed_peak_ram_mb")
-                or _observed_hardware_int(package, "recommended_ram_mb"),
-                declared_peak_vram_mb=runner.observed_execution_peak_vram_mb,
-                declared_peak_ram_mb=runner.observed_execution_peak_ram_mb,
-                required_model_size_mb=_required_model_size_mb_from_package(package),
-            )
-        )
-        resident_runners = []
-        for resident in self.runner_supervisor.list_runners():
-            if resident.runner_id == runner.runner_id and resident.current_job_id is None:
-                continue
-            if (
-                resident.kind is RunnerKind.CORE_COMFYUI
-                and resident.current_job_id is None
-                and resident.status
-                not in {
-                    RunnerStatus.RUNNING,
-                    RunnerStatus.LOADING_MODEL,
-                    RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
-                }
-            ):
-                continue
-            resident_runners.append(RunnerMemorySnapshot.from_descriptor(resident))
-        decision = decide_memory_admission(
-            MemoryAdmissionRequest(
-                workflow_estimate=estimate,
-                machine_snapshot=machine_snapshot,
-                resident_runners=resident_runners,
-            )
-        )
-        record_memory_governor_decision(self.log_store, decision)
-        self._record_memory_governor_metric(f"workflow_run_decision_{decision.action.value}")
-        if (
-            memory_retry_after_cleanup
-            and decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
-            and decision.reason_code == "recent_memory_error_requires_cleanup_before_retry"
-        ):
-            decision = decision.model_copy(
-                update={
-                    "action": MemoryDecisionAction.START_CO_RESIDENT,
-                    "reason_code": "retry_after_cleanup_cautious_start",
-                    "user_message": "Noofy freed memory and is trying this workflow one more time.",
-                    "developer_details": {
-                        **decision.developer_details,
-                        "recent_memory_error_allowed_for_retry_after_cleanup": True,
-                    },
-                }
-            )
-            record_memory_governor_decision(self.log_store, decision)
-        return decision
-
-    def _wait_for_memory_release_after_cleanup(
-        self,
-        decision: MemoryGovernorDecision,
-    ):
-        if self.memory_observer is None or decision.workflow_estimate is None:
-            return None
-        required_free_vram_mb = _required_free_after_cleanup(
-            _estimated_vram_after_cleanup(decision),
-            decision.required_vram_margin_mb,
-        )
-        required_free_ram_mb = _required_free_after_cleanup(
-            _estimated_ram_after_cleanup(decision),
-            decision.required_ram_margin_mb,
-        )
-        if required_free_vram_mb is None and required_free_ram_mb is None:
-            return None
-        release_check = wait_for_memory_release(
-            self.memory_observer,
-            required_free_vram_mb=required_free_vram_mb,
-            required_free_ram_mb=required_free_ram_mb,
-            max_checks=3,
-            interval_seconds=0,
-        )
-        self.log_store.add(
-            "info" if release_check.status is MemoryReleaseStatus.RELEASED else "warning",
-            "Memory release check completed",
-            "memory_governor",
-            workflow_id=decision.workflow_id,
-            details={
-                "memory_decision_id": decision.decision_id,
-                "status": release_check.status.value,
-                "reason_code": release_check.reason_code,
-                "required_free_vram_mb": release_check.required_free_vram_mb,
-                "required_free_ram_mb": release_check.required_free_ram_mb,
-                "checks": len(release_check.snapshots),
-            },
-        )
-        return release_check
-
-    async def _evict_idle_runners_for_workflow_run(
-        self,
-        decision: MemoryGovernorDecision,
-    ) -> EngineJob | None:
-        if self.runner_process_coordinator is None:
-            return None
-        for evict_runner_id in decision.evict_runner_ids:
-            stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
-            self._record_memory_governor_metric("idle_runner_evicted_for_workflow_run")
-            self.log_store.add(
-                "info",
-                "Evicted idle runner before workflow run",
-                "memory_governor",
-                workflow_id=decision.workflow_id,
-                details={
-                    "evicted_runner_id": evict_runner_id,
-                    "stop_status": stopped.status.value,
-                    "memory_decision_id": decision.decision_id,
-                    "reason": decision.reason_code,
-                },
-            )
-        release_check = self._wait_for_memory_release_after_cleanup(decision)
-        if release_check is None or release_check.status is MemoryReleaseStatus.RELEASED:
-            return None
-        self._record_memory_governor_metric("workflow_run_memory_cleanup_failed")
-        return EngineJob(
-            job_id=f"blocked-memory-{decision.workflow_id}",
-            workflow_id=decision.workflow_id or "unknown",
-            engine="noofy",
-            status="blocked_by_memory",
-            message="Noofy freed memory, but the machine still does not have enough available memory.",
-            memory_decision=decision.model_dump(mode="json"),
-            memory_status={
-                **self._memory_status_payload(decision),
-                "state": "memory_cleanup_failed",
-                "message": "Noofy freed memory, but the machine still does not have enough available memory.",
-            },
-        )
-
-    def _start_job_memory_sampling(
-        self,
-        *,
-        job_id: str,
-        workflow_id: str,
-        runner_id: str,
-        initial_snapshot: MachineMemorySnapshot | None = None,
-        retry_after_cleanup: bool = False,
-        telemetry_observed_after: str | None = None,
-    ) -> None:
-        self.memory_observation.start_job_sampling(
-            job_id=job_id,
-            workflow_id=workflow_id,
-            runner_id=runner_id,
-            initial_snapshot=initial_snapshot,
-            retry_after_cleanup=retry_after_cleanup,
-            telemetry_observed_after=telemetry_observed_after,
-        )
-
-    async def _finish_job_memory_sampling(self, job_id: str) -> None:
-        await self.memory_observation.finish_job_sampling(
-            job_id,
-            workflow_id=self._job_workflows.get(job_id),
-        )
-
-    async def _maybe_retry_after_memory_cleanup(self, result: JobResult) -> EngineJob | None:
-        if result.status != "failed" or not likely_memory_error(result.error):
-            return None
-        workflow_id = self._job_workflows.get(result.job_id)
-        run_request = self._job_run_requests.get(result.job_id)
-        if workflow_id is None or run_request is None or self.memory_observer is None:
-            return None
-
-        root_job_id = self._memory_retry_roots.get(result.job_id, result.job_id)
-        retry_already_attempted = root_job_id in self._memory_retry_attempted_roots
-        machine_snapshot = self.memory_observer.snapshot()
-        try:
-            runner = self.runner_supervisor.runner_for_job(result.job_id)
-        except JobRunnerNotFoundError:
-            runner = None
-        local_evidence = (
-            self.memory_learning_store.summary_for(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
-                machine_profile_id=machine_snapshot.machine_profile_id,
-                backend=machine_snapshot.backend,
-                input_profile_fingerprint=memory_input_profile_fingerprint(run_request[1], run_request[2]),
-            )
-            if self.memory_learning_store is not None
-            else None
-        )
-        estimate = build_workflow_memory_estimate(
-            WorkflowMemoryEstimateRequest(
-                workflow_id=workflow_id,
-                runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
-                declared_memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
-                input_profile_fingerprint=memory_input_profile_fingerprint(run_request[1], run_request[2]),
-                local_evidence=local_evidence,
-                declared_peak_vram_mb=runner.observed_execution_peak_vram_mb if runner is not None else None,
-                declared_peak_ram_mb=runner.observed_execution_peak_ram_mb if runner is not None else None,
-            )
-        )
-        decision = retry_after_memory_cleanup_decision(
-            workflow_estimate=estimate,
-            machine_snapshot=machine_snapshot,
-            error_message=result.error,
-            retry_already_attempted=retry_already_attempted,
-        )
-        record_memory_governor_decision(
-            self.log_store,
-            decision,
-            level="warning" if decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY else "info",
-        )
-        if decision.action is not MemoryDecisionAction.RETRY_AFTER_MEMORY_CLEANUP:
-            self._record_memory_governor_metric("memory_retry_blocked")
-            return None
-
-        release_check = await self._stop_idle_runners_for_memory_retry(
-            current_job_id=result.job_id,
-            decision=decision,
-        )
-        if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
-            self._record_memory_governor_metric("memory_retry_cleanup_failed")
-            return None
-
-        self._memory_retry_attempted_roots.add(root_job_id)
-        self._record_memory_governor_metric("memory_retry_attempted")
-        retry_workflow_id, inputs, options = run_request
-        retry_result = await self.run_workflow(
-            retry_workflow_id,
-            dict(inputs),
-            dict(options),
-            memory_retry_after_cleanup=True,
-            run_submission_snapshot=self._job_run_snapshots.get(result.job_id),
-        )
-        if not isinstance(retry_result, EngineJob):
-            return None
-        self._memory_retry_roots[retry_result.job_id] = root_job_id
-        self.log_store.add(
-            "info",
-            "Retrying workflow after Memory Governor cleanup",
-            "memory_governor",
-            job_id=retry_result.job_id,
-            workflow_id=retry_workflow_id,
-            details={
-                "original_job_id": result.job_id,
-                "root_job_id": root_job_id,
-                "memory_decision_id": decision.decision_id,
-            },
-        )
-        return retry_result.model_copy(
-            update={
-                "status": "queued",
-                "message": decision.user_message,
-                "memory_decision": decision.model_dump(mode="json"),
-                "memory_status": self._memory_status_payload(decision),
-            }
-        )
-
-    async def _stop_idle_runners_for_memory_retry(
-        self,
-        *,
-        current_job_id: str,
-        decision: MemoryGovernorDecision,
-    ):
-        if self.runner_process_coordinator is None:
-            return None
-        stopped_runner_ids: list[str] = []
-        for runner in self.runner_supervisor.list_runners():
-            if runner.kind is not RunnerKind.ISOLATED_COMFYUI:
-                continue
-            if runner.current_job_id in {current_job_id}:
-                continue
-            if runner.current_job_id is not None or runner.status is RunnerStatus.RUNNING:
-                continue
-            if runner.status not in {
-                RunnerStatus.READY,
-                RunnerStatus.IDLE,
-                RunnerStatus.IDLE_WARM,
-                RunnerStatus.CO_RESIDENT,
-            }:
-                continue
-            stopped = await self.runner_process_coordinator.stop_runner(runner.runner_id)
-            stopped_runner_ids.append(runner.runner_id)
-            self._record_memory_governor_metric("idle_runner_evicted_for_retry")
-            self.log_store.add(
-                "info",
-                "Evicted idle runner before retry after memory cleanup",
-                "memory_governor",
-                workflow_id=decision.workflow_id,
-                details={
-                    "evicted_runner_id": runner.runner_id,
-                    "stop_status": stopped.status.value,
-                    "memory_decision_id": decision.decision_id,
-                },
-            )
-        if not stopped_runner_ids:
-            return None
-        return self._wait_for_memory_release_after_cleanup(decision)
-
-    def _record_local_memory_observation_for_result(self, result: JobResult) -> None:
-        self.memory_observation.record_result_observation(
-            result,
-            workflow_id=self._job_workflows.get(result.job_id),
-            run_request=self._job_run_requests.get(result.job_id),
-        )
-
     def memory_governor_metrics(self) -> dict[str, int]:
-        return dict(self._memory_governor_metrics)
+        return self.memory_service.memory_governor_metrics()
 
     def _record_memory_governor_metric(self, name: str) -> None:
-        self._memory_governor_metrics[name] = self._memory_governor_metrics.get(name, 0) + 1
+        self.memory_service.record_metric(name)
 
     def _memory_status_payload(
         self,
-        decision: MemoryGovernorDecision,
+        decision: Any,
         *,
         queue_id: str | None = None,
     ) -> dict[str, Any]:
-        return memory_user_status_for_decision(decision, queue_id=queue_id).model_dump(mode="json")
-
-    def _prepared_runtime_paths(self, install_state: InstallState, capsule_lock: CapsuleLock) -> tuple[Path, Path]:
-        if not install_state.dependency_env_path or not install_state.runner_workspace_path:
-            raise ValueError("Prepared runtime artifact paths are missing; prepare the workflow again.")
-
-        dependency_env_path = Path(install_state.dependency_env_path)
-        runner_workspace_path = Path(install_state.runner_workspace_path)
-        missing: list[str] = []
-        if not (dependency_env_path / "manifest.json").exists():
-            missing.append("dependency environment manifest")
-        if not (runner_workspace_path / "manifest.json").exists():
-            missing.append("runner workspace manifest")
-        if not (runner_workspace_path / "main.py").exists():
-            missing.append("runner workspace entrypoint")
-        if missing:
-            raise ValueError(f"Prepared runtime artifact is missing: {', '.join(missing)}")
-
-        dependency_manifest = _read_dependency_manifest(dependency_env_path / "manifest.json")
-        runner_manifest = _read_runner_workspace_manifest(runner_workspace_path / "manifest.json")
-        not_ready: list[str] = []
-        if dependency_manifest.status is not InstallStatus.READY:
-            not_ready.append(f"dependency environment manifest status {dependency_manifest.status.value}")
-        if runner_manifest.status is not InstallStatus.READY:
-            not_ready.append(f"runner workspace manifest status {runner_manifest.status.value}")
-        if dependency_manifest.fingerprint != capsule_lock.runtime.dependency_env_fingerprint:
-            not_ready.append("dependency environment manifest fingerprint mismatch")
-        if runner_manifest.fingerprint != capsule_lock.runtime.runner_fingerprint:
-            not_ready.append("runner workspace manifest fingerprint mismatch")
-        if runner_manifest.dependency_env_fingerprint != dependency_manifest.fingerprint:
-            not_ready.append("runner workspace dependency environment mismatch")
-        not_ready.extend(_invalid_model_references(install_state))
-        if not_ready:
-            raise ValueError(f"Prepared runtime artifact is not ready: {', '.join(not_ready)}")
-        return dependency_env_path, runner_workspace_path
-
-    @staticmethod
-    def _runner_id_for_capsule(capsule_lock: CapsuleLock) -> str:
-        raw = capsule_lock.runtime.runner_fingerprint
-        safe = "".join(char if char.isalnum() else "-" for char in raw.lower()).strip("-")
-        return f"workflow-{capsule_lock.workflow.package_id}-{safe}"
-
-
-def _workflow_runner_launch_spec(
-    capsule_lock: CapsuleLock,
-    *,
-    dependency_env_path: Path,
-    runner_workspace_path: Path,
-    runtime_manager: RuntimeManager,
-    runner_id_suffix: str | None = None,
-) -> RunnerLaunchSpec:
-    runner_id = EngineService._runner_id_for_capsule(capsule_lock)
-    if runner_id_suffix:
-        runner_id = f"{runner_id}-{runner_id_suffix}"
-    telemetry_path = runner_workspace_path / ".noofy" / "memory" / f"{runner_id}.jsonl"
-    extra_args = [
-        "--base-directory",
-        str(runner_workspace_path),
-        "--disable-auto-launch",
-    ]
-    if not capsule_lock.custom_nodes:
-        extra_args.append("--disable-all-custom-nodes")
-    return RunnerLaunchSpec(
-        runner_id=runner_id,
-        kind=RunnerKind.ISOLATED_COMFYUI,
-        fingerprint=capsule_lock.runtime.runner_fingerprint,
-        python_executable=_runtime_python_executable(runtime_manager),
-        working_dir=runner_workspace_path,
-        dependency_env_path=dependency_env_path,
-        runner_workspace_path=runner_workspace_path,
-        runner_workspace_fingerprint=capsule_lock.runtime.runner_fingerprint,
-        dependency_env_fingerprint=capsule_lock.runtime.dependency_env_fingerprint,
-        runner_process_compatibility_key=(
-            capsule_lock.runtime.runner_process_compatibility_key
-            or capsule_lock.runtime.runner_fingerprint
-        ),
-        runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
-        runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
-        memory_class=_memory_class_for_runtime_backend(capsule_lock.runtime.gpu_backend),
-        host=runtime_manager.managed_host,
-        extra_args=extra_args,
-        memory_telemetry_path=telemetry_path,
-        env={
-            "NOOFY_CAPSULE_FINGERPRINT": capsule_lock.runtime.capsule_fingerprint,
-            "NOOFY_DEPENDENCY_ENV_PATH": str(dependency_env_path),
-            "NOOFY_RUNNER_WORKSPACE_PATH": str(runner_workspace_path),
-            "NOOFY_WORKFLOW_ID": capsule_lock.workflow.package_id,
-        },
-    )
-
-
-def _runtime_python_executable(runtime_manager: RuntimeManager) -> str:
-    environment = getattr(runtime_manager, "environment", None)
-    if environment is not None:
-        return environment.python_executable
-    return runtime_manager.python_executable
+        return self.memory_service.memory_status_payload(decision, queue_id=queue_id)
 
 
 def _required_actions_for_workflow(package: WorkflowPackage, install: dict[str, object]) -> list[dict[str, object]]:
@@ -3015,311 +1066,6 @@ def _redact_user_private_paths(value: str) -> str:
     for pattern in _LOCAL_PATH_PATTERNS:
         redacted = pattern.sub("[local-path-redacted]", redacted)
     return redacted
-
-
-def _read_dependency_manifest(path: Path) -> DependencyEnvManifest:
-    try:
-        return DependencyEnvManifest.model_validate_json(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Prepared runtime artifact manifest is unreadable: {path}") from exc
-    except ValidationError as exc:
-        raise ValueError(f"Prepared runtime artifact manifest is invalid: {path}") from exc
-
-
-def _read_runner_workspace_manifest(path: Path) -> RunnerWorkspaceManifest:
-    try:
-        return RunnerWorkspaceManifest.model_validate_json(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Prepared runtime artifact manifest is unreadable: {path}") from exc
-    except ValidationError as exc:
-        raise ValueError(f"Prepared runtime artifact manifest is invalid: {path}") from exc
-
-
-def _invalid_model_references(install_state: InstallState) -> list[str]:
-    invalid: list[str] = []
-    for ref in install_state.model_references:
-        if ref.asset_ownership is AssetOwnership.USER_LOCAL:
-            if not ref.source_path:
-                invalid.append(f"local model reference missing source path for {ref.requirement_id}")
-                continue
-            source_path = Path(ref.source_path)
-            if not source_path.exists():
-                invalid.append(f"local model source missing for {ref.requirement_id}")
-                continue
-        else:
-            if not ref.blob_path:
-                invalid.append(f"model reference missing blob path for {ref.requirement_id}")
-                continue
-            blob_path = Path(ref.blob_path)
-            if not blob_path.exists():
-                invalid.append(f"model blob missing for {ref.requirement_id}")
-                continue
-        if not ref.materialized_path:
-            invalid.append(f"model reference missing materialized path for {ref.requirement_id}")
-            continue
-        materialized_path = Path(ref.materialized_path)
-        if not materialized_path.exists():
-            invalid.append(f"model view file missing for {ref.requirement_id}")
-            continue
-        if ref.size_bytes is not None and materialized_path.stat().st_size != ref.size_bytes:
-            invalid.append(f"model view file size mismatch for {ref.requirement_id}")
-            continue
-        if ref.sha256 is not None:
-            expected = ref.sha256.removeprefix("sha256:")
-            if _sha256_file(materialized_path) != expected:
-                invalid.append(f"model view file hash mismatch for {ref.requirement_id}")
-    return invalid
-
-
-def _installed_model_size_mb(install_state: InstallState) -> int | None:
-    total_size_bytes = sum(ref.size_bytes or 0 for ref in install_state.model_references)
-    if total_size_bytes <= 0:
-        return None
-    return max(1, total_size_bytes // (1024 * 1024))
-
-
-def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None:
-    total_size_bytes = sum(model.size_bytes or 0 for model in package.required_models)
-    if total_size_bytes <= 0:
-        return None
-    return max(1, total_size_bytes // (1024 * 1024))
-
-
-def _observed_hardware_int(package: WorkflowPackage, key: str) -> int | None:
-    value = package.observed_hardware.get(key)
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _required_free_after_cleanup(estimated_peak_mb: int | None, margin_mb: int | None) -> int | None:
-    if estimated_peak_mb is None:
-        return None
-    return estimated_peak_mb + (margin_mb or 0)
-
-
-def _estimated_vram_after_cleanup(decision: MemoryGovernorDecision) -> int | None:
-    if decision.machine_snapshot is not None and decision.machine_snapshot.backend in {
-        MemoryBackend.MPS,
-        MemoryBackend.CPU,
-    }:
-        return None
-    if decision.workflow_estimate is None:
-        return None
-    return decision.workflow_estimate.estimated_peak_vram_mb
-
-
-def _estimated_ram_after_cleanup(decision: MemoryGovernorDecision) -> int | None:
-    if decision.workflow_estimate is None:
-        return None
-    if decision.workflow_estimate.estimated_peak_ram_mb is not None:
-        return decision.workflow_estimate.estimated_peak_ram_mb
-    if decision.machine_snapshot is not None and decision.machine_snapshot.backend in {
-        MemoryBackend.MPS,
-        MemoryBackend.CPU,
-    }:
-        return decision.workflow_estimate.estimated_peak_vram_mb
-    return None
-
-
-def _memory_class_for_runtime_backend(gpu_backend: str) -> RunnerMemoryClass:
-    return RunnerMemoryClass.CPU_ONLY if gpu_backend.lower() == "cpu" else RunnerMemoryClass.GPU_HEAVY
-
-
-def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _unresolved_model_requirement_message(
-    package: WorkflowPackage,
-    capsule_lock: CapsuleLock,
-) -> str | None:
-    locked_targets = {
-        (model.comfyui_folder.casefold(), model.filename.casefold())
-        for model in capsule_lock.models
-    }
-    unresolved: list[str] = []
-    for model in package.required_models:
-        target = (model.folder.casefold(), model.filename.casefold())
-        if target in locked_targets:
-            continue
-        if model.checksum is not None and model.size_bytes is not None:
-            unresolved.append(f"{model.folder}/{model.filename} is missing from the capsule model lock")
-        elif model.checksum is not None:
-            unresolved.append(
-                f"{model.folder}/{model.filename} has hash identity but no byte size; complete model identity is required"
-            )
-        elif model.size_bytes is not None:
-            continue
-        else:
-            unresolved.append(
-                f"{model.folder}/{model.filename} has only filename identity; filename-only model matches are not trusted"
-            )
-    if not unresolved:
-        return None
-    return (
-        "Cannot prepare workflow automatically because model requirements are unresolved: "
-        + "; ".join(unresolved)
-    )
-
-
-def _local_model_requirements(
-    package: WorkflowPackage,
-    capsule_lock: CapsuleLock,
-) -> list[LocalModelRequirement]:
-    locked_targets = {
-        (model.comfyui_folder.casefold(), model.filename.casefold())
-        for model in capsule_lock.models
-    }
-    requirements: list[LocalModelRequirement] = []
-    for model in package.required_models:
-        target = (model.folder.casefold(), model.filename.casefold())
-        if target in locked_targets:
-            continue
-        if model.checksum is None and model.size_bytes is not None:
-            requirements.append(
-                LocalModelRequirement(
-                    requirement_id=f"{model.folder}/{model.filename}",
-                    comfyui_folder=model.folder,
-                    filename=model.filename,
-                    size_bytes=model.size_bytes,
-                )
-            )
-    return requirements
-
-
-def _effective_prepare_source_policy(
-    package: WorkflowPackage,
-    capsule_lock: CapsuleLock,
-    *,
-    local_model_requirements: list[LocalModelRequirement],
-) -> SourcePolicy:
-    policy = package.source_policy or workflow_source_policy(package)
-    if capsule_lock.models and local_model_requirements:
-        model_source_trust = ModelSourceTrust.MIXED
-    elif capsule_lock.models:
-        model_source_trust = ModelSourceTrust.HASHED
-    elif local_model_requirements:
-        model_source_trust = ModelSourceTrust.FILENAME_SIZE
-    else:
-        model_source_trust = policy.model_source_trust
-    return policy.model_copy(update={"model_source_trust": model_source_trust})
-
-
-def _workflow_source_files_dir(
-    workflow_id: str,
-    *,
-    workflow_loader: WorkflowPackageLoader,
-    imported_package_store: ImportedWorkflowPackageStore,
-) -> Path | None:
-    try:
-        package = workflow_loader.get_package(workflow_id)
-    except KeyError:
-        return None
-    if package.import_metadata is None:
-        return None
-    try:
-        package_dir = imported_package_store.package_dir(package)
-    except NoofyImportError:
-        return None
-    source_files_dir = package_dir / "source-files"
-    return source_files_dir if source_files_dir.exists() else None
-
-
-def _smoke_execution_fixture_for_capsule(
-    capsule_lock: CapsuleLock,
-    *,
-    workflow_loader: WorkflowPackageLoader,
-) -> SmokeExecutionFixture | None:
-    package = None
-    for workflow_id in (capsule_lock.workflow.package_id, _imported_workflow_id(capsule_lock)):
-        try:
-            package = workflow_loader.get_package(workflow_id)
-            break
-        except KeyError:
-            continue
-    if package is None:
-        return None
-    fixture = package.smoke_tests.workflow_execution
-    if fixture is None:
-        if capsule_lock.custom_nodes:
-            return None
-        return _default_core_smoke_execution_fixture()
-    return SmokeExecutionFixture(
-        name=fixture.name,
-        prompt=fixture.prompt,
-        required_node_types=fixture.required_node_types,
-        expected_output_node_count=fixture.expected_output_node_count,
-        expected_output_node_ids=fixture.expected_output_node_ids,
-        timeout_seconds=fixture.timeout_seconds,
-    )
-
-
-def _default_core_smoke_execution_fixture() -> SmokeExecutionFixture:
-    return SmokeExecutionFixture(
-        name="default-core-empty-image",
-        prompt={
-            "1": {
-                "class_type": "EmptyImage",
-                "inputs": {
-                    "width": 64,
-                    "height": 64,
-                    "batch_size": 1,
-                    "color": 0x335577,
-                },
-            },
-            "2": {
-                "class_type": "SaveImage",
-                "inputs": {
-                    "images": ["1", 0],
-                    "filename_prefix": "noofy_smoke",
-                },
-            },
-        },
-        required_node_types=("EmptyImage", "SaveImage"),
-        expected_output_node_count=1,
-        expected_output_node_ids=("2",),
-        timeout_seconds=30,
-    )
-
-
-def _imported_workflow_id(capsule_lock: CapsuleLock) -> str:
-    return imported_workflow_id(
-        capsule_lock.workflow.publisher_id,
-        capsule_lock.workflow.package_id,
-        capsule_lock.workflow.version,
-    )
-
-
-def _safe_store_segment(value: str) -> str:
-    return safe_store_segment(value)
-
-
-def _is_primary_model_type(model_type: str | None, folder: str | None) -> bool:
-    value = f"{model_type or ''} {folder or ''}".casefold()
-    return any(token in value for token in ("checkpoint", "diffusion", "unet", "ckpt"))
-
-
-def _download_progress_status_label(status: str) -> str:
-    return {
-        "queued": "Queued",
-        "downloading": "Downloading",
-        "verifying": "Verifying",
-        "completed": "Completed",
-        "failed": "Failed",
-        "canceled": "Canceled",
-    }.get(status, status.replace("_", " ").title())
 
 
 def create_default_engine_service() -> EngineService:

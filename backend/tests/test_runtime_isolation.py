@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     AssetOwnership,
     CapsuleLock,
     DependencyEnvManifest,
@@ -13,7 +13,7 @@ from app.runtime.isolation import (
     SmokeTestStatus,
     TrustLevel,
 )
-from app.runtime.model_gc import model_reference_cleanup_policy
+from app.runtime.models.model_gc import model_reference_cleanup_policy
 
 
 def _valid_capsule_lock_data() -> dict:

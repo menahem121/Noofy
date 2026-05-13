@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.runtime.manager import RuntimeManager
 
 

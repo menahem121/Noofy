@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
-from app.runtime.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
-from app.runtime.dependency_env import DependencyEnvironmentInstallError, DependencyEnvironmentInstallRequest
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallError, DependencyEnvironmentInstallRequest
+from app.runtime.dependencies.dependency_lock import (
     DependencyPolicyErrorCode,
     ResolvedDependencyLock,
     ResolverMetadata,
     with_computed_lock_hash,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     InstallStatus,
     SmokeStageResult,
@@ -27,11 +27,11 @@ from app.runtime.isolation import (
     SmokeTestReport,
     SmokeTestStatus,
 )
-from app.runtime.model_store import ModelStore
+from app.runtime.models.model_store import ModelStore
 from app.runtime.profiles import load_runtime_profile_catalog
 from app.runtime.smoke_test import RunnerSmokeTestError
-from app.runtime.workspace_preparer import RUNTIME_QUARANTINE_FILENAME, RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.storage.workspace_preparer import RUNTIME_QUARANTINE_FILENAME, RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
 
 class _FailingDependencyEnvInstaller:
@@ -787,7 +787,7 @@ async def test_prepare_runtime_profile_failure_marks_unsupported_runtime_profile
     workspace_preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
         runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
-        runtime_profile_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        runtime_profile_catalog=load_runtime_profile_catalog(Path(__file__).parent.parent / "app/runtime/profile_catalog.json"),
         log_store=log_store,
     )
     installer = CapsuleInstaller(

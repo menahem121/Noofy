@@ -14,7 +14,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     InstallState,
     InstallStatus,
     InstalledModelReference,

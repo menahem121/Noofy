@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.runtime.capsule_installer import CapsuleInstaller
-from app.runtime.custom_nodes import (
+from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CustomNodeWorkspaceMaterializer,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     InstallStatus,
     ModelLock,
@@ -24,9 +24,9 @@ from app.runtime.isolation import (
     SmokeTestStatus,
 )
 from app.runtime.profiles import load_runtime_profile_catalog
-from app.runtime.model_store import ModelStore
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.models.model_store import ModelStore
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
@@ -37,6 +37,25 @@ from app.workflows.importer import (
 
 TEST_WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / "test_workflows"
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _supported_import_runtime_profile(monkeypatch):
+    def select_linux_cpu_profile(profiles):
+        profile = profiles[0]
+        for variant in profile.variants:
+            if (
+                variant.os == "linux"
+                and variant.architecture == "x64"
+                and variant.gpu_backend_profile == "cpu"
+            ):
+                return profile, variant
+        raise AssertionError("Test runtime profile catalog is missing linux/x64/cpu.")
+
+    monkeypatch.setattr(
+        "app.workflows.import_capsule_lock.select_import_runtime_profile",
+        select_linux_cpu_profile,
+    )
 
 
 def _exported_archive_bytes() -> bytes:

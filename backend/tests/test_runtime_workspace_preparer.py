@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
-from app.runtime.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
-from app.runtime.dependency_env import DependencyEnvironmentInstallRequest
-from app.runtime.dependency_lock import (
+from app.diagnostics import LogStore
+from app.runtime.dependencies.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallRequest
+from app.runtime.dependencies.dependency_lock import (
     DependencyRelationship,
     DependencySourceKind,
     ResolvedDependencyLock,
@@ -14,11 +14,11 @@ from app.runtime.dependency_lock import (
     ResolverMetadata,
     with_computed_lock_hash,
 )
-from app.runtime.dependency_lock_store import ResolvedDependencyLockStore
-from app.runtime.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
+from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
+from app.runtime.dependencies.isolation import CapsuleLock, InstallStatus, SmokeTestStatus
 from app.runtime.profiles import RuntimeProfileErrorCode, RuntimeProfileResolutionError, load_runtime_profile_catalog
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
 
 
 class _FakeDependencyEnvInstaller:

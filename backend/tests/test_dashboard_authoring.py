@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.workflows.authoring import (
     DashboardAuthoringService,
     DashboardAuthoringError,

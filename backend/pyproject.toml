@@ -30,7 +30,9 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-"app.runtime" = ["profile_catalog.json"]
+"app.runtime" = ["profile_catalog.json", "core_node_manifest.json"]
+"app.runtime.profiles" = ["profile_catalog.json"]
+"app.runtime.dependencies" = ["core_node_manifest.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

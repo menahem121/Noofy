@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes
+from app.api.router import router as _api_router
 from app.composition import (
     ApiServices,
     ApiServicesFactory,
@@ -17,10 +17,12 @@ from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
 from app.engine.service import EngineService
 from app.gallery import GalleryStore
-from app.model_inventory import ModelDownloadJobService, ModelOwnershipStore, ModelTagStore
-from app.runtime.comfyui_sidecar_service import ComfyUISidecarService
+from app.models.downloads import ModelDownloadJobService
+from app.models.ownership import ModelOwnershipStore
+from app.models.tags import ModelTagStore
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeySettingsService
-from app.settings.model_folders import ModelFolderSettingsService
+from app.models.folders import ModelFolderSettingsService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
 
@@ -124,7 +126,7 @@ def create_app(
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Accept", "Authorization", "Content-Type"],
     )
-    app.include_router(routes.router, prefix="/api")
+    app.include_router(_api_router, prefix="/api")
     return app
 
 

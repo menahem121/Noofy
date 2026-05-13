@@ -13,28 +13,28 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.service import EngineService
 from app.runtime.capsule_installer import CapsuleInstaller
-from app.runtime.custom_nodes import (
+from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CustomNodeWorkspaceMaterializer,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.isolation import (
+from app.runtime.dependencies.isolation import (
     InstallStatus,
     SmokeStageResult,
     SmokeStageStatus,
     SmokeTestReport,
 )
-from app.runtime.model_store import ModelStore
+from app.runtime.models.model_store import ModelStore
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     NodeRegistryResolver,
     NoofyNodeRegistry,
 )
 from app.runtime.profiles import load_runtime_profile_catalog
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
     RunnerDescriptor,
@@ -52,8 +52,8 @@ from app.trust import (
     load_trust_verifier,
     registry_signature_payload,
 )
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )
@@ -110,6 +110,10 @@ def _archive_bytes() -> bytes:
 def _test_workflow_archive_bytes(filename: str) -> bytes:
     root = Path(__file__).resolve().parents[2]
     return (root / "test_workflows" / filename).read_bytes()
+
+
+def _small_archive_bytes() -> bytes:
+    return _test_workflow_archive_bytes("core_empty_image_smoke.noofy")
 
 
 def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() -> None:
@@ -175,7 +179,8 @@ def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
                 "snapshot_hash": "sha256:" + "a" * 64,
                 "signature": "sig:registry",
             },
-        }
+        },
+        archive_bytes=_small_archive_bytes(),
     )
 
     package = NoofyArchiveImporter(
@@ -193,13 +198,48 @@ def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
     )
 
 
+def test_noofy_importer_reuses_parsed_json_for_trust_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    importer = NoofyArchiveImporter(
+        _archive_bytes(),
+        original_filename="exported-workflow-for-testing.noofy",
+    )
+    archive_read = importer.archive.read
+    json_reads: list[str] = []
+
+    def tracked_read(name_or_info, *args, **kwargs):
+        name = (
+            name_or_info.filename
+            if isinstance(name_or_info, zipfile.ZipInfo)
+            else str(name_or_info)
+        )
+        if name.endswith(".json"):
+            json_reads.append(name)
+        return archive_read(name_or_info, *args, **kwargs)
+
+    monkeypatch.setattr(importer.archive, "read", tracked_read)
+
+    importer.normalize()
+    importer.trust_payload()
+
+    assert json_reads.count("package.json") == 1
+    assert json_reads.count("comfyui_graph.json") == 1
+    assert json_reads.count("dashboard.json") == 1
+    assert json_reads.count("capsule.lock.json") == 1
+    assert json_reads.count("export-report.json") == 1
+
+
 def test_import_store_rejects_imported_noofy_verified_without_valid_signature(
     tmp_path: Path,
 ) -> None:
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
 
-    package = store.import_archive(
-        _archive_bytes_with_package_update({"trust_level": "noofy_verified"}),
+    package = store.preview_archive(
+        _archive_bytes_with_package_update(
+            {"trust_level": "noofy_verified"},
+            archive_bytes=_small_archive_bytes(),
+        ),
         original_filename="unsigned-verified.noofy",
     )
 
@@ -217,7 +257,11 @@ def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(
     tmp_path: Path,
 ) -> None:
     secret = "test-noofy-verified-secret"
-    unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "noofy_verified"},
+        archive_bytes=archive_bytes,
+    )
     signature = hmac_sha256_signature(
         NoofyArchiveImporter(unsigned).trust_payload(),
         secret,
@@ -232,7 +276,8 @@ def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(
                     "value": f"hmac-sha256:{signature}",
                 }
             ],
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -249,7 +294,7 @@ def test_import_store_accepts_imported_noofy_verified_with_trusted_signature(
         ),
     )
 
-    package = store.import_archive(signed, original_filename="signed-verified.noofy")
+    package = store.preview_archive(signed, original_filename="signed-verified.noofy")
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
@@ -265,7 +310,11 @@ def test_import_store_accepts_registry_locked_with_signed_registry_metadata(
     tmp_path: Path,
 ) -> None:
     secret = "test-registry-secret"
-    unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "registry_locked"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     metadata_payload = registry_signature_payload(
         package_payload=package_payload,
@@ -282,7 +331,8 @@ def test_import_store_accepts_registry_locked_with_signed_registry_metadata(
                 "algorithm": "hmac-sha256",
                 "signature": hmac_sha256_signature(metadata_payload, secret),
             },
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -299,7 +349,7 @@ def test_import_store_accepts_registry_locked_with_signed_registry_metadata(
         ),
     )
 
-    package = store.import_archive(signed, original_filename="registry-locked.noofy")
+    package = store.preview_archive(signed, original_filename="registry-locked.noofy")
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
@@ -314,7 +364,11 @@ def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(
     tmp_path: Path,
 ) -> None:
     private_key, public_key = _ed25519_keypair()
-    unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "noofy_verified"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     signed = _archive_bytes_with_package_update(
         {
@@ -326,7 +380,8 @@ def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(
                     "value": _ed25519_signature(private_key, package_payload),
                 }
             ],
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -343,7 +398,7 @@ def test_import_store_accepts_imported_noofy_verified_with_ed25519_signature(
         ),
     )
 
-    package = store.import_archive(signed, original_filename="ed25519-verified.noofy")
+    package = store.preview_archive(signed, original_filename="ed25519-verified.noofy")
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
@@ -359,7 +414,11 @@ def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(
 ) -> None:
     private_key, public_key = _ed25519_keypair()
     snapshot_hash = "sha256:" + "b" * 64
-    unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "registry_locked"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     metadata_payload = registry_signature_payload(
         package_payload=package_payload,
@@ -376,7 +435,8 @@ def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(
                 "algorithm": "ed25519",
                 "signature": _ed25519_signature(private_key, metadata_payload),
             },
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -393,7 +453,7 @@ def test_import_store_accepts_registry_locked_with_ed25519_registry_metadata(
         ),
     )
 
-    package = store.import_archive(signed, original_filename="registry-ed25519.noofy")
+    package = store.preview_archive(signed, original_filename="registry-ed25519.noofy")
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "needs_input_setup"
@@ -408,7 +468,11 @@ def test_import_store_rejects_ed25519_signature_after_payload_tampering(
     tmp_path: Path,
 ) -> None:
     private_key, public_key = _ed25519_keypair()
-    unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "noofy_verified"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     tampered = _archive_bytes_with_package_update(
         {
@@ -421,7 +485,8 @@ def test_import_store_rejects_ed25519_signature_after_payload_tampering(
                     "value": _ed25519_signature(private_key, package_payload),
                 }
             ],
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -438,7 +503,7 @@ def test_import_store_rejects_ed25519_signature_after_payload_tampering(
         ),
     )
 
-    package = store.import_archive(tampered, original_filename="tampered.noofy")
+    package = store.preview_archive(tampered, original_filename="tampered.noofy")
 
     assert package.import_metadata is not None
     assert package.import_metadata.status == "unsupported"
@@ -454,7 +519,11 @@ def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys
     tmp_path: Path,
 ) -> None:
     private_key, public_key = _ed25519_keypair()
-    unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "noofy_verified"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     now = datetime(2026, 5, 4, tzinfo=UTC)
 
@@ -474,7 +543,8 @@ def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys
                         "value": _ed25519_signature(private_key, package_payload),
                     }
                 ],
-            }
+            },
+            archive_bytes=archive_bytes,
         )
         store = ImportedWorkflowPackageStore(
             tmp_path / f"packages-{expected_status}",
@@ -493,7 +563,7 @@ def test_import_store_rejects_revoked_expired_and_policy_mismatched_ed25519_keys
             ),
         )
 
-        package = store.import_archive(
+        package = store.preview_archive(
             signed, original_filename=f"{expected_status}.noofy"
         )
 
@@ -509,7 +579,11 @@ def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_matc
     tmp_path: Path,
 ) -> None:
     private_key, public_key = _ed25519_keypair()
-    unsigned = _archive_bytes_with_package_update({"trust_level": "registry_locked"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "registry_locked"},
+        archive_bytes=archive_bytes,
+    )
     package_payload = NoofyArchiveImporter(unsigned).trust_payload()
     signed_snapshot_payload = registry_signature_payload(
         package_payload=package_payload,
@@ -526,7 +600,8 @@ def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_matc
                 "algorithm": "ed25519",
                 "signature": _ed25519_signature(private_key, signed_snapshot_payload),
             },
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -543,7 +618,7 @@ def test_import_store_rejects_registry_locked_when_signed_snapshot_does_not_matc
         ),
     )
 
-    package = store.import_archive(
+    package = store.preview_archive(
         mismatched, original_filename="registry-mismatch.noofy"
     )
 
@@ -560,7 +635,11 @@ def test_import_store_rejects_hmac_signature_without_development_policy(
     tmp_path: Path,
 ) -> None:
     secret = "test-noofy-verified-secret"
-    unsigned = _archive_bytes_with_package_update({"trust_level": "noofy_verified"})
+    archive_bytes = _small_archive_bytes()
+    unsigned = _archive_bytes_with_package_update(
+        {"trust_level": "noofy_verified"},
+        archive_bytes=archive_bytes,
+    )
     signature = hmac_sha256_signature(
         NoofyArchiveImporter(unsigned).trust_payload(),
         secret,
@@ -575,7 +654,8 @@ def test_import_store_rejects_hmac_signature_without_development_policy(
                     "value": f"hmac-sha256:{signature}",
                 }
             ],
-        }
+        },
+        archive_bytes=archive_bytes,
     )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
@@ -591,7 +671,7 @@ def test_import_store_rejects_hmac_signature_without_development_policy(
         ),
     )
 
-    package = store.import_archive(
+    package = store.preview_archive(
         signed, original_filename="hmac-without-dev-policy.noofy"
     )
 
@@ -925,14 +1005,12 @@ def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(
     tmp_path: Path,
 ) -> None:
     source_archive = _source_archive_bytes({"node.py": "NODE_CLASS_MAPPINGS = {}\n"})
-    archive = _archive_bytes_with_custom_node_update(
-        0,
+    archive = _small_archive_with_custom_node(
         {
-            "included": False,
             "source": "https://example.test/comfyui-jps/archive/pinned.zip",
             "source_ref": "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21",
             "source_content_hash": f"sha256:{hashlib.sha256(source_archive).hexdigest()}",
-        },
+        }
     )
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
 
@@ -950,9 +1028,7 @@ def test_import_store_blocks_non_bundled_community_custom_node_without_opt_in(
     assert package.source_policy.policy_status == "blocked_by_policy"
     assert package.source_policy.automatic_preparation_allowed is False
     assert package.source_policy.community_preparation_opted_in is False
-    package_dir = (
-        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
-    )
+    package_dir = store.package_dir(package)
     import_report = json.loads(
         (package_dir / "import-report.json").read_text(encoding="utf-8")
     )
@@ -979,15 +1055,13 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
     )
     source_digest = hashlib.sha256(source_archive).hexdigest()
     fetcher = FakeSourceFetcher(source_archive)
-    archive = _archive_bytes_with_custom_node_update(
-        0,
+    archive = _small_archive_with_custom_node(
         {
-            "included": False,
             "source": "https://example.test/comfyui-jps/archive/pinned.zip",
             "source_ref": "9f9118795d083b8eb5bb7bf9bfa0694f3f332a21",
             "source_content_hash": f"sha256:{source_digest}",
             "source_archive_subdir": "repo-root",
-        },
+        }
     )
     source_cache_dir = tmp_path / "custom-node-cache"
     log_store = LogStore()
@@ -1031,9 +1105,7 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
     assert resolved_node.source_content_hash == f"sha256:{source_digest}"
     assert resolved_node.source_archive_subdir == "repo-root"
 
-    package_dir = (
-        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
-    )
+    package_dir = store.package_dir(package)
     capsule = CapsuleLockLoader(
         Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
     ).get_capsule_lock(package.metadata.id)
@@ -1174,13 +1246,14 @@ def test_import_store_rejects_exported_launch_options(tmp_path: Path) -> None:
     with pytest.raises(NoofyImportError, match="unsupported launch options"):
         store.import_archive(
             _archive_bytes_with_capsule_update(
-                {"launch_options": {"vram_mode": "highvram"}}
+                {"launch_options": {"vram_mode": "highvram"}},
+                archive_bytes=_small_archive_bytes(),
             ),
             original_filename="launch-options.noofy",
         )
 
     assert not (
-        tmp_path / "packages" / "unknown" / "controlnet_two_model_workflow" / "0.1.0"
+        tmp_path / "packages" / "unknown" / "core_empty_image_smoke" / "0.1.0"
     ).exists()
 
 
@@ -1320,8 +1393,10 @@ def _unsafe_zip_bytes() -> bytes:
     return payload.getvalue()
 
 
-def _archive_bytes_with_capsule_update(update: dict) -> bytes:
-    source = io.BytesIO(_archive_bytes())
+def _archive_bytes_with_capsule_update(
+    update: dict, *, archive_bytes: bytes | None = None
+) -> bytes:
+    source = io.BytesIO(archive_bytes or _archive_bytes())
     payload = io.BytesIO()
     with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
         payload, "w"
@@ -1354,9 +1429,20 @@ def _archive_bytes_with_package_update(
     return payload.getvalue()
 
 
-def _archive_bytes_with_custom_node_update(index: int, update: dict) -> bytes:
-    source = io.BytesIO(_archive_bytes())
+def _small_archive_with_custom_node(update: dict) -> bytes:
+    source = io.BytesIO(_small_archive_bytes())
     payload = io.BytesIO()
+    custom_node = {
+        "folder_name": "ComfyUI_JPS-Nodes",
+        "has_install_py": False,
+        "id": "comfyui_jps-nodes",
+        "included": False,
+        "node_types": ["Get Image Size (JPS)"],
+        "requirements_files": [],
+        "sha256_manifest": None,
+        "source": "unknown",
+        **update,
+    }
     with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
         payload, "w"
     ) as rewritten:
@@ -1364,10 +1450,16 @@ def _archive_bytes_with_custom_node_update(index: int, update: dict) -> bytes:
             contents = original.read(info)
             if info.filename == "capsule.lock.json":
                 capsule = json.loads(contents.decode("utf-8"))
-                custom_nodes = list(capsule["custom_nodes"])
-                custom_nodes[index] = {**custom_nodes[index], **update}
-                capsule["custom_nodes"] = custom_nodes
+                capsule["custom_nodes"] = [custom_node]
                 contents = json.dumps(capsule).encode("utf-8")
+            elif info.filename == "comfyui_graph.json":
+                graph = json.loads(contents.decode("utf-8"))
+                graph["100"] = {
+                    "_meta": {"title": "Get Image Size (JPS)"},
+                    "class_type": "Get Image Size (JPS)",
+                    "inputs": {"image": ["1", 0]},
+                }
+                contents = json.dumps(graph).encode("utf-8")
             rewritten.writestr(info, contents)
     return payload.getvalue()
 

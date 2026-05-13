@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.artifacts import AssetOwnership
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.workflows import model_availability as availability_module
 from app.workflows.model_availability import (
     ModelAvailabilityService,

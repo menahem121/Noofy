@@ -4,8 +4,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.engine.diagnostics import LogStore
-from app.runtime.memory_governor import (
+from app.diagnostics import LogStore
+from app.runtime.memory.memory_governor import (
     FallbackMemoryObserver,
     BackendAllocatorMemorySample,
     GpuProcessMemoryUsage,
@@ -50,7 +50,7 @@ from app.runtime.memory_governor import (
     wait_for_memory_release,
     _linux_system_ram_mb,
 )
-from app.runtime.supervisor import (
+from app.runtime.runners.supervisor import (
     RunnerDescriptor,
     RunnerKind,
     RunnerMemoryClass,
@@ -335,7 +335,7 @@ def test_nvml_memory_observer_returns_unavailable_on_nvml_errors() -> None:
 
 def test_nvidia_smi_memory_observer_parses_cuda_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "app.runtime.memory_governor._system_ram_signals",
+        "app.runtime.memory.memory_governor._system_ram_signals",
         lambda **_kwargs: (64_000, 50_000, MemoryPressureLevel.LOW, ["system_ram"], []),
     )
 
@@ -385,7 +385,7 @@ def test_nvidia_smi_memory_observer_allows_partial_data() -> None:
 
 def test_windows_gpu_memory_observer_parses_directml_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "app.runtime.memory_governor._system_ram_signals",
+        "app.runtime.memory.memory_governor._system_ram_signals",
         lambda **_kwargs: (64_000, 50_000, MemoryPressureLevel.LOW, ["system_ram"], []),
     )
 

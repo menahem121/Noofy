@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.artifacts import ModelVerificationLevel
-from app.engine.diagnostics import DiagnosticsSink
-from app.runtime.isolation import (
+from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.isolation import (
     CapsuleLock,
     TrustLevel,
 )

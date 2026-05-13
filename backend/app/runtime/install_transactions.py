@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 
 INSTALL_TRANSACTION_SCHEMA_VERSION = "0.1.0"
 INSTALL_TRANSACTION_FILENAME = "transaction.json"

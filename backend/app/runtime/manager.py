@@ -11,7 +11,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.engine.models import (
     ComfyUIRuntimeStatus,
     ComfyUIVersionMetadata,
@@ -20,7 +20,7 @@ from app.engine.models import (
     RuntimeMode,
 )
 from app.runtime.environment import RuntimeEnvironment
-from app.runtime.launch_settings import comfyui_vram_args
+from app.runtime.comfyui.launch_settings import comfyui_vram_args
 
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
 ProcessFactory = Callable[..., Awaitable[Any]]

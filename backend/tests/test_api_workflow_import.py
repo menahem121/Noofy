@@ -5,11 +5,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.engine import service as service_module
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import RequiredModelSummary
 from app.engine.service import EngineService, IMPORT_SESSION_TTL, ImportSessionExpiredError
 from app.main import create_app
-from app.runtime.supervisor import RunnerSupervisor
+from app.runtime.runners.supervisor import RunnerSupervisor
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator

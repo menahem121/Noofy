@@ -9,15 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from app.engine.diagnostics import LogStore
-from app.runtime.custom_nodes import CustomNodeWorkspaceMaterializer
-from app.runtime.isolation import CapsuleLock, SmokeStageStatus, SmokeTestReport
+from app.diagnostics import LogStore
+from app.runtime.dependencies.custom_nodes import CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.isolation import CapsuleLock, SmokeStageStatus, SmokeTestReport
 from app.runtime.profiles import load_runtime_profile_catalog
-from app.runtime.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
+from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester, SmokeExecutionFixture
-from app.runtime.supervisor import RunnerKind
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
-from app.runtime.workspace_store import (
+from app.runtime.runners.supervisor import RunnerKind
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
 )

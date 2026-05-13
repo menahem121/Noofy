@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.diagnostics import LogStore
-from app.runtime.dependency_env import (
+from app.diagnostics import LogStore
+from app.runtime.dependencies.dependency_env import (
     DependencyEnvironmentInstallError,
     DependencyEnvironmentInstallRequest,
     UvDependencyEnvironmentInstaller,
 )
-from app.runtime.dependency_lock import (
+from app.runtime.dependencies.dependency_lock import (
     DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DependencyPolicyErrorCode,
     DependencyRelationship,

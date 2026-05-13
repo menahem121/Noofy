@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader

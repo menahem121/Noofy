@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 
 from app.core.paths import resolve_paths
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.service import EngineService
-from app.runtime.comfyui_updates import (
+from app.runtime.comfyui.comfyui_updates import (
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
     ComfyUIUpdateService,
@@ -18,13 +18,27 @@ from app.runtime.comfyui_updates import (
     resolve_active_runtime_selection,
 )
 from app.runtime.environment import CommandResult
-from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
+from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult, RuntimeHardwareProfile
 from app.runtime.manager import RuntimeManager
 from app.runtime.profiles import (
     RuntimeSourceOriginKind,
     RuntimeSourceStatus,
     build_comfyui_source_manifest,
 )
+
+
+@pytest.fixture(autouse=True)
+def _supported_update_test_hardware(monkeypatch):
+    async def fake_detect_hardware(command_runner):
+        return RuntimeHardwareProfile(
+            os_name="Linux",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="cpu",
+            notes=["Test hardware profile."],
+        )
+
+    monkeypatch.setattr("app.runtime.environment.detect_hardware", fake_detect_hardware)
 
 
 def _release(tag: str, *, prerelease: bool = False) -> UpstreamComfyUIRelease:
@@ -156,7 +170,7 @@ def _write_active_with_previous(
 def _source_hash_for_zip(
     source_archive: Path, tmp_path: Path, tag: str = "v0.20.1"
 ) -> str:
-    from app.runtime.comfyui_updates import _extract_github_zip
+    from app.runtime.comfyui.comfyui_updates import _extract_github_zip
 
     extracted = tmp_path / f"extracted-{tag}"
     _extract_github_zip(source_archive, extracted)

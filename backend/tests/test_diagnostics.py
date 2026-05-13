@@ -2,25 +2,25 @@ import inspect
 import re
 from pathlib import Path
 
-from app.engine.diagnostics import DiagnosticsStore, LogStore
+from app.diagnostics import DiagnosticsStore, LogStore
 from app.engine.process_manager import ComfyUIProcessManager
 from app.engine.service import EngineService, _diagnostic_event_payload, _install_developer_details
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.runtime.capsule_installer import CapsuleInstaller
-from app.runtime.comfyui_updates import ComfyUIUpdateService
-from app.runtime.dependency_env import UvDependencyEnvironmentInstaller
-from app.runtime.dependency_resolver import UvDependencyLockResolver
+from app.runtime.comfyui.comfyui_updates import ComfyUIUpdateService
+from app.runtime.dependencies.dependency_env import UvDependencyEnvironmentInstaller
+from app.runtime.dependencies.dependency_resolver import UvDependencyLockResolver
 from app.runtime.environment import RuntimeEnvironment
 from app.runtime.install_transactions import InstallTransactionStore
-from app.runtime.isolation import InstallState, InstallStatus, SmokeTestStatus
+from app.runtime.dependencies.isolation import InstallState, InstallStatus, SmokeTestStatus
 from app.runtime.manager import RuntimeManager
-from app.runtime.model_store import ModelStore
+from app.runtime.models.model_store import ModelStore
 from app.runtime.node_registry import CustomNodeSourceCache, NodeRegistryResolver
-from app.runtime.runner_coordinator import RunnerProcessCoordinator
-from app.runtime.runner_process import RunnerProcessSupervisor
+from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runners.runner_process import RunnerProcessSupervisor
 from app.runtime.smoke_test import RunnerSmokeTester
-from app.runtime.storage_gc import RuntimeStorageGarbageCollector
-from app.runtime.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector
+from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.importer import ImportedWorkflowPackageStore
 

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-import app.runtime.model_store as model_store_module
+import app.runtime.models.model_store as model_store_module
 from app.artifacts import AssetOwnership, ModelVerificationLevel
-from app.engine.diagnostics import LogStore
-from app.runtime.isolation import ModelLock
-from app.runtime.model_store import (
+from app.diagnostics import LogStore
+from app.runtime.dependencies.isolation import ModelLock
+from app.runtime.models.model_store import (
     LocalModelRequirement,
     ModelDownloadError,
     ModelSourcePolicyError,

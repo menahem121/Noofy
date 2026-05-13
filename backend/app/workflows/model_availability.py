@@ -17,7 +17,7 @@ import httpx
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.core.config import settings
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.engine.models import (
     ModelDownloadSummary,
     RequiredModelAvailability,

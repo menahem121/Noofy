@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.engine.diagnostics import LogStore
+from app.diagnostics import LogStore
 from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import (
     _REQUIRED_RUNTIME_CHECKS,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.paths import resolve_paths
-from app.runtime.comfyui_update_records import (
+from app.runtime.comfyui.comfyui_update_records import (
     ComfyUIVersionRecordStore,
     LocalComfyUIVersionRecord,
 )

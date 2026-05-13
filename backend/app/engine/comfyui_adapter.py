@@ -11,7 +11,7 @@ import httpx
 import websockets
 
 from app.engine.job_store import JobStore
-from app.engine.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.workflows.package import WorkflowPackage
 

@@ -1,0 +1,100 @@
+"""Persistence for Noofy resolved dependency locks."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from app.runtime.dependencies.dependency_lock import ResolvedDependencyLock, resolved_dependency_lock_hash
+
+
+class ResolvedDependencyLockStore:
+    def __init__(self, root_dir: Path) -> None:
+        self.root_dir = root_dir
+
+    def path_for_hash(self, lock_hash: str) -> Path:
+        return self.root_dir / _safe_fingerprint(lock_hash) / "dependency-lock.json"
+
+    def path_for_lock(self, lock: ResolvedDependencyLock) -> Path:
+        lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        runtime_identity = _safe_fingerprint(
+            "__".join(
+                (
+                    lock.runtime_profile_id,
+                    lock.runtime_profile_variant_id,
+                    lock.runtime_profile_manifest_hash,
+                    lock.install_policy_version,
+                )
+            )
+        )
+        return self.root_dir / _safe_fingerprint(lock_hash) / f"dependency-lock.{runtime_identity}.json"
+
+    def exists(self, lock_hash: str) -> bool:
+        return any(path.exists() for path in self._candidate_paths(lock_hash))
+
+    def read(self, lock_hash: str) -> ResolvedDependencyLock:
+        lock = self._read_path(self.path_for_hash(lock_hash))
+        stored_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        if stored_hash != lock_hash:
+            raise ValueError("Resolved dependency lock hash does not match store path.")
+        return lock
+
+    def read_matching(
+        self,
+        lock_hash: str,
+        *,
+        runtime_profile_id: str,
+        runtime_profile_variant_id: str,
+        runtime_profile_manifest_hash: str,
+        install_policy_version: str,
+    ) -> ResolvedDependencyLock | None:
+        for path in self._candidate_paths(lock_hash):
+            if not path.exists():
+                continue
+            lock = self._read_path(path)
+            stored_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+            if stored_hash != lock_hash:
+                raise ValueError("Resolved dependency lock hash does not match store path.")
+            if (
+                lock.runtime_profile_id == runtime_profile_id
+                and lock.runtime_profile_variant_id == runtime_profile_variant_id
+                and lock.runtime_profile_manifest_hash == runtime_profile_manifest_hash
+                and lock.install_policy_version == install_policy_version
+            ):
+                return lock
+        return None
+
+    def write(self, lock: ResolvedDependencyLock) -> Path:
+        lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
+        path = self.path_for_hash(lock_hash)
+        if path.exists():
+            existing = self.read(lock_hash)
+            if existing != lock:
+                path = self.path_for_lock(lock)
+                if path.exists():
+                    existing = self._read_path(path)
+                    if existing != lock:
+                        raise ValueError("Existing resolved dependency lock differs for hash.")
+                    return path
+                return self._write_path(path, lock)
+            return path
+        return self._write_path(path, lock)
+
+    def _candidate_paths(self, lock_hash: str) -> list[Path]:
+        directory = self.root_dir / _safe_fingerprint(lock_hash)
+        return [self.path_for_hash(lock_hash), *sorted(directory.glob("dependency-lock.*.json"))]
+
+    def _read_path(self, path: Path) -> ResolvedDependencyLock:
+        with path.open("r", encoding="utf-8") as file:
+            return ResolvedDependencyLock.model_validate(json.load(file))
+
+    def _write_path(self, path: Path, lock: ResolvedDependencyLock) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(lock.model_dump_json(indent=2), encoding="utf-8")
+        tmp_path.replace(path)
+        return path
+
+
+def _safe_fingerprint(fingerprint: str) -> str:
+    return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
