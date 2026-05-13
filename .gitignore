@@ -24,3 +24,4 @@ frontend/src-tauri/resources/noofy-runtime/runtime-manifest.json
 frontend/src-tauri/resources/noofy-runtime/python/*
 !frontend/src-tauri/resources/noofy-runtime/python/README.md
 WORKLFOWS_PAGE_IMPLEMENTATION_PLAN.md
+NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md

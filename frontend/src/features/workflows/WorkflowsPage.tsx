@@ -607,20 +607,24 @@ function WorkflowRow({
           <Icon size={16} />
         </div>
         <div className="model-main-body">
-          <div className="model-name-text">{workflow.name}</div>
-          <div className="model-type-text">{workflow.source_label ?? "Native Noofy"}</div>
+          <div className="model-name-text" title={workflow.name}>{workflow.name}</div>
+          <div className="model-type-text" title={workflow.source_label ?? "Native Noofy"}>{workflow.source_label ?? "Native Noofy"}</div>
         </div>
       </div>
-      <div className="workflow-col workflow-col-model">{workflow.main_model?.name ?? "No model detected"}</div>
-      <div className="workflow-col workflow-col-description">{workflow.description || "No description yet"}</div>
-      <div className="workflow-col workflow-col-category">
-        <span className="workflow-category-badge">{workflow.category ?? "Txt2img"}</span>
+      <div className="workflow-col workflow-col-model" title={workflow.main_model?.name ?? "No model detected"}>
+        {workflow.main_model?.name ?? "No model detected"}
       </div>
-      <div className="workflow-col workflow-col-opened">{formatDate(workflow.last_opened)}</div>
+      <div className="workflow-col workflow-col-description" title={workflow.description || "No description yet"}>
+        {workflow.description || "No description yet"}
+      </div>
+      <div className="workflow-col workflow-col-category">
+        <span className="workflow-category-badge" title={workflow.category ?? "Txt2img"}>{workflow.category ?? "Txt2img"}</span>
+      </div>
+      <div className="workflow-col workflow-col-opened" title={formatDate(workflow.last_opened)}>{formatDate(workflow.last_opened)}</div>
       <div className="workflow-col workflow-col-tags">
         <div className="model-tags-row">
           {tags.slice(0, 2).map((tag) => (
-            <span key={tag} className="tag-pill tag-pill--more">
+            <span key={tag} className="tag-pill tag-pill--more" title={tag}>
               {tag}
             </span>
           ))}
@@ -738,28 +742,30 @@ function WorkflowDetailsDrawer({
 
   return (
     <>
-      <div className="detail-panel__header">
-        <div className="detail-panel__title-group">
-          <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
-            <Icon size={20} />
+      <div className="workflow-detail-sticky-top">
+        <div className="detail-panel__header">
+          <div className="detail-panel__title-group">
+            <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
+              <Icon size={20} />
+            </div>
+            <div className="detail-panel__title-text">
+              <h2 className="detail-panel__title">{workflow.name}</h2>
+              <span className={`workflow-status workflow-status--${workflowStatus(workflow)}`}>
+                {workflowStatusLabel(workflow)}
+              </span>
+            </div>
           </div>
-          <div className="detail-panel__title-text">
-            <h2 className="detail-panel__title">{workflow.name}</h2>
-            <span className={`workflow-status workflow-status--${workflowStatus(workflow)}`}>
-              {workflowStatusLabel(workflow)}
-            </span>
-          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close workflow details">
+            <X size={17} aria-hidden="true" />
+          </button>
         </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close workflow details">
-          <X size={17} aria-hidden="true" />
-        </button>
-      </div>
 
-      <div className="workflow-detail-primary-actions">
-        <button className="primary-button secondary-button--full workflow-open-cta" type="button" onClick={onOpen}>
-          <Play size={15} aria-hidden="true" />
-          Open Workflow
-        </button>
+        <div className="workflow-detail-primary-actions">
+          <button className="primary-button secondary-button--full workflow-open-cta" type="button" onClick={onOpen}>
+            <Play size={15} aria-hidden="true" />
+            Open Workflow
+          </button>
+        </div>
       </div>
 
       <DetailSection title="Overview">
@@ -839,14 +845,6 @@ function WorkflowDetailsDrawer({
       </DetailSection>
 
       <div className="workflow-detail-export-actions" aria-label="Workflow export actions">
-        <a
-          className="secondary-button secondary-button--full"
-          href={exportWorkflowComfyJsonUrl(workflow.id)}
-          download
-          onClick={(event) => handleExportClick(event, exportWorkflowComfyJsonUrl(workflow.id))}
-        >
-          Export ComfyUI JSON
-        </a>
         {workflow.advanced.can_export_noofy ? (
           <a
             className="primary-button secondary-button--full"
@@ -858,6 +856,14 @@ function WorkflowDetailsDrawer({
             Export .Noofy
           </a>
         ) : null}
+        <a
+          className="secondary-button secondary-button--full"
+          href={exportWorkflowComfyJsonUrl(workflow.id)}
+          download
+          onClick={(event) => handleExportClick(event, exportWorkflowComfyJsonUrl(workflow.id))}
+        >
+          Export ComfyUI JSON
+        </a>
       </div>
     </>
   );
