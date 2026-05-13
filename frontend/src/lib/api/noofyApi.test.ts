@@ -5,6 +5,8 @@ import {
   createModelTag,
   createJobEventsUrl,
   deleteModelFile,
+  exportWorkflowComfyJsonUrl,
+  exportWorkflowUrl,
   fetchActiveModelDownload,
   fetchModelDownloadStatus,
   fetchModelInventory,
@@ -149,6 +151,20 @@ describe("noofyApi", () => {
     );
     expect(resolveBackendUrl("https://example.test/image.png", { includeToken: true })).toBe(
       "https://example.test/image.png",
+    );
+  });
+
+  it("adds the runtime token to browser download workflow export URLs", () => {
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiBaseUrl: "http://127.0.0.1:9123/api/",
+      apiToken: "runtime secret",
+    };
+
+    expect(exportWorkflowUrl("workflow 1")).toBe(
+      "http://127.0.0.1:9123/api/workflows/workflow%201/export?token=runtime%20secret",
+    );
+    expect(exportWorkflowComfyJsonUrl("workflow 1")).toBe(
+      "http://127.0.0.1:9123/api/workflows/workflow%201/export/comfyui-json?token=runtime%20secret",
     );
   });
 

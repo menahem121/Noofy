@@ -1201,11 +1201,11 @@ export function saveDashboard(
 }
 
 export function exportWorkflowUrl(workflowId: string): string {
-  return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export`;
+  return resolveBackendUrl(`/workflows/${encodeURIComponent(workflowId)}/export`, { includeToken: true });
 }
 
 export function exportWorkflowComfyJsonUrl(workflowId: string): string {
-  return `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/export/comfyui-json`;
+  return resolveBackendUrl(`/workflows/${encodeURIComponent(workflowId)}/export/comfyui-json`, { includeToken: true });
 }
 
 // ─── User state ──────────────────────────────────────────────────────────────

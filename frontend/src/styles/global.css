@@ -2320,6 +2320,19 @@ button:disabled {
   max-width: 280px;
 }
 
+.models-toolbar--workflows {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) repeat(4, max-content);
+  align-items: center;
+  width: 100%;
+}
+
+.models-toolbar--workflows .search-field--models {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
 .models-toolbar__spacer {
   flex: 1;
 }
@@ -3505,6 +3518,19 @@ button:disabled {
 }
 
 @container workflows-list (max-width: 620px) {
+  .models-toolbar--workflows {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .models-toolbar--workflows .search-field--models {
+    grid-column: 1 / -1;
+  }
+
+  .models-toolbar--workflows .filter-select-wrap,
+  .models-toolbar--workflows .filter-select {
+    width: 100%;
+  }
+
   .workflows-table-head {
     display: none;
   }
@@ -3609,6 +3635,10 @@ button:disabled {
     width: 100%;
     max-width: none;
     flex: 1 1 100%;
+  }
+
+  .models-toolbar--workflows {
+    grid-template-columns: 1fr;
   }
 }
 

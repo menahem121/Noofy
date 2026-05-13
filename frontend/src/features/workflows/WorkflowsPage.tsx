@@ -393,22 +393,7 @@ export function WorkflowsPage({
           {importError ? <div className="notice notice--warning">{importError}</div> : null}
           {actionError ? <div className="notice notice--warning">{actionError}</div> : null}
 
-          <div className="models-type-tabs" role="tablist" aria-label="Filter by workflow category">
-            {CATEGORY_FILTERS.map((category) => (
-              <button
-                key={category}
-                role="tab"
-                aria-selected={activeCategory === category}
-                className={`models-type-tab${activeCategory === category ? " models-type-tab--active" : ""}`}
-                type="button"
-                onClick={() => setActiveCategory(category)}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
-
-          <div className="models-toolbar">
+          <div className="models-toolbar models-toolbar--workflows">
             <label className="search-field search-field--models">
               <Search size={16} aria-hidden="true" />
               <span className="sr-only">Search workflows</span>
@@ -443,6 +428,21 @@ export function WorkflowsPage({
                 </option>
               ))}
             </FilterSelect>
+          </div>
+
+          <div className="models-type-tabs" role="tablist" aria-label="Filter by workflow category">
+            {CATEGORY_FILTERS.map((category) => (
+              <button
+                key={category}
+                role="tab"
+                aria-selected={activeCategory === category}
+                className={`models-type-tab${activeCategory === category ? " models-type-tab--active" : ""}`}
+                type="button"
+                onClick={() => setActiveCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
           </div>
 
           <div className="workflows-table-head" aria-hidden="true">

@@ -20,6 +20,10 @@ def is_job_query_token_request(request: Request) -> bool:
         return False
     if path.startswith("/api/jobs/") and (path.endswith("/events") or path.endswith("/outputs/view")):
         return True
+    if path.startswith("/api/workflows/") and (
+        path.endswith("/export") or path.endswith("/export/comfyui-json")
+    ):
+        return True
     return path.startswith("/api/gallery/") and (
         path.endswith("/image") or path.endswith("/thumbnail")
     )

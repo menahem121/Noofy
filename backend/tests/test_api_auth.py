@@ -24,6 +24,12 @@ class FakeEngineService:
     async def fetch_output(self, job_id: str, filename: str, subfolder: str, output_type: str):
         return b"image-bytes", "image/png"
 
+    def export_workflow_archive(self, workflow_id: str):
+        return b"noofy-archive", f"{workflow_id}.noofy"
+
+    def export_workflow_comfyui_graph(self, workflow_id: str):
+        return b'{"workflow": true}', f"{workflow_id}.json"
+
     async def shutdown(self) -> None:
         return None
 
@@ -112,3 +118,18 @@ def test_job_output_view_accepts_query_token(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.content == b"image-bytes"
+
+
+def test_workflow_export_downloads_accept_query_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+        noofy_export = client.get("/api/workflows/text_to_image_v0/export?token=secret-token")
+        comfy_export = client.get(
+            "/api/workflows/text_to_image_v0/export/comfyui-json?token=secret-token"
+        )
+
+    assert noofy_export.status_code == 200
+    assert noofy_export.content == b"noofy-archive"
+    assert comfy_export.status_code == 200
+    assert comfy_export.content == b'{"workflow": true}'
