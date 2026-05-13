@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Download,
   FileUp,
   PackagePlus,
@@ -41,6 +42,7 @@ import {
   recentWorkflows,
   starterWorkflows,
   type WorkflowCard,
+  type WorkflowCardVariant,
   type WorkflowStatus,
 } from "./homeContent";
 import { useWorkflowLibrary } from "./WorkflowLibraryProvider";
@@ -109,6 +111,115 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       source: "backend",
     };
   });
+}
+
+type NativeHomeWorkflowKind = "text_to_image" | "image_to_image";
+
+interface NativeHomeWorkflowGroup {
+  id: NativeHomeWorkflowKind;
+  title: "Text to Image" | "Image to Image";
+  description: string;
+}
+
+const nativeHomeWorkflowGroups: Record<NativeHomeWorkflowKind, NativeHomeWorkflowGroup> = {
+  text_to_image: {
+    id: "text_to_image",
+    title: "Text to Image",
+    description: "Generate a new image from a simple text prompt.",
+  },
+  image_to_image: {
+    id: "image_to_image",
+    title: "Image to Image",
+    description: "Use a reference image to guide a new generation.",
+  },
+};
+
+function homeWorkflowCardsFromBackend(
+  workflows: WorkflowSummary[],
+  selectedVariants: Record<string, string | undefined>,
+): WorkflowCard[] {
+  const grouped = new Map<NativeHomeWorkflowKind, WorkflowSummary[]>();
+  const ungrouped: WorkflowSummary[] = [];
+
+  for (const workflow of workflows) {
+    const groupKind = nativeHomeWorkflowKind(workflow);
+    if (groupKind) {
+      grouped.set(groupKind, [...(grouped.get(groupKind) ?? []), workflow]);
+    } else {
+      ungrouped.push(workflow);
+    }
+  }
+
+  const cards: WorkflowCard[] = [];
+  for (const kind of Object.keys(nativeHomeWorkflowGroups) as NativeHomeWorkflowKind[]) {
+    const variants = grouped.get(kind);
+    if (!variants?.length) continue;
+
+    const selectedId = selectedVariants[kind];
+    const selectedWorkflow = variants.find((variant) => variant.id === selectedId) ?? variants[0];
+    const selectedCard = workflowCardsFromBackend([selectedWorkflow])[0];
+    const group = nativeHomeWorkflowGroups[kind];
+
+    cards.push({
+      ...selectedCard,
+      title: group.title,
+      description: group.description,
+      category: "Image Generation",
+      variants: variants.map((variant) => workflowCardVariant(variant, group)),
+    });
+  }
+
+  return [...cards, ...workflowCardsFromBackend(ungrouped)];
+}
+
+function nativeHomeWorkflowKind(workflow: WorkflowSummary): NativeHomeWorkflowKind | null {
+  if (!isNativeBundledWorkflow(workflow)) return null;
+
+  const normalizedName = normalizeWorkflowName(workflow.name);
+  const category = workflow.category?.toLowerCase();
+  if (matchesNativeWorkflowName(normalizedName, "text to image") || category === "txt2img") {
+    return "text_to_image";
+  }
+  if (matchesNativeWorkflowName(normalizedName, "image to image") || category === "img2img") {
+    return "image_to_image";
+  }
+  return null;
+}
+
+function isNativeBundledWorkflow(workflow: WorkflowSummary) {
+  if (workflow.source_label === "Imported" || workflow.trust_level === "quarantined_community" || workflow.can_remove) {
+    return false;
+  }
+  if (workflow.status === "imported") return false;
+  return workflow.source_label === undefined || workflow.source_label === "Native Noofy";
+}
+
+function normalizeWorkflowName(value: string) {
+  return value
+    .replace(/[\u2014\u2013]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function matchesNativeWorkflowName(normalizedName: string, baseName: string) {
+  return normalizedName === baseName || normalizedName.startsWith(`${baseName} - `) || normalizedName.startsWith(`${baseName}: `);
+}
+
+function workflowCardVariant(workflow: WorkflowSummary, group: NativeHomeWorkflowGroup): WorkflowCardVariant {
+  const rawLabel = workflow.name
+    .replace(new RegExp(`^${group.title.replace(/\s+/g, "\\s+")}`, "i"), "")
+    .replace(/^[\s:\u2014\u2013-]+/, "")
+    .trim();
+  const modelLabel = workflow.main_model?.name && workflow.main_model.name !== "No model detected"
+    ? workflow.main_model.name.replace(/\.(safetensors|ckpt|gguf|pt|pth)$/i, "")
+    : null;
+
+  return {
+    id: workflow.id,
+    label: rawLabel || modelLabel || workflow.name,
+    title: workflow.name,
+  };
 }
 
 function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
@@ -183,6 +294,7 @@ export function HomePage({
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
+  const [selectedNativeVariants, setSelectedNativeVariants] = useState<Record<string, string | undefined>>({});
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
   const { refreshRuntime } = runtimeStatus;
@@ -196,14 +308,14 @@ export function HomePage({
   const status = runtimeStatus.statusView;
 
   const workflowCards = useMemo(() => {
-    const backendCards = workflowCardsFromBackend(workflowLibrary.workflows);
+    const backendCards = homeWorkflowCardsFromBackend(workflowLibrary.workflows, selectedNativeVariants);
     const fallbackCards = backendCards.length > 0 ? backendCards : [fallbackWorkflow];
     const starterWithoutDuplicates = starterWorkflows.filter(
-      (starter) => !fallbackCards.some((card) => card.id === starter.id),
+      (starter) => !fallbackCards.some((card) => card.id === starter.id || card.title === starter.title),
     );
 
     return [...fallbackCards, ...starterWithoutDuplicates].slice(0, 8);
-  }, [workflowLibrary.workflows]);
+  }, [selectedNativeVariants, workflowLibrary.workflows]);
 
   const installedCount = workflowLibrary.workflows.length;
   const homeWarning =
@@ -371,13 +483,15 @@ export function HomePage({
   }
 
   async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
+    const workflowId = activeWorkflowId(workflow);
+    const workflowTitle = activeWorkflowTitle(workflow);
     if (!workflow.canRemove) return;
-    const confirmed = window.confirm(`Remove "${workflow.title}" from Noofy?`);
+    const confirmed = window.confirm(`Remove "${workflowTitle}" from Noofy?`);
     if (!confirmed) return;
     setMenuOpenFor(null);
     setCardActionError(null);
     try {
-      await removeWorkflow(workflow.id);
+      await removeWorkflow(workflowId);
       await refreshWorkflows();
     } catch (error) {
       setCardActionError(error instanceof Error ? error.message : String(error));
@@ -385,14 +499,16 @@ export function HomePage({
   }
 
   async function handleEditWorkflowCard(workflow: WorkflowCard, open?: (schema: DashboardSchema) => void) {
+    const workflowId = activeWorkflowId(workflow);
+    const workflowTitle = activeWorkflowTitle(workflow);
     setMenuOpenFor(null);
     setCardActionError(null);
     if (!open) {
-      onConfigureDashboard?.(workflow.id, workflow.title);
+      onConfigureDashboard?.(workflowId, workflowTitle);
       return;
     }
     try {
-      const packageData = await fetchWorkflowPackage(workflow.id);
+      const packageData = await fetchWorkflowPackage(workflowId);
       open(buildDashboardSchemaForEditing(packageData));
     } catch (error) {
       setCardActionError(error instanceof Error ? error.message : String(error));
@@ -669,6 +785,9 @@ export function HomePage({
                 onViewDetails={() => onNavigate("workflows")}
                 onToggleMenu={() => setMenuOpenFor((current) => current === workflow.id ? null : workflow.id)}
                 onCloseMenu={() => setMenuOpenFor(null)}
+                onVariantChange={(variantId) =>
+                  setSelectedNativeVariants((current) => ({ ...current, [nativeVariantSelectionKey(workflow)]: variantId }))
+                }
                 onEditDashboard={() => void handleEditWorkflowCard(workflow, onEditDashboard)}
                 onEditWidgets={() => void handleEditWorkflowCard(workflow, onEditWidgets)}
                 onRemove={() => void handleRemoveWorkflowCard(workflow)}
@@ -677,6 +796,20 @@ export function HomePage({
           </section>
     </AppLayout>
   );
+}
+
+function activeWorkflowId(workflow: WorkflowCard) {
+  return workflow.id;
+}
+
+function activeWorkflowTitle(workflow: WorkflowCard) {
+  return workflow.variants?.find((variant) => variant.id === workflow.id)?.title ?? workflow.title;
+}
+
+function nativeVariantSelectionKey(workflow: WorkflowCard) {
+  if (workflow.title === "Text to Image") return "text_to_image";
+  if (workflow.title === "Image to Image") return "image_to_image";
+  return workflow.id;
 }
 
 function RequiredModelsModal({
@@ -851,6 +984,39 @@ function modelSourceLabel(model: RequiredModelAvailability) {
   return "No download source";
 }
 
+function WorkflowVariantSelect({
+  title,
+  value,
+  variants,
+  onChange,
+}: {
+  title: string;
+  value: string;
+  variants: WorkflowCardVariant[];
+  onChange: (workflowId: string) => void;
+}) {
+  return (
+    <label className="workflow-variant-select">
+      <span>Model</span>
+      <div className="workflow-variant-select__control">
+        <select
+          aria-label={`${title} model workflow`}
+          value={value}
+          disabled={variants.length < 2}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {variants.map((variant) => (
+            <option key={variant.id} value={variant.id}>
+              {variant.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={15} aria-hidden="true" />
+      </div>
+    </label>
+  );
+}
+
 function WorkflowCardView({
   workflow,
   menuOpen,
@@ -859,6 +1025,7 @@ function WorkflowCardView({
   onViewDetails,
   onToggleMenu,
   onCloseMenu,
+  onVariantChange,
   onEditDashboard,
   onEditWidgets,
   onRemove,
@@ -870,6 +1037,7 @@ function WorkflowCardView({
   onViewDetails: () => void;
   onToggleMenu: () => void;
   onCloseMenu: () => void;
+  onVariantChange: (workflowId: string) => void;
   onEditDashboard: () => void;
   onEditWidgets: () => void;
   onRemove: () => void;
@@ -879,11 +1047,12 @@ function WorkflowCardView({
     workflow.status === "needs_input_setup" || workflow.status === "cannot_prepare_automatically";
   const canOpen = workflow.source === "backend" || workflow.id === "text_to_image_v0";
   const canShowActions = workflow.source === "backend";
+  const selectedWorkflowTitle = activeWorkflowTitle(workflow);
 
   function handleClick() {
     onCloseMenu();
     if (needsSetup) {
-      onConfigureDashboard?.(workflow.id, workflow.title);
+      onConfigureDashboard?.(workflow.id, selectedWorkflowTitle);
       return;
     }
     if (canOpen) {
@@ -934,6 +1103,14 @@ function WorkflowCardView({
       </div>
       <h3>{workflow.title}</h3>
       <p>{workflow.description}</p>
+      {workflow.variants ? (
+        <WorkflowVariantSelect
+          title={workflow.title}
+          value={workflow.id}
+          variants={workflow.variants}
+          onChange={onVariantChange}
+        />
+      ) : null}
       <div className="workflow-card__footer">
         <span className={`workflow-status workflow-status--${workflow.status}`}>
           <StatusIcon size={14} aria-hidden="true" />

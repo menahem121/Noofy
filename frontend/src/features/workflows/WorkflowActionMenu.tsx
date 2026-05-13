@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { exportWorkflowComfyJsonUrl, exportWorkflowUrl } from "../../lib/api/noofyApi";
+import { handleNativeWorkflowExportClick, workflowExportFilename } from "../../lib/workflowExport";
 
 export interface WorkflowActionMenuWorkflow {
   id: string;
@@ -48,6 +49,17 @@ export function WorkflowActionMenu({
 }: WorkflowActionMenuProps) {
   const menuClasses = ["workflow-action-menu", menuClassName].filter(Boolean).join(" ");
   const canExportComfyJson = workflow.can_export_comfyui_json !== false;
+  const exportNoofyUrl = exportWorkflowUrl(workflow.id);
+  const exportComfyJsonUrl = exportWorkflowComfyJsonUrl(workflow.id);
+
+  function handleExportClick(
+    event: { preventDefault: () => void },
+    url: string,
+    defaultFilename: string,
+  ) {
+    onCloseMenu();
+    handleNativeWorkflowExportClick(event, url, defaultFilename);
+  }
 
   return (
     <div className={menuClasses}>
@@ -80,13 +92,31 @@ export function WorkflowActionMenu({
             Edit Widgets
           </button>
           {workflow.can_export_noofy ? (
-            <a role="menuitem" href={exportWorkflowUrl(workflow.id)} download onClick={onCloseMenu}>
+            <a
+              role="menuitem"
+              href={exportNoofyUrl}
+              download
+              onClick={(event) => handleExportClick(
+                event,
+                exportNoofyUrl,
+                workflowExportFilename(workflow.name, ".noofy"),
+              )}
+            >
               <Download size={14} aria-hidden="true" />
               Export .Noofy
             </a>
           ) : null}
           {canExportComfyJson ? (
-            <a role="menuitem" href={exportWorkflowComfyJsonUrl(workflow.id)} download onClick={onCloseMenu}>
+            <a
+              role="menuitem"
+              href={exportComfyJsonUrl}
+              download
+              onClick={(event) => handleExportClick(
+                event,
+                exportComfyJsonUrl,
+                workflowExportFilename(workflow.name, ".json"),
+              )}
+            >
               <FileJson size={14} aria-hidden="true" />
               Export ComfyUI JSON
             </a>

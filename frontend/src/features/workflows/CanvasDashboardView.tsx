@@ -28,6 +28,7 @@ import {
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
 import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
+import { handleNativeWorkflowExportClick } from "../../lib/workflowExport";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
@@ -61,6 +62,7 @@ interface CanvasDashboardViewProps {
   isEditingLayout: boolean;
   runState: CanvasRunState;
   exportNoofyUrl: string;
+  exportNoofyFilename?: string;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
@@ -85,6 +87,7 @@ export function CanvasDashboardView({
   isEditingLayout,
   runState,
   exportNoofyUrl,
+  exportNoofyFilename = "workflow.noofy",
   onChange,
   onImageUpload,
   onOutputPreferenceChange,
@@ -322,7 +325,10 @@ export function CanvasDashboardView({
                       role="menuitem"
                       href={exportNoofyUrl}
                       download
-                      onClick={() => setOptionsOpen(false)}
+                      onClick={(event) => {
+                        setOptionsOpen(false);
+                        handleNativeWorkflowExportClick(event, exportNoofyUrl, exportNoofyFilename);
+                      }}
                     >
                       Export as Noofy
                     </a>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -199,6 +199,115 @@ describe("HomePage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
     expect(screen.queryByRole("menuitem", { name: "Remove workflow" })).not.toBeInTheDocument();
+  });
+
+  it("groups native Text to Image and Image to Image variants behind Home page model selectors", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: "native_txt_sdxl",
+              name: "Text to Image \u2014 SDXL",
+              version: "1.0.0",
+              description: "Native SDXL generation.",
+              category: "Txt2img",
+              trust_level: "noofy_verified",
+              source_label: "Native Noofy",
+              status: "installed",
+              status_label: "Installed",
+              can_remove: false,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+            {
+              id: "native_txt_flux",
+              name: "Text to Image \u2014 Flux",
+              version: "1.0.0",
+              description: "Native Flux generation.",
+              category: "Txt2img",
+              trust_level: "noofy_verified",
+              source_label: "Native Noofy",
+              status: "installed",
+              status_label: "Installed",
+              can_remove: false,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+            {
+              id: "native_img_sdxl",
+              name: "Image to Image \u2014 SDXL",
+              version: "1.0.0",
+              description: "Native SDXL image guidance.",
+              category: "Img2img",
+              trust_level: "noofy_verified",
+              source_label: "Native Noofy",
+              status: "installed",
+              status_label: "Installed",
+              can_remove: false,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+            {
+              id: "native_img_flux",
+              name: "Image to Image \u2014 Flux",
+              version: "1.0.0",
+              description: "Native Flux image guidance.",
+              category: "Img2img",
+              trust_level: "noofy_verified",
+              source_label: "Native Noofy",
+              status: "installed",
+              status_label: "Installed",
+              can_remove: false,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+            {
+              id: "community_txt",
+              name: "Text to Image \u2014 Community",
+              version: "1.0.0",
+              description: "Imported community generation.",
+              category: "Txt2img",
+              trust_level: "quarantined_community",
+              source_label: "Imported",
+              status: "imported",
+              status_label: "Imported",
+              can_remove: true,
+              can_export_noofy: true,
+              can_export_comfyui_json: true,
+            },
+          ]),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    const textSelector = await screen.findByLabelText("Text to Image model workflow");
+    const imageSelector = screen.getByLabelText("Image to Image model workflow");
+
+    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 SDXL" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 Flux" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Text to Image \u2014 Community" })).toBeInTheDocument();
+    expect(textSelector).toHaveValue("native_txt_sdxl");
+    expect(within(textSelector).getByRole("option", { name: "Flux" })).toBeInTheDocument();
+    expect(imageSelector).toHaveValue("native_img_sdxl");
+    expect(within(imageSelector).getByRole("option", { name: "Flux" })).toBeInTheDocument();
+
+    fireEvent.change(textSelector, { target: { value: "native_txt_flux" } });
+    const selectedTextSelector = screen.getByLabelText("Text to Image model workflow");
+    expect(selectedTextSelector).toHaveValue("native_txt_flux");
+    const textCard = selectedTextSelector.closest("article");
+    expect(textCard).not.toBeNull();
+    fireEvent.click(within(textCard as HTMLElement).getByRole("button", { name: "Open Text to Image" }));
+
+    expect(onOpenWorkflow).toHaveBeenCalledWith("native_txt_flux");
   });
 
   it("shows starter content and a clear status when the backend is unavailable", async () => {

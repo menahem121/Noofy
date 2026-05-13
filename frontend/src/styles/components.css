@@ -422,6 +422,62 @@
   line-height: 1.45;
 }
 
+.workflow-variant-select {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+}
+
+.workflow-variant-select > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.workflow-variant-select__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.workflow-variant-select__control select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 34px 0 12px;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  appearance: none;
+}
+
+.workflow-variant-select__control select:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.workflow-variant-select__control select:focus {
+  border-color: rgba(168, 85, 247, 0.72);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.16);
+}
+
+.workflow-variant-select__control select:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.workflow-variant-select__control svg {
+  position: absolute;
+  right: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
 .workflow-card__footer {
   justify-content: space-between;
   gap: 12px;
@@ -1448,4 +1504,3 @@
     align-self: flex-start;
   }
 }
-

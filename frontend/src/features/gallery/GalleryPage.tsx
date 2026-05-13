@@ -134,7 +134,10 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
   const [filterWorkflowId, setFilterWorkflowId] = useState("");
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
+  const [bulkActionError, setBulkActionError] = useState<string | null>(null);
 
   const filterPanelRef = useRef<HTMLDivElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
@@ -184,6 +187,14 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     [galleryState.images, filters, filterWorkflowId],
   );
 
+  useEffect(() => {
+    const visibleIds = new Set(displayedImages.map((img) => img.id));
+    setSelectedImageIds((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [displayedImages]);
+
   const workflows = useMemo(() => uniqueWorkflows(galleryState.images), [galleryState.images]);
 
   const sortedWorkflows = useMemo(
@@ -203,6 +214,26 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     () => (selectedImageIndex >= 0 ? displayedImages[selectedImageIndex] : null),
     [selectedImageIndex, displayedImages],
   );
+
+  const selectedImages = useMemo(
+    () => displayedImages.filter((img) => selectedImageIds.has(img.id)),
+    [displayedImages, selectedImageIds],
+  );
+
+  const downloadableSelectedImages = useMemo(
+    () => selectedImages.filter((img) => img.fileState !== "missing" && Boolean(img.imageUrl)),
+    [selectedImages],
+  );
+
+  function toggleImageSelection(id: string) {
+    setBulkActionError(null);
+    setSelectedImageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function toggleFavorite(id: string) {
     const nextFavorite = !favorites.has(id);
@@ -234,8 +265,47 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
         images: prev.images.filter((img) => img.id !== id),
         total: Math.max(0, prev.total - 1),
       }));
+      setSelectedImageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       if (selectedImageId === id) setSelectedImageId(null);
     });
+  }
+
+  function handleDownloadSelected() {
+    for (const image of downloadableSelectedImages) {
+      downloadGalleryImage(image);
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedImages.length === 0) return;
+    setBulkActionBusy(true);
+    setBulkActionError(null);
+    const idsToDelete = selectedImages.map((img) => img.id);
+    const results = await Promise.allSettled(idsToDelete.map((id) => deleteGalleryItem(id)));
+    const deletedIds = new Set(
+      idsToDelete.filter((_, index) => results[index].status === "fulfilled"),
+    );
+
+    if (deletedIds.size > 0) {
+      setGalleryState((prev) => ({
+        ...prev,
+        images: prev.images.filter((img) => !deletedIds.has(img.id)),
+        total: Math.max(0, prev.total - deletedIds.size),
+      }));
+      setSelectedImageIds((prev) => new Set([...prev].filter((id) => !deletedIds.has(id))));
+      if (selectedImageId && deletedIds.has(selectedImageId)) {
+        setSelectedImageId(null);
+      }
+    }
+
+    if (deletedIds.size !== idsToDelete.length) {
+      setBulkActionError("Some selected images could not be deleted. Try again.");
+    }
+    setBulkActionBusy(false);
   }
 
   function handleClearFilters() {
@@ -396,6 +466,48 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
         </div>
       )}
 
+      {selectedImages.length > 0 && (
+        <div className="gallery-bulk-bar" role="region" aria-label="Selected image actions">
+          <div className="gallery-bulk-bar__summary">
+            <strong>{selectedImages.length} selected</strong>
+            <span>
+              {downloadableSelectedImages.length === selectedImages.length
+                ? "Ready for bulk actions"
+                : `${downloadableSelectedImages.length} available to download`}
+            </span>
+          </div>
+          <div className="gallery-bulk-bar__actions">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={handleDownloadSelected}
+              disabled={downloadableSelectedImages.length === 0 || bulkActionBusy}
+            >
+              <Download size={14} aria-hidden="true" />
+              Download selected
+            </button>
+            <button
+              className="secondary-button secondary-button--danger"
+              type="button"
+              onClick={() => void handleDeleteSelected()}
+              disabled={bulkActionBusy}
+            >
+              {bulkActionBusy ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+              Delete selected
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => setSelectedImageIds(new Set())}
+              disabled={bulkActionBusy}
+            >
+              Clear selection
+            </button>
+          </div>
+          {bulkActionError ? <p className="gallery-bulk-bar__error">{bulkActionError}</p> : null}
+        </div>
+      )}
+
       {/* ── States ── */}
       {galleryState.phase === "loading" && <GalleryLoadingState />}
 
@@ -428,7 +540,9 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
               key={img.id}
               image={img}
               isFavorite={favorites.has(img.id)}
+              isSelected={selectedImageIds.has(img.id)}
               onOpen={() => setSelectedImageId(img.id)}
+              onToggleSelected={() => toggleImageSelection(img.id)}
               onToggleFavorite={() => toggleFavorite(img.id)}
             />
           ))}
@@ -463,19 +577,33 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
 
 // ─── Thumbnail ────────────────────────────────────────────────────────────────
 
+function downloadGalleryImage(image: GalleryImage) {
+  const a = document.createElement("a");
+  a.href = image.imageUrl;
+  a.download = `noofy-${image.id}.png`;
+  a.click();
+}
+
 function GalleryThumbnail({
   image,
   isFavorite,
+  isSelected,
   onOpen,
+  onToggleSelected,
   onToggleFavorite,
 }: {
   image: GalleryImage;
   isFavorite: boolean;
+  isSelected: boolean;
   onOpen: () => void;
+  onToggleSelected: () => void;
   onToggleFavorite: () => void;
 }) {
   return (
-    <article className="gallery-thumb" aria-label={image.prompt || image.widgetTitle || image.workflowName}>
+    <article
+      className={`gallery-thumb${isSelected ? " gallery-thumb--selected" : ""}`}
+      aria-label={image.prompt || image.widgetTitle || image.workflowName}
+    >
       <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open image: ${image.prompt || image.widgetTitle || image.workflowName}`}>
         {image.fileState === "missing" || !image.thumbnailUrl ? (
           <div className="gallery-thumb__missing">
@@ -495,6 +623,16 @@ function GalleryThumbnail({
           <span className="gallery-thumb__open-hint">View image</span>
         </div>
       </button>
+
+      <label className="gallery-thumb__select" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={isSelected}
+          aria-label={`Select image: ${image.prompt || image.widgetTitle || image.workflowName}`}
+          onChange={onToggleSelected}
+        />
+        <span className="gallery-thumb__checkbox" aria-hidden="true" />
+      </label>
 
       <button
         className={`gallery-thumb__fav${isFavorite ? " gallery-thumb__fav--active" : ""}`}
@@ -555,10 +693,7 @@ function ImageDetailModal({
   }, [image.id]);
 
   function handleDownload() {
-    const a = document.createElement("a");
-    a.href = image.imageUrl;
-    a.download = `noofy-${image.id}.png`;
-    a.click();
+    downloadGalleryImage(image);
   }
 
   async function handleCopyPrompt() {

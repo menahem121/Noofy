@@ -37,6 +37,13 @@ export interface WorkflowCard {
   canExportComfyJson?: boolean;
   Icon: LucideIcon;
   source: "backend" | "starter";
+  variants?: WorkflowCardVariant[];
+}
+
+export interface WorkflowCardVariant {
+  id: string;
+  label: string;
+  title: string;
 }
 
 export interface RecentWorkflow {

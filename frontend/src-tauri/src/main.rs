@@ -4,6 +4,7 @@ use rand::{rngs::OsRng, RngCore};
 use std::{
     collections::HashMap,
     ffi::OsString,
+    fs,
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -85,21 +86,60 @@ fn select_model_files() -> Result<Vec<String>, String> {
     Ok(rfd::FileDialog::new()
         .add_filter(
             "Model files",
-            &[
-                "safetensors",
-                "ckpt",
-                "pt",
-                "pth",
-                "bin",
-                "gguf",
-                "onnx",
-            ],
+            &["safetensors", "ckpt", "pt", "pth", "bin", "gguf", "onnx"],
         )
         .pick_files()
         .unwrap_or_default()
         .into_iter()
         .map(|path| path.to_string_lossy().to_string())
         .collect())
+}
+
+#[tauri::command]
+fn select_save_file(default_filename: String) -> Result<Option<String>, String> {
+    let filename = safe_dialog_filename(&default_filename);
+    let extension = Path::new(&filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut dialog = rfd::FileDialog::new().set_file_name(filename.clone());
+
+    dialog = match extension.as_str() {
+        "noofy" => dialog.add_filter("Noofy workflow package", &["noofy"]),
+        "json" => dialog.add_filter("JSON file", &["json"]),
+        _ => dialog,
+    };
+
+    Ok(dialog
+        .save_file()
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn save_binary_file(path: String, bytes: Vec<u8>) -> Result<String, String> {
+    let target = PathBuf::from(path);
+    let Some(parent) = target.parent() else {
+        return Err("save location has no parent folder".to_string());
+    };
+    if !parent.is_dir() {
+        return Err("save folder does not exist".to_string());
+    }
+    fs::write(&target, bytes).map_err(|e| format!("failed to save file: {e}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+fn safe_dialog_filename(filename: &str) -> String {
+    let name = Path::new(filename)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("workflow.noofy")
+        .trim();
+    if name.is_empty() {
+        "workflow.noofy".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 #[tauri::command]
@@ -123,6 +163,8 @@ fn main() {
             open_external_url,
             select_folder,
             select_model_files,
+            select_save_file,
+            save_binary_file,
             open_folder
         ])
         .setup(move |app| {

@@ -43,6 +43,7 @@ import {
   type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
+import { handleNativeWorkflowExportClick, workflowExportFilename } from "../../lib/workflowExport";
 import type {
   DashboardSchema,
   DashboardWidget,
@@ -530,6 +531,11 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           href={exportWorkflowUrl(workflowId)}
           download
           aria-label="Share / Save as .noofy"
+          onClick={(event) => handleNativeWorkflowExportClick(
+            event,
+            exportWorkflowUrl(workflowId),
+            workflowExportFilename(workflowSummary?.name ?? state.packageData?.metadata?.name, ".noofy"),
+          )}
         >
           <Share2 size={15} aria-hidden="true" />
           Share
@@ -637,6 +643,10 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
             canCancel,
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
+          exportNoofyFilename={workflowExportFilename(
+            workflowSummary?.name ?? state.packageData?.metadata?.name,
+            ".noofy",
+          )}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}

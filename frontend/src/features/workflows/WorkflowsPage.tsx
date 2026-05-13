@@ -26,6 +26,11 @@ import {
   type WorkflowMetadataUpdate,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
+import {
+  isNativeWorkflowExportAvailable,
+  saveWorkflowExportToNativeFileWithAlert,
+  workflowExportFilename,
+} from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
@@ -692,11 +697,17 @@ function WorkflowDetailsDrawer({
     }
   }
 
-  function handleExportClick(event: MouseEvent<HTMLAnchorElement>, url: string) {
-    if (metadataDraftsEqual(draft, savedDraft)) return;
+  function handleExportClick(event: MouseEvent<HTMLAnchorElement>, url: string, defaultFilename: string) {
+    const needsNativeExport = isNativeWorkflowExportAvailable();
+    if (metadataDraftsEqual(draft, savedDraft) && !needsNativeExport) return;
     event.preventDefault();
     void saveDraft().then((saved) => {
-      if (saved) window.location.href = url;
+      if (!saved) return;
+      if (needsNativeExport) {
+        void saveWorkflowExportToNativeFileWithAlert(url, defaultFilename);
+        return;
+      }
+      window.location.href = url;
     });
   }
 
@@ -810,7 +821,11 @@ function WorkflowDetailsDrawer({
             className="primary-button secondary-button--full"
             href={exportWorkflowUrl(workflow.id)}
             download
-            onClick={(event) => handleExportClick(event, exportWorkflowUrl(workflow.id))}
+            onClick={(event) => handleExportClick(
+              event,
+              exportWorkflowUrl(workflow.id),
+              workflowExportFilename(workflow.name, ".noofy"),
+            )}
           >
             <Download size={15} aria-hidden="true" />
             Export .Noofy
@@ -820,7 +835,11 @@ function WorkflowDetailsDrawer({
           className="secondary-button secondary-button--full"
           href={exportWorkflowComfyJsonUrl(workflow.id)}
           download
-          onClick={(event) => handleExportClick(event, exportWorkflowComfyJsonUrl(workflow.id))}
+          onClick={(event) => handleExportClick(
+            event,
+            exportWorkflowComfyJsonUrl(workflow.id),
+            workflowExportFilename(workflow.name, ".json"),
+          )}
         >
           Export ComfyUI JSON
         </a>
