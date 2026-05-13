@@ -2,18 +2,14 @@ import { ChangeEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useRe
 import {
   ChevronDown,
   Download,
-  Edit3,
-  FileJson,
   FileUp,
   Image,
   Maximize2,
-  MoreHorizontal,
   PackageOpen,
   Play,
   Search,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 
@@ -35,6 +31,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
+import { WorkflowActionMenu } from "./WorkflowActionMenu";
 
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
@@ -636,54 +633,17 @@ function WorkflowRow({
           <Play size={13} aria-hidden="true" />
           Open
         </button>
-        <div className="workflow-action-menu">
-          <button
-            className="icon-button"
-            type="button"
-            aria-label={`Actions for ${workflow.name}`}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            onClick={onToggleMenu}
-          >
-            <MoreHorizontal size={16} aria-hidden="true" />
-          </button>
-          {menuOpen ? (
-            <div className="workflow-action-menu__content" role="menu">
-              <button role="menuitem" type="button" onClick={onOpen}>
-                <Play size={14} aria-hidden="true" />
-                Open
-              </button>
-              <button role="menuitem" type="button" onClick={onDetails}>
-                <PackageOpen size={14} aria-hidden="true" />
-                View details
-              </button>
-              <button role="menuitem" type="button" onClick={onEditDashboard}>
-                <Edit3 size={14} aria-hidden="true" />
-                Edit dashboard
-              </button>
-              <button role="menuitem" type="button" onClick={onEditWidgets}>
-                <SlidersHorizontal size={14} aria-hidden="true" />
-                Edit Widgets
-              </button>
-              {workflow.can_export_noofy ? (
-                <a role="menuitem" href={exportWorkflowUrl(workflow.id)} download onClick={onCloseMenu}>
-                  <Download size={14} aria-hidden="true" />
-                  Export .Noofy
-                </a>
-              ) : null}
-              <a role="menuitem" href={exportWorkflowComfyJsonUrl(workflow.id)} download onClick={onCloseMenu}>
-                <FileJson size={14} aria-hidden="true" />
-                Export ComfyUI JSON
-              </a>
-              {workflow.can_remove ? (
-                <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>
-                  <Trash2 size={14} aria-hidden="true" />
-                  Remove workflow
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <WorkflowActionMenu
+          workflow={workflow}
+          menuOpen={menuOpen}
+          onOpen={onOpen}
+          onDetails={onDetails}
+          onToggleMenu={onToggleMenu}
+          onCloseMenu={onCloseMenu}
+          onEditDashboard={onEditDashboard}
+          onEditWidgets={onEditWidgets}
+          onRemove={onRemove}
+        />
       </div>
     </article>
   );

@@ -4,17 +4,10 @@ import {
   ArrowRight,
   CheckCircle2,
   Download,
-  Edit3,
-  FileJson,
   FileUp,
-  MoreHorizontal,
-  PackageOpen,
   PackagePlus,
-  Play,
   Plus,
   Search,
-  SlidersHorizontal,
-  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -29,8 +22,6 @@ import {
   cancelWorkflowImport,
   commitWorkflowImport,
   downloadImportMissingModels,
-  exportWorkflowComfyJsonUrl,
-  exportWorkflowUrl,
   fetchImportModelDownloadStatus,
   fetchWorkflowPackage,
   previewWorkflowPackageImport,
@@ -44,6 +35,7 @@ import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
+import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import {
   fallbackWorkflow,
   recentWorkflows,
@@ -918,56 +910,25 @@ function WorkflowCardView({
             ) : null}
           </div>
           {canShowActions ? (
-            <div className="workflow-action-menu workflow-action-menu--card" onClick={(event) => event.stopPropagation()}>
-              <button
-                className="icon-button icon-button--card"
-                type="button"
-                aria-label={`Actions for ${workflow.title}`}
-                aria-haspopup="menu"
-                aria-expanded={menuOpen}
-                onClick={onToggleMenu}
-              >
-                <MoreHorizontal size={16} aria-hidden="true" />
-              </button>
-              {menuOpen ? (
-                <div className="workflow-action-menu__content" role="menu">
-                  <button role="menuitem" type="button" onClick={handleClick}>
-                    <Play size={14} aria-hidden="true" />
-                    Open
-                  </button>
-                  <button role="menuitem" type="button" onClick={onViewDetails}>
-                    <PackageOpen size={14} aria-hidden="true" />
-                    View details
-                  </button>
-                  <button role="menuitem" type="button" onClick={onEditDashboard}>
-                    <Edit3 size={14} aria-hidden="true" />
-                    Edit dashboard
-                  </button>
-                  <button role="menuitem" type="button" onClick={onEditWidgets}>
-                    <SlidersHorizontal size={14} aria-hidden="true" />
-                    Edit Widgets
-                  </button>
-                  {workflow.canExportNoofy ? (
-                    <a role="menuitem" href={exportWorkflowUrl(workflow.id)} download onClick={onCloseMenu}>
-                      <Download size={14} aria-hidden="true" />
-                      Export .Noofy
-                    </a>
-                  ) : null}
-                  {workflow.canExportComfyJson ? (
-                    <a role="menuitem" href={exportWorkflowComfyJsonUrl(workflow.id)} download onClick={onCloseMenu}>
-                      <FileJson size={14} aria-hidden="true" />
-                      Export ComfyUI JSON
-                    </a>
-                  ) : null}
-                  {workflow.canRemove ? (
-                    <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>
-                      <Trash2 size={14} aria-hidden="true" />
-                      Remove workflow
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            <WorkflowActionMenu
+              workflow={{
+                id: workflow.id,
+                name: workflow.title,
+                can_export_noofy: workflow.canExportNoofy,
+                can_export_comfyui_json: workflow.canExportComfyJson,
+                can_remove: workflow.canRemove,
+              }}
+              menuOpen={menuOpen}
+              buttonClassName="icon-button icon-button--card"
+              menuClassName="workflow-action-menu--card"
+              onOpen={handleClick}
+              onDetails={onViewDetails}
+              onToggleMenu={onToggleMenu}
+              onCloseMenu={onCloseMenu}
+              onEditDashboard={onEditDashboard}
+              onEditWidgets={onEditWidgets}
+              onRemove={onRemove}
+            />
           ) : null}
         </div>
       </div>
