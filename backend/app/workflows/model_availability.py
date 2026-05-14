@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 
@@ -122,22 +122,25 @@ class ProviderModelCandidate:
     source_trust: str = "provider_metadata"
 
     def strength_for(self, model: RequiredModel) -> int:
+        expected_sha = _model_sha256(model)
+        if expected_sha is not None:
+            if self.sha256 is None or self.sha256 != expected_sha:
+                return 0
+            size_matches = (
+                model.size_bytes is not None
+                and self.size_bytes is not None
+                and self.size_bytes == model.size_bytes
+            )
+            return 4 if size_matches else 3
+
         filename_matches = self.filename.casefold() == model.filename.casefold()
         if not filename_matches:
             return 0
-        expected_sha = _model_sha256(model)
-        if expected_sha is not None and self.sha256 is not None and self.sha256 != expected_sha:
-            return 0
-        sha_matches = expected_sha is not None and self.sha256 == expected_sha
         size_matches = (
             model.size_bytes is not None
             and self.size_bytes is not None
             and self.size_bytes == model.size_bytes
         )
-        if sha_matches and size_matches:
-            return 4
-        if sha_matches:
-            return 3
         if size_matches:
             return 2
         return 0
@@ -166,20 +169,6 @@ class ProviderModelResolver:
             )
             return []
         candidates: list[ProviderModelCandidate] = []
-        hf = await self._search_hugging_face(model)
-        self._record_provider_step(
-            model,
-            provider="hugging_face",
-            step="model_search",
-            candidates=hf,
-        )
-        reliable_hf = _reliable_candidates(model, hf)
-        if reliable_hf and reliable_hf[0].strength_for(model) >= 4:
-            return [candidate.download_url for candidate in reliable_hf]
-        if reliable_hf and _model_sha256(model) is None:
-            return [candidate.download_url for candidate in reliable_hf]
-        candidates.extend(hf)
-
         if _model_sha256(model) is not None:
             civitai_by_hash = await self._search_civitai_by_hash(model)
             self._record_provider_step(
@@ -189,12 +178,24 @@ class ProviderModelResolver:
                 candidates=civitai_by_hash,
             )
             candidates.extend(civitai_by_hash)
-            reliable_civitai_by_hash = _reliable_candidates(model, civitai_by_hash)
-            if (
-                reliable_civitai_by_hash
-                and reliable_civitai_by_hash[0].strength_for(model) >= 4
-            ):
-                return [candidate.download_url for candidate in reliable_civitai_by_hash]
+
+        try:
+            hf = await self._search_hugging_face(model)
+        except (ProviderAuthenticationRequired, ProviderRateLimited):
+            selected = _reliable_candidates(model, candidates)
+            if selected:
+                return [candidate.download_url for candidate in selected]
+            raise
+        self._record_provider_step(
+            model,
+            provider="hugging_face",
+            step="model_search",
+            candidates=hf,
+        )
+        candidates.extend(hf)
+        selected = _reliable_candidates(model, candidates)
+        if selected:
+            return [candidate.download_url for candidate in selected]
 
         civitai_query = await self._search_civitai_query(model)
         self._record_provider_step(
@@ -1001,7 +1002,7 @@ class ModelAvailabilityService:
         total_models: int | None = None,
     ) -> None:
         last_error: Exception | None = None
-        for url in urls:
+        for index, url in enumerate(urls):
             transaction = self._begin_download_transaction(model)
             try:
                 provider = _provider_from_url(url)
@@ -1095,23 +1096,37 @@ class ModelAvailabilityService:
                     transaction.part_path.unlink()
                 status_code = exc.response.status_code
                 if status_code == 401:
-                    raise ProviderAuthenticationRequired(
+                    last_error = ProviderAuthenticationRequired(
                         "A provider API key is required or the saved key is invalid."
-                    ) from exc
+                    )
+                    if index == len(urls) - 1:
+                        raise last_error from exc
+                    continue
                 if status_code == 403:
-                    raise ProviderAccessDenied(
+                    last_error = ProviderAccessDenied(
                         "The provider denied access to this model file."
-                    ) from exc
+                    )
+                    if index == len(urls) - 1:
+                        raise last_error from exc
+                    continue
                 if status_code == 429:
-                    raise ProviderRateLimited(
+                    last_error = ProviderRateLimited(
                         "The provider is rate limiting downloads; try again later."
-                    ) from exc
+                    )
+                    if index == len(urls) - 1:
+                        raise last_error from exc
+                    continue
             except Exception as exc:
                 last_error = exc
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
             finally:
                 self._cleanup_transaction(transaction.transaction_dir)
+        if isinstance(
+            last_error,
+            (ProviderAuthenticationRequired, ProviderAccessDenied, ProviderRateLimited),
+        ):
+            raise last_error
         raise ModelAvailabilityError(f"All model sources failed: {last_error}")
 
     def _cleanup_transaction(self, transaction_dir: Path) -> None:
@@ -1238,7 +1253,24 @@ def _source_urls(model: RequiredModel) -> list[str]:
     urls = list(model.source_urls)
     if model.source_url and model.source_url not in urls:
         urls.append(model.source_url)
-    return [url for url in urls if url.strip()]
+    return [_normalize_source_url(url.strip()) for url in urls if url.strip()]
+
+
+def _normalize_source_url(url: str) -> str:
+    parsed = urlparse(url)
+    if "huggingface.co" not in parsed.netloc.casefold():
+        return url
+    path_parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+    try:
+        marker_index = path_parts.index("blob")
+    except ValueError:
+        return url
+    if marker_index < 2 or marker_index + 2 >= len(path_parts):
+        return url
+    repo_id = "/".join(path_parts[:marker_index])
+    revision = path_parts[marker_index + 1]
+    rfilename = "/".join(path_parts[marker_index + 2 :])
+    return _hugging_face_resolve_url(repo_id, rfilename, revision=revision)
 
 
 def _prioritized_source_urls(urls: list[str]) -> list[str]:
@@ -1499,6 +1531,8 @@ def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
         terms.extend(["stable diffusion v1 5", "stable-diffusion-v1-5"])
     if "sd15" in tokens or "sd1" in tokens:
         terms.extend(["stable diffusion 1.5", "stable-diffusion-v1-5"])
+    if _model_sha256(model) is not None and _looks_like_generic_provider_filename(filename, tokens):
+        terms.extend(_hugging_face_context_search_terms(model, useful_tokens))
     unique: list[str] = []
     for term in terms:
         term = term.strip(" ._-")
@@ -1508,6 +1542,61 @@ def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
         if len(unique) >= HUGGING_FACE_SEARCH_TERM_LIMIT:
             break
     return unique
+
+
+def _looks_like_generic_provider_filename(filename: str, tokens: list[str]) -> bool:
+    stem = Path(filename).stem.casefold()
+    return (
+        stem == "model"
+        or stem.startswith("model.")
+        or stem.startswith("model_")
+        or stem.startswith("model-")
+        or stem == "pytorch_model"
+        or stem.startswith("pytorch_model.")
+        or stem.startswith("pytorch_model_")
+        or stem.startswith("pytorch_model-")
+        or stem == "diffusion_pytorch_model"
+        or stem.startswith("diffusion_pytorch_model.")
+        or stem.startswith("diffusion_pytorch_model_")
+        or stem.startswith("diffusion_pytorch_model-")
+        or {"diffusion", "pytorch", "model"}.issubset(set(tokens))
+    )
+
+
+def _hugging_face_context_search_terms(
+    model: RequiredModel, useful_filename_tokens: list[str]
+) -> list[str]:
+    context_stop_tokens = {
+        "checkpoint",
+        "checkpoints",
+        "model",
+        "models",
+        "safetensors",
+        "bin",
+    }
+    filename_stop_tokens = {
+        "diffusion",
+        "pytorch",
+        "model",
+        "safetensors",
+        "bin",
+    }
+    context_tokens: list[str] = []
+    for value in (model.model_type, model.folder):
+        if not value:
+            continue
+        for token in re.split(r"[^a-zA-Z0-9]+", value.casefold()):
+            if token and token not in context_stop_tokens and token not in context_tokens:
+                context_tokens.append(token)
+    distinct_filename_tokens = [
+        token for token in useful_filename_tokens if token not in filename_stop_tokens
+    ]
+    terms: list[str] = []
+    for context in context_tokens:
+        terms.append(context)
+        if distinct_filename_tokens:
+            terms.append(" ".join([context, *distinct_filename_tokens[:3]]))
+    return terms
 
 
 def _hugging_face_api_model_url(repo_id: str) -> str:
@@ -1521,6 +1610,7 @@ def _hugging_face_candidates_from_repo_record(
     siblings = repo.get("siblings")
     if not isinstance(siblings, list):
         return []
+    expected_sha = _model_sha256(model)
     candidates: list[ProviderModelCandidate] = []
     for sibling in siblings:
         if not isinstance(sibling, dict):
@@ -1528,10 +1618,13 @@ def _hugging_face_candidates_from_repo_record(
         rfilename = sibling.get("rfilename") or sibling.get("path")
         if not isinstance(rfilename, str):
             continue
-        if Path(rfilename).name.casefold() != model.filename.casefold():
-            continue
         size = _hugging_face_file_size(sibling)
         sha256 = _hugging_face_file_sha256(sibling)
+        if expected_sha is not None:
+            if sha256 != expected_sha:
+                continue
+        elif Path(rfilename).name.casefold() != model.filename.casefold():
+            continue
         candidates.append(
             ProviderModelCandidate(
                 provider="hugging_face",
@@ -1567,10 +1660,13 @@ def _hugging_face_file_sha256(file_record: dict[str, object]) -> str | None:
     return _sha_from_mapping(file_record)
 
 
-def _hugging_face_resolve_url(repo_id: str, rfilename: str) -> str:
+def _hugging_face_resolve_url(
+    repo_id: str, rfilename: str, *, revision: str = "main"
+) -> str:
     repo = "/".join(quote(part, safe="") for part in repo_id.split("/"))
+    resolved_revision = quote(revision, safe="")
     file_path = "/".join(quote(part, safe="") for part in rfilename.split("/"))
-    return f"https://huggingface.co/{repo}/resolve/main/{file_path}"
+    return f"https://huggingface.co/{repo}/resolve/{resolved_revision}/{file_path}"
 
 
 def _civitai_file_candidate(
@@ -1580,12 +1676,18 @@ def _civitai_file_candidate(
         return None
     name = file_record.get("name")
     download_url = file_record.get("downloadUrl")
-    if not isinstance(name, str) or Path(name).name.casefold() != model.filename.casefold():
+    if not isinstance(name, str):
         return None
     if not isinstance(download_url, str) or not download_url:
         return None
     hashes = file_record.get("hashes")
     sha256 = _sha_from_mapping(hashes) if isinstance(hashes, dict) else _sha_from_mapping(file_record)
+    expected_sha = _model_sha256(model)
+    if expected_sha is not None:
+        if sha256 != expected_sha:
+            return None
+    elif Path(name).name.casefold() != model.filename.casefold():
+        return None
     size = _int_or_none(file_record.get("size"))
     if size is None:
         size_kb = file_record.get("sizeKB")

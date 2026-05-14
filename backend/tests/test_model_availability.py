@@ -569,6 +569,251 @@ async def test_download_resolves_hugging_face_exact_filename_and_size(
 
 
 @pytest.mark.anyio
+async def test_download_resolves_generic_diffusers_hugging_face_filename_from_model_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"controlnet-union-promax"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    searched_terms: list[str] = []
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        assert method == "GET"
+        assert headers == {}
+        if "/by-hash/" in url:
+            return {"files": []}
+        if url == "https://huggingface.co/api/models":
+            searched_terms.append(params["search"])
+            if params["search"] == "controlnet":
+                return [{"modelId": "xinsir/controlnet-union-sdxl-1.0"}]
+            return []
+        assert url == "https://huggingface.co/api/models/xinsir/controlnet-union-sdxl-1.0"
+        assert params == {"blobs": "true"}
+        return {
+            "siblings": [
+                {
+                    "rfilename": "diffusion_pytorch_model_promax.safetensors",
+                    "size": len(payload),
+                    "lfs": {"sha256": sha, "size": len(payload)},
+                }
+            ],
+        }
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="controlnet",
+                    filename="diffusion_pytorch_model_promax.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert "controlnet" in searched_terms
+    assert streamed_urls == [
+        "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors"
+    ]
+    assert (
+        noofy_root / "controlnet" / "diffusion_pytorch_model_promax.safetensors"
+    ).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_hugging_face_accepts_sha_match_when_provider_filename_differs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"same-model-different-name"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if "/by-hash/" in url:
+            return {"files": []}
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "expected-target.safetensors":
+                return [{"modelId": "creator/repo"}]
+            return []
+        assert url == "https://huggingface.co/api/models/creator/repo"
+        return {
+            "siblings": [
+                {
+                    "rfilename": "provider-name.safetensors",
+                    "size": len(payload),
+                    "lfs": {"sha256": sha, "size": len(payload)},
+                }
+            ],
+        }
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="expected-target.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert streamed_urls == [
+        "https://huggingface.co/creator/repo/resolve/main/provider-name.safetensors"
+    ]
+    assert (noofy_root / "checkpoints" / "expected-target.safetensors").read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_explicit_hugging_face_blob_source_url_is_used_as_verified_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"explicit-source-url"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed_urls: list[str] = []
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    class FailingResolver(ProviderModelResolver):
+        async def resolve(self, model: RequiredModel) -> list[str]:
+            raise AssertionError("provider search should not run when a source URL exists")
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=FailingResolver(api_key_resolver=lambda provider: None),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="controlnet",
+                    filename="target-name.safetensors",
+                    source_urls=[
+                        "https://huggingface.co/creator/repo/blob/main/provider-name.safetensors"
+                    ],
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert streamed_urls == [
+        "https://huggingface.co/creator/repo/resolve/main/provider-name.safetensors"
+    ]
+    assert (noofy_root / "controlnet" / "target-name.safetensors").read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_download_falls_back_when_first_provider_source_requires_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"public-fallback"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed_urls: list[str] = []
+
+    class FallbackResolver(ProviderModelResolver):
+        async def resolve(self, model: RequiredModel) -> list[str]:
+            return [
+                "https://civitai.com/api/download/models/auth-gated",
+                "https://huggingface.co/creator/repo/resolve/main/model.safetensors",
+            ]
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        streamed_urls.append(url)
+        if "civitai.com" in url:
+            raise _http_error(url, 401)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=FallbackResolver(api_key_resolver=lambda provider: None),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="controlnet",
+                    filename="target-name.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert streamed_urls == [
+        "https://civitai.com/api/download/models/auth-gated",
+        "https://huggingface.co/creator/repo/resolve/main/model.safetensors",
+    ]
+    assert (noofy_root / "controlnet" / "target-name.safetensors").read_bytes() == payload
+
+
+@pytest.mark.anyio
 async def test_explicit_source_urls_take_priority_over_provider_search(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -766,7 +1011,7 @@ async def test_provider_auth_and_rate_limit_messages_redact_url_tokens(
 
 
 @pytest.mark.anyio
-async def test_hugging_face_uses_api_key_and_is_tried_before_civitai(
+async def test_hugging_face_uses_api_key_and_is_tried_before_civitai_without_hash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -812,9 +1057,8 @@ async def test_hugging_face_uses_api_key_and_is_tried_before_civitai(
                 RequiredModel(
                     folder="checkpoints",
                     filename="hf-fixture.safetensors",
-                    checksum=f"sha256:{sha}",
                     size_bytes=len(payload),
-                    verification_level="sha256_size",
+                    verification_level="filename_size",
                 )
             ]
         )
@@ -842,6 +1086,8 @@ async def test_hugging_face_inspects_repo_file_metadata_when_repo_name_differs(
         params: dict[str, str],
         headers: dict[str, str],
     ) -> object:
+        if "/by-hash/" in url:
+            return {"files": []}
         if url == "https://huggingface.co/api/models":
             if params["search"] == "stable-diffusion-v1-5":
                 return [{"modelId": "Comfy-Org/stable-diffusion-v1-5-archive"}]
@@ -959,7 +1205,7 @@ async def test_hugging_face_provider_sha_mismatch_is_rejected_even_when_size_mat
 
 
 @pytest.mark.anyio
-async def test_hugging_face_size_only_candidate_downloads_then_verifies_local_sha(
+async def test_hugging_face_size_only_candidate_is_not_trusted_when_hash_is_required(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -988,8 +1234,7 @@ async def test_hugging_face_size_only_candidate_downloads_then_verifies_local_sh
         return {"items": []}
 
     async def fake_stream(url: str, part_path: Path) -> None:
-        part_path.parent.mkdir(parents=True, exist_ok=True)
-        part_path.write_bytes(payload)
+        raise AssertionError("size-only provider candidates should not be downloaded when a hash is required")
 
     service = _service(
         noofy_root=noofy_root,
@@ -1014,9 +1259,9 @@ async def test_hugging_face_size_only_candidate_downloads_then_verifies_local_sh
         )
     )
 
-    assert result.downloaded_count == 1
-    assert result.model_summary.models[0].status == "available"
-    assert (noofy_root / "checkpoints" / "size-only.safetensors").read_bytes() == payload
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "needs_manual_download"
+    assert not (noofy_root / "checkpoints" / "size-only.safetensors").exists()
 
 
 @pytest.mark.anyio
@@ -1095,7 +1340,7 @@ async def test_hugging_face_candidates_are_downloaded_in_reliability_order(
 
 
 @pytest.mark.anyio
-async def test_hugging_face_size_only_candidate_final_sha_mismatch_cleans_transaction(
+async def test_hugging_face_size_only_candidate_with_required_hash_does_not_download(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1125,8 +1370,7 @@ async def test_hugging_face_size_only_candidate_final_sha_mismatch_cleans_transa
         return {"items": []}
 
     async def fake_stream(url: str, part_path: Path) -> None:
-        part_path.parent.mkdir(parents=True, exist_ok=True)
-        part_path.write_bytes(wrong_payload)
+        raise AssertionError("size-only provider candidates should not be downloaded when a hash is required")
 
     service = _service(
         noofy_root=noofy_root,
@@ -1152,7 +1396,7 @@ async def test_hugging_face_size_only_candidate_final_sha_mismatch_cleans_transa
     )
 
     assert result.failed_count == 1
-    assert result.model_summary.models[0].status == "hash_mismatch"
+    assert result.model_summary.models[0].status == "needs_manual_download"
     assert not (noofy_root / "checkpoints" / "final-mismatch.safetensors").exists()
     assert not list((noofy_root / ".downloads").glob("*/**/*.part"))
 
@@ -1660,10 +1904,10 @@ async def test_civitai_auth_errors_return_clear_message(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("provider_url", "expected_message"),
+    ("provider_url", "expected_message", "use_hash"),
     [
-        ("https://huggingface.co/api/models", "Hugging Face rate limit"),
-        ("https://civitai.com/api/v1/model-versions/by-hash", "Civitai rate limit"),
+        ("https://huggingface.co/api/models", "Hugging Face rate limit", False),
+        ("https://civitai.com/api/v1/model-versions/by-hash", "Civitai rate limit", True),
     ],
 )
 async def test_provider_rate_limits_do_not_crash_import_flow(
@@ -1671,6 +1915,7 @@ async def test_provider_rate_limits_do_not_crash_import_flow(
     monkeypatch: pytest.MonkeyPatch,
     provider_url: str,
     expected_message: str,
+    use_hash: bool,
 ) -> None:
     payload = b"rate-limited"
     sha = hashlib.sha256(payload).hexdigest()
@@ -1709,9 +1954,9 @@ async def test_provider_rate_limits_do_not_crash_import_flow(
                 RequiredModel(
                     folder="checkpoints",
                     filename="rate-limited.safetensors",
-                    checksum=f"sha256:{sha}",
+                    checksum=f"sha256:{sha}" if use_hash else None,
                     size_bytes=len(payload),
-                    verification_level="sha256_size",
+                    verification_level="sha256_size" if use_hash else "filename_size",
                 )
             ]
         )
