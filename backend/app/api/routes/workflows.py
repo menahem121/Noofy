@@ -11,6 +11,7 @@ from app.api.deps import (
     WorkflowLibraryServiceDep,
 )
 from app.engine.models import WorkflowRunRequest
+from app.runs.credentials import credential_input_ids
 from app.workflows.import_orchestrator import ImportSessionExpiredError
 from app.workflows.assets import AssetUploadError
 from app.workflows.authoring import DashboardAuthoringError
@@ -419,6 +420,7 @@ async def save_user_state(
     workflow_id: str,
     request: Request,
     user_state_service: UserStateServiceDep,
+    library: WorkflowLibraryServiceDep,
 ):
     body = await request.json()
     body["workflow_id"] = workflow_id
@@ -426,7 +428,14 @@ async def save_user_state(
         state = WorkflowUserState.model_validate(body)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return user_state_service.save(state)
+    try:
+        package = library.workflow_loader.get_package(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return user_state_service.save(
+        state,
+        credential_input_ids=credential_input_ids(package),
+    )
 
 
 @router.delete("/workflows/{workflow_id}/user-state/values")

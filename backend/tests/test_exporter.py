@@ -228,6 +228,92 @@ def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Pat
     assert second_control["show_download"] is True
 
 
+def test_exported_archive_strips_api_credential_status_and_raw_values(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "comfy_account_key",
+                "label": "ComfyUI Account API Key",
+                "control": "api_credential",
+                "binding": {"node_id": "1", "input_name": "text"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "comfy_account_key",
+                        "type": "api_credential",
+                        "label": "ComfyUI Account API Key",
+                        "input_id": "comfy_account_key",
+                        "provider": "comfy_org",
+                        "required": True,
+                        "secret_ref": "api-key:comfy_org",
+                        "configured": True,
+                        "last_four": "1234",
+                        "value": "raw-secret-should-not-export",
+                        "injection_strategy": {
+                            "kind": "comfyui_extra_data",
+                            "field": "api_key_comfy_org",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+    )
+    (exporter._find_package_dir(workflow_id) / "dashboard.json").write_text(
+        json.dumps(dashboard),
+        encoding="utf-8",
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            values={
+                "comfy_account_key": {
+                    "kind": "api_key_ref",
+                    "provider": "comfy_org",
+                    "secret_ref": "api-key:comfy_org",
+                    "configured": True,
+                    "last_four": "9999",
+                    "raw": "raw-secret-should-not-export",
+                }
+            },
+        )
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        for name in zf.namelist():
+            assert "raw-secret-should-not-export" not in zf.read(name).decode(
+                "utf-8",
+                errors="ignore",
+            )
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+    control = dashboard_data["sections"][0]["controls"][0]
+    assert control["secret_ref"] == "api-key:comfy_org"
+    assert "configured" not in control
+    assert "last_four" not in control
+    assert "value" not in control
+    assert dashboard_data["inputs"][0]["default"] == {
+        "kind": "api_key_ref",
+        "provider": "comfy_org",
+        "secret_ref": "api-key:comfy_org",
+    }
+
+
 def test_export_supports_bundled_workflow_with_user_preferences(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     loader = WorkflowPackageLoader(Path(__file__).resolve().parents[1] / "app/workflows/packages")

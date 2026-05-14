@@ -465,7 +465,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const topBarProgress = isRunning ? { percent: progressPercent } : null;
 
   const inputControls = allControls.filter(
-    (c) => c.type !== "result_image" && c.type !== "display_image" && c.input_id,
+    (c) => c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.input_id),
   );
 
   const hasDashboard = Boolean(
@@ -862,8 +862,10 @@ function DashboardInputControls({
   return (
     <>
       {controls.map((control) => {
-        if (!control.input_id) return null;
-        const input = inputIndex.get(control.input_id);
+        const inputId = control.input_id ?? control.id;
+        const input = control.type === "api_credential"
+          ? credentialInputForControl(control)
+          : inputIndex.get(inputId);
         if (!input) return null;
         const value = inputValues[input.id];
 
@@ -880,6 +882,21 @@ function DashboardInputControls({
       })}
     </>
   );
+}
+
+function credentialInputForControl(control: DashboardControlDef): WorkflowInputDef {
+  return {
+    id: control.input_id ?? control.id,
+    label: control.label || "ComfyUI Account API Key",
+    control: "api_credential",
+    binding: { node_id: "", input_name: "" },
+    default: {
+      kind: "api_key_ref",
+      provider: control.provider ?? "comfy_org",
+      secret_ref: control.secret_ref ?? "api-key:comfy_org",
+    },
+    validation: {},
+  };
 }
 
 // ─── Fallback inputs (no configured dashboard) ──────────────────────────────

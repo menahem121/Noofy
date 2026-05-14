@@ -62,10 +62,12 @@ const initialState: EngineSettingsState = {
   apiDrafts: {
     hugging_face: "",
     civitai: "",
+    comfy_org: "",
   },
   apiVisible: {
     hugging_face: false,
     civitai: false,
+    comfy_org: false,
   },
   apiStatus: null,
   modelFolderStatus: null,
@@ -136,6 +138,7 @@ const VRAM_MODE_INDEX_BY_VALUE = new Map(VRAM_MODE_OPTIONS.map((option, index) =
 const API_PROVIDERS: Array<{ id: ApiKeyProviderId; label: string; fieldId: string }> = [
   { id: "hugging_face", label: "Hugging Face API Key", fieldId: "hugging-face-api-key" },
   { id: "civitai", label: "Civitai API Key", fieldId: "civitai-api-key" },
+  { id: "comfy_org", label: "ComfyUI Account API Key", fieldId: "comfy-org-api-key" },
 ];
 
 function vramModeOption(mode: ComfyUIVramMode) {

@@ -1,6 +1,6 @@
 import { deleteJson, getJson, putJson } from "./client";
 
-export type ApiKeyProviderId = "hugging_face" | "civitai";
+export type ApiKeyProviderId = "hugging_face" | "civitai" | "comfy_org";
 
 export interface ApiKeyProviderMetadata {
   provider: ApiKeyProviderId;

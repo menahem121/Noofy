@@ -48,11 +48,19 @@ class UserStateService:
         except Exception:
             return WorkflowUserState(workflow_id=workflow_id)
 
-    def save(self, state: WorkflowUserState) -> WorkflowUserState:
+    def save(
+        self,
+        state: WorkflowUserState,
+        *,
+        credential_input_ids: set[str] | None = None,
+    ) -> WorkflowUserState:
         self._dir.mkdir(parents=True, exist_ok=True)
         path = self._path(state.workflow_id)
-        _atomic_write_json(path, state.model_dump())
-        return state
+        safe_state = state.model_copy(
+            update={"values": _safe_values(state.values, credential_input_ids or set())}
+        )
+        _atomic_write_json(path, safe_state.model_dump())
+        return safe_state
 
     def clear_values(self, workflow_id: str) -> WorkflowUserState:
         state = self.get(workflow_id)
@@ -78,3 +86,28 @@ def _atomic_write_json(target: Path, data: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _safe_values(values: dict[str, Any], credential_input_ids: set[str]) -> dict[str, Any]:
+    safe_values: dict[str, Any] = {}
+    for key, value in values.items():
+        if key in credential_input_ids or (
+            isinstance(value, dict) and value.get("kind") == "api_key_ref"
+        ):
+            safe_credential = _safe_credential_value(value)
+            if safe_credential is not None:
+                safe_values[key] = safe_credential
+            continue
+        safe_values[key] = value
+    return safe_values
+
+
+def _safe_credential_value(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or value.get("kind") != "api_key_ref":
+        return None
+    safe: dict[str, Any] = {}
+    for key in ("kind", "provider", "secret_ref", "configured", "last_four"):
+        item = value.get(key)
+        if item is not None and isinstance(item, (str, bool)):
+            safe[key] = item
+    return safe

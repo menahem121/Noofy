@@ -145,6 +145,12 @@ const apiSettings = {
       configured: false,
       last_four: null,
     },
+    comfy_org: {
+      provider: "comfy_org",
+      label: "ComfyUI Account API Key",
+      configured: false,
+      last_four: null,
+    },
   },
   credential_store: {
     available: true,

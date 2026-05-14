@@ -1125,7 +1125,8 @@
 }
 
 .field-group textarea,
-.field-group input[type="number"] {
+.field-group input[type="number"],
+.field-group input[type="password"] {
   width: 100%;
   color: var(--text-primary);
   background: var(--surface-2);
@@ -1141,13 +1142,15 @@
   line-height: 1.5;
 }
 
-.field-group input[type="number"] {
+.field-group input[type="number"],
+.field-group input[type="password"] {
   height: 42px;
   padding: 0 12px;
 }
 
 .field-group textarea:focus,
-.field-group input[type="number"]:focus {
+.field-group input[type="number"]:focus,
+.field-group input[type="password"]:focus {
   border-color: rgba(139, 92, 246, 0.75);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
 }
@@ -1159,6 +1162,18 @@
 .field-group small {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.api-credential-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.api-credential-control .field-error {
+  grid-column: 1 / -1;
+  color: var(--danger);
 }
 
 .input-grid {

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink, sanitize
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.install_state import user_facing_install_message
 from app.runtime.dependencies.isolation import (
@@ -717,7 +717,7 @@ class WorkflowRunnerLifecycleService:
         *,
         capsule_lock: CapsuleLock | None = None,
     ) -> dict[str, object]:
-        return {
+        return sanitize({
             "workflow_id": workflow_id,
             "capsule_fingerprint": state.capsule_fingerprint,
             "status": state.status.value,
@@ -733,7 +733,7 @@ class WorkflowRunnerLifecycleService:
             "source_policy": capsule_source_policy(capsule_lock).model_dump(mode="json")
             if capsule_lock is not None
             else None,
-        }
+        })
 
     def _unsupported_install_payload(self, workflow_id: str) -> dict[str, object]:
         return {
@@ -1022,7 +1022,7 @@ def _install_developer_details(state: InstallState) -> dict[str, object]:
     details["smoke_test_report"] = state.smoke_test_report.model_dump(mode="json")
     details["dependency_env_path"] = state.dependency_env_path
     details["runner_workspace_path"] = state.runner_workspace_path
-    return details
+    return sanitize(details)
 
 
 def _workflow_source_files_dir(

@@ -15,11 +15,12 @@ from pydantic import BaseModel, Field
 
 from app.diagnostics import DiagnosticsSink
 
-ApiKeyProvider = Literal["hugging_face", "civitai"]
+ApiKeyProvider = Literal["hugging_face", "civitai", "comfy_org"]
 
 PROVIDER_LABELS: dict[ApiKeyProvider, str] = {
     "hugging_face": "Hugging Face",
     "civitai": "Civitai",
+    "comfy_org": "ComfyUI Account API Key",
 }
 
 PROVIDER_ALIASES: dict[str, ApiKeyProvider] = {
@@ -27,6 +28,9 @@ PROVIDER_ALIASES: dict[str, ApiKeyProvider] = {
     "hugging_face": "hugging_face",
     "hf": "hugging_face",
     "civitai": "civitai",
+    "comfy-org": "comfy_org",
+    "comfy_org": "comfy_org",
+    "comfy": "comfy_org",
 }
 
 KEYCHAIN_SERVICE_NAME = "Noofy"

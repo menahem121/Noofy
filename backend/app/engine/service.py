@@ -8,7 +8,7 @@ import httpx
 
 from app.core.config import settings
 from app.engine.adapter import EngineAdapter
-from app.diagnostics import DiagnosticsStore
+from app.diagnostics import DiagnosticsStore, sanitize, sanitize_text
 from app.engine.models import (
     BackendHealthReport,
     DiagnosticLogResponse,
@@ -131,6 +131,7 @@ class EngineService:
         run_orchestrator: RunOrchestrator | None = None,
         run_result_service: RunResultService | None = None,
         history_service: HistoryService | None = None,
+        credential_resolver=None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -250,6 +251,8 @@ class EngineService:
             record_memory_metric=self.memory_service.record_metric,
             start_memory_sampling=self.memory_service.start_job_sampling,
             history_service=self.history_service,
+            credential_resolver=credential_resolver,
+            api_nodes_unavailable_reason=self._api_nodes_unavailable_reason,
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow
@@ -911,6 +914,49 @@ class EngineService:
             node_inputs[input_name] = inputs[exposed_input.id]
         return graph
 
+    async def _api_nodes_unavailable_reason(
+        self,
+        package: WorkflowPackage,
+        adapter: EngineAdapter,
+    ) -> str | None:
+        runtime_manager = getattr(self, "runtime_manager", None)
+        if runtime_manager is not None:
+            disabled = bool(getattr(runtime_manager, "api_nodes_disabled", False))
+            extra_args = getattr(runtime_manager, "managed_extra_args", [])
+            if "--disable-api-nodes" in extra_args:
+                disabled = True
+            if disabled:
+                return "ComfyUI API nodes are disabled for the active runtime."
+
+        base_url = getattr(adapter, "base_url", None)
+        if not isinstance(base_url, str) or not base_url:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(f"{base_url.rstrip('/')}/object_info")
+                response.raise_for_status()
+                object_info = response.json()
+        except Exception:
+            return None
+        if not isinstance(object_info, dict):
+            return None
+
+        missing_node_types = sorted(
+            {
+                str(node.get("class_type"))
+                for node in package.comfyui_graph.values()
+                if isinstance(node, dict)
+                and isinstance(node.get("class_type"), str)
+                and node.get("class_type") not in object_info
+            }
+        )
+        if missing_node_types:
+            return (
+                "ComfyUI Partner/API node support is unavailable for this workflow. "
+                f"Missing node types: {', '.join(missing_node_types[:5])}."
+            )
+        return None
+
     def _reconfigure_core_runner_endpoint(self) -> None:
         try:
             descriptor = self.runner_supervisor.core_runner()
@@ -1032,6 +1078,7 @@ def _diagnostic_correlation_ids(event, details: dict[str, object]) -> dict[str, 
 
 
 def _redact_diagnostic_details(value):
+    value = sanitize(value)
     if isinstance(value, dict):
         return {
             key: "[redacted]" if _is_secret_key(key) else _redact_diagnostic_details(item)
@@ -1042,7 +1089,7 @@ def _redact_diagnostic_details(value):
     if isinstance(value, str) and _looks_sensitive(value):
         return "[redacted]"
     if isinstance(value, str):
-        return _redact_user_private_paths(value)
+        return _redact_user_private_paths(sanitize_text(value))
     return value
 
 

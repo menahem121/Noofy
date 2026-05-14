@@ -3,8 +3,10 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.router import router as _api_router
 from app.composition import (
@@ -15,6 +17,7 @@ from app.composition import (
 )
 from app.core.auth import LocalApiTokenMiddleware
 from app.core.config import settings
+from app.diagnostics import sanitize
 from app.engine.service import EngineService
 from app.gallery import GalleryStore
 from app.models.downloads import ModelDownloadJobService
@@ -126,8 +129,21 @@ def create_app(
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Accept", "Authorization", "Content-Type"],
     )
+    app.add_exception_handler(StarletteHTTPException, _sanitized_http_exception_handler)
     app.include_router(_api_router, prefix="/api")
     return app
+
+
+async def _sanitized_http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
+    del request
+    return JSONResponse(
+        {"detail": sanitize(exc.detail)},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
 
 
 def _api_services_for_app(app: FastAPI) -> ApiServices:

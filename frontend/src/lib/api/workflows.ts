@@ -301,6 +301,10 @@ export interface DashboardControlDef {
   description?: string;
   group?: string;
   show_download?: boolean;
+  provider?: string;
+  required?: boolean;
+  secret_ref?: string;
+  injection_strategy?: { kind: string; field?: string | null };
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 

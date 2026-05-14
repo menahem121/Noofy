@@ -43,6 +43,44 @@ The dashboard schema describes what the end user sees. It should support:
 - validation rules
 - conditional visibility and enabled states
 
+### API Credential Controls
+
+Official ComfyUI Partner/API-node workflows can declare an `api_credential`
+control for a user-owned ComfyUI Account API Key. The dashboard/package may
+store provider and injection metadata, but never the raw key or user-specific
+status such as `configured` or `last_four`.
+
+Supported v1 metadata:
+
+```json
+{
+  "id": "comfy_account_key",
+  "type": "api_credential",
+  "label": "ComfyUI Account API Key",
+  "provider": "comfy_org",
+  "required": true,
+  "secret_ref": "api-key:comfy_org",
+  "injection_strategy": {
+    "kind": "comfyui_extra_data",
+    "field": "api_key_comfy_org"
+  }
+}
+```
+
+At run time, the backend derives a credential injection plan from the saved
+dashboard schema, resolves `api-key:comfy_org` locally, registers the resolved
+secret with shared redaction, and passes only that plan to the active engine
+adapter. For ComfyUI this becomes `/prompt.extra_data.api_key_comfy_org`.
+The frontend may submit credential references for state, but it must never
+submit raw keys in a run payload and must not decide ComfyUI payload details.
+
+Custom-node API key conventions are out of scope for this v1 path. Future
+strategies such as `runner_env`, `config_file`, and `node_input` must be
+modeled explicitly with separate warnings and tests; generic node input
+injection is not a default. For example, BFL custom nodes that use
+`BFL_API_KEY` or `bfl_api_key.txt` are not covered by
+`comfyui_extra_data.api_key_comfy_org`.
+
 ## Bindings
 
 Each exposed control should bind to a workflow input without requiring the app to understand the full graph.

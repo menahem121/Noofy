@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardInputControl } from "./DashboardInputControl";
@@ -50,6 +50,70 @@ describe("DashboardInputControl", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Loaded: reference portrait.png")).toBeInTheDocument();
+    });
+  });
+
+  it("saves API credentials through settings and emits only a reference", async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        status: "saved",
+        provider: {
+          provider: "comfy_org",
+          label: "ComfyUI Account API Key",
+          configured: true,
+          last_four: "1234",
+        },
+      }),
+    );
+
+    render(
+      <DashboardInputControl
+        control={{
+          id: "comfy_account_key",
+          type: "api_credential",
+          label: "ComfyUI Account API Key",
+          provider: "comfy_org",
+          required: true,
+          secret_ref: "api-key:comfy_org",
+          injection_strategy: {
+            kind: "comfyui_extra_data",
+            field: "api_key_comfy_org",
+          },
+        }}
+        input={{
+          id: "comfy_account_key",
+          label: "ComfyUI Account API Key",
+          control: "api_credential",
+          binding: { node_id: "", input_name: "" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const field = screen.getByLabelText("ComfyUI Account API Key");
+    expect(field).toHaveAttribute("type", "password");
+    fireEvent.change(field, { target: { value: "raw-comfy-secret-1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/apis/comfy_org/key"),
+        expect.objectContaining({
+          body: JSON.stringify({ api_key: "raw-comfy-secret-1234" }),
+        }),
+      );
+      expect(onChange).toHaveBeenCalledWith({
+        kind: "api_key_ref",
+        provider: "comfy_org",
+        secret_ref: "api-key:comfy_org",
+        configured: true,
+        last_four: "1234",
+      });
     });
   });
 });

@@ -11,8 +11,9 @@ import httpx
 import websockets
 
 from app.engine.job_store import JobStore
-from app.diagnostics import DiagnosticsSink
+from app.diagnostics import DiagnosticsSink, sanitize_text
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
+from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
 
 _ASSET_ID_RE = re.compile(
@@ -89,14 +90,17 @@ class ComfyUIEngineAdapter:
                 connect_timeout=float(options.get("ws_connect_timeout", 2)),
             )
 
+        credential_plan = plan_from_options(options)
+        extra_data = {
+            "workflow_id": workflow_package.metadata.id,
+            "workflow_version": workflow_package.metadata.version,
+            **credential_plan.extra_data,
+        }
         payload = {
             "prompt": graph,
             "prompt_id": job_id,
             "client_id": client_id,
-            "extra_data": {
-                "workflow_id": workflow_package.metadata.id,
-                "workflow_version": workflow_package.metadata.version,
-            },
+            "extra_data": extra_data,
         }
 
         try:
@@ -107,10 +111,10 @@ class ComfyUIEngineAdapter:
             self._stop_event_listener(job_id)
             self._cleanup_staged_files(job_id)
             self.job_store.set_progress(
-                JobProgress(job_id=job_id, status="failed", message=str(exc))
+                JobProgress(job_id=job_id, status="failed", message=sanitize_text(str(exc)))
             )
             self.job_store.set_result(
-                JobResult(job_id=job_id, status="failed", error=str(exc))
+                JobResult(job_id=job_id, status="failed", error=sanitize_text(str(exc)))
             )
             self.log_store.add(
                 "error",
@@ -120,7 +124,9 @@ class ComfyUIEngineAdapter:
                 workflow_id=workflow_package.metadata.id,
                 details={"error": str(exc)},
             )
-            raise
+            raise ValueError(
+                f"Failed to submit workflow to ComfyUI: {sanitize_text(str(exc))}"
+            ) from exc
 
         self.log_store.add(
             "info",
@@ -369,7 +375,7 @@ class ComfyUIEngineAdapter:
                         value=current.value,
                         max=current.max,
                         current_node=current.current_node,
-                        message=f"ComfyUI WebSocket listener stopped: {exc}",
+                        message=f"ComfyUI WebSocket listener stopped: {sanitize_text(str(exc))}",
                     )
                 )
                 self.log_store.add(
@@ -466,7 +472,7 @@ class ComfyUIEngineAdapter:
                 job_id=job_id,
                 status="failed",
                 current_node=str(node) if node is not None else None,
-                message=str(error_message),
+                message=sanitize_text(str(error_message)),
             )
 
         return None

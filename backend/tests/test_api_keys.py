@@ -1,9 +1,12 @@
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from app.diagnostics import register_secret
 from app.diagnostics import LogStore
+from app.engine.service import _redact_diagnostic_details
 from app.main import create_app
 from app.settings.api_keys import (
     ApiKeyMetadataStore,
@@ -60,6 +63,20 @@ def test_api_key_service_stores_secret_in_credential_store_and_metadata_only(tmp
     assert "1234" in metadata_file.read_text(encoding="utf-8")
 
 
+def test_comfy_org_key_uses_credential_store_and_safe_metadata(tmp_path: Path) -> None:
+    credential_store = FakeCredentialStore()
+    service = _service(tmp_path, credential_store)
+
+    result = service.save_key("comfy_org", "comfy_account_secret_wxyz")
+
+    metadata_file = tmp_path / "settings" / "api-keys.json"
+    metadata_text = metadata_file.read_text(encoding="utf-8")
+    assert result.provider.label == "ComfyUI Account API Key"
+    assert credential_store.secrets["comfy_org"] == "comfy_account_secret_wxyz"
+    assert "comfy_account_secret_wxyz" not in metadata_text
+    assert '"last_four": "wxyz"' in metadata_text
+
+
 def test_api_key_service_clear_removes_secret_and_metadata(tmp_path: Path) -> None:
     credential_store = FakeCredentialStore()
     service = _service(tmp_path, credential_store)
@@ -112,6 +129,42 @@ def test_api_key_routes_return_metadata_without_exposing_secret(tmp_path: Path) 
         "configured": True,
         "last_four": "abcd",
     }
+
+
+def test_http_exception_responses_are_sanitized(tmp_path: Path) -> None:
+    secret = "secret-that-must-not-return"
+    register_secret(secret)
+    app = create_app(
+        engine_service=FakeEngineService(),
+        api_key_service=_service(tmp_path, FakeCredentialStore()),
+    )
+
+    @app.get("/api/debug-secret")
+    async def debug_secret():
+        raise HTTPException(status_code=400, detail=f"failure: {secret}")
+
+    with TestClient(app) as client:
+        response = client.get("/api/debug-secret")
+
+    assert response.status_code == 400
+    assert secret not in response.text
+    assert response.json()["detail"] == "failure: [redacted]"
+
+
+def test_registered_secret_is_redacted_from_developer_details() -> None:
+    secret = "secret-in-developer-details"
+    register_secret(secret)
+
+    details = _redact_diagnostic_details(
+        {
+            "stdout": f"runtime failed with {secret}",
+            "nested": {"api_key": secret},
+        }
+    )
+
+    assert secret not in str(details)
+    assert details["stdout"] == "runtime failed with [redacted]"
+    assert details["nested"]["api_key"] == "[redacted]"
 
 
 @pytest.mark.parametrize("provider", ["hugging-face", "hugging_face", "hf", "civitai"])

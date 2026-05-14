@@ -101,6 +101,7 @@ DASHBOARD_CONTROL_TYPES = frozenset(
         "lora_loader",
         "select",
         "result_image",
+        "api_credential",
     }
 )
 
@@ -112,6 +113,11 @@ class ControlLayout(BaseModel):
     h: int = 4
     min_w: int | None = None
     min_h: int | None = None
+
+
+class CredentialInjectionStrategy(BaseModel):
+    kind: Literal["comfyui_extra_data", "runner_env", "config_file", "node_input"]
+    field: str | None = None
 
 
 class DashboardControl(BaseModel):
@@ -126,6 +132,10 @@ class DashboardControl(BaseModel):
     layout: ControlLayout | None = None
     visible_if: dict[str, Any] | None = None
     enabled_if: dict[str, Any] | None = None
+    provider: str | None = None
+    required: bool = False
+    secret_ref: str | None = None
+    injection_strategy: CredentialInjectionStrategy | None = None
 
 
 class DashboardSection(BaseModel):

@@ -43,7 +43,23 @@ class WorkflowPackageValidator:
                 seen_control_ids.add(control.id)
 
                 # input_id must reference a known input.
-                if control.input_id:
+                if control.type == "api_credential":
+                    if control.input_id and control.input_id not in input_ids:
+                        # Credential refs are allowed to be control-owned, so
+                        # an input_id is optional and not graph-bound.
+                        pass
+                    strategy = control.injection_strategy
+                    if control.provider != "comfy_org":
+                        errors.append(f"Dashboard control '{control.id}' uses an unsupported credential provider.")
+                    if control.secret_ref != "api-key:comfy_org":
+                        errors.append(f"Dashboard control '{control.id}' has an invalid credential reference.")
+                    if strategy is None:
+                        errors.append(f"Dashboard control '{control.id}' has no credential injection strategy.")
+                    elif strategy.kind != "comfyui_extra_data" or strategy.field != "api_key_comfy_org":
+                        errors.append(
+                            f"Dashboard control '{control.id}' uses an unsupported credential injection strategy."
+                        )
+                elif control.input_id:
                     if control.input_id not in input_ids:
                         errors.append(
                             f"Dashboard control '{control.id}' references missing input '{control.input_id}'."

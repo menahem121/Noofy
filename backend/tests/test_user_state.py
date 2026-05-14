@@ -87,3 +87,40 @@ def test_workflow_id_with_special_chars_is_safe(tmp_path: Path) -> None:
     for f in files:
         assert "/" not in f.name
         assert f.parent == state_dir
+
+
+def test_save_sanitizes_schema_api_credential_values(tmp_path: Path) -> None:
+    svc = UserStateService(tmp_path / "state")
+
+    saved = svc.save(
+        WorkflowUserState(
+            workflow_id="wf-api",
+            values={
+                "prompt": "dog",
+                "token_count": 77,
+                "comfy_account_key": "raw-secret-should-not-persist",
+                "credential_control": {
+                    "kind": "api_key_ref",
+                    "provider": "comfy_org",
+                    "secret_ref": "api-key:comfy_org",
+                    "configured": True,
+                    "last_four": "1234",
+                    "raw": "raw-secret-should-not-persist",
+                },
+            },
+        ),
+        credential_input_ids={"comfy_account_key"},
+    )
+
+    text = (tmp_path / "state" / "wf-api.json").read_text(encoding="utf-8")
+    assert "raw-secret-should-not-persist" not in text
+    assert saved.values["prompt"] == "dog"
+    assert saved.values["token_count"] == 77
+    assert "comfy_account_key" not in saved.values
+    assert saved.values["credential_control"] == {
+        "kind": "api_key_ref",
+        "provider": "comfy_org",
+        "secret_ref": "api-key:comfy_org",
+        "configured": True,
+        "last_four": "1234",
+    }

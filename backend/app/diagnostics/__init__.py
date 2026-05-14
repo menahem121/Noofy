@@ -13,6 +13,15 @@ Public API:
   LogStore           — concrete in-memory implementation
 """
 
+from app.diagnostics.redaction import register_secret, sanitize, sanitize_text
 from app.diagnostics.store import DiagnosticsReader, DiagnosticsSink, DiagnosticsStore, LogStore
 
-__all__ = ["DiagnosticsReader", "DiagnosticsSink", "DiagnosticsStore", "LogStore"]
+__all__ = [
+    "DiagnosticsReader",
+    "DiagnosticsSink",
+    "DiagnosticsStore",
+    "LogStore",
+    "register_secret",
+    "sanitize",
+    "sanitize_text",
+]

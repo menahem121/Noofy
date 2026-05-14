@@ -2,6 +2,7 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from app.diagnostics.redaction import sanitize, sanitize_text
 from app.engine.models import DiagnosticEvent, DiagnosticLogResponse, LogLevel
 
 
@@ -56,11 +57,11 @@ class LogStore:
             id=self._next_id,
             timestamp=datetime.now(UTC),
             level=level,
-            message=message,
+            message=sanitize_text(message),
             source=source,
             job_id=job_id,
             workflow_id=workflow_id,
-            details=details or {},
+            details=sanitize(details or {}),
         )
         self._next_id += 1
         self._events.append(event)
@@ -78,10 +79,19 @@ class LogStore:
             events = [event for event in events if event.job_id == job_id]
         if level is not None:
             events = [event for event in events if event.level == level]
-        return DiagnosticLogResponse(events=events[-limit:])
+        return DiagnosticLogResponse(events=[_sanitized_event(event) for event in events[-limit:]])
 
     def latest_error(self) -> DiagnosticEvent | None:
         for event in reversed(self._events):
             if event.level == "error":
-                return event
+                return _sanitized_event(event)
         return None
+
+
+def _sanitized_event(event: DiagnosticEvent) -> DiagnosticEvent:
+    return event.model_copy(
+        update={
+            "message": sanitize_text(event.message),
+            "details": sanitize(event.details),
+        }
+    )

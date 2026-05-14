@@ -106,13 +106,17 @@ class WorkflowExporter:
         exported = json.loads(json.dumps(dashboard_data))
 
         values = user_state.values or {}
+        credential_input_ids = _credential_input_ids(exported)
         if values:
             for item in exported.get("inputs") or []:
                 if not isinstance(item, dict):
                     continue
                 input_id = item.get("id")
                 if isinstance(input_id, str) and input_id in values:
-                    item["default"] = values[input_id]
+                    item["default"] = _export_safe_user_value(
+                        values[input_id],
+                        credential=bool(input_id in credential_input_ids),
+                    )
 
         layout_overrides = user_state.layout_overrides or {}
         output_preferences = user_state.output_preferences or {}
@@ -138,6 +142,10 @@ class WorkflowExporter:
                 preference = output_preferences.get(control_id)
                 if preference is not None:
                     control["show_download"] = preference.auto_save
+                if control.get("type") == "api_credential":
+                    control.pop("configured", None)
+                    control.pop("last_four", None)
+                    control.pop("value", None)
 
         return exported
 
@@ -254,6 +262,35 @@ def _apply_library_metadata(base: dict[str, Any], metadata: WorkflowLibraryMetad
         if key in {"description", "author", "website", "category", "tags", "icon"}:
             base[key] = value
     base["metadata"] = package_metadata
+
+
+def _credential_input_ids(dashboard_data: dict[str, Any]) -> set[str]:
+    input_ids: set[str] = set()
+    for section in dashboard_data.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        for control in section.get("controls") or []:
+            if not isinstance(control, dict):
+                continue
+            if control.get("type") != "api_credential":
+                continue
+            input_id = control.get("input_id")
+            if isinstance(input_id, str):
+                input_ids.add(input_id)
+    return input_ids
+
+
+def _export_safe_user_value(value: Any, *, credential: bool = False) -> Any:
+    if credential and not (isinstance(value, dict) and value.get("kind") == "api_key_ref"):
+        return None
+    if isinstance(value, dict) and value.get("kind") == "api_key_ref":
+        return {
+            key: item
+            for key, item in value.items()
+            if key in {"kind", "provider", "secret_ref"}
+            and isinstance(item, str)
+        }
+    return value
 
 
 def _safe_filename(name: str) -> str:

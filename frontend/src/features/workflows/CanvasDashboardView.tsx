@@ -661,8 +661,10 @@ function InputWidgetContent({
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
 }) {
-  if (!control.input_id) return null;
-  const input = inputIndex.get(control.input_id);
+  const inputId = control.input_id ?? control.id;
+  const input = control.type === "api_credential"
+    ? credentialInputForControl(control)
+    : inputIndex.get(inputId);
   if (!input) return null;
 
   return (
@@ -676,6 +678,21 @@ function InputWidgetContent({
       onImageUpload={(file) => onImageUpload(input.id, file)}
     />
   );
+}
+
+function credentialInputForControl(control: DashboardControlDef): WorkflowInputDef {
+  return {
+    id: control.input_id ?? control.id,
+    label: control.label || "ComfyUI Account API Key",
+    control: "api_credential",
+    binding: { node_id: "", input_name: "" },
+    default: {
+      kind: "api_key_ref",
+      provider: control.provider ?? "comfy_org",
+      secret_ref: control.secret_ref ?? "api-key:comfy_org",
+    },
+    validation: {},
+  };
 }
 
 async function downloadImage(imageUrl: string) {

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -6,7 +7,55 @@ import pytest
 from app.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.models import JobProgress
+from app.engine.service import EngineService
+from app.runs.credentials import (
+    CredentialRequirementError,
+    build_credential_injection_plan,
+    options_with_credential_plan,
+)
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.package import WorkflowPackage
+
+
+def _api_credential_package() -> WorkflowPackage:
+    return WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "api_wf", "name": "API Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [],
+            "custom_nodes": [],
+            "comfyui_graph": {
+                "1": {
+                    "class_type": "ComfyAPINode",
+                    "inputs": {"prompt": "hello"},
+                }
+            },
+            "dashboard": {
+                "version": "0.1.0",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Controls",
+                        "controls": [
+                            {
+                                "id": "comfy_account_key",
+                                "type": "api_credential",
+                                "label": "ComfyUI Account API Key",
+                                "provider": "comfy_org",
+                                "required": True,
+                                "secret_ref": "api-key:comfy_org",
+                                "injection_strategy": {
+                                    "kind": "comfyui_extra_data",
+                                    "field": "api_key_comfy_org",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
 
 
 def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
@@ -75,6 +124,203 @@ async def test_upload_workflow_image_posts_to_configured_endpoint(
 
     assert result == {"filename": "stored.png"}
     assert len(requests) == 1
+
+
+def test_credential_plan_is_built_from_saved_dashboard_schema() -> None:
+    package = _api_credential_package()
+    submitted_inputs = {
+        "comfy_account_key": {
+            "kind": "api_key_ref",
+            "provider": "comfy_org",
+            "secret_ref": "api-key:evil",
+        }
+    }
+
+    with pytest.raises(CredentialRequirementError, match="does not match"):
+        build_credential_injection_plan(
+            package=package,
+            submitted_inputs=submitted_inputs,
+            credential_resolver=lambda provider: "secret-from-store",
+        )
+
+
+def test_missing_api_credential_returns_clean_error() -> None:
+    package = _api_credential_package()
+
+    with pytest.raises(CredentialRequirementError) as exc:
+        build_credential_injection_plan(
+            package=package,
+            submitted_inputs={},
+            credential_resolver=lambda provider: None,
+        )
+
+    assert "ComfyUI Account API Key is required" in str(exc.value)
+    assert "api_key_comfy_org" not in str(exc.value)
+
+
+def test_raw_api_credential_input_is_rejected_before_snapshot() -> None:
+    package = _api_credential_package()
+
+    with pytest.raises(CredentialRequirementError) as exc:
+        build_credential_injection_plan(
+            package=package,
+            submitted_inputs={"comfy_account_key": "raw-secret-should-not-snapshot"},
+            credential_resolver=lambda provider: "secret-from-store",
+        )
+
+    assert "ComfyUI Account API Key must be saved before running this workflow" in str(exc.value)
+    assert "raw-secret-should-not-snapshot" not in str(exc.value)
+
+
+@pytest.mark.anyio
+async def test_api_nodes_disabled_returns_clean_non_secret_error() -> None:
+    service = EngineService.__new__(EngineService)
+    service.runtime_manager = type(
+        "RuntimeManager",
+        (),
+        {"api_nodes_disabled": True, "managed_extra_args": []},
+    )()
+
+    reason = await service._api_nodes_unavailable_reason(
+        _api_credential_package(),
+        object(),
+    )
+
+    assert reason == "ComfyUI API nodes are disabled for the active runtime."
+
+
+@pytest.mark.anyio
+async def test_missing_partner_api_node_support_returns_clean_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = EngineService.__new__(EngineService)
+    service.runtime_manager = type(
+        "RuntimeManager",
+        (),
+        {"api_nodes_disabled": False, "managed_extra_args": []},
+    )()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/object_info"
+        return httpx.Response(200, json={"KSampler": {}})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    adapter = type("Adapter", (), {"base_url": "http://comfyui.test"})()
+
+    reason = await service._api_nodes_unavailable_reason(
+        _api_credential_package(),
+        adapter,
+    )
+
+    assert reason is not None
+    assert "Partner/API node support is unavailable" in reason
+    assert "ComfyAPINode" in reason
+
+
+@pytest.mark.anyio
+async def test_run_workflow_posts_comfyui_extra_data_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/prompt"
+        return httpx.Response(200, json={"prompt_id": "job"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    package = _api_credential_package()
+    plan = build_credential_injection_plan(
+        package=package,
+        submitted_inputs={
+            "comfy_account_key": {
+                "kind": "api_key_ref",
+                "provider": "comfy_org",
+                "secret_ref": "api-key:comfy_org",
+            }
+        },
+        credential_resolver=lambda provider: "resolved-comfy-secret-1234",
+    )
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+
+    await adapter.run_workflow(
+        package,
+        package.comfyui_graph,
+        {},
+        options_with_credential_plan(
+            {"listen_for_events": False, "client_id": "client-1"},
+            plan,
+        ),
+    )
+
+    payload = json_payload(requests[0])
+    assert payload["extra_data"]["api_key_comfy_org"] == "resolved-comfy-secret-1234"
+    assert payload["prompt"]["1"]["inputs"] == {"prompt": "hello"}
+
+
+@pytest.mark.anyio
+async def test_adapter_redacts_resolved_api_key_from_http_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "resolved-comfy-secret-error"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            text=f"bad request contains {secret}",
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    package = _api_credential_package()
+    plan = build_credential_injection_plan(
+        package=package,
+        submitted_inputs={},
+        credential_resolver=lambda provider: secret,
+    )
+    log_store = LogStore()
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=log_store)
+
+    with pytest.raises(ValueError) as exc:
+        await adapter.run_workflow(
+            package,
+            package.comfyui_graph,
+            {},
+            options_with_credential_plan({"listen_for_events": False}, plan),
+        )
+
+    assert secret not in str(exc.value)
+    assert secret not in str(log_store.list_events().model_dump(mode="json"))
+    assert secret not in str(adapter.job_store._progress)
+    assert secret not in str(adapter.job_store._results)
+
+
+def json_payload(request: httpx.Request) -> dict:
+    request.read()
+    return json.loads(request.content.decode("utf-8"))
 
 
 @pytest.mark.anyio

@@ -97,6 +97,8 @@ class RuntimeManager:
         self._managed_model_roots = managed_model_roots or []
         self._version_metadata = version_metadata
         self.managed_vram_mode = managed_vram_mode
+        self.api_nodes_disabled = False
+        self.managed_extra_args: list[str] = []
         comfyui_vram_args(self.managed_vram_mode)
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
@@ -384,6 +386,7 @@ class RuntimeManager:
         ]
         command.extend(self._managed_vram_args())
         command.extend(self._managed_path_args())
+        command.extend(self.managed_extra_args)
         process_env = self._managed_process_env()
         self._process = await self._process_factory(
             command,

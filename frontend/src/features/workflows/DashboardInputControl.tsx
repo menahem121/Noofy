@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import {
   fetchAssetBlobUrl,
   fetchAssetMetadata,
+  updateExternalApiKey,
   type DashboardControlDef,
   type WorkflowInputDef,
 } from "../../lib/api/noofyApi";
+import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
@@ -185,6 +187,17 @@ function renderControl(
         </select>
       );
 
+    case "api_credential":
+      return (
+        <ApiCredentialInput
+          control={control}
+          value={value}
+          disabled={disabled}
+          variant={variant}
+          onChange={onChange}
+        />
+      );
+
     default:
       return (
         <input
@@ -196,6 +209,73 @@ function renderControl(
         />
       );
   }
+}
+
+function ApiCredentialInput({
+  control,
+  value,
+  disabled,
+  variant,
+  onChange,
+}: {
+  control: DashboardControlDef;
+  value: unknown;
+  disabled: boolean;
+  variant: DashboardInputControlVariant;
+  onChange: (value: unknown) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const provider = control.provider === "comfy_org" ? "comfy_org" : null;
+  const metadata = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const lastFour = typeof metadata.last_four === "string" ? metadata.last_four : null;
+  const configured = Boolean(metadata.configured || lastFour);
+  const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
+
+  async function save() {
+    if (!provider || !draft.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await updateExternalApiKey(provider as ApiKeyProviderId, draft.trim());
+      onChange({
+        kind: "api_key_ref",
+        provider,
+        secret_ref: control.secret_ref ?? `api-key:${provider}`,
+        configured: result.provider.configured,
+        last_four: result.provider.last_four,
+      });
+      setDraft("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="api-credential-control">
+      <input
+        className={inputClass}
+        type="password"
+        value={draft}
+        placeholder={configured ? `Saved key ending in ${lastFour ?? "****"}` : "Paste key"}
+        disabled={disabled || saving || !provider}
+        autoComplete="off"
+        onChange={(event) => setDraft(event.target.value)}
+      />
+      <button
+        className="secondary-button"
+        type="button"
+        disabled={disabled || saving || !provider || !draft.trim()}
+        onClick={() => void save()}
+      >
+        {configured ? "Replace" : "Save"}
+      </button>
+      {error ? <small className="field-error">{error}</small> : null}
+    </div>
+  );
 }
 
 function AssetImageInput({

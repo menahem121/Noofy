@@ -293,6 +293,44 @@ def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
     ), "validate_dashboard must not write any files"
 
 
+def test_dashboard_schema_accepts_api_credential_without_raw_secret(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "comfy_account_key",
+                        "type": "api_credential",
+                        "label": "ComfyUI Account API Key",
+                        "provider": "comfy_org",
+                        "required": True,
+                        "secret_ref": "api-key:comfy_org",
+                        "injection_strategy": {
+                            "kind": "comfyui_extra_data",
+                            "field": "api_key_comfy_org",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = service.save_dashboard(workflow_id, [], dashboard)
+
+    assert result["valid"] is True
+    saved = service.workflow_loader.get_package(workflow_id).dashboard.model_dump(mode="json")
+    assert saved["sections"][0]["controls"][0]["secret_ref"] == "api-key:comfy_org"
+    assert "api_key" not in saved["sections"][0]["controls"][0]
+
+
 def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)

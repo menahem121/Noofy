@@ -146,6 +146,18 @@ def create_api_services(
         ownership_store=ownership,
         log_store=getattr(engine_service, "log_store", None),
     )
+    api_keys = api_key_service or ApiKeySettingsService(
+        metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),
+        credential_store=create_credential_store(
+            data_dir=settings.paths.data_dir,
+            settings_dir=settings.paths.settings_dir,
+        ),
+        log_store=getattr(engine_service, "log_store", None),
+    )
+    run_orchestrator = getattr(engine_service, "run_orchestrator", None)
+    if run_orchestrator is not None:
+        run_orchestrator.credential_resolver = api_keys.get_key
+
     return ApiServices(
         engine_service=engine_service,
         comfyui_sidecar_service=(
@@ -156,15 +168,7 @@ def create_api_services(
         user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
         asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
         gallery_store=gallery,
-        api_key_service=api_key_service
-        or ApiKeySettingsService(
-            metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),
-            credential_store=create_credential_store(
-                data_dir=settings.paths.data_dir,
-                settings_dir=settings.paths.settings_dir,
-            ),
-            log_store=getattr(engine_service, "log_store", None),
-        ),
+        api_key_service=api_keys,
         model_folder_service=folders,
         model_tag_store=tags,
         model_ownership_store=ownership,

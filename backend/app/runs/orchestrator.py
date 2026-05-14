@@ -17,6 +17,15 @@ from app.runtime.memory.memory_governor import (
     MemoryGovernorDecision,
 )
 from app.runtime.runners.supervisor import RunnerDescriptor, RunnerSupervisor
+from app.runs.credentials import (
+    CredentialResolver,
+    CredentialRequirementError,
+    build_credential_injection_plan,
+    options_with_credential_plan,
+    package_requires_credential_injection,
+    safe_options_for_storage,
+    strip_credential_inputs,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 
@@ -28,6 +37,7 @@ EvictIdleRunners = Callable[[MemoryGovernorDecision], Awaitable[EngineJob | None
 MemoryStatusPayload = Callable[..., dict[str, Any]]
 RecordMemoryMetric = Callable[[str], None]
 StartMemorySampling = Callable[..., None]
+ApiNodesUnavailableReason = Callable[[WorkflowPackage, EngineAdapter], Awaitable[str | None]]
 
 
 class RunOrchestrator:
@@ -60,6 +70,8 @@ class RunOrchestrator:
         record_memory_metric: RecordMemoryMetric,
         start_memory_sampling: StartMemorySampling,
         history_service: HistoryService | None = None,
+        credential_resolver: CredentialResolver | None = None,
+        api_nodes_unavailable_reason: ApiNodesUnavailableReason | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -80,6 +92,8 @@ class RunOrchestrator:
         self.record_memory_metric = record_memory_metric
         self.start_memory_sampling = start_memory_sampling
         self.history_service = history_service
+        self.credential_resolver = credential_resolver
+        self.api_nodes_unavailable_reason = api_nodes_unavailable_reason
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -133,9 +147,31 @@ class RunOrchestrator:
         run_submission_snapshot: RunSubmissionSnapshot | None = None,
     ):
         package = self.workflow_loader.get_package(workflow_id)
+        try:
+            credential_plan = build_credential_injection_plan(
+                package=package,
+                submitted_inputs=inputs,
+                credential_resolver=self.credential_resolver,
+            )
+            runtime_inputs = strip_credential_inputs(package, inputs)
+        except CredentialRequirementError as exc:
+            self._record_run_blocked(package, str(exc))
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by credential requirements",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": str(exc), "input_keys": sorted(inputs.keys())},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[str(exc)],
+            )
+
         run_submission_snapshot = self._run_submission_snapshot(
             package=package,
-            inputs=inputs,
+            inputs=runtime_inputs,
             output_preferences_snapshot=output_preferences_snapshot,
             run_submission_snapshot=run_submission_snapshot,
         )
@@ -173,17 +209,35 @@ class RunOrchestrator:
             )
             return validation
 
-        graph = self.apply_input_bindings(package, inputs)
+        graph = self.apply_input_bindings(package, runtime_inputs)
+
+        if package_requires_credential_injection(package) and self.api_nodes_unavailable_reason is not None:
+            unavailable_reason = await self.api_nodes_unavailable_reason(package, adapter)
+            if unavailable_reason is not None:
+                self._record_run_blocked(package, unavailable_reason)
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked because ComfyUI API nodes are unavailable",
+                    "runs.orchestrator",
+                    workflow_id=workflow_id,
+                    details={"error": unavailable_reason},
+                )
+                return WorkflowValidationResult(
+                    workflow_id=workflow_id,
+                    valid=False,
+                    errors=[unavailable_reason],
+                )
+
         memory_decision = self.workflow_run_memory_decision(
             package=package,
             workflow_id=workflow_id,
             runner=runner,
-            input_profile_fingerprint=memory_input_profile_fingerprint(inputs, options),
+            input_profile_fingerprint=memory_input_profile_fingerprint(runtime_inputs, options),
             memory_retry_after_cleanup=memory_retry_after_cleanup,
         )
         memory_result = await self._handle_memory_decision(
             workflow_id=workflow_id,
-            inputs=inputs,
+            inputs=runtime_inputs,
             options=options,
             runner=runner,
             memory_decision=memory_decision,
@@ -196,8 +250,9 @@ class RunOrchestrator:
             package=package,
             workflow_id=workflow_id,
             graph=graph,
-            inputs=inputs,
+            inputs=runtime_inputs,
             options=options,
+            adapter_options=options_with_credential_plan(options, credential_plan),
             runner=runner,
             adapter=adapter,
             memory_decision=memory_decision,
@@ -329,6 +384,7 @@ class RunOrchestrator:
         graph: dict[str, Any],
         inputs: dict[str, Any],
         options: dict[str, Any],
+        adapter_options: dict[str, Any],
         runner: RunnerDescriptor,
         adapter: EngineAdapter,
         memory_decision: MemoryGovernorDecision | None,
@@ -346,11 +402,11 @@ class RunOrchestrator:
         pre_submit_snapshot: MachineMemorySnapshot | None = (
             self.memory_observer.snapshot() if self.memory_observer is not None else None
         )
-        job = await adapter.run_workflow(package, graph, inputs, options)
+        job = await adapter.run_workflow(package, graph, inputs, adapter_options)
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
         self.job_workflows[job.job_id] = workflow_id
         self.job_started_at[job.job_id] = datetime.now(UTC)
-        self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), dict(options))
+        self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), safe_options_for_storage(options))
         self.job_run_snapshots[job.job_id] = run_submission_snapshot
         self.memory_retry_roots.setdefault(job.job_id, job.job_id)
         self.start_memory_sampling(
