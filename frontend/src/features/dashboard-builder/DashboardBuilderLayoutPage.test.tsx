@@ -98,7 +98,7 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
   });
 
-  it("clears the local draft and navigates only after backend save succeeds", async () => {
+  it("clears the local draft and keeps the saved canvas visible after backend save succeeds", async () => {
     const onSaveComplete = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -125,7 +125,11 @@ describe("DashboardBuilderLayoutPage", () => {
     await screen.findByText("Dashboard saved");
 
     expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
-    await waitFor(() => expect(onSaveComplete).toHaveBeenCalledWith("wf-1"));
+    expect(onSaveComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /open workflow/i }));
+    expect(onSaveComplete).toHaveBeenCalledWith("wf-1");
   });
 
   it("uses resize handles instead of bottom size preset buttons", async () => {
