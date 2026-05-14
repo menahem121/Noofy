@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -602,18 +604,10 @@ function WidgetEditor({
 
       {showOptions ? (
         <FormCard title="Options">
-          <FieldRow label="Choices" hint="One per line.">
-            <textarea
-              className="builder-input builder-input--textarea"
-              rows={4}
-              value={(widget.options ?? value.options ?? []).join("\n")}
-              onChange={(event) =>
-                onPatch({
-                  options: event.target.value.split("\n").map((line) => line.trim()).filter(Boolean),
-                })
-              }
-            />
-          </FieldRow>
+          <DropdownOptionsEditor
+            options={widget.options ?? value.options ?? []}
+            onChange={(options) => onPatch({ options })}
+          />
         </FormCard>
       ) : null}
 
@@ -641,6 +635,97 @@ function WidgetEditor({
         <code>node {widget.binding.nodeId}</code>
         <span className="builder-config__binding-arrow">→</span>
         <code>{widget.binding.inputName}</code>
+      </div>
+    </div>
+  );
+}
+
+function DropdownOptionsEditor({
+  options,
+  onChange,
+}: {
+  options: string[];
+  onChange: (options: string[]) => void;
+}) {
+  const visibleOptions = options.length > 0 ? options : [""];
+
+  function updateOption(index: number, nextValue: string) {
+    onChange(visibleOptions.map((option, optionIndex) => (optionIndex === index ? nextValue : option)));
+  }
+
+  function addOption() {
+    const existingOptions = options.length > 0 ? visibleOptions : [];
+    onChange([...existingOptions, `Option ${existingOptions.length + 1}`]);
+  }
+
+  function removeOption(index: number) {
+    onChange(visibleOptions.filter((_, optionIndex) => optionIndex !== index));
+  }
+
+  function moveOption(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= visibleOptions.length) return;
+    const nextOptions = [...visibleOptions];
+    [nextOptions[index], nextOptions[nextIndex]] = [nextOptions[nextIndex], nextOptions[index]];
+    onChange(nextOptions);
+  }
+
+  return (
+    <div className="builder-options-editor">
+      <div className="builder-options-editor__header">
+        <div>
+          <span className="builder-field__label">Choices</span>
+          <span className="builder-field__hint">Each dropdown item gets its own field.</span>
+        </div>
+        <button className="secondary-button secondary-button--small" type="button" onClick={addOption}>
+          <Plus size={14} aria-hidden="true" />
+          Add option
+        </button>
+      </div>
+
+      <div className="builder-options-grid">
+        {visibleOptions.map((option, index) => (
+          <div className="builder-options-grid__item" key={`${index}-${visibleOptions.length}`}>
+            <input
+              type="text"
+              className="builder-input builder-input--compact"
+              aria-label={`Dropdown option ${index + 1}`}
+              value={option}
+              onChange={(event) => updateOption(index, event.target.value)}
+            />
+            <div className="builder-options-grid__actions" role="group" aria-label={`Edit dropdown option ${index + 1}`}>
+              <button
+                className="icon-button icon-button--small"
+                type="button"
+                onClick={() => moveOption(index, -1)}
+                disabled={index === 0}
+                aria-label={`Move option ${index + 1} up`}
+                title="Move up"
+              >
+                <ArrowUp size={13} aria-hidden="true" />
+              </button>
+              <button
+                className="icon-button icon-button--small"
+                type="button"
+                onClick={() => moveOption(index, 1)}
+                disabled={index === visibleOptions.length - 1}
+                aria-label={`Move option ${index + 1} down`}
+                title="Move down"
+              >
+                <ArrowDown size={13} aria-hidden="true" />
+              </button>
+              <button
+                className="icon-button icon-button--small icon-button--danger"
+                type="button"
+                onClick={() => removeOption(index)}
+                aria-label={`Remove option ${index + 1}`}
+                title="Remove option"
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
