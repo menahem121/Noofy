@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DownloadCloud } from "lucide-react";
 
 import {
   fetchAssetBlobUrl,
@@ -11,12 +12,20 @@ import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
+export interface LoraBrowserControlProps {
+  enabled: boolean;
+  disabledReason?: string;
+  extraOptions?: string[];
+  onOpen: () => void;
+}
+
 interface DashboardInputControlProps {
   control: DashboardControlDef;
   input: WorkflowInputDef;
   value: unknown;
   disabled?: boolean;
   variant?: DashboardInputControlVariant;
+  loraBrowser?: LoraBrowserControlProps;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
 }
@@ -27,6 +36,7 @@ export function DashboardInputControl({
   value,
   disabled = false,
   variant = "classic",
+  loraBrowser,
   onChange,
   onImageUpload,
 }: DashboardInputControlProps) {
@@ -39,7 +49,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload)}
+            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -47,14 +57,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload)}
+            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, value, validation, disabled, variant, onChange, onImageUpload)}</>;
+  return <>{renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}</>;
 }
 
 function renderControl(
@@ -65,6 +75,7 @@ function renderControl(
   variant: DashboardInputControlVariant,
   onChange: (value: unknown) => void,
   onImageUpload: (file: File) => Promise<void>,
+  loraBrowser?: LoraBrowserControlProps,
 ) {
   const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
   const textareaClass = variant === "canvas" ? "canvas-widget-textarea" : undefined;
@@ -171,20 +182,26 @@ function renderControl(
 
     case "select":
       return (
-        <select
+        <ModelSelect
           className={selectClass}
-          value={typeof value === "string" || typeof value === "number" ? String(value) : ""}
+          value={value}
+          validation={validation}
           disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-        >
-          {Array.isArray(validation.options)
-            ? (validation.options as string[]).map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))
-            : null}
-        </select>
+          onChange={onChange}
+        />
+      );
+
+    case "lora_loader":
+      return (
+        <LoraLoaderInput
+          className={selectClass}
+          value={value}
+          validation={validation}
+          disabled={disabled}
+          variant={variant}
+          browser={loraBrowser}
+          onChange={onChange}
+        />
       );
 
     case "api_credential":
@@ -209,6 +226,93 @@ function renderControl(
         />
       );
   }
+}
+
+function ModelSelect({
+  className,
+  value,
+  validation,
+  disabled,
+  extraOptions = [],
+  onChange,
+}: {
+  className?: string;
+  value: unknown;
+  validation: Record<string, unknown>;
+  disabled: boolean;
+  extraOptions?: string[];
+  onChange: (value: unknown) => void;
+}) {
+  const selectedValue = typeof value === "string" || typeof value === "number" ? String(value) : "";
+  const options = mergeOptions(Array.isArray(validation.options) ? (validation.options as string[]) : [], extraOptions, selectedValue);
+  return (
+    <select
+      className={className}
+      value={selectedValue}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function LoraLoaderInput({
+  className,
+  value,
+  validation,
+  disabled,
+  variant,
+  browser,
+  onChange,
+}: {
+  className?: string;
+  value: unknown;
+  validation: Record<string, unknown>;
+  disabled: boolean;
+  variant: DashboardInputControlVariant;
+  browser?: LoraBrowserControlProps;
+  onChange: (value: unknown) => void;
+}) {
+  const buttonDisabled = disabled || !browser?.enabled;
+  const reason = browser?.disabledReason;
+  return (
+    <div className={`lora-loader-control lora-loader-control--${variant}`}>
+      <ModelSelect
+        className={className}
+        value={value}
+        validation={validation}
+        disabled={disabled}
+        extraOptions={browser?.extraOptions}
+        onChange={onChange}
+      />
+      <button
+        className="secondary-button secondary-button--small lora-loader-control__browse"
+        type="button"
+        disabled={buttonDisabled}
+        title={buttonDisabled ? reason : "Search and download LoRAs"}
+        onClick={() => browser?.onOpen()}
+      >
+        <DownloadCloud size={14} aria-hidden="true" />
+        Download more LoRAs
+      </button>
+    </div>
+  );
+}
+
+function mergeOptions(options: string[], extraOptions: string[], selectedValue: string): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const option of [...options, ...extraOptions, selectedValue]) {
+    if (!option || seen.has(option)) continue;
+    seen.add(option);
+    merged.push(option);
+  }
+  return merged;
 }
 
 function ApiCredentialInput({

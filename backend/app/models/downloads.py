@@ -29,10 +29,15 @@ JOB_TTL = timedelta(hours=6)
 class _ModelDownloadJob:
     job_id: str
     selections: list[ModelDownloadSelection]
+    direct_workflow_id: str | None
+    direct_models: list[RequiredModel]
     cancel_event: asyncio.Event
     task: asyncio.Task | None
     status: str
     user_facing_message: str
+    running_message: str
+    failed_message: str
+    completed_message: str
     started_at: datetime
     updated_at: datetime
     total_models: int
@@ -71,10 +76,15 @@ class ModelDownloadJobService:
         job = _ModelDownloadJob(
             job_id=job_id,
             selections=selections,
+            direct_workflow_id=None,
+            direct_models=[],
             cancel_event=asyncio.Event(),
             task=None,
             status="queued",
             user_facing_message="Model download is queued.",
+            running_message="Downloading required models...",
+            failed_message="Some models could not be downloaded.",
+            completed_message="Model download check finished.",
             started_at=now,
             updated_at=now,
             total_models=total_models,
@@ -87,6 +97,52 @@ class ModelDownloadJobService:
                     total_bytes=model.size_bytes,
                 )
                 for workflow_id, model in selected
+            },
+        )
+        self._jobs[job_id] = job
+        job.task = asyncio.create_task(self._run(job_id))
+        return ModelDownloadJobStart(
+            job_id=job_id,
+            status=job.status,
+            user_facing_message=job.user_facing_message,
+        )
+
+    def start_direct(
+        self,
+        *,
+        workflow_id: str,
+        models: list[RequiredModel],
+        queued_message: str = "Model download is queued.",
+    ) -> ModelDownloadJobStart:
+        self._sweep_old_jobs()
+        if not models:
+            raise ValueError("At least one model is required.")
+        job_id = f"model-download-{uuid.uuid4().hex}"
+        now = datetime.now(UTC)
+        job = _ModelDownloadJob(
+            job_id=job_id,
+            selections=[],
+            direct_workflow_id=workflow_id,
+            direct_models=models,
+            cancel_event=asyncio.Event(),
+            task=None,
+            status="queued",
+            user_facing_message=queued_message,
+            running_message="Downloading model...",
+            failed_message="The model could not be downloaded.",
+            completed_message="Model download finished.",
+            started_at=now,
+            updated_at=now,
+            total_models=len(models),
+            models={
+                _progress_key(workflow_id, model): ImportModelDownloadProgressItem(
+                    requirement_id=model_key(workflow_id, _requirement_id(model)),
+                    filename=model.filename,
+                    status="queued",
+                    status_label="Queued",
+                    total_bytes=model.size_bytes,
+                )
+                for model in models
             },
         )
         self._jobs[job_id] = job
@@ -126,9 +182,9 @@ class ModelDownloadJobService:
     async def _run(self, job_id: str) -> None:
         job = self._jobs[job_id]
         job.status = "running"
-        job.user_facing_message = "Downloading required models..."
+        job.user_facing_message = job.running_message
         job.updated_at = datetime.now(UTC)
-        grouped = self._selected_packages(job.selections)
+        grouped = self._selected_packages(job.selections) if not job.direct_models else {}
         failed = False
         completed = 0
         last_progress_at = job.updated_at
@@ -170,6 +226,28 @@ class ModelDownloadJobService:
 
         try:
             availability_service = self._availability_service()
+            if job.direct_models:
+                workflow_id = job.direct_workflow_id or "direct-model-download"
+                direct_package = WorkflowPackage(
+                    metadata={
+                        "id": workflow_id,
+                        "name": "Direct model download",
+                        "version": "0.1.0",
+                    },
+                    engine="comfyui",
+                    required_models=job.direct_models,
+                    comfyui_graph={},
+                )
+                result = await availability_service.download_missing(
+                    direct_package,
+                    progress_callback=progress_callback(workflow_id),
+                    cancel_event=job.cancel_event,
+                )
+                completed += len(job.direct_models)
+                failed = failed or result.failed_count > 0
+                self._mark_downloaded_models(job.direct_models)
+                if result.status == "canceled":
+                    job.cancel_event.set()
             for package, models in grouped.values():
                 if job.cancel_event.is_set():
                     break
@@ -189,10 +267,10 @@ class ModelDownloadJobService:
                 job.user_facing_message = "Model download was canceled."
             elif failed:
                 job.status = "failed"
-                job.user_facing_message = "Some models could not be downloaded."
+                job.user_facing_message = job.failed_message
             else:
                 job.status = "completed"
-                job.user_facing_message = "Model download check finished."
+                job.user_facing_message = job.completed_message
         except Exception as exc:
             job.status = "failed"
             job.user_facing_message = "The model download failed. The partial download was cleaned up safely."
@@ -322,6 +400,7 @@ def _download_progress_status_label(status: str) -> str:
 
 def _sanitize_error(exc: Exception) -> str:
     message = str(exc)[:240]
-    message = re.sub(r"(?i)(token|api[_-]?key|key|signature|auth)=([^&\s]+)", r"\1=<redacted>", message)
+    message = message.replace("[redacted]", "<redacted>")
+    message = re.sub(r"(?i)(token|api[_-]?key|key|signature|auth)=([^&\s]+)", r"\1 <redacted>", message)
     message = re.sub(r"(?i)bearer\s+[a-z0-9._~+/=-]+", "Bearer <redacted>", message)
     return message or "Model download failed."

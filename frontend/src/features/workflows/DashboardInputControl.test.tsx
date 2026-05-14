@@ -116,4 +116,35 @@ describe("DashboardInputControl", () => {
       });
     });
   });
+
+  it("disables the LoRA browser button when the CivitAI key is missing", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "style_lora", type: "lora_loader", label: "Style LoRA", input_id: "style_lora" }}
+        input={{
+          id: "style_lora",
+          label: "Style LoRA",
+          control: "lora_loader",
+          binding: { node_id: "12", input_name: "lora_name" },
+          default: "None",
+          validation: { options: ["None"] },
+        }}
+        value="None"
+        loraBrowser={{
+          enabled: false,
+          disabledReason: "Requires a CivitAI API key. Add one in Settings to search and download LoRAs.",
+          onOpen: vi.fn(),
+        }}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: /Download more LoRAs/i });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute(
+      "title",
+      "Requires a CivitAI API key. Add one in Settings to search and download LoRAs.",
+    );
+  });
 });

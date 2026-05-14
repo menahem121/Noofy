@@ -10,6 +10,7 @@ from app.api.routes import (
     history,
     health,
     models,
+    model_sources,
     runners,
     runs,
     runtime,
@@ -30,4 +31,5 @@ router.include_router(runners.router)
 router.include_router(workflows.router)
 router.include_router(runs.router)
 router.include_router(models.router)
+router.include_router(model_sources.router)
 router.include_router(assets.router)

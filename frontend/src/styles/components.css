@@ -1126,7 +1126,8 @@
 
 .field-group textarea,
 .field-group input[type="number"],
-.field-group input[type="password"] {
+.field-group input[type="password"],
+.field-group select {
   width: 100%;
   color: var(--text-primary);
   background: var(--surface-2);
@@ -1143,14 +1144,16 @@
 }
 
 .field-group input[type="number"],
-.field-group input[type="password"] {
+.field-group input[type="password"],
+.field-group select {
   height: 42px;
   padding: 0 12px;
 }
 
 .field-group textarea:focus,
 .field-group input[type="number"]:focus,
-.field-group input[type="password"]:focus {
+.field-group input[type="password"]:focus,
+.field-group select:focus {
   border-color: rgba(139, 92, 246, 0.75);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
 }
@@ -1174,6 +1177,21 @@
 .api-credential-control .field-error {
   grid-column: 1 / -1;
   color: var(--danger);
+}
+
+.lora-loader-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.lora-loader-control--canvas {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lora-loader-control__browse {
+  white-space: nowrap;
 }
 
 .input-grid {

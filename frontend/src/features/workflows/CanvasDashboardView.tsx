@@ -44,6 +44,7 @@ import {
   sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
+import type { LoraBrowserControlProps } from "./DashboardInputControl";
 
 export interface CanvasRunState {
   isRunning: boolean;
@@ -65,6 +66,7 @@ interface CanvasDashboardViewProps {
   exportNoofyFilename?: string;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onRun: () => void;
   onCancel: () => void;
@@ -90,6 +92,7 @@ export function CanvasDashboardView({
   exportNoofyFilename = "workflow.noofy",
   onChange,
   onImageUpload,
+  loraBrowserFor,
   onOutputPreferenceChange,
   onRun,
   onCancel,
@@ -432,6 +435,7 @@ export function CanvasDashboardView({
                 outputPreferences={outputPreferences}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                loraBrowserFor={loraBrowserFor}
                 onOutputPreferenceChange={onOutputPreferenceChange}
                 onMoveStart={(event) => handleMoveStart(event, control.id, displayLayout)}
                 onResizeStart={(event, handle) => handleResizeStart(event, control.id, displayLayout, handle)}
@@ -490,6 +494,7 @@ function CanvasWidgetCell({
   outputPreferences,
   onChange,
   onImageUpload,
+  loraBrowserFor,
   onOutputPreferenceChange,
   onMoveStart,
   onResizeStart,
@@ -505,6 +510,7 @@ function CanvasWidgetCell({
   outputPreferences: OutputPreferences;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
@@ -565,6 +571,7 @@ function CanvasWidgetCell({
             disabled={isEditingLayout}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            loraBrowserFor={loraBrowserFor}
           />
         )}
       </div>
@@ -653,6 +660,7 @@ function InputWidgetContent({
   disabled,
   onChange,
   onImageUpload,
+  loraBrowserFor,
 }: {
   control: DashboardControlDef;
   inputIndex: Map<string, WorkflowInputDef>;
@@ -660,6 +668,7 @@ function InputWidgetContent({
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   const inputId = control.input_id ?? control.id;
   const input = control.type === "api_credential"
@@ -674,6 +683,7 @@ function InputWidgetContent({
       value={inputValues[input.id]}
       disabled={disabled}
       variant="canvas"
+      loraBrowser={loraBrowserFor?.(control, input)}
       onChange={(value) => onChange(input.id, value)}
       onImageUpload={(file) => onImageUpload(input.id, file)}
     />

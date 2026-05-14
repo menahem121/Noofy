@@ -62,6 +62,7 @@ class RequiredModelAvailability(BaseModel):
         "needs_manual_download",
         "download_failed",
         "authentication_required",
+        "access_denied",
         "rate_limited",
         "hash_mismatch",
         "not_enough_disk_space",

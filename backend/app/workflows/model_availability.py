@@ -50,6 +50,10 @@ class ProviderAuthenticationRequired(ModelAvailabilityError):
     """Raised when a provider reports authentication is required."""
 
 
+class ProviderAccessDenied(ModelAvailabilityError):
+    """Raised when a provider denies access to a model file."""
+
+
 class ProviderRateLimited(ModelAvailabilityError):
     """Raised when a provider asks Noofy to retry later."""
 
@@ -410,6 +414,11 @@ class ProviderModelResolver:
                 redacted = redacted.replace(token, "[redacted]")
         return redacted
 
+    def auth_headers_for_provider(self, provider: str) -> dict[str, str]:
+        if provider not in {"hugging_face", "civitai"}:
+            return {}
+        return _auth_headers(self._api_key(provider))  # type: ignore[arg-type]
+
     def _record_unresolved(
         self, model: RequiredModel, candidates: list[ProviderModelCandidate]
     ) -> None:
@@ -639,6 +648,32 @@ class ModelAvailabilityService:
                 self.log_store.add(
                     "warning",
                     "Required model provider authentication needed",
+                    "workflow.models",
+                    workflow_id=package.metadata.id,
+                    details={
+                        "folder": model.folder,
+                        "filename": model.filename,
+                    },
+                )
+                _emit_model_download_progress(
+                    progress_callback,
+                    model=model,
+                    status="failed",
+                    model_index=model_index,
+                    total_models=total_models,
+                    message=failures[_requirement_id(model)].status_label,
+                )
+            except ProviderAccessDenied as exc:
+                failed_count += 1
+                failures[_requirement_id(model)] = ModelDownloadFailure(
+                    status="access_denied",
+                    status_label="Access denied",
+                    message=self.provider_resolver.sanitize_message(str(exc))
+                    + " The partial download was cleaned up safely.",
+                )
+                self.log_store.add(
+                    "warning",
+                    "Required model provider access denied",
                     "workflow.models",
                     workflow_id=package.metadata.id,
                     details={
@@ -909,7 +944,7 @@ class ModelAvailabilityService:
             if current.status == "available":
                 return False
             raise ModelAvailabilityError(
-                f"A different file already exists at {final_path}; Noofy will not overwrite it."
+                "A different file already exists at the target model location; Noofy will not overwrite it."
             )
         final_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_path_inside_noofy_models(final_path)
@@ -932,7 +967,6 @@ class ModelAvailabilityService:
                 "filename": model.filename,
                 "size_bytes": final_path.stat().st_size,
                 "sha256": f"sha256:{_sha256_file(final_path)}",
-                "target_path": str(final_path),
             },
         )
         return True
@@ -1000,12 +1034,18 @@ class ModelAvailabilityService:
                         total_bytes=total_bytes or model.size_bytes,
                     )
 
+                headers = self.provider_resolver.auth_headers_for_provider(provider)
                 if progress_callback is None and cancel_event is None:
-                    await _stream_url(url, transaction.part_path)
-                else:
-                    await _stream_url(
+                    await _stream_with_optional_headers(
                         url,
                         transaction.part_path,
+                        headers=headers,
+                    )
+                else:
+                    await _stream_with_optional_headers(
+                        url,
+                        transaction.part_path,
+                        headers=headers,
                         progress_callback=stream_progress,
                         cancel_event=cancel_event,
                     )
@@ -1049,6 +1089,23 @@ class ModelAvailabilityService:
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
                 raise
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if transaction.part_path.exists():
+                    transaction.part_path.unlink()
+                status_code = exc.response.status_code
+                if status_code == 401:
+                    raise ProviderAuthenticationRequired(
+                        "A provider API key is required or the saved key is invalid."
+                    ) from exc
+                if status_code == 403:
+                    raise ProviderAccessDenied(
+                        "The provider denied access to this model file."
+                    ) from exc
+                if status_code == 429:
+                    raise ProviderRateLimited(
+                        "The provider is rate limiting downloads; try again later."
+                    ) from exc
             except Exception as exc:
                 last_error = exc
                 if transaction.part_path.exists():
@@ -1128,11 +1185,12 @@ async def _stream_url(
     url: str,
     part_path: Path,
     *,
+    headers: dict[str, str] | None = None,
     progress_callback: Callable[[int, int | None], None] | None = None,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
     async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-        async with client.stream("GET", url) as response:
+        async with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             total_bytes = _int_or_none(response.headers.get("content-length"))
             downloaded = 0
@@ -1146,6 +1204,34 @@ async def _stream_url(
                     downloaded += len(chunk)
                     if progress_callback is not None:
                         progress_callback(downloaded, total_bytes)
+
+
+async def _stream_with_optional_headers(
+    url: str,
+    part_path: Path,
+    *,
+    headers: dict[str, str] | None = None,
+    progress_callback: Callable[[int, int | None], None] | None = None,
+    cancel_event: asyncio.Event | None = None,
+) -> None:
+    kwargs: dict[str, object] = {}
+    if headers:
+        kwargs["headers"] = headers
+    if progress_callback is not None:
+        kwargs["progress_callback"] = progress_callback
+    if cancel_event is not None:
+        kwargs["cancel_event"] = cancel_event
+    try:
+        await _stream_url(url, part_path, **kwargs)
+    except TypeError as exc:
+        if "headers" not in str(exc):
+            raise
+        kwargs.pop("headers", None)
+        await _stream_url(
+            url,
+            part_path,
+            **kwargs,
+        )
 
 
 def _source_urls(model: RequiredModel) -> list[str]:

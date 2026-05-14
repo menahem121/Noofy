@@ -292,6 +292,18 @@ export interface WorkflowOutputDef {
   type: string;
 }
 
+export interface RequiredModelDef {
+  folder: string;
+  filename: string;
+  node_id?: string | null;
+  node_type?: string | null;
+  input_name?: string | null;
+  source_url?: string | null;
+  checksum?: string | null;
+  model_type?: string | null;
+  size_bytes?: number | null;
+}
+
 export interface DashboardControlDef {
   id: string;
   type: string;
@@ -322,6 +334,8 @@ export interface DashboardSchemaDef {
 
 export interface WorkflowPackageResponse {
   metadata: { id: string; name: string; version: string; description: string };
+  required_models?: RequiredModelDef[];
+  comfyui_graph?: Record<string, unknown>;
   inputs: WorkflowInputDef[];
   outputs: WorkflowOutputDef[];
   dashboard: DashboardSchemaDef;

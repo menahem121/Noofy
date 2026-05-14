@@ -153,6 +153,212 @@
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.civitai-lora-modal {
+  width: min(1040px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-1);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.civitai-lora-modal__header,
+.civitai-lora-modal__footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px;
+}
+
+.civitai-lora-modal__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.civitai-lora-modal__header h2 {
+  margin: 4px 0 8px;
+  font-size: 24px;
+}
+
+.civitai-lora-modal__header p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.civitai-lora-modal__toolbar {
+  display: grid;
+  gap: 12px;
+  padding: 16px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.civitai-lora-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.civitai-lora-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+}
+
+.civitai-lora-modal__chips,
+.civitai-lora-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.12);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.civitai-lora-filters {
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.civitai-lora-filters label,
+.civitai-lora-detection {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.civitai-lora-filters select,
+.civitai-lora-detection select {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.civitai-lora-modal__body {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow: auto;
+  padding: 16px 22px;
+}
+
+.civitai-lora-modal__loading,
+.civitai-lora-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.civitai-lora-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.civitai-lora-card {
+  display: grid;
+  grid-template-rows: 160px minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.civitai-lora-card__preview {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.civitai-lora-card__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.civitai-lora-card__body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.civitai-lora-card__body h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.civitai-lora-card__body p,
+.civitai-lora-card__body small {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.civitai-lora-card__meta,
+.civitai-lora-card__triggers,
+.civitai-lora-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.civitai-lora-card__meta span,
+.civitai-lora-card__triggers span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.civitai-lora-card__actions {
+  justify-content: space-between;
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.civitai-lora-modal__footer {
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .required-models-list {
   display: grid;
   gap: 10px;
@@ -1055,4 +1261,3 @@
     display: none;
   }
 }
-

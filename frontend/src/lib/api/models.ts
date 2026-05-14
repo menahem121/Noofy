@@ -118,6 +118,78 @@ export interface ModelDownloadActiveResponse {
   job: ModelDownloadJobStatus | null;
 }
 
+export interface CivitaiLoraBaseModelCandidate {
+  id: string;
+  label: string;
+  filename: string | null;
+  folder?: string | null;
+  node_id: string | null;
+  input_name: string | null;
+  base_model: string | null;
+  confidence: "high" | "medium" | "low" | "unknown";
+  source: string;
+}
+
+export interface CivitaiLoraBaseModelDetection {
+  status: "detected" | "ambiguous" | "unknown";
+  base_model: string | null;
+  confidence: "high" | "medium" | "low" | "unknown";
+  label: string | null;
+  message: string;
+  candidates: CivitaiLoraBaseModelCandidate[];
+  available_base_models: string[];
+}
+
+export interface CivitaiLoraCard {
+  model_id: number;
+  model_version_id: number;
+  file_id: number | null;
+  name: string;
+  creator: string | null;
+  version_name: string | null;
+  base_model: string | null;
+  file_name: string;
+  file_size_bytes: number | null;
+  download_count: number | null;
+  thumbs_up_count: number | null;
+  rating_count: number | null;
+  trigger_words: string[];
+  preview_image_url: string | null;
+  model_page_url: string;
+  already_downloaded: boolean;
+}
+
+export interface CivitaiLoraSearchRequest {
+  workflow_id: string;
+  lora_input_id: string;
+  input_values: Record<string, unknown>;
+  query?: string;
+  base_model?: string | null;
+  clear_base_model_filter?: boolean;
+  cursor?: string | null;
+  limit?: number;
+  sort?: string;
+}
+
+export interface CivitaiLoraSearchResponse {
+  status: "ok" | "api_key_required" | "access_denied" | "rate_limited" | "error";
+  user_facing_message: string;
+  detection: CivitaiLoraBaseModelDetection;
+  base_model_filter: string | null;
+  used_server_base_model_filter: boolean;
+  items: CivitaiLoraCard[];
+  next_cursor: string | null;
+}
+
+export interface CivitaiLoraDownloadStart {
+  job_id: string;
+  status: string;
+  user_facing_message: string;
+  target_filename: string;
+  model_key: string;
+  observed_lora_value: string | null;
+}
+
 export function fetchModelInventory() {
   return getJson<ModelInventoryResponse>("/models");
 }
@@ -155,4 +227,19 @@ export function cancelModelDownload(jobId: string) {
 
 export function deleteModelFile(modelKey: string) {
   return deleteJson<{ model_key: string; deleted: boolean; message: string }>(`/models/${encodeURIComponent(modelKey)}`);
+}
+
+export function searchCivitaiLoras(payload: CivitaiLoraSearchRequest) {
+  return postJson<CivitaiLoraSearchResponse>("/model-sources/civitai/search-loras", payload);
+}
+
+export function startCivitaiLoraDownload(payload: {
+  workflow_id: string;
+  lora_input_id: string;
+  model_id: number;
+  model_version_id: number;
+  file_id?: number | null;
+  observed_lora_value?: string | null;
+}) {
+  return postJson<CivitaiLoraDownloadStart>("/model-sources/civitai/download", payload);
 }

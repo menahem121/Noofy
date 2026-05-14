@@ -84,6 +84,15 @@ const readyModelSummary = {
   models: [],
 };
 
+const configuredApiSettings = {
+  providers: {
+    hugging_face: { provider: "hugging_face", label: "Hugging Face", configured: false, last_four: null },
+    civitai: { provider: "civitai", label: "CivitAI", configured: true, last_four: "1234" },
+    comfy_org: { provider: "comfy_org", label: "ComfyUI Account API Key", configured: false, last_four: null },
+  },
+  credential_store: { available: true, status: "available", error: null },
+};
+
 const missingModelSummary = {
   workflow_id: "text_to_image_v0",
   total_count: 1,
@@ -215,6 +224,61 @@ const configuredPackageData = {
   },
 };
 
+const loraPackageData = {
+  metadata: {
+    id: "text_to_image_v0",
+    name: "Text to Image",
+    version: "0.1.0",
+    description: "",
+  },
+  required_models: [
+    {
+      folder: "checkpoints",
+      filename: "sdxl-base.safetensors",
+      node_id: "4",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      model_type: "checkpoint",
+      size_bytes: 12,
+    },
+  ],
+  comfyui_graph: {
+    "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "sdxl-base.safetensors" } },
+    "12": { class_type: "LoraLoader", inputs: { model: ["4", 0], clip: ["4", 1], lora_name: "None" } },
+  },
+  inputs: [
+    {
+      id: "style_lora",
+      label: "Style LoRA",
+      control: "lora_loader",
+      binding: { node_id: "12", input_name: "lora_name" },
+      default: "None",
+      validation: { options: ["None", "existing.safetensors"] },
+    },
+  ],
+  outputs: [],
+  dashboard: {
+    version: "0.1.0",
+    status: "configured",
+    sections: [
+      {
+        id: "main",
+        title: "Main",
+        controls: [
+          {
+            id: "style_lora",
+            type: "lora_loader",
+            label: "Style LoRA",
+            input_id: "style_lora",
+            layout: { x: 0, y: 0, w: 12, h: 4 },
+          },
+        ],
+      },
+    ],
+  },
+};
+
 function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
   runtimeResponse = readyRuntime,
@@ -223,6 +287,7 @@ function mockConfiguredDashboardFetch(
     const url = String(input);
     if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
     if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
+    if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
     if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
@@ -272,6 +337,45 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
   fireEvent(target, event);
 }
 
+function civitaiSearchResponse() {
+  return {
+    status: "ok",
+    user_facing_message: "LoRAs matching this base model.",
+    base_model_filter: "SDXL 1.0",
+    used_server_base_model_filter: true,
+    detection: {
+      status: "detected",
+      base_model: "SDXL 1.0",
+      confidence: "high",
+      label: "sdxl-base.safetensors",
+      message: "LoRAs matching this base model.",
+      candidates: [],
+      available_base_models: ["SD 1.5", "SDXL 1.0", "Pony", "Flux.1 D"],
+    },
+    items: [
+      {
+        model_id: 100,
+        model_version_id: 200,
+        file_id: 300,
+        name: "Cinematic SDXL LoRA",
+        creator: "maker",
+        version_name: "v1",
+        base_model: "SDXL 1.0",
+        file_name: "cinematic.safetensors",
+        file_size_bytes: 1024,
+        download_count: 1200,
+        thumbs_up_count: 80,
+        rating_count: 80,
+        trigger_words: ["cinematic"],
+        preview_image_url: null,
+        model_page_url: "https://civitai.com/models/100?modelVersionId=200",
+        already_downloaded: false,
+      },
+    ],
+    next_cursor: null,
+  };
+}
+
 describe("WorkflowRunPage", () => {
   const fetchMock = vi.fn();
 
@@ -312,6 +416,169 @@ describe("WorkflowRunPage", () => {
       "memory_governor",
       "workflow.models",
     ]);
+  });
+
+  it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(loraPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }));
+      }
+      if (url.endsWith("/api/model-sources/civitai/search-loras")) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.workflow_id).toBe("text_to_image_v0");
+        expect(body.lora_input_id).toBe("style_lora");
+        return Promise.resolve(jsonResponse(civitaiSearchResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+    await screen.findByRole("button", { name: /Download more LoRAs/i });
+    fireEvent.click(screen.getByRole("button", { name: /Download more LoRAs/i }));
+
+    expect(await screen.findByText("Cinematic SDXL LoRA")).toBeInTheDocument();
+    expect(screen.getByText("Base model: SDXL 1.0")).toBeInTheDocument();
+    expect(screen.getByText("cinematic")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("civitai.com"))).toBe(false);
+  });
+
+  it("refreshes LoRA options and auto-selects the downloaded LoRA when the value is unchanged", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(loraPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }));
+      }
+      if (url.endsWith("/api/model-sources/civitai/search-loras")) {
+        return Promise.resolve(jsonResponse(civitaiSearchResponse()));
+      }
+      if (url.endsWith("/api/model-sources/civitai/download")) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.observed_lora_value).toBe("None");
+        return Promise.resolve(jsonResponse({
+          job_id: "job-1",
+          status: "queued",
+          user_facing_message: "CivitAI LoRA download is queued.",
+          target_filename: "cinematic.safetensors",
+          model_key: "loras/cinematic.safetensors",
+          observed_lora_value: "None",
+        }));
+      }
+      if (url.endsWith("/api/models/downloads/job-1")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-1",
+          status: "completed",
+          user_facing_message: "Model download check finished.",
+          current_model_filename: "cinematic.safetensors",
+          current_model_index: 1,
+          total_models: 1,
+          bytes_downloaded: 1024,
+          total_bytes: 1024,
+          percent: 100,
+          speed_bytes_per_second: null,
+          models: [],
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Download more LoRAs/i }));
+    await screen.findByText("Cinematic SDXL LoRA");
+    fireEvent.click(screen.getByRole("button", { name: /^Download$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("cinematic.safetensors")).toBeInTheDocument();
+    }, { timeout: 2500 });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/package"))).toBe(true);
+  });
+
+  it("does not overwrite the LoRA value if the user changes it before download completes", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(loraPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }));
+      }
+      if (url.endsWith("/api/model-sources/civitai/search-loras")) {
+        return Promise.resolve(jsonResponse(civitaiSearchResponse()));
+      }
+      if (url.endsWith("/api/model-sources/civitai/download")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-2",
+          status: "queued",
+          user_facing_message: "CivitAI LoRA download is queued.",
+          target_filename: "cinematic.safetensors",
+          model_key: "loras/cinematic.safetensors",
+          observed_lora_value: "None",
+        }));
+      }
+      if (url.endsWith("/api/models/downloads/job-2")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-2",
+          status: "completed",
+          user_facing_message: "Model download check finished.",
+          current_model_filename: "cinematic.safetensors",
+          current_model_index: 1,
+          total_models: 1,
+          bytes_downloaded: 1024,
+          total_bytes: 1024,
+          percent: 100,
+          speed_bytes_per_second: null,
+          models: [],
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Download more LoRAs/i }));
+    await screen.findByText("Cinematic SDXL LoRA");
+    fireEvent.click(screen.getByRole("button", { name: /^Download$/i }));
+    fireEvent.change(screen.getByDisplayValue("None"), { target: { value: "existing.safetensors" } });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("existing.safetensors")).toBeInTheDocument();
+    }, { timeout: 2500 });
+    expect(screen.queryByDisplayValue("cinematic.safetensors")).not.toBeInTheDocument();
   });
 
   it("validates requirements, starts a run, polls progress, and shows the result", async () => {

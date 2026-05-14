@@ -157,6 +157,10 @@ def create_api_services(
     run_orchestrator = getattr(engine_service, "run_orchestrator", None)
     if run_orchestrator is not None:
         run_orchestrator.credential_resolver = api_keys.get_key
+    model_availability_service = getattr(engine_service, "model_availability_service", None)
+    provider_resolver = getattr(model_availability_service, "provider_resolver", None)
+    if provider_resolver is not None:
+        provider_resolver.api_key_resolver = api_keys.get_key
 
     return ApiServices(
         engine_service=engine_service,

@@ -18,6 +18,7 @@ import {
   cancelJob,
   createJobEventsUrl,
   exportWorkflowUrl,
+  fetchApiKeySettings,
   fetchJobLogs,
   fetchJobProgress,
   fetchJobResult,
@@ -33,6 +34,7 @@ import {
   type DashboardControlDef,
   type DiagnosticEvent,
   type EngineJob,
+  type ApiKeySettingsResponse,
   type JobProgress,
   type JobResult,
   type MemoryStatus,
@@ -57,7 +59,8 @@ import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { CanvasDashboardView } from "./CanvasDashboardView";
-import { DashboardInputControl } from "./DashboardInputControl";
+import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
+import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
 
 interface WorkflowRunPageProps {
   workflowId: string;
@@ -71,6 +74,7 @@ interface RunPageState {
   workflowStatus: WorkflowStatusResponse | null;
   modelSummary: RequiredModelSummary | null;
   packageData: WorkflowPackageResponse | null;
+  apiKeySettings: ApiKeySettingsResponse | null;
   validation: WorkflowValidationResult | null;
   job: EngineJob | null;
   progress: JobProgress | null;
@@ -88,11 +92,17 @@ interface RunFailureDialogState {
   copied: boolean;
 }
 
+interface LoraBrowserDialogState {
+  control: DashboardControlDef;
+  input: WorkflowInputDef;
+}
+
 const initialState: RunPageState = {
   loading: true,
   workflowStatus: null,
   modelSummary: null,
   packageData: null,
+  apiKeySettings: null,
   validation: null,
   job: null,
   progress: null,
@@ -109,6 +119,8 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
+  const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
+  const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -195,14 +207,15 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [workflowStatus, packageData, modelSummary] = await Promise.all([
+      const [workflowStatus, packageData, modelSummary, apiKeySettings] = await Promise.all([
         fetchWorkflowStatus(workflowId).catch(() => null),
         fetchWorkflowPackage(workflowId).catch(() => null),
         fetchWorkflowModelSummary(workflowId).catch(() => null),
+        fetchApiKeySettings().catch(() => null),
       ]);
 
       const validation = await validateWorkflow(workflowId);
-      setState((current) => ({ ...current, loading: false, workflowStatus, modelSummary, packageData, validation }));
+      setState((current) => ({ ...current, loading: false, workflowStatus, modelSummary, packageData, apiKeySettings, validation }));
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -210,6 +223,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         workflowStatus: null,
         modelSummary: null,
         packageData: null,
+        apiKeySettings: null,
         validation: null,
         error: error instanceof Error ? error.message : String(error),
       }));
@@ -296,6 +310,35 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       setInputValue(inputId, asset_id);
     } catch {
       // ignore — user will see the input is still empty
+    }
+  }
+
+  function loraBrowserFor(control: DashboardControlDef, input: WorkflowInputDef) {
+    if (control.type !== "lora_loader") return undefined;
+    const civitaiConfigured = Boolean(state.apiKeySettings?.providers?.civitai?.configured);
+    const disabledReason = !civitaiConfigured
+      ? "Requires a CivitAI API key. Add one in Settings to search and download LoRAs."
+      : !state.packageData
+        ? "Workflow context is still loading."
+        : undefined;
+    return {
+      enabled: civitaiConfigured && Boolean(state.packageData),
+      disabledReason,
+      extraOptions: downloadedLoraOptions[input.id] ?? [],
+      onOpen: () => setLoraBrowserDialog({ control, input }),
+    };
+  }
+
+  function handleLoraDownloadCompleted(inputId: string, targetFilename: string, observedValue: string | null) {
+    setDownloadedLoraOptions((current) => ({
+      ...current,
+      [inputId]: Array.from(new Set([...(current[inputId] ?? []), targetFilename])),
+    }));
+    void loadRequirements();
+    const currentValue = inputValues[inputId];
+    const currentString = typeof currentValue === "string" ? currentValue : currentValue == null ? null : String(currentValue);
+    if (currentString === observedValue) {
+      setInputValue(inputId, targetFilename);
     }
   }
 
@@ -617,6 +660,19 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       onCopy={() => void handleCopyFailureLogs()}
     />
   ) : null;
+  const loraBrowserElement = loraBrowserDialog ? (
+    <CivitaiLoraBrowserModal
+      workflowId={workflowId}
+      control={loraBrowserDialog.control}
+      input={loraBrowserDialog.input}
+      inputValues={inputValues as Record<string, unknown>}
+      currentValue={inputValues[loraBrowserDialog.input.id]}
+      onClose={() => setLoraBrowserDialog(null)}
+      onDownloadCompleted={(targetFilename, observedValue) =>
+        handleLoraDownloadCompleted(loraBrowserDialog.input.id, targetFilename, observedValue)
+      }
+    />
+  ) : null;
 
   if (showCanvasView) {
     return (
@@ -649,6 +705,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           )}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
+          loraBrowserFor={loraBrowserFor}
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
@@ -662,6 +719,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
           }
         />
         {failureDialogElement}
+        {loraBrowserElement}
       </AppLayout>
     );
   }
@@ -691,6 +749,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
               inputValues={inputValues}
               onChange={(id, value) => setInputValue(id, value)}
               onImageUpload={handleImageUpload}
+              loraBrowserFor={loraBrowserFor}
             />
           ) : (
             <FallbackInputs
@@ -749,6 +808,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         </aside>
       </section>
       {failureDialogElement}
+      {loraBrowserElement}
     </AppLayout>
   );
 }
@@ -852,12 +912,14 @@ function DashboardInputControls({
   inputValues,
   onChange,
   onImageUpload,
+  loraBrowserFor,
 }: {
   controls: DashboardControlDef[];
   inputIndex: Map<string, WorkflowInputDef>;
   inputValues: Record<string, unknown>;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   return (
     <>
@@ -875,6 +937,7 @@ function DashboardInputControls({
             control={control}
             input={input}
             value={value}
+            loraBrowser={loraBrowserFor?.(control, input)}
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
           />
