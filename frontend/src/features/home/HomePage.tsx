@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Download,
   FileUp,
+  Loader2,
   PackagePlus,
   Plus,
   Search,
@@ -654,6 +655,7 @@ export function HomePage({
             <RequiredModelsModal
               importResult={homeData.pendingImport}
               busy={homeData.importing || homeData.downloadingModels}
+              importing={homeData.importing}
               downloadJob={homeData.downloadJob}
               onDownload={() => void handleDownloadMissingModels()}
               onCancelDownload={() => void handleCancelModelDownload()}
@@ -815,6 +817,7 @@ function nativeVariantSelectionKey(workflow: WorkflowCard) {
 function RequiredModelsModal({
   importResult,
   busy,
+  importing,
   downloadJob,
   onDownload,
   onCancelDownload,
@@ -823,6 +826,7 @@ function RequiredModelsModal({
 }: {
   importResult: WorkflowImportResponse;
   busy: boolean;
+  importing: boolean;
   downloadJob: ImportModelDownloadJobStatus | null;
   onDownload: () => void;
   onCancelDownload: () => void;
@@ -845,7 +849,7 @@ function RequiredModelsModal({
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-models-title">
-      <section className="required-models-modal">
+      <section className="required-models-modal" aria-busy={importing}>
         <header className="required-models-modal__header">
           <div>
             <p className="eyebrow">Workflow models</p>
@@ -869,6 +873,13 @@ function RequiredModelsModal({
 
         {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
 
+        {importing ? (
+          <div className="required-models-modal__processing" role="status" aria-live="polite">
+            <Loader2 className="spin" size={16} aria-hidden="true" />
+            <span>Preparing workflow import...</span>
+          </div>
+        ) : null}
+
         <footer className="required-models-modal__footer">
           <button className="secondary-button" type="button" disabled={busy || !hasDownloadable} onClick={onDownload}>
             <Download size={16} aria-hidden="true" />
@@ -880,7 +891,8 @@ function RequiredModelsModal({
             </button>
           ) : null}
           <button className="secondary-button" type="button" disabled={busy} onClick={onContinue}>
-            Continue Without Downloading
+            {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+            {importing ? "Importing..." : "Continue Without Downloading"}
           </button>
           <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
             Cancel Import
@@ -925,21 +937,37 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
   const label = job.current_model_filename
     ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
     : job.user_facing_message;
-  const percent = job.percent ?? (
+  const rawPercent = job.percent ?? (
     job.bytes_downloaded !== null && job.total_bytes
       ? Math.round((job.bytes_downloaded / job.total_bytes) * 100)
       : null
   );
+  const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
+    ? Math.max(0, Math.min(Number(rawPercent), 100))
+    : null;
+  const percentLabel = percent !== null
+    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+    : job.status;
 
   return (
     <div className="model-download-progress" role="status">
       <div className="model-download-progress__header">
         <strong>{label}</strong>
-        <span>{percent !== null ? `${percent}%` : job.status}</span>
+        <span>{percentLabel}</span>
       </div>
       {percent !== null ? (
-        <div className="model-download-progress__bar" aria-hidden="true">
-          <span style={{ width: `${Math.max(0, Math.min(percent, 100))}%` }} />
+        <div
+          className="model-download-progress__bar"
+          role="progressbar"
+          aria-label="Model download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <div
+            className="model-download-progress__bar-fill"
+            style={{ transform: `scaleX(${percent / 100})` }}
+          />
         </div>
       ) : null}
       <p>

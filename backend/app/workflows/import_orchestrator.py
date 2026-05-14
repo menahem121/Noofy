@@ -261,17 +261,25 @@ class WorkflowImportOrchestrator:
         pending = self._pending_import_or_raise(import_session_id)
         if self._has_active_import_download(pending):
             raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        started_at = datetime.now(UTC)
         self._pending_workflow_imports.pop(import_session_id, None)
-        preview = self.imported_package_store.preview_archive(
-            pending.data,
-            original_filename=pending.original_filename,
-            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
-        )
-        model_summary = self.workflow_library_service.model_availability_summary_for_package(preview)
+        model_summary = self.workflow_library_service.model_availability_summary_for_package(pending.package)
         committed = self.import_workflow_archive(
             pending.data,
             original_filename=pending.original_filename,
             allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+        )
+        finished_at = datetime.now(UTC)
+        self.log_store.add(
+            "info",
+            "Staged workflow import committed",
+            "workflow.import",
+            workflow_id=pending.package.metadata.id,
+            details={
+                "import_session_id": import_session_id,
+                "duration_ms": round((finished_at - started_at).total_seconds() * 1000, 1),
+                "reused_preview_package": True,
+            },
         )
         return StagedWorkflowImportResponse(
             import_session_id=None,

@@ -572,6 +572,227 @@ describe("HomePage", () => {
     expect(screen.getAllByText("Community").length).toBeGreaterThan(0);
   });
 
+  it("shows immediate feedback while continuing an import without downloading", async () => {
+    const pendingImport = {
+      import_session_id: "import-session-slow-commit",
+      workflow_id: "slow_model_workflow",
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: "slow_model_workflow",
+        name: "Slow Model Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "slow_model_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [
+          {
+            requirement_id: "checkpoint",
+            node_id: "1",
+            node_type: "CheckpointLoaderSimple",
+            input_name: "ckpt_name",
+            filename: "slow.safetensors",
+            model_type: "Checkpoint",
+            folder: "checkpoints",
+            verification_level: "sha256_size",
+            size_bytes: 1024,
+            source_urls: [],
+            source_availability: "resolvable",
+            status: "missing",
+            status_label: "Missing",
+            asset_ownership: "external_reference",
+            source_path: null,
+            matched_root: null,
+            matched_sha256: null,
+            matched_size_bytes: null,
+            message: "Noofy can try to resolve and download this model before the workflow runs.",
+          },
+        ],
+      },
+    };
+    let resolveCommit!: (response: Response) => void;
+    const commitPromise = new Promise<Response>((resolve) => {
+      resolveCommit = resolve;
+    });
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=slow.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-slow-commit/commit") && init?.method === "POST") {
+        return commitPromise;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "slow.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Slow Model Workflow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue Without Downloading" }));
+
+    expect(await screen.findByRole("button", { name: "Importing..." })).toBeDisabled();
+    expect(screen.getByText("Preparing workflow import...")).toBeInTheDocument();
+
+    resolveCommit(
+      jsonResponse({
+        ...pendingImport,
+        import_session_id: null,
+        user_facing_message: "Imported",
+        model_summary: null,
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Slow Model Workflow" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("moves the missing model download progress bar with the reported percentage", async () => {
+    const missingModel = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "sd15.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "resolvable",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy can try to resolve and download this model before the workflow runs.",
+    };
+    const pendingImport = {
+      import_session_id: "import-session-progress",
+      workflow_id: "progress_workflow",
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: "progress_workflow",
+        name: "Progress Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "progress_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [missingModel],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=progress.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-progress/download-models") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-progress",
+            import_session_id: "import-session-progress",
+            workflow_id: "progress_workflow",
+            status: "queued",
+            user_facing_message: "Model download is queued.",
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-progress/download-models/model-download-progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-progress",
+            import_session_id: "import-session-progress",
+            workflow_id: "progress_workflow",
+            status: "running",
+            user_facing_message: "Downloading required models...",
+            current_model_filename: "sd15.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            bytes_downloaded: 384,
+            total_bytes: 1024,
+            percent: 37.5,
+            speed_bytes_per_second: 128,
+            models: [
+              {
+                requirement_id: "checkpoint",
+                filename: "sd15.safetensors",
+                status: "downloading",
+                status_label: "Downloading",
+                bytes_downloaded: 384,
+                total_bytes: 1024,
+                message: null,
+              },
+            ],
+            model_summary: pendingImport.model_summary,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "progress.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Progress Workflow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+
+    expect(await screen.findByText("37.5%")).toBeInTheDocument();
+    const progressbar = screen.getByRole("progressbar", { name: "Model download progress" });
+    expect(progressbar).toHaveAttribute("aria-valuenow", "37.5");
+    expect(progressbar.querySelector(".model-download-progress__bar-fill")).toHaveStyle("transform: scaleX(0.375)");
+  });
+
   it("auto-commits a staged import when all required models are already available", async () => {
     const readyImport = {
       import_session_id: "import-session-ready",

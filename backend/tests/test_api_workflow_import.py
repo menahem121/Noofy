@@ -23,11 +23,15 @@ class StubRuntimeManager:
 class FakePackageStore:
     def __init__(self, package: WorkflowPackage) -> None:
         self.package = package
+        self.preview_count = 0
+        self.import_count = 0
 
     def preview_archive(self, data: bytes, **kwargs):
+        self.preview_count += 1
         return self.package
 
     def import_archive(self, data: bytes, **kwargs):
+        self.import_count += 1
         return self.package
 
 
@@ -367,6 +371,19 @@ def test_pending_import_session_expires_after_ttl(tmp_path) -> None:
     with pytest.raises(ImportSessionExpiredError):
         service.commit_workflow_import(session_id)
     assert session_id not in service._pending_workflow_imports
+
+
+def test_staged_import_commit_reuses_previewed_package_for_model_summary(tmp_path) -> None:
+    service = _staged_import_engine_service(tmp_path)
+    package_store = service.workflow_import_orchestrator.imported_package_store
+    preview = service.preview_workflow_import(b"archive")
+    session_id = preview.import_session_id
+    assert session_id is not None
+
+    service.commit_workflow_import(session_id)
+
+    assert package_store.preview_count == 1
+    assert package_store.import_count == 1
 
 
 def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> None:
