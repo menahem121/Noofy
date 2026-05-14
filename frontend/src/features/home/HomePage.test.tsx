@@ -56,11 +56,13 @@ const cachedImportedWorkflow = {
 
 const onOpenWorkflow = vi.fn();
 const onNavigate = vi.fn();
+const onConfigureDashboard = vi.fn();
 
 function renderHomePage(options: {
   runtimeState?: Partial<RuntimeHealthState>;
   skipInitialRefresh?: boolean;
   workflowState?: ComponentProps<typeof WorkflowLibraryProvider>["initialWorkflowState"];
+  onConfigureDashboard?: typeof onConfigureDashboard;
 } = {}) {
   return render(
     <RuntimeStatusProvider
@@ -68,7 +70,11 @@ function renderHomePage(options: {
       skipInitialRefresh={options.skipInitialRefresh}
     >
       <WorkflowLibraryProvider initialWorkflowState={options.workflowState}>
-        <HomePage onOpenWorkflow={onOpenWorkflow} onNavigate={onNavigate} />
+        <HomePage
+          onOpenWorkflow={onOpenWorkflow}
+          onConfigureDashboard={options.onConfigureDashboard}
+          onNavigate={onNavigate}
+        />
       </WorkflowLibraryProvider>
     </RuntimeStatusProvider>,
   );
@@ -86,6 +92,7 @@ describe("HomePage", () => {
     fetchMock.mockReset();
     onOpenWorkflow.mockReset();
     onNavigate.mockReset();
+    onConfigureDashboard.mockReset();
   });
 
   it("loads backend runtime and workflow summaries through the Noofy API", async () => {
@@ -790,7 +797,7 @@ describe("HomePage", () => {
     expect(await screen.findByText("37.5%")).toBeInTheDocument();
     const progressbar = screen.getByRole("progressbar", { name: "Model download progress" });
     expect(progressbar).toHaveAttribute("aria-valuenow", "37.5");
-    expect(progressbar.querySelector(".model-download-progress__bar-fill")).toHaveStyle("transform: scaleX(0.375)");
+    expect(progressbar.querySelector(".model-download-progress__bar-fill")).toHaveStyle("width: 37.5%");
   });
 
   it("auto-commits a staged import when all required models are already available", async () => {
@@ -915,7 +922,7 @@ describe("HomePage", () => {
     expect(readyCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
   });
 
-  it("commits the staged import after a completed model download job makes models ready", async () => {
+  it("shows a single open action after downloaded models make the import ready", async () => {
     const missingModel = {
       requirement_id: "checkpoint",
       node_id: "1",
@@ -971,6 +978,7 @@ describe("HomePage", () => {
       },
     };
 
+    let statusCalls = 0;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -1027,6 +1035,7 @@ describe("HomePage", () => {
       }
 
       if (url.endsWith("/api/workflows/import/import-session-download/download-models/model-download-1")) {
+        statusCalls += 1;
         return Promise.resolve(
           jsonResponse({
             job_id: "model-download-1",
@@ -1060,7 +1069,7 @@ describe("HomePage", () => {
         return Promise.resolve(
           jsonResponse({
             ...pendingImport,
-            import_session_id: "import-session-download",
+            import_session_id: null,
             user_facing_message: "Imported",
             model_summary: null,
           }),
@@ -1080,6 +1089,15 @@ describe("HomePage", () => {
     expect(await screen.findByRole("dialog", { name: "Core SD15 Text to Image" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
 
+    expect(await screen.findByRole("button", { name: "Open Workflow" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download Missing Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel Import" })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/workflows/import/import-session-download/commit", expect.anything());
+    expect(statusCalls).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Workflow" }));
+
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-download/commit", {
         method: "POST",
@@ -1093,8 +1111,134 @@ describe("HomePage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
     });
+    expect(onOpenWorkflow).toHaveBeenCalledWith("core_sd15_txt2img");
     const workflowCard = (await screen.findByRole("heading", { name: "Core SD15 Text to Image" })).closest("article");
     expect(workflowCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
     expect(workflowCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
+  });
+
+  it("shows a single configure action after downloaded models leave input setup remaining", async () => {
+    const model = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "setup.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "resolvable",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: null,
+    };
+    const pendingImport = {
+      import_session_id: "import-session-configure",
+      workflow_id: "setup_workflow",
+      status: "needs_input_setup",
+      user_facing_message: "Needs input setup",
+      workflow: {
+        id: "setup_workflow",
+        name: "Setup Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 1,
+      model_summary: {
+        workflow_id: "setup_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [model],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=setup.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-configure/download-models") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-configure",
+            import_session_id: "import-session-configure",
+            workflow_id: "setup_workflow",
+            status: "queued",
+            user_facing_message: "Model download is queued.",
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-configure/download-models/model-download-configure")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-configure",
+            import_session_id: "import-session-configure",
+            workflow_id: "setup_workflow",
+            status: "completed",
+            user_facing_message: "Model download check finished.",
+            current_model_filename: null,
+            current_model_index: null,
+            total_models: 1,
+            bytes_downloaded: null,
+            total_bytes: null,
+            percent: null,
+            speed_bytes_per_second: null,
+            models: [],
+            model_summary: {
+              ...pendingImport.model_summary,
+              available_count: 1,
+              missing_count: 0,
+              ready_to_run: true,
+              models: [{ ...model, status: "available", status_label: "Available" }],
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-configure/commit") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ...pendingImport, import_session_id: null, model_summary: null }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ onConfigureDashboard });
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "setup.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Setup Workflow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+
+    expect(await screen.findByRole("button", { name: "Configure Workflow" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure Workflow" }));
+
+    await waitFor(() => {
+      expect(onConfigureDashboard).toHaveBeenCalledWith("setup_workflow", "Setup Workflow");
+    });
+    expect(onOpenWorkflow).not.toHaveBeenCalled();
   });
 });

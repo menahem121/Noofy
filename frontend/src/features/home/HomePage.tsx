@@ -471,6 +471,37 @@ export function HomePage({
     }
   }
 
+  async function handleReadyImportAction() {
+    const sessionId = homeData.pendingImport?.import_session_id;
+    if (!sessionId) return;
+    setHomeData((current) => ({ ...current, importing: true, downloadingModels: false, importError: null }));
+    try {
+      const importResult = await commitWorkflowImport(sessionId);
+      const workflows = await fetchWorkflows();
+      setWorkflowsFromResponse(workflows);
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        downloadingModels: false,
+        pendingImport: null,
+        downloadJob: null,
+        importResult,
+        importError: null,
+      }));
+      if (importResult.status === "needs_input_setup" && onConfigureDashboard) {
+        onConfigureDashboard(importResult.workflow.id, importResult.workflow.name);
+        return;
+      }
+      onOpenWorkflow(importResult.workflow.id);
+    } catch (error) {
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
   async function handleCancelImport() {
     const sessionId = homeData.pendingImport?.import_session_id;
     if (sessionId) {
@@ -523,29 +554,21 @@ export function HomePage({
     if (!sessionId || !jobId || !active) return;
 
     let stopped = false;
-    let committingReadyImport = false;
+    let inFlight = false;
+    let interval: number | null = null;
+    const stopPolling = () => {
+      stopped = true;
+      if (interval !== null) {
+        window.clearInterval(interval);
+      }
+    };
     const poll = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
       try {
         const status = await fetchImportModelDownloadStatus(sessionId, jobId);
         if (stopped) return;
         const finished = ["completed", "failed", "canceled"].includes(status.status);
-        if (finished && status.status === "completed" && status.model_summary?.ready_to_run && !committingReadyImport) {
-          committingReadyImport = true;
-          const importResult = await commitWorkflowImport(sessionId);
-          const workflows = await fetchWorkflows();
-          setWorkflowsFromResponse(workflows);
-          if (stopped) return;
-          setHomeData((current) => ({
-            ...current,
-            importing: false,
-            downloadingModels: false,
-            pendingImport: null,
-            downloadJob: null,
-            importResult,
-            importError: null,
-          }));
-          return;
-        }
         setHomeData((current) => ({
           ...current,
           downloadingModels: !finished,
@@ -556,27 +579,27 @@ export function HomePage({
               : current.pendingImport,
           importError: finished && status.status !== "completed" ? status.user_facing_message : current.importError,
         }));
+        if (finished) stopPolling();
       } catch (error) {
         if (stopped) return;
+        stopPolling();
         setHomeData((current) => ({
           ...current,
           downloadingModels: false,
           importError: error instanceof Error ? error.message : String(error),
         }));
+      } finally {
+        inFlight = false;
       }
     };
 
     void poll();
-    const interval = window.setInterval(() => void poll(), 1000);
-    return () => {
-      stopped = true;
-      window.clearInterval(interval);
-    };
+    interval = window.setInterval(() => void poll(), 1000);
+    return stopPolling;
   }, [
     homeData.pendingImport?.import_session_id,
     homeData.downloadJob?.job_id,
     homeData.downloadJob?.status,
-    setWorkflowsFromResponse,
   ]);
 
   return (
@@ -660,6 +683,7 @@ export function HomePage({
               onDownload={() => void handleDownloadMissingModels()}
               onCancelDownload={() => void handleCancelModelDownload()}
               onContinue={() => void handleContinueImport()}
+              onReadyAction={() => void handleReadyImportAction()}
               onCancel={() => void handleCancelImport()}
             />
           ) : null}
@@ -822,6 +846,7 @@ function RequiredModelsModal({
   onDownload,
   onCancelDownload,
   onContinue,
+  onReadyAction,
   onCancel,
 }: {
   importResult: WorkflowImportResponse;
@@ -831,6 +856,7 @@ function RequiredModelsModal({
   onDownload: () => void;
   onCancelDownload: () => void;
   onContinue: () => void;
+  onReadyAction: () => void;
   onCancel: () => void;
 }) {
   const summary = importResult.model_summary;
@@ -846,6 +872,9 @@ function RequiredModelsModal({
   const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
   const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
   const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
+  const readyToRun = summary.ready_to_run && !activeDownload;
+  const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
+  const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-models-title">
@@ -880,27 +909,40 @@ function RequiredModelsModal({
           </div>
         ) : null}
 
-        <footer className="required-models-modal__footer">
-          <button className="secondary-button" type="button" disabled={busy || !hasDownloadable} onClick={onDownload}>
-            <Download size={16} aria-hidden="true" />
-            {activeDownload ? "Downloading..." : "Download Missing Models"}
-          </button>
-          {activeDownload ? (
-            <button className="secondary-button" type="button" onClick={onCancelDownload}>
-              Cancel Download
+        <footer className={`required-models-modal__footer${readyToRun ? " required-models-modal__footer--ready" : ""}`}>
+          {readyToRun ? (
+            <button className="primary-button" type="button" disabled={busy} onClick={onReadyAction}>
+              {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
+              {importing ? "Preparing..." : readyActionLabel}
             </button>
-          ) : null}
-          <button className="secondary-button" type="button" disabled={busy} onClick={onContinue}>
-            {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
-            {importing ? "Importing..." : "Continue Without Downloading"}
-          </button>
-          <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
-            Cancel Import
-          </button>
+          ) : (
+            <>
+              <button className="secondary-button" type="button" disabled={busy || !hasDownloadable} onClick={onDownload}>
+                <Download size={16} aria-hidden="true" />
+                {activeDownload ? "Downloading..." : "Download Missing Models"}
+              </button>
+              {activeDownload ? (
+                <button className="secondary-button" type="button" onClick={onCancelDownload}>
+                  Cancel Download
+                </button>
+              ) : null}
+              <button className="secondary-button" type="button" disabled={busy} onClick={onContinue}>
+                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+                {importing ? "Importing..." : "Continue Without Downloading"}
+              </button>
+              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+                Cancel Import
+              </button>
+            </>
+          )}
         </footer>
       </section>
     </div>
   );
+}
+
+function importNeedsConfiguration(importResult: WorkflowImportResponse) {
+  return importResult.status === "needs_input_setup" || importResult.unresolved_input_count > 0;
 }
 
 function RequiredModelRow({
@@ -966,7 +1008,7 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
         >
           <div
             className="model-download-progress__bar-fill"
-            style={{ transform: `scaleX(${percent / 100})` }}
+            style={{ width: `${percent}%` }}
           />
         </div>
       ) : null}
