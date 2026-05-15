@@ -25,10 +25,12 @@ import {
   commitWorkflowImport,
   downloadImportMissingModels,
   fetchImportModelDownloadStatus,
+  fetchImportModelVerificationStatus,
   fetchWorkflowPackage,
   previewWorkflowPackageImport,
   removeWorkflow,
   type ImportModelDownloadJobStatus,
+  type ImportModelVerificationJobStatus,
   type RequiredModelAvailability,
   type WorkflowImportResponse,
   type WorkflowSummary,
@@ -53,6 +55,7 @@ interface HomeDataState {
   importing: boolean;
   downloadingModels: boolean;
   downloadJob: ImportModelDownloadJobStatus | null;
+  verificationJob: ImportModelVerificationJobStatus | null;
   pendingImport: WorkflowImportResponse | null;
   allowCommunityPreparation: true;
   importResult: WorkflowImportResponse | null;
@@ -63,6 +66,7 @@ const initialHomeState: HomeDataState = {
   importing: false,
   downloadingModels: false,
   downloadJob: null,
+  verificationJob: null,
   pendingImport: null,
   allowCommunityPreparation: true,
   importResult: null,
@@ -415,6 +419,7 @@ export function HomePage({
       importing: true,
       downloadingModels: false,
       downloadJob: null,
+      verificationJob: null,
       pendingImport: null,
       importResult: null,
       importError: null,
@@ -423,23 +428,10 @@ export function HomePage({
     try {
       const importResult = await previewWorkflowPackageImport(file, homeData.allowCommunityPreparation);
       if (importResult.import_session_id && importResult.model_summary && importResult.model_summary.total_count > 0) {
-        if (importResult.model_summary.ready_to_run) {
-          const committedImport = await commitWorkflowImport(importResult.import_session_id);
-          const workflows = await fetchWorkflows();
-          setWorkflowsFromResponse(workflows);
-          setHomeData((current) => ({
-            ...current,
-            importing: false,
-            pendingImport: null,
-            downloadJob: null,
-            importResult: committedImport,
-            importError: null,
-          }));
-          return;
-        }
         setHomeData((current) => ({
           ...current,
           importing: false,
+          verificationJob: null,
           pendingImport: importResult,
           importResult: null,
           importError: null,
@@ -452,6 +444,7 @@ export function HomePage({
         ...current,
         importing: false,
         pendingImport: null,
+        verificationJob: null,
         importResult,
         importError: null,
       }));
@@ -460,6 +453,7 @@ export function HomePage({
         ...current,
         importing: false,
         pendingImport: null,
+        verificationJob: null,
         importResult: null,
         importError: error instanceof Error ? error.message : String(error),
       }));
@@ -530,6 +524,7 @@ export function HomePage({
         ...current,
         importing: false,
         pendingImport: null,
+        verificationJob: null,
         importResult,
         importError: null,
       }));
@@ -556,6 +551,7 @@ export function HomePage({
         downloadingModels: false,
         pendingImport: null,
         downloadJob: null,
+        verificationJob: null,
         importResult,
         importError: null,
       }));
@@ -582,7 +578,7 @@ export function HomePage({
         // The pending import is in-memory; if the backend already forgot it, the UI can still close.
       }
     }
-    setHomeData((current) => ({ ...current, pendingImport: null, downloadJob: null, importError: null }));
+    setHomeData((current) => ({ ...current, pendingImport: null, downloadJob: null, verificationJob: null, importError: null }));
   }
 
   async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
@@ -617,6 +613,61 @@ export function HomePage({
       setCardActionError(error instanceof Error ? error.message : String(error));
     }
   }
+
+  useEffect(() => {
+    const sessionId = homeData.pendingImport?.import_session_id;
+    const verifying =
+      homeData.verificationJob?.status === "queued" ||
+      homeData.verificationJob?.status === "running" ||
+      homeData.pendingImport?.model_summary?.models.some((model) => model.status === "checking");
+    if (!sessionId || !verifying) return;
+
+    let stopped = false;
+    let inFlight = false;
+    let interval: number | null = null;
+    const stopPolling = () => {
+      stopped = true;
+      if (interval !== null) {
+        window.clearInterval(interval);
+      }
+    };
+    const poll = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      try {
+        const status = await fetchImportModelVerificationStatus(sessionId);
+        if (stopped) return;
+        const finished = ["completed", "failed"].includes(status.status);
+        setHomeData((current) => ({
+          ...current,
+          verificationJob: status,
+          pendingImport:
+            status.model_summary && current.pendingImport
+              ? { ...current.pendingImport, model_summary: status.model_summary }
+              : current.pendingImport,
+          importError: finished && status.status !== "completed" ? status.user_facing_message : current.importError,
+        }));
+        if (finished) stopPolling();
+      } catch (error) {
+        if (stopped) return;
+        stopPolling();
+        setHomeData((current) => ({
+          ...current,
+          importError: error instanceof Error ? error.message : String(error),
+        }));
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void poll();
+    interval = window.setInterval(() => void poll(), 800);
+    return stopPolling;
+  }, [
+    homeData.pendingImport?.import_session_id,
+    homeData.pendingImport?.model_summary,
+    homeData.verificationJob?.status,
+  ]);
 
   useEffect(() => {
     const sessionId = homeData.pendingImport?.import_session_id;
@@ -751,6 +802,7 @@ export function HomePage({
               busy={homeData.importing || homeData.downloadingModels}
               importing={homeData.importing}
               downloadJob={homeData.downloadJob}
+              verificationJob={homeData.verificationJob}
               onDownload={() => void handleDownloadMissingModels()}
               onCancelDownload={() => void handleCancelModelDownload()}
               onContinue={() => void handleContinueImport()}
@@ -971,6 +1023,7 @@ function RequiredModelsModal({
   busy,
   importing,
   downloadJob,
+  verificationJob,
   onDownload,
   onCancelDownload,
   onContinue,
@@ -981,6 +1034,7 @@ function RequiredModelsModal({
   busy: boolean;
   importing: boolean;
   downloadJob: ImportModelDownloadJobStatus | null;
+  verificationJob: ImportModelVerificationJobStatus | null;
   onDownload: () => void;
   onCancelDownload: () => void;
   onContinue: () => void;
@@ -999,8 +1053,12 @@ function RequiredModelsModal({
   ]);
   const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
   const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
+  const activeVerification =
+    verificationJob?.status === "queued" ||
+    verificationJob?.status === "running" ||
+    summary.models.some((model) => model.status === "checking");
   const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
-  const readyToRun = summary.ready_to_run && !activeDownload;
+  const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
   const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
   const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
 
@@ -1012,9 +1070,8 @@ function RequiredModelsModal({
             <p className="eyebrow">Workflow models</p>
             <h2 id="required-models-title">{importResult.workflow.name}</h2>
             <p>
-              This workflow needs the following AI models. Some are already available on your computer.
-              Missing models must be downloaded or selected before the workflow can run. If a download fails,
-              Noofy cleans up the partial file safely; you can retry, continue importing, or cancel.
+              Noofy is checking your local models first. Missing models can be downloaded or selected before the
+              workflow runs. If a download fails, Noofy cleans up the partial file safely.
             </p>
           </div>
           <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
@@ -1029,6 +1086,7 @@ function RequiredModelsModal({
         </div>
 
         {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
+        {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
 
         {importing ? (
           <div className="required-models-modal__processing" role="status" aria-live="polite">
@@ -1045,7 +1103,7 @@ function RequiredModelsModal({
             </button>
           ) : (
             <>
-              <button className="secondary-button" type="button" disabled={busy || !hasDownloadable} onClick={onDownload}>
+              <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
                 <Download size={16} aria-hidden="true" />
                 {activeDownload ? "Downloading..." : "Download Missing Models"}
               </button>
@@ -1054,7 +1112,7 @@ function RequiredModelsModal({
                   Cancel Download
                 </button>
               ) : null}
-              <button className="secondary-button" type="button" disabled={busy} onClick={onContinue}>
+              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onContinue}>
                 {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
                 {importing ? "Importing..." : "Continue Without Downloading"}
               </button>
@@ -1147,6 +1205,41 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
         {job.speed_bytes_per_second ? ` · ${formatModelSpeed(job.speed_bytes_per_second)}` : ""}
       </p>
       <span>{job.user_facing_message}</span>
+    </div>
+  );
+}
+
+function ModelVerificationProgressPanel({ job }: { job: ImportModelVerificationJobStatus | null }) {
+  const percent = job?.percent !== null && job?.percent !== undefined
+    ? Math.max(0, Math.min(Number(job.percent), 100))
+    : null;
+  const label = job?.current_model_filename
+    ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
+    : "Checking local models";
+  const percentLabel = percent !== null
+    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+    : "Checking";
+
+  return (
+    <div className="model-download-progress" role="status">
+      <div className="model-download-progress__header">
+        <strong>{label}</strong>
+        <span>{percentLabel}</span>
+      </div>
+      <div
+        className="model-download-progress__bar"
+        role="progressbar"
+        aria-label="Model verification progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? 0}
+      >
+        <div
+          className="model-download-progress__bar-fill"
+          style={{ width: `${percent ?? 0}%` }}
+        />
+      </div>
+      <span>{job?.user_facing_message ?? "Verifying local model files..."}</span>
     </div>
   );
 }

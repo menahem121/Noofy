@@ -279,8 +279,8 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
 
 export function suggestDescription(value: WorkflowNodeValue): string {
   const hints: Record<string, string> = {
-    text: "Describe what you want to see.",
-    prompt: "Describe what you want to see.",
+    text: "Describe what you want to create.",
+    prompt: "Describe what you want to create.",
     negative: "Describe what to avoid in the result.",
     width: "Output width in pixels.",
     height: "Output height in pixels.",

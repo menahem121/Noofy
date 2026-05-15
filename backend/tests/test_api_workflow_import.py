@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,6 +12,7 @@ from app.engine.service import EngineService, IMPORT_SESSION_TTL, ImportSessionE
 from app.main import create_app
 from app.runtime.runners.supervisor import RunnerSupervisor
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -357,6 +359,93 @@ def test_preview_workflow_import_endpoint_returns_staged_model_summary(monkeypat
     assert payload["model_summary"]["models"][0]["status"] == "missing"
     assert fake_service.previewed_payload == b"archive-bytes"
     assert fake_service.previewed_filename == "model.noofy"
+
+
+def test_preview_workflow_import_verifies_exact_local_model_before_prompting(tmp_path) -> None:
+    payload = b"local-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "model.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="local_model_workflow",
+            name="Local Model Workflow",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        required_models=[
+            RequiredModel(
+                folder="checkpoints",
+                filename="model.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ],
+        comfyui_graph={},
+    )
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=FakePackageStore(package),
+        model_availability_service=ModelAvailabilityService(
+            model_roots=[noofy_root],
+            noofy_models_dir=noofy_root,
+            log_store=LogStore(),
+        ),
+    )
+
+    preview = service.preview_workflow_import(b"archive")
+
+    assert preview.import_session_id is not None
+    assert preview.model_summary is not None
+    assert preview.model_summary.ready_to_run is False
+    assert preview.model_summary.models[0].status == "checking"
+    verification = service.workflow_import_orchestrator.import_model_verification_status(
+        preview.import_session_id
+    )
+    assert verification.status == "completed"
+    assert verification.model_summary is not None
+    assert verification.model_summary.ready_to_run is True
+    assert verification.model_summary.models[0].status == "available"
+    assert verification.model_summary.models[0].matched_sha256 == sha
+
+
+def test_import_model_verification_status_endpoint(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    def verification_status(import_session_id: str):
+        assert import_session_id == "import-session-1"
+        return {
+            "job_id": "model-verification-1",
+            "import_session_id": "import-session-1",
+            "workflow_id": "unknown__model_workflow__0.1.0",
+            "status": "running",
+            "user_facing_message": "Verifying local model files...",
+            "current_model_filename": "model.safetensors",
+            "current_model_index": 1,
+            "total_models": 2,
+            "verified_models": 1,
+            "percent": 50.0,
+            "models": [],
+            "model_summary": None,
+        }
+
+    fake_service.import_model_verification_status = verification_status  # type: ignore[attr-defined]
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.get("/api/workflows/import/import-session-1/model-verification")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert payload["percent"] == 50.0
 
 
 def test_pending_import_session_expires_after_ttl(tmp_path) -> None:

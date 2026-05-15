@@ -10,13 +10,17 @@ from app.engine.models import (
     ImportModelDownloadJobStart,
     ImportModelDownloadJobStatus,
     ImportModelDownloadProgressItem,
+    ImportModelVerificationJobStatus,
+    RequiredModelAvailability,
+    RequiredModelSummary,
     StagedWorkflowImportResponse,
 )
 from app.history import HistoryService
+from app.artifacts import AssetOwnership
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.model_availability import ModelAvailabilityService
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import RequiredModel, WorkflowPackage
 
 IMPORT_SESSION_TTL = timedelta(hours=1)
 
@@ -34,6 +38,7 @@ class _PendingWorkflowImport:
     created_at: datetime
     updated_at: datetime
     active_download_job_id: str | None = None
+    active_verification_job_id: str | None = None
 
 
 @dataclass
@@ -55,6 +60,24 @@ class _ImportModelDownloadJob:
     bytes_downloaded: int | None = None
     total_bytes: int | None = None
     speed_bytes_per_second: float | None = None
+
+
+@dataclass
+class _ImportModelVerificationJob:
+    job_id: str
+    import_session_id: str
+    workflow_id: str
+    task: asyncio.Task | None
+    status: str
+    user_facing_message: str
+    started_at: datetime
+    updated_at: datetime
+    total_models: int
+    verified_models: int = 0
+    current_model_filename: str | None = None
+    current_model_index: int | None = None
+    model_summary: RequiredModelSummary | None = None
+    models: dict[str, RequiredModelAvailability] | None = None
 
 
 def _download_progress_status_label(status: str) -> str:
@@ -88,6 +111,7 @@ class WorkflowImportOrchestrator:
         self.history_service = history_service
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
+        self._import_model_verification_jobs: dict[str, _ImportModelVerificationJob] = {}
 
     def import_workflow_archive(
         self,
@@ -134,10 +158,6 @@ class WorkflowImportOrchestrator:
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
-        model_summary = self.workflow_library_service.model_availability_summary_for_package(
-            package,
-            fast=True,
-        )
         if not package.required_models:
             committed = self.import_workflow_archive(
                 data,
@@ -149,6 +169,7 @@ class WorkflowImportOrchestrator:
                 model_summary=None,
                 **committed,
             )
+        model_summary = self._checking_model_summary(package)
         session_id = f"import-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
         self._pending_workflow_imports[session_id] = _PendingWorkflowImport(
@@ -159,6 +180,7 @@ class WorkflowImportOrchestrator:
             created_at=now,
             updated_at=now,
         )
+        self._start_model_verification_for_import(session_id)
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
         self.log_store.add(
@@ -201,6 +223,7 @@ class WorkflowImportOrchestrator:
         before = self.workflow_library_service.model_availability_summary_for_package(
             pending.package,
             fast=True,
+            verify_hashes=True,
         )
         missing_models = [model for model in before.models if model.status == "missing"]
         job_id = f"model-download-{uuid.uuid4().hex}"
@@ -249,6 +272,26 @@ class WorkflowImportOrchestrator:
             raise KeyError(f"Unknown model download job: {job_id}")
         return self._import_download_job_status(job)
 
+    def import_model_verification_status(
+        self,
+        import_session_id: str,
+    ) -> ImportModelVerificationJobStatus:
+        pending = self._pending_import_or_raise(import_session_id)
+        job_id = pending.active_verification_job_id
+        if job_id is None:
+            candidates = [
+                job for job in self._import_model_verification_jobs.values()
+                if job.import_session_id == import_session_id
+            ]
+            if not candidates:
+                raise KeyError(f"Unknown model verification job for import session: {import_session_id}")
+            job = max(candidates, key=lambda candidate: candidate.updated_at)
+        else:
+            job = self._import_model_verification_jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Unknown model verification job: {job_id}")
+        return self._import_verification_job_status(job)
+
     def cancel_import_model_download_job(
         self, import_session_id: str, job_id: str
     ) -> ImportModelDownloadJobStatus:
@@ -272,6 +315,7 @@ class WorkflowImportOrchestrator:
         model_summary = self.workflow_library_service.model_availability_summary_for_package(
             pending.package,
             fast=True,
+            verify_hashes=True,
         )
         committed = self.import_workflow_archive(
             pending.data,
@@ -312,6 +356,172 @@ class WorkflowImportOrchestrator:
             "import_session_id": import_session_id,
             "status": "canceled" if removed is not None else "not_found",
         }
+
+    def _start_model_verification_for_import(self, import_session_id: str) -> None:
+        pending = self._pending_import_or_raise(import_session_id)
+        job_id = f"model-verification-{uuid.uuid4().hex}"
+        now = datetime.now(UTC)
+        job = _ImportModelVerificationJob(
+            job_id=job_id,
+            import_session_id=import_session_id,
+            workflow_id=pending.package.metadata.id,
+            task=None,
+            status="queued",
+            user_facing_message="Model verification is queued.",
+            started_at=now,
+            updated_at=now,
+            total_models=len(pending.package.required_models),
+            model_summary=self._checking_model_summary(pending.package),
+            models={
+                item.requirement_id: item
+                for item in self._checking_model_summary(pending.package).models
+            },
+        )
+        self._import_model_verification_jobs[job_id] = job
+        pending.active_verification_job_id = job_id
+        pending.updated_at = now
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._run_model_verification_job_sync(job_id)
+        else:
+            job.task = loop.create_task(self._run_model_verification_job(job_id))
+
+    async def _run_model_verification_job(self, job_id: str) -> None:
+        job = self._import_model_verification_jobs[job_id]
+        pending = self._pending_workflow_imports.get(job.import_session_id)
+        if pending is None:
+            job.status = "failed"
+            job.user_facing_message = "The import session expired. Import the workflow again."
+            job.updated_at = datetime.now(UTC)
+            return
+        self._begin_model_verification_job(job, pending)
+        try:
+            for index, model in enumerate(pending.package.required_models, start=1):
+                self._record_model_verification_progress(job, pending, index, model)
+                availability = await asyncio.to_thread(
+                    self._verify_import_model,
+                    pending.package,
+                    model,
+                )
+                self._record_verified_import_model(job, pending, availability)
+            self._finish_model_verification_job(job, pending)
+        except Exception as exc:
+            self._fail_model_verification_job(job, pending, exc)
+
+    def _run_model_verification_job_sync(self, job_id: str) -> None:
+        job = self._import_model_verification_jobs[job_id]
+        pending = self._pending_workflow_imports.get(job.import_session_id)
+        if pending is None:
+            job.status = "failed"
+            job.user_facing_message = "The import session expired. Import the workflow again."
+            job.updated_at = datetime.now(UTC)
+            return
+        self._begin_model_verification_job(job, pending)
+        try:
+            for index, model in enumerate(pending.package.required_models, start=1):
+                self._record_model_verification_progress(job, pending, index, model)
+                availability = self._verify_import_model(pending.package, model)
+                self._record_verified_import_model(job, pending, availability)
+            self._finish_model_verification_job(job, pending)
+        except Exception as exc:
+            self._fail_model_verification_job(job, pending, exc)
+
+    def _begin_model_verification_job(
+        self,
+        job: _ImportModelVerificationJob,
+        pending: _PendingWorkflowImport,
+    ) -> None:
+        now = datetime.now(UTC)
+        job.status = "running"
+        job.user_facing_message = "Verifying local model files..."
+        job.updated_at = now
+        pending.updated_at = now
+
+    def _record_model_verification_progress(
+        self,
+        job: _ImportModelVerificationJob,
+        pending: _PendingWorkflowImport,
+        index: int,
+        model: RequiredModel,
+    ) -> None:
+        now = datetime.now(UTC)
+        job.current_model_index = index
+        job.current_model_filename = model.filename
+        job.updated_at = now
+        pending.updated_at = now
+
+    def _record_verified_import_model(
+        self,
+        job: _ImportModelVerificationJob,
+        pending: _PendingWorkflowImport,
+        availability: RequiredModelAvailability,
+    ) -> None:
+        now = datetime.now(UTC)
+        if job.models is None:
+            job.models = {}
+        job.models[availability.requirement_id] = availability
+        job.verified_models = len(
+            [
+                item for item in job.models.values()
+                if item.status != "checking"
+            ]
+        )
+        job.model_summary = self._model_summary_from_availability(
+            pending.package,
+            list(job.models.values()),
+        )
+        job.updated_at = now
+        pending.updated_at = now
+
+    def _finish_model_verification_job(
+        self,
+        job: _ImportModelVerificationJob,
+        pending: _PendingWorkflowImport,
+    ) -> None:
+        now = datetime.now(UTC)
+        job.status = "completed"
+        job.user_facing_message = "Model verification finished."
+        job.current_model_filename = None
+        job.current_model_index = None
+        job.updated_at = now
+        pending.updated_at = now
+        if pending.active_verification_job_id == job.job_id:
+            pending.active_verification_job_id = None
+
+    def _fail_model_verification_job(
+        self,
+        job: _ImportModelVerificationJob,
+        pending: _PendingWorkflowImport,
+        exc: Exception,
+    ) -> None:
+        now = datetime.now(UTC)
+        job.status = "failed"
+        job.user_facing_message = "Model verification failed. You can retry by importing the workflow again."
+        job.updated_at = now
+        pending.updated_at = now
+        if pending.active_verification_job_id == job.job_id:
+            pending.active_verification_job_id = None
+        self.log_store.add(
+            "warning",
+            "Import model verification failed",
+            "workflow.models",
+            workflow_id=pending.package.metadata.id,
+            details={"job_id": job.job_id, "error": str(exc)},
+        )
+
+    def _verify_import_model(
+        self,
+        package: WorkflowPackage,
+        model: RequiredModel,
+    ) -> RequiredModelAvailability:
+        single_model_package = package.model_copy(update={"required_models": [model]})
+        summary = self.workflow_library_service.model_availability_summary_for_package(
+            single_model_package,
+            fast=True,
+            verify_hashes=True,
+        )
+        return summary.models[0]
 
     async def _run_import_model_download_job(self, job_id: str) -> None:
         job = self._import_model_download_jobs[job_id]
@@ -441,6 +651,76 @@ class WorkflowImportOrchestrator:
             speed_bytes_per_second=job.speed_bytes_per_second,
             models=list((job.models or {}).values()),
             model_summary=job.model_summary,
+        )
+
+    def _import_verification_job_status(
+        self,
+        job: _ImportModelVerificationJob,
+    ) -> ImportModelVerificationJobStatus:
+        percent = None
+        if job.total_models:
+            percent = min(100.0, round((job.verified_models / job.total_models) * 100, 1))
+        return ImportModelVerificationJobStatus(
+            job_id=job.job_id,
+            import_session_id=job.import_session_id,
+            workflow_id=job.workflow_id,
+            status=job.status,  # type: ignore[arg-type]
+            user_facing_message=job.user_facing_message,
+            current_model_filename=job.current_model_filename,
+            current_model_index=job.current_model_index,
+            total_models=job.total_models,
+            verified_models=job.verified_models,
+            percent=percent,
+            models=list((job.models or {}).values()),
+            model_summary=job.model_summary,
+        )
+
+    def _checking_model_summary(self, package: WorkflowPackage) -> RequiredModelSummary:
+        return self._model_summary_from_availability(
+            package,
+            [self._checking_model_availability(model) for model in package.required_models],
+        )
+
+    def _checking_model_availability(self, model: RequiredModel) -> RequiredModelAvailability:
+        source_urls = list(getattr(model, "source_urls", []) or [])
+        if not source_urls and getattr(model, "source_url", None):
+            source_urls = [str(model.source_url)]
+        return RequiredModelAvailability(
+            requirement_id=f"{model.folder}/{model.filename}",
+            node_id=model.node_id,
+            node_type=model.node_type,
+            input_name=model.input_name,
+            filename=model.filename,
+            model_type=model.model_type,
+            folder=model.folder,
+            verification_level=model.verification_level,
+            size_bytes=model.size_bytes,
+            source_urls=source_urls,
+            source_availability="known" if source_urls else "unknown",
+            status="checking",
+            status_label="Checking",
+            asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+            message="Noofy is checking whether this model is already available locally.",
+        )
+
+    def _model_summary_from_availability(
+        self,
+        package: WorkflowPackage,
+        models: list[RequiredModelAvailability],
+    ) -> RequiredModelSummary:
+        available_count = sum(model.status == "available" for model in models)
+        possible_count = sum(model.status == "possible_match" for model in models)
+        missing_count = sum(model.status == "missing" for model in models)
+        manual_count = sum(model.status == "needs_manual_download" for model in models)
+        return RequiredModelSummary(
+            workflow_id=package.metadata.id,
+            total_count=len(models),
+            available_count=available_count,
+            possible_match_count=possible_count,
+            missing_count=missing_count,
+            needs_manual_download_count=manual_count,
+            ready_to_run=bool(models) and len(models) == available_count,
+            models=models,
         )
 
     def _pending_import_or_raise(self, import_session_id: str) -> _PendingWorkflowImport:

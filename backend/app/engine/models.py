@@ -59,6 +59,7 @@ class RequiredModelAvailability(BaseModel):
         "available",
         "possible_match",
         "missing",
+        "checking",
         "needs_manual_download",
         "download_failed",
         "authentication_required",
@@ -148,6 +149,21 @@ class ImportModelDownloadJobStatus(BaseModel):
     percent: float | None = None
     speed_bytes_per_second: float | None = None
     models: list[ImportModelDownloadProgressItem] = Field(default_factory=list)
+    model_summary: RequiredModelSummary | None = None
+
+
+class ImportModelVerificationJobStatus(BaseModel):
+    job_id: str
+    import_session_id: str
+    workflow_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    user_facing_message: str
+    current_model_filename: str | None = None
+    current_model_index: int | None = None
+    total_models: int
+    verified_models: int
+    percent: float | None = None
+    models: list[RequiredModelAvailability] = Field(default_factory=list)
     model_summary: RequiredModelSummary | None = None
 
 

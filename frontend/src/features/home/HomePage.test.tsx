@@ -926,7 +926,39 @@ describe("HomePage", () => {
     expect(progressbar.querySelector(".model-download-progress__bar-fill")).toHaveStyle("width: 37.5%");
   });
 
-  it("auto-commits a staged import when all required models are already available", async () => {
+  it("opens the model popup while verification runs before allowing a ready import", async () => {
+    const checkingModel = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "ready.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "known",
+      status: "checking",
+      status_label: "Checking",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy is checking whether this model is already available locally.",
+    };
+    const availableModel = {
+      ...checkingModel,
+      status: "available",
+      status_label: "Available",
+      asset_ownership: "noofy_downloaded",
+      source_path: "/models/checkpoints/ready.safetensors",
+      matched_root: "/models",
+      matched_sha256: "abc",
+      matched_size_bytes: 1024,
+      message: null,
+    };
     const readyImport = {
       import_session_id: "import-session-ready",
       workflow_id: "ready_workflow",
@@ -945,36 +977,24 @@ describe("HomePage", () => {
       model_summary: {
         workflow_id: "ready_workflow",
         total_count: 1,
-        available_count: 1,
+        available_count: 0,
         possible_match_count: 0,
         missing_count: 0,
         needs_manual_download_count: 0,
-        ready_to_run: true,
-        models: [
-          {
-            requirement_id: "checkpoint",
-            node_id: "1",
-            node_type: "CheckpointLoaderSimple",
-            input_name: "ckpt_name",
-            filename: "ready.safetensors",
-            model_type: "Checkpoint",
-            folder: "checkpoints",
-            verification_level: "sha256_size",
-            size_bytes: 1024,
-            source_urls: [],
-            source_availability: "known",
-            status: "available",
-            status_label: "Available",
-            asset_ownership: "noofy_downloaded",
-            source_path: "/models/checkpoints/ready.safetensors",
-            matched_root: "/models",
-            matched_sha256: "abc",
-            matched_size_bytes: 1024,
-            message: null,
-          },
-        ],
+        ready_to_run: false,
+        models: [checkingModel],
       },
     };
+    const readySummary = {
+      ...readyImport.model_summary,
+      available_count: 1,
+      ready_to_run: true,
+      models: [availableModel],
+    };
+    let resolveVerification!: (response: Response) => void;
+    const verificationPromise = new Promise<Response>((resolve) => {
+      resolveVerification = resolve;
+    });
 
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1012,6 +1032,10 @@ describe("HomePage", () => {
         return Promise.resolve(jsonResponse(readyImport));
       }
 
+      if (url.endsWith("/api/workflows/import/import-session-ready/model-verification")) {
+        return verificationPromise;
+      }
+
       if (url.endsWith("/api/workflows/import/import-session-ready/commit") && init?.method === "POST") {
         return Promise.resolve(
           jsonResponse({
@@ -1032,20 +1056,42 @@ describe("HomePage", () => {
     const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-ready/commit", {
+    expect(await screen.findByRole("dialog", { name: "Ready Workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("progressbar", { name: "Model verification progress" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeDisabled();
+
+    resolveVerification(
+      jsonResponse({
+        job_id: "model-verification-ready",
+        import_session_id: "import-session-ready",
+        workflow_id: "ready_workflow",
+        status: "completed",
+        user_facing_message: "Model verification finished.",
+        current_model_filename: null,
+        current_model_index: null,
+        total_models: 1,
+        verified_models: 1,
+        percent: 100,
+        models: [availableModel],
+        model_summary: readySummary,
+      }),
+    );
+    const readyButton = await screen.findByRole("button", { name: "Open Workflow" });
+    fireEvent.click(readyButton);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-ready/commit", {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
         body: undefined,
-      });
-    });
+      }));
     expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
     const readyCard = (await screen.findByRole("heading", { name: "Ready Workflow" })).closest("article");
     expect(readyCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
     expect(readyCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
+    expect(onOpenWorkflow).toHaveBeenCalledWith("ready_workflow");
   });
 
   it("shows a single open action after downloaded models make the import ready", async () => {

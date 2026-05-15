@@ -164,6 +164,19 @@ async def get_import_model_download_status(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/workflows/import/{import_session_id}/model-verification")
+async def get_import_model_verification_status(
+    import_session_id: str,
+    import_orchestrator: WorkflowImportOrchestratorDep,
+):
+    try:
+        return import_orchestrator.import_model_verification_status(import_session_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/workflows/import/{import_session_id}/download-models/{job_id}/cancel")
 async def cancel_import_model_download(
     import_session_id: str,

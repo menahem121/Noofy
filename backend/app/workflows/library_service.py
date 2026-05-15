@@ -185,8 +185,13 @@ class WorkflowLibraryService:
         package: WorkflowPackage,
         *,
         fast: bool = False,
+        verify_hashes: bool = False,
     ) -> RequiredModelSummary:
-        return self._summarize_models(package, fast=fast)
+        return self._summarize_models(
+            package,
+            fast=fast,
+            verify_hashes=verify_hashes,
+        )
 
     def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
         status = package.import_metadata.status if package.import_metadata else "installed"
@@ -354,6 +359,7 @@ class WorkflowLibraryService:
         package: WorkflowPackage,
         *,
         fast: bool = False,
+        verify_hashes: bool = False,
     ) -> RequiredModelSummary:
         summarize = self.model_availability_service.summarize
         if not fast:
@@ -364,7 +370,7 @@ class WorkflowLibraryService:
             return summarize(package)
         if "deep_search" not in parameters or "verify_hashes" not in parameters:
             return summarize(package)
-        return summarize(package, deep_search=False, verify_hashes=False)
+        return summarize(package, deep_search=False, verify_hashes=verify_hashes)
 
     def _infer_workflow_category(self, package: WorkflowPackage) -> str:
         name = f"{package.metadata.name} {package.metadata.description}".casefold()

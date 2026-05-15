@@ -191,6 +191,7 @@ export type RequiredModelStatus =
   | "available"
   | "possible_match"
   | "missing"
+  | "checking"
   | "needs_manual_download"
   | "download_failed"
   | "authentication_required"
@@ -272,6 +273,21 @@ export interface ImportModelDownloadJobStatus {
   percent: number | null;
   speed_bytes_per_second: number | null;
   models: ImportModelDownloadProgressItem[];
+  model_summary: RequiredModelSummary | null;
+}
+
+export interface ImportModelVerificationJobStatus {
+  job_id: string;
+  import_session_id: string;
+  workflow_id: string;
+  status: "queued" | "running" | "completed" | "failed" | string;
+  user_facing_message: string;
+  current_model_filename: string | null;
+  current_model_index: number | null;
+  total_models: number;
+  verified_models: number;
+  percent: number | null;
+  models: RequiredModelAvailability[];
   model_summary: RequiredModelSummary | null;
 }
 
@@ -542,6 +558,12 @@ export function downloadImportMissingModels(importSessionId: string) {
 export function fetchImportModelDownloadStatus(importSessionId: string, jobId: string) {
   return getJson<ImportModelDownloadJobStatus>(
     `/workflows/import/${encodeURIComponent(importSessionId)}/download-models/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function fetchImportModelVerificationStatus(importSessionId: string) {
+  return getJson<ImportModelVerificationJobStatus>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/model-verification`,
   );
 }
 
