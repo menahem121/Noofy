@@ -81,8 +81,9 @@ export async function apiErrorMessage(response: Response): Promise<string> {
   return fallback;
 }
 
-export async function getJson<T>(path: string): Promise<T> {
+export async function getJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    ...init,
     headers: apiHeaders(),
   });
   if (!response.ok) throw new Error(await apiErrorMessage(response));

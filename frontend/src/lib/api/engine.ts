@@ -172,8 +172,8 @@ export interface BackendHealthReport {
   latest_error: unknown | null;
 }
 
-export function fetchRuntimeStatus() {
-  return getJson<RuntimeStatus>("/runtime");
+export function fetchRuntimeStatus(options: { signal?: AbortSignal } = {}) {
+  return getJson<RuntimeStatus>("/runtime", { signal: options.signal });
 }
 
 export function fetchResourceSnapshot() {

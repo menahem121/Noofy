@@ -491,6 +491,9 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
   const status = runtimeStatus.statusView;
   const environment = state.runtime?.environment;
+  const environmentPrepared = Boolean(
+    environment?.prepared || state.runtime?.managed_process_running || state.runtime?.reachable,
+  );
   const versions = state.versions;
   const currentVersion =
     versions?.current?.tag ??
@@ -576,15 +579,15 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
 
           <ul className="engine-status-card__steps">
             <li className="engine-status-card__step">
-              <div className={`engine-status-card__step-icon ${environment?.prepared ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`} aria-hidden="true">
-                {environment?.prepared ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+              <div className={`engine-status-card__step-icon ${environmentPrepared ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`} aria-hidden="true">
+                {environmentPrepared ? <CheckCircle2 size={16} /> : <Circle size={16} />}
               </div>
               <div className="engine-status-card__step-body">
                 <span className="engine-status-card__step-label">
-                  {environment?.prepared ? "ComfyUI is installed" : "ComfyUI is not installed yet"}
+                  {environmentPrepared ? "ComfyUI is installed" : "ComfyUI is not installed yet"}
                 </span>
                 <span className="engine-status-card__step-hint">
-                  {environment?.prepared
+                  {environmentPrepared
                     ? "ComfyUI is installed and ready on this computer."
                     : <>Use the &ldquo;Set Up&rdquo; button below to install it.</>}
                 </span>
@@ -636,7 +639,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
               onClick={() => void runAction("bootstrap", bootstrapEngine)}
             >
               {state.action === "bootstrap" ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Wrench size={16} aria-hidden="true" />}
-              {environment?.prepared ? "Repair Installation" : "Set Up"}
+              {environmentPrepared ? "Repair Installation" : "Set Up"}
             </button>
           </div>
         </article>

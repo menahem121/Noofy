@@ -32,6 +32,7 @@ export interface RefreshRuntimeOptions {
 
 const DEFAULT_MAX_AGE_MS = 10_000;
 const SILENT_FAILURE_THRESHOLD = 2;
+const RUNTIME_REFRESH_TIMEOUT_MS = 8_000;
 
 const RuntimeStatusContext = createContext<RuntimeStatusContextValue | null>(null);
 
@@ -106,7 +107,9 @@ export function RuntimeStatusProvider({
         refreshError: silent ? stateBeforeRefresh.refreshError : null,
       }));
 
-      const request = fetchRuntimeStatus()
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), RUNTIME_REFRESH_TIMEOUT_MS);
+      const request = fetchRuntimeStatus({ signal: controller.signal })
         .then((runtime) => {
           if (requestSeq !== latestRequestSeqRef.current) return runtime;
           setState((stateBeforeSuccess) => stateFromRuntime(runtime, stateBeforeSuccess));
@@ -114,10 +117,11 @@ export function RuntimeStatusProvider({
         })
         .catch((error) => {
           if (requestSeq !== latestRequestSeqRef.current) return null;
-          setState((stateBeforeFailure) => stateFromFailure(stateBeforeFailure, error, silent));
+          setState((stateBeforeFailure) => stateFromFailure(stateBeforeFailure, runtimeRefreshError(error), silent));
           return null;
         })
         .finally(() => {
+          window.clearTimeout(timeout);
           if (inFlightRef.current === request) {
             inFlightRef.current = null;
           }
@@ -247,4 +251,11 @@ function engineStatusFromRuntime(runtime: RuntimeStatus): EngineStatus {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function runtimeRefreshError(error: unknown) {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new Error("Noofy backend did not answer runtime status in time.");
+  }
+  return error;
 }

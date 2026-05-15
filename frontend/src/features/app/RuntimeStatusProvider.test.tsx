@@ -82,6 +82,7 @@ describe("RuntimeStatusProvider", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
   });
@@ -155,6 +156,32 @@ describe("RuntimeStatusProvider", () => {
 
     expect(result.current.backendStatus).toBe("unreachable");
     expect(result.current.statusView.label).toBe("Backend offline");
+  });
+
+  it("marks the backend unreachable when runtime status hangs", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation((_url, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(),
+    });
+
+    const refresh = result.current.refreshRuntime({ force: true, silent: false });
+    await act(async () => {
+      vi.advanceTimersByTime(8_000);
+      await refresh;
+    });
+    vi.useRealTimers();
+
+    expect(result.current.backendStatus).toBe("unreachable");
+    expect(result.current.statusView.label).toBe("Backend offline");
+    expect(result.current.refreshError).toBe("Noofy backend did not answer runtime status in time.");
   });
 
   it("does not let an older failing refresh overwrite a newer successful one", async () => {

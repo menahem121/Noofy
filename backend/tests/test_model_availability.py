@@ -120,6 +120,62 @@ def test_model_summary_reuses_external_model_as_user_local(tmp_path: Path) -> No
     assert summary.models[0].source_path == str(model_path)
 
 
+def test_fast_model_summary_skips_recursive_filename_search(tmp_path: Path) -> None:
+    payload = b"nested-model"
+    noofy_root = tmp_path / "Noofy Models"
+    nested_model_path = noofy_root / "checkpoints" / "nested" / "demo.safetensors"
+    nested_model_path.parent.mkdir(parents=True)
+    nested_model_path.write_bytes(payload)
+    service = _service(noofy_root=noofy_root)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                size_bytes=len(payload),
+                verification_level="filename_size",
+                source_urls=["https://example.com/models/demo.safetensors"],
+            )
+        ]
+    )
+
+    fast_summary = service.summarize(package, deep_search=False, verify_hashes=False)
+    full_summary = service.summarize(package)
+
+    assert fast_summary.models[0].status == "missing"
+    assert full_summary.models[0].status == "available"
+    assert full_summary.models[0].source_path == str(nested_model_path)
+
+
+def test_fast_model_summary_skips_sha256_file_hashing(tmp_path: Path) -> None:
+    payload = b"model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    service = _service(noofy_root=noofy_root)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    fast_summary = service.summarize(package, deep_search=False, verify_hashes=False)
+    full_summary = service.summarize(package)
+
+    assert fast_summary.models[0].status == "possible_match"
+    assert fast_summary.models[0].matched_sha256 is None
+    assert full_summary.models[0].status == "available"
+    assert full_summary.models[0].matched_sha256 == sha
+
+
 @pytest.mark.anyio
 async def test_download_uses_part_file_then_atomic_final_path(
     tmp_path: Path,

@@ -1,3 +1,4 @@
+import inspect
 import json
 import shutil
 from pathlib import Path
@@ -179,8 +180,13 @@ class WorkflowLibraryService:
             self.workflow_loader.get_package(workflow_id)
         )
 
-    def model_availability_summary_for_package(self, package: WorkflowPackage) -> RequiredModelSummary:
-        return self.model_availability_service.summarize(package)
+    def model_availability_summary_for_package(
+        self,
+        package: WorkflowPackage,
+        *,
+        fast: bool = False,
+    ) -> RequiredModelSummary:
+        return self._summarize_models(package, fast=fast)
 
     def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
         status = package.import_metadata.status if package.import_metadata else "installed"
@@ -325,7 +331,7 @@ class WorkflowLibraryService:
         if not package.required_models:
             return {"missing_model_count": 0, "ready_to_run": True}
         try:
-            summary = self.model_availability_service.summarize(package)
+            summary = self._summarize_models(package, fast=True)
         except Exception as exc:
             self.log_store.add(
                 "warning",
@@ -342,6 +348,23 @@ class WorkflowLibraryService:
             "missing_model_count": summary.missing_count + summary.needs_manual_download_count,
             "ready_to_run": summary.ready_to_run,
         }
+
+    def _summarize_models(
+        self,
+        package: WorkflowPackage,
+        *,
+        fast: bool = False,
+    ) -> RequiredModelSummary:
+        summarize = self.model_availability_service.summarize
+        if not fast:
+            return summarize(package)
+        try:
+            parameters = inspect.signature(summarize).parameters
+        except (TypeError, ValueError):
+            return summarize(package)
+        if "deep_search" not in parameters or "verify_hashes" not in parameters:
+            return summarize(package)
+        return summarize(package, deep_search=False, verify_hashes=False)
 
     def _infer_workflow_category(self, package: WorkflowPackage) -> str:
         name = f"{package.metadata.name} {package.metadata.description}".casefold()

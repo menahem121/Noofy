@@ -1,4 +1,5 @@
 import importlib.util
+import signal
 import sys
 from pathlib import Path
 
@@ -46,6 +47,34 @@ def test_backend_python_path_uses_windows_scripts_directory(tmp_path: Path) -> N
     assert cli.backend_python_path(tmp_path, os_name="nt") == (
         tmp_path / "backend" / ".venv" / "Scripts" / "python.exe"
     )
+
+
+def test_child_process_popen_kwargs_starts_new_session_on_posix() -> None:
+    cli = load_noofy_cli()
+
+    assert cli.child_process_popen_kwargs(os_name="posix") == {"start_new_session": True}
+
+
+def test_child_process_popen_kwargs_uses_new_process_group_on_windows(monkeypatch) -> None:
+    cli = load_noofy_cli()
+    monkeypatch.setattr(cli.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
+
+    assert cli.child_process_popen_kwargs(os_name="nt") == {"creationflags": 512}
+
+
+def test_signal_process_tree_targets_posix_process_group(monkeypatch) -> None:
+    cli = load_noofy_cli()
+    calls = []
+
+    class Process:
+        pid = 1234
+
+    monkeypatch.setattr(cli.os, "name", "posix")
+    monkeypatch.setattr(cli.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
+
+    cli.signal_process_tree(Process(), signal.SIGTERM)
+
+    assert calls == [(1234, signal.SIGTERM)]
 
 
 def test_runtime_bootstrap_command_delegates_to_backend_service(tmp_path: Path) -> None:

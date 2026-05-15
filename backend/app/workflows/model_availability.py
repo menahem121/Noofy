@@ -547,8 +547,21 @@ class ModelAvailabilityService:
             )
         return cleaned
 
-    def summarize(self, package: WorkflowPackage) -> RequiredModelSummary:
-        models = [self._availability_for(model) for model in package.required_models]
+    def summarize(
+        self,
+        package: WorkflowPackage,
+        *,
+        deep_search: bool = True,
+        verify_hashes: bool = True,
+    ) -> RequiredModelSummary:
+        models = [
+            self._availability_for(
+                model,
+                deep_search=deep_search,
+                verify_hashes=verify_hashes,
+            )
+            for model in package.required_models
+        ]
         available_count = sum(model.status == "available" for model in models)
         possible_count = sum(model.status == "possible_match" for model in models)
         missing_count = sum(model.status == "missing" for model in models)
@@ -788,9 +801,15 @@ class ModelAvailabilityService:
             model_summary=after,
         )
 
-    def _availability_for(self, model: RequiredModel) -> RequiredModelAvailability:
+    def _availability_for(
+        self,
+        model: RequiredModel,
+        *,
+        deep_search: bool,
+        verify_hashes: bool,
+    ) -> RequiredModelAvailability:
         source_urls = _source_urls(model)
-        candidates = self._local_candidates(model)
+        candidates = self._local_candidates(model, deep_search=deep_search)
         source_availability = (
             "known"
             if source_urls
@@ -810,7 +829,11 @@ class ModelAvailabilityService:
             "source_availability": source_availability,
         }
         for candidate, root in candidates:
-            status = self._candidate_status(model, candidate)
+            status = self._candidate_status(
+                model,
+                candidate,
+                verify_hashes=verify_hashes,
+            )
             if status == "available":
                 return RequiredModelAvailability(
                     **base,
@@ -820,7 +843,8 @@ class ModelAvailabilityService:
                     source_path=str(candidate),
                     matched_root=str(root),
                     matched_sha256=_sha256_file(candidate)
-                    if model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
+                    if verify_hashes
+                    and model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
                     else None,
                     matched_size_bytes=candidate.stat().st_size,
                 )
@@ -854,7 +878,13 @@ class ModelAvailabilityService:
             message="Noofy does not have enough source information to download this model automatically.",
         )
 
-    def _candidate_status(self, model: RequiredModel, path: Path) -> str:
+    def _candidate_status(
+        self,
+        model: RequiredModel,
+        path: Path,
+        *,
+        verify_hashes: bool = True,
+    ) -> str:
         if not path.is_file():
             return "missing"
         size = path.stat().st_size
@@ -863,12 +893,19 @@ class ModelAvailabilityService:
                 return "possible_match"
             if size != model.size_bytes:
                 return "possible_match"
+            if not verify_hashes:
+                return "possible_match"
             return "available" if _sha256_file(path) == _normalize_sha256(model.checksum) else "possible_match"
         if model.verification_level is ModelVerificationLevel.FILENAME_SIZE:
             return "available" if model.size_bytes is not None and size == model.size_bytes else "possible_match"
         return "possible_match"
 
-    def _local_candidates(self, model: RequiredModel) -> list[tuple[Path, Path]]:
+    def _local_candidates(
+        self,
+        model: RequiredModel,
+        *,
+        deep_search: bool = True,
+    ) -> list[tuple[Path, Path]]:
         candidates: list[tuple[Path, Path]] = []
         seen: set[Path] = set()
         for root in self._safe_model_roots():
@@ -881,8 +918,13 @@ class ModelAvailabilityService:
                 if resolved not in seen:
                     candidates.append((expected, root))
                     seen.add(resolved)
+            if not deep_search:
+                continue
             try:
-                for candidate in root.rglob(model.filename):
+                search_root = _safe_join_model_folder(root, model.folder)
+                if not search_root.is_dir():
+                    continue
+                for candidate in search_root.rglob(model.filename):
                     if candidate.name.endswith(".part") or not candidate.is_file():
                         continue
                     resolved = candidate.resolve(strict=False)
@@ -1762,6 +1804,11 @@ def _safe_join_model_path(root: Path, folder: str, filename: str) -> Path:
     folder_parts = _safe_relative_parts(folder, field_name="folder", allow_nested=True)
     filename_parts = _safe_relative_parts(filename, field_name="filename", allow_nested=False)
     return root.joinpath(*folder_parts, *filename_parts)
+
+
+def _safe_join_model_folder(root: Path, folder: str) -> Path:
+    folder_parts = _safe_relative_parts(folder, field_name="folder", allow_nested=True)
+    return root.joinpath(*folder_parts)
 
 
 def _safe_relative_parts(

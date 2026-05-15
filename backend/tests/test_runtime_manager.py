@@ -452,7 +452,7 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
     )
 
     start_result = await manager.start()
-    status = await manager.status()
+    status = await manager.status(include_environment=True)
     stop_result = await manager.stop()
 
     assert start_result.status == "started"
@@ -463,6 +463,51 @@ HTTPServer((args.listen, args.port), Handler).serve_forever()
     assert status.environment.prepared
     assert stop_result.status == "stopped"
     assert not stop_result.comfyui.managed_process_running
+
+
+@pytest.mark.anyio
+async def test_passive_status_skips_environment_dependency_checks(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+
+    async def reachable(_: str) -> tuple[bool, str | None]:
+        return True, None
+
+    async def fail_if_checked(*args, **kwargs):
+        raise AssertionError("passive status should not run dependency checks")
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=tmp_path / "runtime",
+        python_executable_override=sys.executable,
+        required_imports=("json",),
+        required_runtime_checks=(),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="cpu",
+        ),
+        command_runner=fail_if_checked,
+        log_store=LogStore(),
+    )
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        environment=environment,
+        health_check=reachable,
+        log_store=LogStore(),
+    )
+
+    status = await manager.status()
+
+    assert status.reachable
+    assert status.environment is None
 
 
 def _arg_value(command: list[str], flag: str) -> str:

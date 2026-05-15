@@ -134,7 +134,10 @@ class WorkflowImportOrchestrator:
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
-        model_summary = self.workflow_library_service.model_availability_summary_for_package(package)
+        model_summary = self.workflow_library_service.model_availability_summary_for_package(
+            package,
+            fast=True,
+        )
         if not package.required_models:
             committed = self.import_workflow_archive(
                 data,
@@ -195,7 +198,10 @@ class WorkflowImportOrchestrator:
                     user_facing_message=active.user_facing_message,
                 )
 
-        before = self.workflow_library_service.model_availability_summary_for_package(pending.package)
+        before = self.workflow_library_service.model_availability_summary_for_package(
+            pending.package,
+            fast=True,
+        )
         missing_models = [model for model in before.models if model.status == "missing"]
         job_id = f"model-download-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
@@ -263,7 +269,10 @@ class WorkflowImportOrchestrator:
             raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
         started_at = datetime.now(UTC)
         self._pending_workflow_imports.pop(import_session_id, None)
-        model_summary = self.workflow_library_service.model_availability_summary_for_package(pending.package)
+        model_summary = self.workflow_library_service.model_availability_summary_for_package(
+            pending.package,
+            fast=True,
+        )
         committed = self.import_workflow_archive(
             pending.data,
             original_filename=pending.original_filename,

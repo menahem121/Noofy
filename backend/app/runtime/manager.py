@@ -131,11 +131,13 @@ class RuntimeManager:
     # Public API
     # ------------------------------------------------------------------
 
-    async def status(self) -> ComfyUIRuntimeStatus:
+    async def status(self, *, include_environment: bool = False) -> ComfyUIRuntimeStatus:
         self._record_process_exit_if_needed()
         reachable, reachability_error = await self._health_check(self.base_url)
         environment_status = (
-            await self.environment.status() if self.environment is not None else None
+            await self.environment.status()
+            if include_environment and self.environment is not None
+            else None
         )
         error = None if reachable else self._last_error or reachability_error
 
@@ -264,7 +266,10 @@ class RuntimeManager:
                     details={"error": self._last_error},
                 )
                 return ProcessActionResult(
-                    status="environment_not_ready", comfyui=(await self.status())
+                    status="environment_not_ready",
+                    comfyui=(await self.status()).model_copy(
+                        update={"environment": environment_status}
+                    ),
                 )
 
         # Clean up any orphan from a previous backend crash.

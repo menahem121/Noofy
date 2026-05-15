@@ -341,9 +341,19 @@ class NoofyCheckout:
         frontend_command = ["npm", "run", "dev"]
 
         print(f"Starting Noofy backend: {backend_api}")
-        backend = subprocess.Popen(backend_command, cwd=self.backend_dir, env=backend_env)
+        backend = subprocess.Popen(
+            backend_command,
+            cwd=self.backend_dir,
+            env=backend_env,
+            **child_process_popen_kwargs(),
+        )
         print(f"Starting Noofy frontend: {frontend_url}")
-        frontend = subprocess.Popen(frontend_command, cwd=self.frontend_dir, env=frontend_env)
+        frontend = subprocess.Popen(
+            frontend_command,
+            cwd=self.frontend_dir,
+            env=frontend_env,
+            **child_process_popen_kwargs(),
+        )
         print()
         print(f"Open Noofy at {frontend_url}")
         print("Press Ctrl+C to stop Noofy.")
@@ -440,8 +450,17 @@ def wait_for_processes(processes: list[subprocess.Popen[bytes]]) -> int:
                     return int(returncode)
             time.sleep(0.5)
     except KeyboardInterrupt:
+        print("\nStopping Noofy...")
         terminate_processes(processes)
         return 130
+
+
+def child_process_popen_kwargs(*, os_name: str | None = None) -> dict[str, object]:
+    selected_os = os.name if os_name is None else os_name
+    if selected_os == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"creationflags": creationflags} if creationflags else {}
+    return {"start_new_session": True}
 
 
 def terminate_processes(
@@ -449,23 +468,82 @@ def terminate_processes(
     *,
     except_process: subprocess.Popen[bytes] | None = None,
 ) -> None:
-    for process in processes:
-        if process is except_process or process.poll() is not None:
-            continue
-        with suppress_process_errors():
-            if os.name == "nt":
-                process.terminate()
-            else:
-                process.send_signal(signal.SIGTERM)
-    deadline = time.monotonic() + 8
+    with suppress_cleanup_interrupts() as interrupted:
+        for process in processes:
+            if process is except_process or process.poll() is not None:
+                continue
+            signal_process_tree(process, signal.SIGTERM)
+
+        wait_for_process_shutdown(
+            processes,
+            except_process=except_process,
+            deadline=time.monotonic() + 8,
+            interrupted=interrupted,
+        )
+
+        for process in processes:
+            if process is except_process or process.poll() is not None:
+                continue
+            kill_process_tree(process)
+
+        wait_for_process_shutdown(
+            processes,
+            except_process=except_process,
+            deadline=time.monotonic() + 2,
+            interrupted=interrupted,
+        )
+
+
+def wait_for_process_shutdown(
+    processes: list[subprocess.Popen[bytes]],
+    *,
+    except_process: subprocess.Popen[bytes] | None,
+    deadline: float,
+    interrupted: Callable[[], bool],
+) -> None:
     for process in processes:
         if process is except_process:
             continue
-        while process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if process.poll() is None:
-            with suppress_process_errors():
-                process.kill()
+        while process.poll() is None and time.monotonic() < deadline and not interrupted():
+            try:
+                process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def signal_process_tree(process: subprocess.Popen[bytes], signal_number: int) -> None:
+    with suppress_process_errors():
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal_number)
+
+
+def kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+    with suppress_process_errors():
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+
+
+@contextlib.contextmanager
+def suppress_cleanup_interrupts():
+    interrupted = False
+
+    def mark_interrupted(signum, frame):
+        nonlocal interrupted
+        interrupted = True
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, mark_interrupted)
+    signal.signal(signal.SIGTERM, mark_interrupted)
+    try:
+        yield lambda: interrupted
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def suppress_process_errors():
