@@ -117,6 +117,19 @@ export interface WorkflowStatusResponse {
   can_cancel_job: boolean;
 }
 
+export interface WorkflowRunnerLeaseResponse {
+  workflow_id: string;
+  status: string;
+  lease_id: string | null;
+  runner: Record<string, unknown> | null;
+}
+
+export interface QueuedRunnerStartCancelResponse {
+  queue_id: string;
+  workflow_id: string | null;
+  status: string;
+}
+
 export interface TrustPolicyResponse {
   schema_version: string;
   signature_payload_schema_version: string;
@@ -490,6 +503,20 @@ export function validateWorkflow(workflowId: string) {
 
 export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {
   return postJson<WorkflowRunResponse>(`/workflows/${workflowId}/run`, payload);
+}
+
+export function openWorkflowRunnerLease(workflowId: string) {
+  return postJson<WorkflowRunnerLeaseResponse>(`/workflows/${encodeURIComponent(workflowId)}/runner/leases`);
+}
+
+export function closeWorkflowRunnerLease(workflowId: string, leaseId: string) {
+  return deleteJson<WorkflowRunnerLeaseResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/runner/leases/${encodeURIComponent(leaseId)}`,
+  );
+}
+
+export function cancelQueuedRunnerStart(queueId: string) {
+  return deleteJson<QueuedRunnerStartCancelResponse>(`/workflows/runner/queue/${encodeURIComponent(queueId)}`);
 }
 
 export async function importWorkflowPackage(file: File, allowUnverifiedCommunityPreparation = false) {

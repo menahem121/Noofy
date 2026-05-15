@@ -1383,6 +1383,7 @@
 }
 
 .primary-button,
+.danger-button,
 .secondary-button,
 .ghost-button,
 .icon-button {
@@ -1442,6 +1443,23 @@
 .secondary-button:hover {
   background: #4a4851;
   border-color: rgba(104, 99, 113, 0.8);
+}
+
+.danger-button {
+  min-height: 38px;
+  padding: 0 14px;
+  color: #fff7f7;
+  background: rgba(248, 113, 113, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.danger-button:hover {
+  background: rgba(248, 113, 113, 0.28);
+  border-color: rgba(248, 113, 113, 0.64);
 }
 
 .secondary-button--full {

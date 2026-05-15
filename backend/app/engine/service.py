@@ -215,6 +215,8 @@ class EngineService:
             job_run_requests=self._job_run_requests,
             job_run_snapshots=self._job_run_snapshots,
         )
+        self.run_job_service.queued_workflow_run_progress = self.memory_service.queued_workflow_run_progress
+        self.run_job_service.cancel_queued_workflow_run = self.memory_service.cancel_queued_workflow_run
         # Temporary migration alias used by diagnostics and tests.
         self.memory_observation = self.memory_service.memory_observation
 

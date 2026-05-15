@@ -15,6 +15,7 @@ import {
 import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
+import { WorkflowTabsTopBar } from "./WorkflowTabs";
 
 // Replace with your real Tipeee / donation URL when ready.
 const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
@@ -116,6 +117,8 @@ export function AppLayout({
             <span className="brand-name">Noofy</span>
           </button>
         </div>
+
+        <WorkflowTabsTopBar />
 
         <div className="topbar__actions">
           <ResourceMonitor snapshot={resources} />

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.diagnostics.store import LogStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, JobProgress, LogLevel
@@ -16,13 +18,23 @@ class RunJobService:
     def __init__(self, runner_supervisor: RunnerSupervisor, log_store: LogStore) -> None:
         self.runner_supervisor = runner_supervisor
         self.log_store = log_store
+        self.queued_workflow_run_progress: Callable[[str], JobProgress | None] | None = None
+        self.cancel_queued_workflow_run: Callable[[str], JobProgress | None] | None = None
 
     async def get_progress(self, job_id: str) -> JobProgress:
+        if self.queued_workflow_run_progress is not None:
+            progress = self.queued_workflow_run_progress(job_id)
+            if progress is not None:
+                return progress
         adapter = self._adapter_for_job(job_id)
         return await adapter.get_progress(job_id)
 
     async def cancel_job(self, job_id: str) -> JobProgress:
         self.log_store.add("info", "Cancel requested", "runs.job_service", job_id=job_id)
+        if self.cancel_queued_workflow_run is not None:
+            canceled = self.cancel_queued_workflow_run(job_id)
+            if canceled is not None:
+                return canceled
         adapter = self._adapter_for_job(job_id)
         return await adapter.cancel_job(job_id)
 

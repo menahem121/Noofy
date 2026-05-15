@@ -41,7 +41,7 @@ import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflow
 
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
-  onOpenWorkflow: (workflowId: string) => void;
+  onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onEditWidgets: (schema: DashboardSchema) => void;
   onEditDashboard: (schema: DashboardSchema) => void;
   initialSearchQuery?: string;

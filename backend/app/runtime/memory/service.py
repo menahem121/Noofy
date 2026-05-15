@@ -15,7 +15,7 @@ from app.engine.memory_observation import (
     MemoryObservationCoordinator,
     memory_input_profile_fingerprint,
 )
-from app.engine.models import EngineJob, JobResult
+from app.engine.models import EngineJob, JobProgress, JobResult
 from app.gallery import RunSubmissionSnapshot
 from app.runtime.memory.memory_governor import (
     LocalMemoryLearningStore,
@@ -546,6 +546,41 @@ class MemoryGovernorService:
         if isinstance(result, EngineJob):
             result = result.model_copy(update={"queue_id": result.queue_id or queue_id})
         return result
+
+    def queued_workflow_run_progress(self, queue_id: str) -> JobProgress | None:
+        queued = self.queued_workflow_runs.get(queue_id)
+        if queued is None:
+            return None
+        return JobProgress(
+            job_id=queue_id,
+            status="queued_pending_memory",
+            message="Waiting for enough memory to start this workflow.",
+            current_node=None,
+            value=None,
+            max=None,
+        )
+
+    def cancel_queued_workflow_run(self, queue_id: str) -> JobProgress | None:
+        queued = self.queued_workflow_runs.pop(queue_id, None)
+        if queued is None:
+            return None
+        workflow_id = queued[0]
+        self.record_metric("workflow_run_queued_pending_memory_canceled")
+        self.log_store.add(
+            "info",
+            "Canceled queued workflow run",
+            "memory_governor",
+            workflow_id=workflow_id,
+            details={"queue_id": queue_id},
+        )
+        return JobProgress(
+            job_id=queue_id,
+            status="canceled",
+            message="Workflow run canceled.",
+            current_node=None,
+            value=None,
+            max=None,
+        )
 
 
 # ------------------------------------------------------------------

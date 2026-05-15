@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
+import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
 import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
 import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
 import { DashboardBuilderLayoutPage } from "./features/dashboard-builder/DashboardBuilderLayoutPage";
@@ -10,10 +11,16 @@ import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
 import { GalleryPage } from "./features/gallery/GalleryPage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { HomePage } from "./features/home/HomePage";
-import { WorkflowLibraryProvider } from "./features/home/WorkflowLibraryProvider";
+import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
+import {
+  cancelJob,
+  cancelQueuedRunnerStart,
+  closeWorkflowRunnerLease,
+  fetchJobProgress,
+} from "./lib/api/noofyApi";
 
 type AppRoute =
   | { name: "home" }
@@ -27,7 +34,35 @@ type AppRoute =
   | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema };
 
 export default function App() {
+  return (
+    <RuntimeStatusProvider>
+      <WorkflowTabsProvider>
+        <WorkflowLibraryProvider>
+          <SidebarProvider>
+            <AppContent />
+          </SidebarProvider>
+        </WorkflowLibraryProvider>
+      </WorkflowTabsProvider>
+    </RuntimeStatusProvider>
+  );
+}
+
+function AppContent() {
   const [route, setRoute] = useState<AppRoute>({ name: "home" });
+  const [closeDialog, setCloseDialog] = useState<WorkflowCloseDialogState | null>(null);
+  const workflowLibrary = useWorkflowLibrary();
+  const workflowTabs = useWorkflowTabs();
+
+  function workflowNameFor(workflowId: string, providedName?: string) {
+    if (providedName) return providedName;
+    if (workflowId === "text_to_image_v0") return "Text to Image";
+    return workflowLibrary.workflows.find((workflow) => workflow.id === workflowId)?.name ?? workflowId;
+  }
+
+  function openWorkflow(workflowId: string, workflowName?: string) {
+    workflowTabs.openWorkflowTab(workflowId, workflowNameFor(workflowId, workflowName));
+    setRoute({ name: "workflow", workflowId });
+  }
 
   function navigate(routeId: AppRouteId, options?: AppNavigateOptions) {
     if (routeId === "settings") {
@@ -53,12 +88,55 @@ export default function App() {
     setRoute({ name: "home" });
   }
 
+  async function requestCloseWorkflowTab(workflowId: string) {
+    const refreshed = await activeCloseState(workflowTabs.runtimeByWorkflowId[workflowId]);
+    if (refreshed) {
+      setCloseDialog({
+        workflowId,
+        workflowName: workflowNameFor(workflowId),
+        runtime: refreshed,
+        busy: false,
+        error: null,
+      });
+      return;
+    }
+    await closeWorkflowTabNow(workflowId);
+  }
+
+  async function closeWorkflowTabNow(workflowId: string) {
+    await closeWorkflowSessionLease(workflowId, workflowTabs.runtimeByWorkflowId[workflowId]);
+    const nextRoute = fallbackRouteAfterClose(workflowId, workflowTabs.tabs, route);
+    workflowTabs.closeWorkflowTab(workflowId);
+    if (nextRoute) setRoute(nextRoute);
+  }
+
+  async function confirmStopAndClose() {
+    if (!closeDialog) return;
+    setCloseDialog((current) => (current ? { ...current, busy: true, error: null } : current));
+    try {
+      await cancelRuntimeHandle(closeDialog.runtime);
+      await closeWorkflowTabNow(closeDialog.workflowId);
+      setCloseDialog(null);
+    } catch (error) {
+      setCloseDialog((current) =>
+        current
+          ? {
+              ...current,
+              busy: false,
+              error: error instanceof Error ? error.message : String(error),
+            }
+          : current,
+      );
+    }
+  }
+
   function renderPage() {
     if (route.name === "workflow") {
       return (
         <WorkflowRunPage
           workflowId={route.workflowId}
           onBack={() => setRoute({ name: "home" })}
+          onWorkflowNameChange={(workflowName) => workflowTabs.updateWorkflowTabName(route.workflowId, workflowName)}
           onEditWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",
@@ -106,7 +184,7 @@ export default function App() {
               initialSchema: schema,
             })
           }
-          onSaveComplete={(workflowId) => setRoute({ name: "workflow", workflowId })}
+          onSaveComplete={(workflowId) => openWorkflow(workflowId)}
           onNavigate={navigate}
         />
       );
@@ -124,7 +202,7 @@ export default function App() {
       return (
         <WorkflowsPage
           onNavigate={navigate}
-          onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
+          onOpenWorkflow={openWorkflow}
           onEditWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",
@@ -156,7 +234,7 @@ export default function App() {
 
     return (
       <HomePage
-        onOpenWorkflow={(workflowId) => setRoute({ name: "workflow", workflowId })}
+        onOpenWorkflow={openWorkflow}
         onConfigureDashboard={(workflowId, workflowName) =>
           setRoute({
             name: "dashboard-builder",
@@ -186,10 +264,120 @@ export default function App() {
   }
 
   return (
-    <RuntimeStatusProvider>
-      <WorkflowLibraryProvider>
-        <SidebarProvider>{renderPage()}</SidebarProvider>
-      </WorkflowLibraryProvider>
-    </RuntimeStatusProvider>
+    <WorkflowTabsRouteProvider
+      activeWorkflowId={route.name === "workflow" ? route.workflowId : null}
+      onActivateWorkflowTab={openWorkflow}
+      onRequestCloseWorkflowTab={(workflowId) => void requestCloseWorkflowTab(workflowId)}
+    >
+      {renderPage()}
+      {closeDialog ? (
+        <WorkflowCloseDialog
+          dialog={closeDialog}
+          onCancel={() => setCloseDialog(null)}
+          onConfirm={() => void confirmStopAndClose()}
+        />
+      ) : null}
+    </WorkflowTabsRouteProvider>
+  );
+}
+
+interface WorkflowCloseDialogState {
+  workflowId: string;
+  workflowName: string;
+  runtime: WorkflowTabRuntimeState;
+  busy: boolean;
+  error: string | null;
+}
+
+const activeJobStatuses = new Set(["queued", "running", "queued_pending_memory"]);
+
+async function activeCloseState(
+  runtime: WorkflowTabRuntimeState | undefined,
+): Promise<WorkflowTabRuntimeState | null> {
+  if (!runtime?.handleSource) return null;
+
+  if (runtime.handleSource === "runner_start_queue" && runtime.queueId) {
+    return runtime.activeJobStatus && activeJobStatuses.has(runtime.activeJobStatus) ? runtime : null;
+  }
+
+  const jobId = runtime.activeJobId ?? runtime.queueId;
+  if (!jobId) return null;
+  try {
+    const progress = await fetchJobProgress(jobId);
+    if (activeJobStatuses.has(progress.status)) {
+      return {
+        ...runtime,
+        activeJobId: progress.job_id,
+        activeJobStatus: progress.status,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function cancelRuntimeHandle(runtime: WorkflowTabRuntimeState) {
+  if (runtime.handleSource === "runner_start_queue" && runtime.queueId) {
+    await cancelQueuedRunnerStart(runtime.queueId);
+    return;
+  }
+  const jobId = runtime.activeJobId ?? runtime.queueId;
+  if (jobId) await cancelJob(jobId);
+}
+
+async function closeWorkflowSessionLease(workflowId: string, runtime: WorkflowTabRuntimeState | undefined) {
+  if (!runtime?.runnerLeaseId) return;
+  try {
+    await closeWorkflowRunnerLease(workflowId, runtime.runnerLeaseId);
+  } catch {
+    // The lease is session runtime state; stale or already-closed leases should not block tab close.
+  }
+}
+
+function fallbackRouteAfterClose(
+  workflowId: string,
+  tabs: Array<{ workflowId: string }>,
+  route: AppRoute,
+): AppRoute | null {
+  if (route.name !== "workflow" || route.workflowId !== workflowId) return null;
+  const index = tabs.findIndex((tab) => tab.workflowId === workflowId);
+  const next = index >= 0 ? tabs[index + 1] ?? tabs[index - 1] : tabs.find((tab) => tab.workflowId !== workflowId);
+  return next ? { name: "workflow", workflowId: next.workflowId } : { name: "home" };
+}
+
+function WorkflowCloseDialog({
+  dialog,
+  onCancel,
+  onConfirm,
+}: {
+  dialog: WorkflowCloseDialogState;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-close-title">
+      <section className="workflow-close-modal">
+        <header className="workflow-close-modal__header">
+          <h2 id="workflow-close-title">Stop this workflow?</h2>
+          <p>
+            {dialog.workflowName} is still working. Closing the tab now will stop the current generation.
+          </p>
+        </header>
+        {dialog.error ? (
+          <div className="notice notice--error" role="status">
+            <span>{dialog.error}</span>
+          </div>
+        ) : null}
+        <footer className="workflow-close-modal__footer">
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={dialog.busy}>
+            Cancel
+          </button>
+          <button className="danger-button" type="button" onClick={onConfirm} disabled={dialog.busy}>
+            {dialog.busy ? "Stopping..." : "Stop and close"}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }

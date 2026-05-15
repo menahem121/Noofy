@@ -1435,6 +1435,58 @@ async def test_run_workflow_queues_pending_memory_without_submitting_to_adapter(
 
 
 @pytest.mark.anyio
+async def test_cancel_queued_workflow_run_removes_memory_queue_without_adapter_cancel() -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+    queued = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    progress = await service.get_progress(queued.job_id)
+    canceled = await service.cancel_job(queued.job_id)
+
+    assert progress.status == "queued_pending_memory"
+    assert canceled.status == "canceled"
+    assert selected_adapter.cancel_calls == []
+    assert await service.handoff_queued_workflow_run(queued.job_id) is None
+
+
+@pytest.mark.anyio
 async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> None:
     selected_adapter = RecordingAdapter(
         models=[

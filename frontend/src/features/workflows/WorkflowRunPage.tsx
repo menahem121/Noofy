@@ -27,6 +27,8 @@ import {
   fetchWorkflowPackage,
   fetchWorkflowStatus,
   isEngineJob,
+  closeWorkflowRunnerLease,
+  openWorkflowRunnerLease,
   resolveBackendUrl,
   runWorkflow,
   uploadDashboardAsset,
@@ -58,6 +60,7 @@ import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
+import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
 import { CanvasDashboardView } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
@@ -65,6 +68,7 @@ import { DashboardInputControl, type LoraBrowserControlProps } from "./Dashboard
 interface WorkflowRunPageProps {
   workflowId: string;
   onBack: () => void;
+  onWorkflowNameChange?: (workflowName: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
 }
@@ -115,7 +119,7 @@ const watchableJobStatuses = new Set(["queued", "running"]);
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
 
-export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate }: WorkflowRunPageProps) {
+export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEditWidgets, onNavigate }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
@@ -127,6 +131,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
+  const workflowTabs = useOptionalWorkflowTabs();
   const isRunning = isSubmittingRun || state.progress?.status === "queued" || state.progress?.status === "running";
   const isWaitingForMemory = state.job?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
@@ -238,6 +243,29 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     };
   }, [workflowId, runtimeStatus.refreshRuntime]);
 
+  useEffect(() => {
+    if (!workflowTabs) return;
+    let canceled = false;
+    openWorkflowRunnerLease(workflowId)
+      .then((response) => {
+        if (!response.lease_id) return;
+        if (canceled) {
+          void closeWorkflowRunnerLease(workflowId, response.lease_id);
+          return;
+        }
+        workflowTabs.setWorkflowRuntime(workflowId, {
+          runnerLeaseId: response.lease_id,
+          runnerId: runnerIdFromLease(response.runner),
+        });
+      })
+      .catch(() => {
+        // A workflow can be opened without a bound isolated runner; tabs remain navigation-only.
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [workflowId]);
+
   async function handleRun() {
     if (!canRun) {
       return;
@@ -296,6 +324,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       cleanupJobWatchers();
       setIsSubmittingRun(false);
       setState((current) => ({ ...current, progress }));
+      recordWorkflowProgress(progress);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -399,6 +428,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       const progress = JSON.parse(event.data) as JobProgress;
       if (terminalStatuses.has(progress.status)) setIsSubmittingRun(false);
       setState((current) => ({ ...current, progress }));
+      recordWorkflowProgress(progress);
     });
     source.addEventListener("result", (event) => {
       source.close();
@@ -414,6 +444,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
       }
       setIsSubmittingRun(false);
       setState((current) => ({ ...current, result }));
+      recordWorkflowTerminalResult(result);
       if (result.status === "failed") {
         void openFailureDialog(result.error ?? "The local engine could not finish this run.", result.job_id);
       }
@@ -429,6 +460,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
 
   function setSubmittedJob(job: EngineJob) {
     setIsSubmittingRun(false);
+    recordWorkflowJob(job);
     setState((current) => ({
       ...current,
       job,
@@ -447,6 +479,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
   async function pollJobOnce(jobId: string) {
     const progress = await fetchJobProgress(jobId);
     setState((current) => ({ ...current, progress }));
+    recordWorkflowProgress(progress);
 
     if (terminalStatuses.has(progress.status)) {
       setIsSubmittingRun(false);
@@ -461,6 +494,7 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
         return;
       }
       setState((current) => ({ ...current, result }));
+      recordWorkflowTerminalResult(result);
       if (result.status === "failed") {
         void openFailureDialog(result.error ?? progress.message ?? "The local engine could not finish this run.", jobId);
       }
@@ -476,10 +510,50 @@ export function WorkflowRunPage({ workflowId, onBack, onEditWidgets, onNavigate 
     }
   }
 
+  function recordWorkflowJob(job: EngineJob) {
+    workflowTabs?.setWorkflowRuntime(workflowId, {
+      activeJobId: job.job_id,
+      activeJobStatus: job.status,
+      handleSource: workflowHandleSource(job),
+      queueId: job.queue_id ?? (job.status === "queued_pending_memory" ? job.job_id : null),
+    });
+  }
+
+  function recordWorkflowProgress(progress: JobProgress) {
+    if (terminalStatuses.has(progress.status)) {
+      workflowTabs?.setWorkflowRuntime(workflowId, {
+        activeJobId: null,
+        activeJobStatus: progress.status,
+        handleSource: null,
+        queueId: null,
+      });
+      return;
+    }
+    workflowTabs?.setWorkflowRuntime(workflowId, {
+      activeJobId: progress.job_id,
+      activeJobStatus: progress.status,
+    });
+  }
+
+  function recordWorkflowTerminalResult(result: JobResult) {
+    workflowTabs?.setWorkflowRuntime(workflowId, {
+      activeJobId: null,
+      activeJobStatus: result.status,
+      handleSource: null,
+      queueId: null,
+    });
+  }
+
   const unresolvedModelSummary = state.modelSummary?.models.filter((model) => model.status !== "available") ?? [];
   const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : state.validation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
   const trust = workflowSummary?.trust;
+
+  useEffect(() => {
+    const name = workflowSummary?.name ?? state.packageData?.metadata?.name;
+    if (name) onWorkflowNameChange?.(name);
+  }, [state.packageData?.metadata?.name, workflowSummary?.name]);
+
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
     : null;
@@ -1081,6 +1155,18 @@ export function splitDiagnosticLogs(events: DiagnosticEvent[]) {
     }
   }
   return { comfyuiLogs, noofyLogs };
+}
+
+function workflowHandleSource(job: EngineJob): WorkflowRuntimeHandleSource {
+  if (job.status === "queued_pending_memory" && job.engine === "noofy") {
+    return "workflow_run_queue";
+  }
+  return "job";
+}
+
+function runnerIdFromLease(runner: Record<string, unknown> | null) {
+  const runnerId = runner?.runner_id;
+  return typeof runnerId === "string" ? runnerId : null;
 }
 
 function isComfyUIDiagnostic(event: DiagnosticEvent) {

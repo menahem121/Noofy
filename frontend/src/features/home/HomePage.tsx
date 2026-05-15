@@ -290,7 +290,7 @@ function trustLevelTone(level?: string) {
 }
 
 interface HomePageProps {
-  onOpenWorkflow: (workflowId: string) => void;
+  onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onEditDashboard?: (schema: DashboardSchema) => void;
@@ -1230,7 +1230,7 @@ function WorkflowCardView({
 }: {
   workflow: WorkflowCard;
   menuOpen: boolean;
-  onOpenWorkflow: (workflowId: string) => void;
+  onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onViewDetails: () => void;
   onToggleMenu: () => void;
