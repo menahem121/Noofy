@@ -37,12 +37,14 @@ import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderConte
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
+import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
   onOpenWorkflow: (workflowId: string) => void;
   onEditWidgets: (schema: DashboardSchema) => void;
   onEditDashboard: (schema: DashboardSchema) => void;
+  initialSearchQuery?: string;
 }
 
 type WorkflowCategory =
@@ -90,19 +92,6 @@ const WORKFLOW_ICONS = {
   package: PackageOpen,
 };
 
-function workflowStatus(summary: WorkflowSummary) {
-  if ((summary.missing_model_count ?? 0) > 0) return "missing_models";
-  if (summary.needs_setup) return "need_setup";
-  return "ready";
-}
-
-function workflowStatusLabel(summary: WorkflowSummary) {
-  const status = workflowStatus(summary);
-  if (status === "need_setup") return "Need setup";
-  if (status === "missing_models") return "Missing models";
-  return "Ready";
-}
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "Never";
   const date = new Date(value);
@@ -131,6 +120,7 @@ export function WorkflowsPage({
   onOpenWorkflow,
   onEditWidgets,
   onEditDashboard,
+  initialSearchQuery = "",
 }: WorkflowsPageProps) {
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
@@ -138,7 +128,7 @@ export function WorkflowsPage({
   const detailsPanelFrameRef = useRef<number | null>(null);
   const detailsPanelCloseTimerRef = useRef<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<WorkflowCategory>("All");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchQuery);
   const [statusFilter, setStatusFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -158,6 +148,10 @@ export function WorkflowsPage({
     void runtimeStatus.refreshRuntime({ silent: true });
     void workflowLibrary.refreshWorkflows();
   }, [runtimeStatus.refreshRuntime, workflowLibrary.refreshWorkflows]);
+
+  useEffect(() => {
+    setSearch(initialSearchQuery);
+  }, [initialSearchQuery]);
 
   useEffect(() => {
     return () => {
@@ -180,33 +174,18 @@ export function WorkflowsPage({
     [workflows],
   );
 
-  const filteredWorkflows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return workflows.filter((workflow) => {
-      const category = workflow.category ?? "Txt2img";
-      const tags = workflow.tags ?? [];
-      if (activeCategory !== "All" && category !== activeCategory) return false;
-      if (categoryFilter !== "all" && category !== categoryFilter) return false;
-      if (sourceFilter !== "all" && workflow.source_label !== sourceFilter) return false;
-      if (tagFilter !== "all" && !tags.includes(tagFilter)) return false;
-      if (statusFilter !== "all" && workflowStatus(workflow) !== statusFilter) return false;
-      if (query) {
-        const haystack = [
-          workflow.name,
-          workflow.description,
-          workflow.main_model?.name,
-          category,
-          workflow.source_label,
-          ...tags,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [activeCategory, categoryFilter, search, sourceFilter, statusFilter, tagFilter, workflows]);
+  const filteredWorkflows = useMemo(
+    () =>
+      searchWorkflows(workflows, {
+        query: search,
+        activeCategory,
+        categoryFilter,
+        sourceFilter,
+        statusFilter,
+        tagFilter,
+      }),
+    [activeCategory, categoryFilter, search, sourceFilter, statusFilter, tagFilter, workflows],
+  );
 
   const selectedSummary = selectedWorkflowId
     ? workflows.find((workflow) => workflow.id === selectedWorkflowId) ?? null

@@ -54,6 +54,45 @@ const cachedImportedWorkflow = {
   status_label: "Imported",
 };
 
+const searchableWorkflows = [
+  {
+    id: "native_text",
+    name: "Native Text",
+    version: "1.0.0",
+    description: "Generate an image from a prompt.",
+    trust_level: "noofy_verified",
+    source_label: "Native Noofy",
+    category: "Txt2img",
+    tags: ["starter"],
+    status: "installed",
+    status_label: "Installed",
+  },
+  {
+    id: "imported_cleanup",
+    name: "Cleanup Flow",
+    version: "1.0.0",
+    description: "Clean up images.",
+    trust_level: "quarantined_community",
+    source_label: "Imported",
+    category: "Inpainting",
+    tags: ["cleanup"],
+    status: "imported",
+    status_label: "Imported",
+  },
+  {
+    id: "portrait_restore",
+    name: "Portrait Restore",
+    version: "1.0.0",
+    description: "Repair face details.",
+    trust_level: "noofy_verified",
+    source_label: "Native Noofy",
+    category: "Restoration",
+    tags: ["portrait"],
+    status: "installed",
+    status_label: "Installed",
+  },
+];
+
 const onOpenWorkflow = vi.fn();
 const onNavigate = vi.fn();
 const onConfigureDashboard = vi.fn();
@@ -94,6 +133,15 @@ describe("HomePage", () => {
     onNavigate.mockReset();
     onConfigureDashboard.mockReset();
   });
+
+  function mockSearchableHome() {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse(searchableWorkflows));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+  }
 
   it("loads backend runtime and workflow summaries through the Noofy API", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -141,6 +189,84 @@ describe("HomePage", () => {
     expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
     expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
+  });
+
+  it("shows matching Home search results while typing", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+    });
+
+    const searchInput = await screen.findByPlaceholderText("Search workflows...");
+    fireEvent.change(searchInput, { target: { value: "cleanup" } });
+
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).getByRole("option", { name: /Cleanup Flow/i })).toBeInTheDocument();
+    expect(within(listbox).queryByRole("option", { name: /Native Text/i })).not.toBeInTheDocument();
+    expect(within(listbox).getByText("Clean up images.")).toBeInTheDocument();
+  });
+
+  it("opens a workflow when a Home search result is clicked", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+    });
+
+    fireEvent.change(await screen.findByPlaceholderText("Search workflows..."), { target: { value: "portrait" } });
+    fireEvent.click(await screen.findByRole("option", { name: /Portrait Restore/i }));
+
+    expect(onOpenWorkflow).toHaveBeenCalledWith("portrait_restore");
+  });
+
+  it("pressing Enter on Home search navigates to Workflows with the query preserved", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+    });
+
+    const searchInput = await screen.findByPlaceholderText("Search workflows...");
+    fireEvent.change(searchInput, { target: { value: "cleanup" } });
+    await screen.findByRole("option", { name: /Cleanup Flow/i });
+    fireEvent.keyDown(searchInput, { key: "Enter" });
+
+    expect(onNavigate).toHaveBeenCalledWith("workflows", { workflowSearch: "cleanup" });
+    expect(onOpenWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("keeps Home search empty results quiet and offers the Workflows page", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+    });
+
+    fireEvent.change(await screen.findByPlaceholderText("Search workflows..."), { target: { value: "nothing-here" } });
+
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).queryByRole("option")).not.toBeInTheDocument();
+    fireEvent.click(within(listbox).getByRole("button", { name: "Go to Workflows page" }));
+
+    expect(onNavigate).toHaveBeenCalledWith("workflows", { workflowSearch: "nothing-here" });
+  });
+
+  it("supports keyboard navigation in Home search results", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+    });
+
+    const searchInput = await screen.findByPlaceholderText("Search workflows...");
+    fireEvent.change(searchInput, { target: { value: "flow" } });
+    await screen.findByRole("option", { name: /Cleanup Flow/i });
+
+    fireEvent.keyDown(searchInput, { key: "ArrowDown" });
+    fireEvent.keyDown(searchInput, { key: "Enter" });
+
+    expect(onOpenWorkflow).toHaveBeenCalledWith("imported_cleanup");
   });
 
   it("shows workflow row actions on backend workflow cards", async () => {

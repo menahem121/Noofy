@@ -20,6 +20,9 @@ import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
 
 export type AppRouteId = "home" | "workflows" | "history" | "models" | "gallery" | "settings";
+export interface AppNavigateOptions {
+  workflowSearch?: string;
+}
 export type StatusTone = "success" | "warning" | "error" | "info";
 
 export interface AppStatusView {
@@ -37,7 +40,7 @@ interface AppLayoutProps {
   activeRoute: AppRouteId;
   status?: AppStatusView;
   children: ReactNode;
-  onNavigate: (route: AppRouteId) => void;
+  onNavigate: (route: AppRouteId, options?: AppNavigateOptions) => void;
   mainClassName?: string;
   contentClassName?: string;
   progress?: AppTopBarProgress | null;

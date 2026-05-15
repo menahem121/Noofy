@@ -244,7 +244,7 @@ describe("WorkflowsPage", () => {
     vi.clearAllMocks();
   });
 
-  function renderPage() {
+  function renderPage(options: { initialSearchQuery?: string } = {}) {
     return render(
       <RuntimeStatusProvider>
         <WorkflowLibraryProvider>
@@ -254,6 +254,7 @@ describe("WorkflowsPage", () => {
               onOpenWorkflow={onOpenWorkflow}
               onEditWidgets={onEditWidgets}
               onEditDashboard={onEditDashboard}
+              initialSearchQuery={options.initialSearchQuery}
             />
           </SidebarProvider>
         </WorkflowLibraryProvider>
@@ -270,6 +271,15 @@ describe("WorkflowsPage", () => {
 
     fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "cleanup" } });
 
+    expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
+    expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+  });
+
+  it("applies an incoming search query immediately", async () => {
+    renderPage({ initialSearchQuery: "cleanup" });
+
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search workflows...")).toHaveValue("cleanup");
     expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
   });

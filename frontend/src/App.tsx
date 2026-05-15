@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppRouteId } from "./features/app/AppLayout";
+import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
@@ -17,7 +17,7 @@ import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 
 type AppRoute =
   | { name: "home" }
-  | { name: "workflows" }
+  | { name: "workflows"; search?: string }
   | { name: "gallery" }
   | { name: "history" }
   | { name: "models" }
@@ -29,7 +29,7 @@ type AppRoute =
 export default function App() {
   const [route, setRoute] = useState<AppRoute>({ name: "home" });
 
-  function navigate(routeId: AppRouteId) {
+  function navigate(routeId: AppRouteId, options?: AppNavigateOptions) {
     if (routeId === "settings") {
       setRoute({ name: "settings" });
       return;
@@ -39,7 +39,7 @@ export default function App() {
       return;
     }
     if (routeId === "workflows") {
-      setRoute({ name: "workflows" });
+      setRoute({ name: "workflows", search: options?.workflowSearch });
       return;
     }
     if (routeId === "gallery") {
@@ -141,6 +141,7 @@ export default function App() {
               initialSchema: schema,
             })
           }
+          initialSearchQuery={route.search}
         />
       );
     }

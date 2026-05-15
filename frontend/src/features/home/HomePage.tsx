@@ -1,4 +1,4 @@
-import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -38,6 +38,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
+import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
 import {
   fallbackWorkflow,
   recentWorkflows,
@@ -67,6 +68,17 @@ const initialHomeState: HomeDataState = {
   importResult: null,
   importError: null,
 };
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs, value]);
+
+  return debounced;
+}
 
 function friendlyDescription(workflow: WorkflowSummary) {
   if (workflow.id === "text_to_image_v0") {
@@ -282,7 +294,7 @@ interface HomePageProps {
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onEditDashboard?: (schema: DashboardSchema) => void;
-  onNavigate: (route: AppRouteId) => void;
+  onNavigate: (route: AppRouteId, options?: { workflowSearch?: string }) => void;
 }
 
 export function HomePage({
@@ -296,6 +308,10 @@ export function HomePage({
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
   const [selectedNativeVariants, setSelectedNativeVariants] = useState<Record<string, string | undefined>>({});
+  const [homeSearch, setHomeSearch] = useState("");
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
+  const [highlightedSearchIndex, setHighlightedSearchIndex] = useState(-1);
+  const debouncedHomeSearch = useDebouncedValue(homeSearch, 160);
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
   const { refreshRuntime } = runtimeStatus;
@@ -319,6 +335,15 @@ export function HomePage({
   }, [selectedNativeVariants, workflowLibrary.workflows]);
 
   const installedCount = workflowLibrary.workflows.length;
+  const homeSearchResults = useMemo(
+    () =>
+      debouncedHomeSearch.trim()
+        ? searchWorkflows(workflowLibrary.workflows, { query: debouncedHomeSearch }).slice(0, 6)
+        : [],
+    [debouncedHomeSearch, workflowLibrary.workflows],
+  );
+  const searchQueryActive = debouncedHomeSearch.trim().length > 0;
+  const showSearchDropdown = searchDropdownOpen && searchQueryActive;
   const homeWarning =
     workflowLibrary.error
       ? {
@@ -331,6 +356,52 @@ export function HomePage({
             message: "The page is keeping the last loaded workflows visible until the local backend returns.",
           }
         : null;
+
+  useEffect(() => {
+    setHighlightedSearchIndex(-1);
+  }, [homeSearchResults]);
+
+  function navigateToWorkflowSearch() {
+    setSearchDropdownOpen(false);
+    onNavigate("workflows", { workflowSearch: homeSearch.trim() });
+  }
+
+  function openSearchResult(workflow: WorkflowSummary) {
+    setSearchDropdownOpen(false);
+    onOpenWorkflow(workflow.id);
+  }
+
+  function handleHomeSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      setSearchDropdownOpen(false);
+      setHighlightedSearchIndex(-1);
+      return;
+    }
+
+    if (event.key === "ArrowDown" && showSearchDropdown && homeSearchResults.length > 0) {
+      event.preventDefault();
+      setHighlightedSearchIndex((current) => (current < 0 ? 0 : (current + 1) % homeSearchResults.length));
+      return;
+    }
+
+    if (event.key === "ArrowUp" && showSearchDropdown && homeSearchResults.length > 0) {
+      event.preventDefault();
+      setHighlightedSearchIndex((current) =>
+        current < 0 ? homeSearchResults.length - 1 : (current - 1 + homeSearchResults.length) % homeSearchResults.length,
+      );
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const highlightedWorkflow = showSearchDropdown ? homeSearchResults[highlightedSearchIndex] : undefined;
+      if (highlightedWorkflow) {
+        openSearchResult(highlightedWorkflow);
+        return;
+      }
+      navigateToWorkflowSearch();
+    }
+  }
 
   async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -737,11 +808,68 @@ export function HomePage({
               <div className="find-workflow-card__body">
                 <h2 id="find-workflow-title">Find a Workflow</h2>
                 <p>Search by name, tag, or category.</p>
-                <label className="search-field find-workflow-card__input">
-                  <Search size={16} aria-hidden="true" />
-                  <span className="sr-only">Search workflows</span>
-                  <input type="search" placeholder="Search workflows..." />
-                </label>
+                <div className="home-workflow-search">
+                  <label className="search-field find-workflow-card__input">
+                    <Search size={16} aria-hidden="true" />
+                    <span className="sr-only">Search workflows</span>
+                    <input
+                      type="search"
+                      placeholder="Search workflows..."
+                      value={homeSearch}
+                      aria-expanded={showSearchDropdown}
+                      aria-controls="home-workflow-search-results"
+                      aria-activedescendant={
+                        showSearchDropdown && highlightedSearchIndex >= 0
+                          ? `home-workflow-search-result-${homeSearchResults[highlightedSearchIndex]?.id}`
+                          : undefined
+                      }
+                      onChange={(event) => {
+                        setHomeSearch(event.target.value);
+                        setSearchDropdownOpen(event.target.value.trim().length > 0);
+                      }}
+                      onFocus={() => setSearchDropdownOpen(homeSearch.trim().length > 0)}
+                      onKeyDown={handleHomeSearchKeyDown}
+                    />
+                  </label>
+                  {showSearchDropdown ? (
+                    <div className="home-workflow-search__panel" id="home-workflow-search-results" role="listbox">
+                      {homeSearchResults.length > 0 ? (
+                        homeSearchResults.map((workflow, index) => (
+                          <button
+                            key={workflow.id}
+                            id={`home-workflow-search-result-${workflow.id}`}
+                            className={
+                              index === highlightedSearchIndex
+                                ? "home-workflow-search__result home-workflow-search__result--active"
+                                : "home-workflow-search__result"
+                            }
+                            type="button"
+                            role="option"
+                            aria-selected={index === highlightedSearchIndex}
+                            onMouseEnter={() => setHighlightedSearchIndex(index)}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => openSearchResult(workflow)}
+                          >
+                            <span className="home-workflow-search__result-main">
+                              <span>{workflow.name}</span>
+                              <small>{workflow.description || workflow.status_label || workflowSearchStatusLabel(workflow)}</small>
+                            </span>
+                            <span className="mini-status">{workflow.status_label ?? workflowSearchStatusLabel(workflow)}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <button
+                          className="home-workflow-search__empty"
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={navigateToWorkflowSearch}
+                        >
+                          Go to Workflows page
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </section>
