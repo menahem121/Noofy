@@ -29,6 +29,34 @@ export interface WorkflowExportDownloadRequest {
   requestInit?: RequestInit;
 }
 
+export interface WorkflowExportMetadata {
+  name?: string;
+  description?: string;
+  author?: string;
+  website?: string;
+  category?: string;
+  tags?: string[];
+  icon?: string;
+}
+
+export interface WorkflowExportReviewModel {
+  name?: string | null;
+  description?: string | null;
+  author?: string | null;
+  website?: string | null;
+  category?: string | null;
+  tags?: string[] | null;
+  icon?: string | null;
+  source?: string | null;
+  requiredModels?: Array<{
+    name: string;
+    type?: string | null;
+    size_bytes?: number | null;
+    status_label?: string | null;
+    folder?: string | null;
+  }>;
+}
+
 function cleanDefaultExportName(name: string, extension: ".noofy" | ".json") {
   if (extension !== ".noofy") return name;
   const trimmed = name.trim();
@@ -83,14 +111,18 @@ export function validateNoofyExportFilename(input: string): WorkflowExportFilena
 export function workflowExportDownloadRequest(
   url: string,
   inputValues?: Record<string, unknown>,
+  exportMetadata?: WorkflowExportMetadata,
 ): WorkflowExportDownloadRequest {
-  if (inputValues === undefined) return { url };
+  if (inputValues === undefined && exportMetadata === undefined) return { url };
   return {
     url,
     requestInit: {
       method: "POST",
       headers: apiHeaders("application/json"),
-      body: JSON.stringify({ input_values: inputValues }),
+      body: JSON.stringify({
+        ...(inputValues === undefined ? {} : { input_values: inputValues }),
+        ...(exportMetadata === undefined ? {} : { export_metadata: exportMetadata }),
+      }),
     },
   };
 }

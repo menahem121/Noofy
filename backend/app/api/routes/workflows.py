@@ -27,6 +27,7 @@ router = APIRouter()
 
 class WorkflowExportRequest(BaseModel):
     input_values: dict[str, Any] | None = Field(default=None)
+    export_metadata: dict[str, Any] | None = Field(default=None)
 
 
 # ─── Workflow library ────────────────────────────────────────────────────────
@@ -390,6 +391,7 @@ async def export_workflow_with_values(
         workflow_id,
         engine_service,
         input_values=request.input_values,
+        export_metadata=request.export_metadata,
     )
 
 
@@ -398,14 +400,16 @@ def _workflow_archive_response(
     engine_service: EngineServiceDep,
     *,
     input_values: dict[str, Any] | None,
+    export_metadata: dict[str, Any] | None = None,
 ):
     try:
-        if input_values is None:
+        if input_values is None and export_metadata is None:
             archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
         else:
             archive_bytes, filename = engine_service.export_workflow_archive(
                 workflow_id,
                 input_values=input_values,
+                export_metadata=export_metadata,
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

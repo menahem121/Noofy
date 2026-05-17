@@ -131,7 +131,7 @@ def _import_result(tmp_path: Path, archive_bytes: bytes) -> dict[str, Any]:
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
     package = store.import_archive(archive_bytes, original_filename="test.noofy")
     status = package.import_metadata.status if package.import_metadata else "imported"
-    return {"status": status, "workflow_id": package.metadata.id}
+    return {"status": status, "workflow_id": package.metadata.id, "package": package}
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +160,14 @@ def test_not_configured_dashboard_routes_to_needs_input_setup(tmp_path: Path) ->
 def test_configured_valid_dashboard_routes_to_imported(tmp_path: Path) -> None:
     result = _import_result(tmp_path, _archive(_CONFIGURED_DASHBOARD))
     assert result["status"] == "imported"
+
+
+def test_configured_valid_dashboard_preserves_inputs_and_outputs(tmp_path: Path) -> None:
+    result = _import_result(tmp_path, _archive(_CONFIGURED_DASHBOARD))
+    package = result["package"]
+
+    assert [item.id for item in package.inputs] == ["prompt"]
+    assert [item.id for item in package.outputs] == ["image_out"]
 
 
 def test_configured_invalid_dashboard_routes_to_needs_input_setup(tmp_path: Path) -> None:

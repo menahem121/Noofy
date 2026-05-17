@@ -42,6 +42,7 @@ class WorkflowExporter:
         self,
         workflow_id: str,
         input_values: dict[str, Any] | None = None,
+        export_metadata: dict[str, Any] | None = None,
     ) -> tuple[bytes, str]:
         """Return (archive_bytes, suggested_filename).
 
@@ -58,7 +59,12 @@ class WorkflowExporter:
                 if self.workflow_library_store is not None
                 else None
             )
-            package_json = _build_export_package_json(package_dir, package, metadata)
+            package_json = _build_export_package_json(
+                package_dir,
+                package,
+                metadata,
+                export_metadata=export_metadata,
+            )
             zf.writestr("package.json", json.dumps(package_json, indent=2, sort_keys=True))
 
             # comfyui_graph.json — export-time snapshot with current dashboard values applied.
@@ -79,7 +85,9 @@ class WorkflowExporter:
             else:
                 # Fall back to generating from in-memory model.
                 dashboard_data: dict[str, Any] = package.dashboard.model_dump(mode="json")
+            if not dashboard_data.get("inputs") and package.inputs:
                 dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
+            if not dashboard_data.get("outputs") and package.outputs:
                 dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
             dashboard_data = self._dashboard_with_user_state(
                 package.metadata.id,
@@ -274,6 +282,7 @@ def _build_export_package_json(
     package_dir: Path | None,
     package: WorkflowPackage,
     metadata: WorkflowLibraryMetadata | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the package.json for the exported archive.
 
@@ -314,6 +323,8 @@ def _build_export_package_json(
 
     if metadata is not None:
         _apply_library_metadata(base, metadata)
+    if export_metadata is not None:
+        _apply_export_metadata(base, export_metadata)
 
     return base
 
@@ -337,6 +348,42 @@ def _apply_library_metadata(base: dict[str, Any], metadata: WorkflowLibraryMetad
         package_metadata[key] = value
         if key in {"description", "author", "website", "category", "tags", "icon"}:
             base[key] = value
+    base["metadata"] = package_metadata
+
+
+def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> None:
+    package_metadata = base.get("metadata")
+    if not isinstance(package_metadata, dict):
+        package_metadata = {}
+
+    for key in ("name", "description", "author", "website", "category", "icon"):
+        value = metadata.get(key)
+        if not isinstance(value, str):
+            continue
+        cleaned = value.strip()
+        if key == "name" and not cleaned:
+            continue
+        package_metadata[key] = cleaned
+        if key == "name":
+            base["display_name"] = cleaned
+        else:
+            base[key] = cleaned
+
+    tags = metadata.get("tags")
+    if isinstance(tags, list):
+        cleaned_tags = []
+        seen = set()
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            cleaned = tag.strip()
+            if not cleaned or cleaned.casefold() in seen:
+                continue
+            seen.add(cleaned.casefold())
+            cleaned_tags.append(cleaned)
+        package_metadata["tags"] = cleaned_tags
+        base["tags"] = cleaned_tags
+
     base["metadata"] = package_metadata
 
 

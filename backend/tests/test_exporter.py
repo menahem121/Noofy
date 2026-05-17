@@ -200,6 +200,24 @@ def test_exported_archive_has_separate_dashboard_json(tmp_path: Path) -> None:
     assert "dashboard" not in package_data
 
 
+def test_export_backfills_dashboard_inputs_when_stored_dashboard_lost_them(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    dashboard_file = package_dir / "dashboard.json"
+    dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
+    dashboard_data["inputs"] = []
+    dashboard_data["outputs"] = []
+    dashboard_file.write_text(json.dumps(dashboard_data), encoding="utf-8")
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        exported_dashboard = json.loads(zf.read("dashboard.json"))
+
+    assert [item["id"] for item in exported_dashboard["inputs"]] == ["prompt"]
+
+
 def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
@@ -249,6 +267,40 @@ def test_exported_archive_applies_explicit_dashboard_values_without_mutating_sto
     assert graph_data["1"]["inputs"]["text"] == "visible dashboard prompt"
     assert dashboard_data["inputs"][0]["default"] == "visible dashboard prompt"
     assert json.loads(graph_file.read_text(encoding="utf-8")) == before
+
+
+def test_exported_archive_applies_export_only_metadata_without_mutating_store(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    package_file = package_dir / "package.json"
+    before = json.loads(package_file.read_text(encoding="utf-8"))
+
+    archive_bytes, _ = exporter.export_archive(
+        workflow_id,
+        export_metadata={
+            "name": "Reviewed Export",
+            "description": "Export-ready description",
+            "author": "Noofy User",
+            "website": "https://example.test",
+            "category": "Portrait",
+            "tags": ["portrait", " cleanup ", "portrait"],
+            "icon": "image",
+        },
+    )
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+
+    assert package_data["metadata"]["name"] == "Reviewed Export"
+    assert package_data["display_name"] == "Reviewed Export"
+    assert package_data["metadata"]["description"] == "Export-ready description"
+    assert package_data["metadata"]["author"] == "Noofy User"
+    assert package_data["metadata"]["website"] == "https://example.test"
+    assert package_data["metadata"]["category"] == "Portrait"
+    assert package_data["metadata"]["tags"] == ["portrait", "cleanup"]
+    assert package_data["metadata"]["icon"] == "image"
+    assert json.loads(package_file.read_text(encoding="utf-8")) == before
 
 
 def test_comfyui_json_export_applies_explicit_dashboard_values(tmp_path: Path) -> None:

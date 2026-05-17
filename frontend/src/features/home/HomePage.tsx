@@ -40,6 +40,7 @@ import {
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
@@ -318,6 +319,7 @@ export function HomePage({
     workflowName: string;
     exportUrl: string;
     extension: ".noofy" | ".json";
+    review?: WorkflowExportReviewModel;
   } | null>(null);
   const [selectedNativeVariants, setSelectedNativeVariants] = useState<Record<string, string | undefined>>({});
   const [homeSearch, setHomeSearch] = useState("");
@@ -1009,6 +1011,7 @@ export function HomePage({
                     workflowName: activeWorkflowTitle(workflow),
                     exportUrl: exportWorkflowUrl(activeWorkflowId(workflow)),
                     extension: ".noofy",
+                    review: workflowCardExportReview(workflow),
                   })
                 }
                 onExportComfyJson={() =>
@@ -1027,6 +1030,7 @@ export function HomePage({
               workflowName={exportDialog.workflowName}
               exportUrl={exportDialog.exportUrl}
               extension={exportDialog.extension}
+              review={exportDialog.review}
               onClose={() => setExportDialog(null)}
             />
           ) : null}
@@ -1040,6 +1044,16 @@ function activeWorkflowId(workflow: WorkflowCard) {
 
 function activeWorkflowTitle(workflow: WorkflowCard) {
   return workflow.variants?.find((variant) => variant.id === workflow.id)?.title ?? workflow.title;
+}
+
+function workflowCardExportReview(workflow: WorkflowCard): WorkflowExportReviewModel {
+  return {
+    name: activeWorkflowTitle(workflow),
+    description: workflow.description,
+    category: workflow.category,
+    source: workflow.source === "backend" ? workflow.category : "Starter workflow",
+    requiredModels: [],
+  };
 }
 
 function nativeVariantSelectionKey(workflow: WorkflowCard) {

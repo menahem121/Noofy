@@ -36,6 +36,30 @@ def _load_dashboard_from_dir(package_dir: Path) -> tuple[list[WorkflowInput], li
             except Exception:
                 pass
 
+    if (not inputs or not outputs) and any(section.get("controls") for section in raw.get("sections") or [] if isinstance(section, dict)):
+        source_dashboard_file = package_dir / "source-files" / "dashboard.json"
+        if source_dashboard_file.exists():
+            try:
+                source_raw = json.loads(source_dashboard_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                source_raw = {}
+            if not inputs:
+                for item in source_raw.get("inputs") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        inputs.append(WorkflowInput.model_validate(item))
+                    except Exception:
+                        pass
+            if not outputs:
+                for item in source_raw.get("outputs") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        outputs.append(WorkflowOutput.model_validate(item))
+                    except Exception:
+                        pass
+
     try:
         schema = DashboardSchema.model_validate(raw)
     except Exception:

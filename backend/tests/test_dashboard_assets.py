@@ -10,8 +10,19 @@ from app.workflows.assets import AssetUploadError, DashboardAssetService
 
 
 class FakeEngineService:
+    def list_workflows(self):
+        return []
+
     async def shutdown(self) -> None:
         return None
+
+
+class IconInUseEngineService(FakeEngineService):
+    def __init__(self, icon_id: str) -> None:
+        self.icon_id = icon_id
+
+    def list_workflows(self):
+        return [{"name": "Cleanup Flow", "icon": self.icon_id}]
 
 
 def _make_png(width: int = 1, height: int = 1) -> bytes:
@@ -111,6 +122,57 @@ def test_metadata_returns_original_filename(tmp_path: Path) -> None:
         "original_filename": "portrait.png",
         "content_type": "image/png",
     }
+
+
+def test_workflow_icon_upload_is_resized_and_listed(tmp_path: Path) -> None:
+    from PIL import Image
+
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    large_icon = _make_png(300, 128)
+
+    result = asset_service.store_workflow_icon(large_icon, "image/png", "large-icon.png")
+
+    assert result["id"].startswith("asset:")
+    assert result["kind"] == "custom"
+    with Image.open(asset_service.asset_path(result["asset_id"])) as image:
+        assert image.width <= 256
+        assert image.height <= 256
+    assert asset_service.list_workflow_icons()[0]["id"] == result["id"]
+
+
+def test_workflow_icon_upload_rejects_unsupported_file(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="not allowed"):
+        asset_service.store_workflow_icon(b"nope", "image/svg+xml", "icon.svg")
+
+
+def test_workflow_icon_routes_upload_list_and_delete(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(create_app(engine_service=FakeEngineService(), asset_service=asset_service)) as client:
+        upload = client.post(
+            "/api/workflow-icons",
+            files={"image": ("icon.png", PNG_BYTES, "image/png")},
+        )
+        list_response = client.get("/api/workflow-icons")
+        delete = client.delete(f"/api/workflow-icons/{upload.json()['id']}")
+
+    assert upload.status_code == 200
+    assert list_response.status_code == 200
+    assert list_response.json()["icons"][0]["id"] == upload.json()["id"]
+    assert delete.status_code == 200
+    assert asset_service.list_workflow_icons() == []
+
+
+def test_workflow_icon_delete_blocks_icons_used_by_workflows(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    stored = asset_service.store_workflow_icon(PNG_BYTES, "image/png", "icon.png")
+
+    with TestClient(create_app(engine_service=IconInUseEngineService(stored["id"]), asset_service=asset_service)) as client:
+        response = client.delete(f"/api/workflow-icons/{stored['id']}")
+
+    assert response.status_code == 409
+    assert "Cleanup Flow" in response.json()["detail"]
 
 
 def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -> None:

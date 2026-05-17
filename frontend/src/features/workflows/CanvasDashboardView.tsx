@@ -45,6 +45,7 @@ import {
 import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
+import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 
 export interface CanvasRunState {
   isRunning: boolean;
@@ -65,6 +66,7 @@ interface CanvasDashboardViewProps {
   exportNoofyUrl: string;
   exportComfyJsonUrl: string;
   exportWorkflowName?: string | null;
+  exportReview?: WorkflowExportReviewModel;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
@@ -92,6 +94,7 @@ export function CanvasDashboardView({
   exportNoofyUrl,
   exportComfyJsonUrl,
   exportWorkflowName,
+  exportReview,
   onChange,
   onImageUpload,
   loraBrowserFor,
@@ -460,6 +463,7 @@ export function CanvasDashboardView({
           exportUrl={exportDialog.url}
           extension={exportDialog.extension}
           inputValues={inputValues}
+          review={exportDialog.extension === ".noofy" ? exportReview : undefined}
           onClose={() => setExportDialog(null)}
         />
       ) : null}

@@ -624,16 +624,18 @@ class EngineService:
         self,
         workflow_id: str,
         input_values: dict[str, Any] | None = None,
+        export_metadata: dict[str, Any] | None = None,
     ) -> tuple[bytes, str]:
         """Return (archive_bytes, suggested_filename) for download."""
         if self.workflow_exporter is None:
             raise KeyError(f"Workflow export not configured: {workflow_id}")
         try:
-            if input_values is None:
+            if input_values is None and export_metadata is None:
                 return self.workflow_exporter.export_archive(workflow_id)
             return self.workflow_exporter.export_archive(
                 workflow_id,
                 input_values=input_values,
+                export_metadata=export_metadata,
             )
         except WorkflowExportError as exc:
             raise ValueError(str(exc)) from exc

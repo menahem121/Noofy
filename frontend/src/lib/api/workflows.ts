@@ -1,4 +1,4 @@
-import { deleteJson, getApiBaseUrl, getApiToken, getJson, postBytes, postJson, putJson, resolveBackendUrl } from "./client";
+import { apiErrorMessage, deleteJson, getApiBaseUrl, getApiToken, getJson, postBytes, postJson, putJson, resolveBackendUrl } from "./client";
 import type { EngineJob } from "./jobs";
 
 export interface WorkflowTrustSummary {
@@ -102,6 +102,18 @@ export interface WorkflowMetadataUpdateResponse {
   workflow_id: string;
   metadata: WorkflowMetadataUpdate;
   workflow: WorkflowSummary;
+}
+
+export interface WorkflowIconOption {
+  id: string;
+  asset_id?: string;
+  label: string;
+  kind: "custom";
+  url: string;
+}
+
+export interface WorkflowIconsResponse {
+  icons: WorkflowIconOption[];
 }
 
 export interface WorkflowStatusResponse {
@@ -658,6 +670,25 @@ export async function uploadDashboardAsset(
   );
   if (!response.ok) throw new Error(`Asset upload failed: ${response.status}`);
   return response.json() as Promise<DashboardAssetUploadResponse>;
+}
+
+export function fetchWorkflowIcons(): Promise<WorkflowIconsResponse> {
+  return getJson<WorkflowIconsResponse>("/workflow-icons");
+}
+
+export async function uploadWorkflowIcon(file: File): Promise<WorkflowIconOption> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${getApiBaseUrl()}/workflow-icons`, { method: "POST", headers, body: formData });
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  return response.json() as Promise<WorkflowIconOption>;
+}
+
+export function deleteWorkflowIcon(iconId: string): Promise<{ deleted: boolean; id: string }> {
+  return deleteJson<{ deleted: boolean; id: string }>(`/workflow-icons/${encodeURIComponent(iconId)}`);
 }
 
 export async function fetchAssetBlobUrl(assetId: string): Promise<string> {

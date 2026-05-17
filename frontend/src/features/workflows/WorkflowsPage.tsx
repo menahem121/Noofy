@@ -3,12 +3,9 @@ import {
   ChevronDown,
   Download,
   FileUp,
-  Image,
-  Maximize2,
   PackageOpen,
   Play,
   Search,
-  SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
@@ -26,6 +23,7 @@ import {
   type WorkflowMetadataUpdate,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
+import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
@@ -33,6 +31,7 @@ import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
+import { WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS } from "./workflowMetadataOptions";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
@@ -45,48 +44,12 @@ interface WorkflowsPageProps {
 
 type WorkflowCategory =
   | "All"
-  | "Txt2img"
-  | "Img2img"
-  | "Inpainting"
-  | "Outpainting"
-  | "Upscaling"
-  | "Style Transfer"
-  | "Swapping"
-  | "Character Consistency"
-  | "Pose Control"
-  | "Depth Control"
-  | "Canny / Line Control"
-  | "Background Replacement"
-  | "Background Removal"
-  | "Restoration"
-  | "All-in-one";
+  | (typeof WORKFLOW_CATEGORY_OPTIONS)[number];
 
 const CATEGORY_FILTERS: WorkflowCategory[] = [
   "All",
-  "Txt2img",
-  "Img2img",
-  "Inpainting",
-  "Outpainting",
-  "Upscaling",
-  "Style Transfer",
-  "Swapping",
-  "Character Consistency",
-  "Pose Control",
-  "Depth Control",
-  "Canny / Line Control",
-  "Background Replacement",
-  "Background Removal",
-  "Restoration",
-  "All-in-one",
+  ...WORKFLOW_CATEGORY_OPTIONS,
 ];
-
-const WORKFLOW_ICONS = {
-  sparkles: Sparkles,
-  image: Image,
-  maximize: Maximize2,
-  sliders: SlidersHorizontal,
-  package: PackageOpen,
-};
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "Never";
@@ -143,6 +106,7 @@ export function WorkflowsPage({
     workflowName: string;
     exportUrl: string;
     extension: ".noofy" | ".json";
+    review?: WorkflowExportReviewModel;
   } | null>(null);
 
   useEffect(() => {
@@ -460,7 +424,12 @@ export function WorkflowsPage({
                   onEditDashboard={() => void handleEditDashboard(workflow)}
                   onEditWidgets={() => void handleEditWidgets(workflow)}
                   onExportNoofy={() =>
-                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowUrl(workflow.id), extension: ".noofy" })
+                    setExportDialog({
+                      workflowName: workflow.name,
+                      exportUrl: exportWorkflowUrl(workflow.id),
+                      extension: ".noofy",
+                      review: workflowSummaryExportReview(workflow),
+                    })
                   }
                   onExportComfyJson={() =>
                     setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowComfyJsonUrl(workflow.id), extension: ".json" })
@@ -495,7 +464,7 @@ export function WorkflowsPage({
                 onClose={closeDetailsPanel}
                 onOpen={() => onOpenWorkflow(selectedDetails.id)}
                 onSave={(payload) => handleMetadataSave(selectedDetails.id, payload)}
-                onExport={(workflowName, exportUrl, extension) => setExportDialog({ workflowName, exportUrl, extension })}
+                onExport={(workflowName, exportUrl, extension, review) => setExportDialog({ workflowName, exportUrl, extension, review })}
               />
             ) : null}
           </aside>
@@ -506,6 +475,7 @@ export function WorkflowsPage({
           workflowName={exportDialog.workflowName}
           exportUrl={exportDialog.exportUrl}
           extension={exportDialog.extension}
+          review={exportDialog.review}
           onClose={() => setExportDialog(null)}
         />
       ) : null}
@@ -566,6 +536,40 @@ function FilterSelect({
       <ChevronDown size={13} aria-hidden="true" />
     </div>
   );
+}
+
+function workflowSummaryExportReview(workflow: WorkflowSummary): WorkflowExportReviewModel {
+  return {
+    name: workflow.name,
+    description: workflow.description ?? "",
+    category: workflow.category ?? "",
+    tags: workflow.tags ?? [],
+    icon: workflow.icon ?? "",
+    source: workflow.source_label ?? workflow.trust?.label ?? "Noofy workflow",
+    requiredModels: workflow.main_model?.name ? [{
+      name: workflow.main_model.name,
+      type: workflow.main_model.type,
+      size_bytes: workflow.main_model.size_bytes,
+      status_label: workflow.missing_model_count && workflow.missing_model_count > 0 ? "Missing" : "Available",
+    }] : [],
+  };
+}
+
+function workflowDetailsExportReview(
+  workflow: WorkflowDetails,
+  draft?: WorkflowMetadataUpdate,
+): WorkflowExportReviewModel {
+  return {
+    name: workflow.name,
+    description: draft?.description ?? workflow.overview.description,
+    author: draft?.author ?? workflow.overview.author,
+    website: draft?.website ?? workflow.overview.website,
+    category: draft?.category ?? workflow.organization.category,
+    tags: draft?.tags ?? workflow.organization.tags,
+    icon: draft?.icon ?? workflow.organization.icon,
+    source: workflow.overview.source,
+    requiredModels: workflow.models_used,
+  };
 }
 
 function WorkflowRow({
@@ -666,7 +670,12 @@ function WorkflowDetailsDrawer({
   onClose: () => void;
   onOpen: () => void;
   onSave: (payload: WorkflowMetadataUpdate) => Promise<void> | void;
-  onExport: (workflowName: string, exportUrl: string, extension: ".noofy" | ".json") => void;
+  onExport: (
+    workflowName: string,
+    exportUrl: string,
+    extension: ".noofy" | ".json",
+    review?: WorkflowExportReviewModel,
+  ) => void;
 }) {
   const workflowMetadataDraft = useMemo<WorkflowMetadataUpdate>(() => ({
     description: workflow.overview.description,
@@ -703,7 +712,12 @@ function WorkflowDetailsDrawer({
   function handleExportClick(exportUrl: string, extension: ".noofy" | ".json") {
     void saveDraft().then((saved) => {
       if (!saved) return;
-      onExport(workflow.name, exportUrl, extension);
+      onExport(
+        workflow.name,
+        exportUrl,
+        extension,
+        extension === ".noofy" ? workflowDetailsExportReview(workflow, draft) : undefined,
+      );
     });
   }
 

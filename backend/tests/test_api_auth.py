@@ -142,8 +142,11 @@ def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
         archive_values = None
         graph_values = None
 
-        def export_workflow_archive(self, workflow_id: str, input_values=None):
+        export_metadata = None
+
+        def export_workflow_archive(self, workflow_id: str, input_values=None, export_metadata=None):
             self.archive_values = input_values
+            self.export_metadata = export_metadata
             return b"noofy-archive", f"{workflow_id}.noofy"
 
         def export_workflow_comfyui_graph(self, workflow_id: str, input_values=None):
@@ -155,7 +158,10 @@ def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
     with TestClient(create_app(engine_service=engine_service)) as client:
         noofy_export = client.post(
             "/api/workflows/text_to_image_v0/export",
-            json={"input_values": {"prompt": "visible prompt"}},
+            json={
+                "input_values": {"prompt": "visible prompt"},
+                "export_metadata": {"name": "Reviewed Export"},
+            },
         )
         comfy_export = client.post(
             "/api/workflows/text_to_image_v0/export/comfyui-json",
@@ -165,4 +171,5 @@ def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
     assert noofy_export.status_code == 200
     assert comfy_export.status_code == 200
     assert engine_service.archive_values == {"prompt": "visible prompt"}
+    assert engine_service.export_metadata == {"name": "Reviewed Export"}
     assert engine_service.graph_values == {"prompt": "visible prompt"}

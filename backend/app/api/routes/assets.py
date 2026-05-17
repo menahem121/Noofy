@@ -1,9 +1,55 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.deps import DashboardAssetServiceDep
+from app.api.deps import DashboardAssetServiceDep, EngineServiceDep
+from app.workflows.assets import AssetUploadError
 
 router = APIRouter()
+
+
+@router.get("/workflow-icons")
+async def list_workflow_icons(asset_service: DashboardAssetServiceDep):
+    return {"icons": asset_service.list_workflow_icons()}
+
+
+@router.post("/workflow-icons")
+async def upload_workflow_icon(
+    asset_service: DashboardAssetServiceDep,
+    image: UploadFile = File(...),
+):
+    data = await image.read()
+    content_type = image.content_type or "application/octet-stream"
+    original_filename = image.filename or "workflow-icon"
+    try:
+        return asset_service.store_workflow_icon(data, content_type, original_filename)
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/workflow-icons/{icon_id:path}")
+async def delete_workflow_icon(
+    icon_id: str,
+    asset_service: DashboardAssetServiceDep,
+    engine_service: EngineServiceDep,
+):
+    users = []
+    list_workflows = getattr(engine_service, "list_workflows", None)
+    if callable(list_workflows):
+        users = [
+            workflow["name"]
+            for workflow in list_workflows()
+            if workflow.get("icon") == icon_id
+        ]
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This icon is used by {users[0]}. Choose another icon for that workflow before deleting it.",
+        )
+    try:
+        asset_service.delete_workflow_icon(icon_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"deleted": True, "id": icon_id}
 
 
 @router.get("/assets/{asset_id}/metadata")

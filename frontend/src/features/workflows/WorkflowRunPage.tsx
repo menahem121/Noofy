@@ -66,6 +66,7 @@ import { CanvasDashboardView } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
+import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 
 interface WorkflowRunPageProps {
   workflowId: string;
@@ -757,12 +758,25 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     />
   ) : null;
   const workflowDisplayName = workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow";
+  const exportReview: WorkflowExportReviewModel = {
+    name: workflowDisplayName,
+    description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
+    source: workflowSummary?.source_label ?? workflowSummary?.trust?.label ?? "Noofy workflow",
+    requiredModels: state.modelSummary?.models?.map((model) => ({
+      name: model.filename,
+      type: model.model_type,
+      status_label: model.status_label,
+      folder: model.folder,
+      size_bytes: model.size_bytes,
+    })) ?? [],
+  };
   const exportDialogElement = exportDialog ? (
     <WorkflowExportDialog
       workflowName={workflowDisplayName}
       exportUrl={exportDialog.url}
       extension={exportDialog.extension}
       inputValues={inputValues as Record<string, unknown>}
+      review={exportDialog.extension === ".noofy" ? exportReview : undefined}
       onClose={() => setExportDialog(null)}
     />
   ) : null;
@@ -794,6 +808,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
           exportWorkflowName={workflowSummary?.name ?? state.packageData?.metadata?.name}
+          exportReview={exportReview}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
           loraBrowserFor={loraBrowserFor}

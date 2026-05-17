@@ -184,3 +184,55 @@ def test_round_trip_dashboard_inputs_survive_reload(tmp_path: Path) -> None:
     assert seed_input is not None
     assert seed_input.default == 42
     assert seed_input.validation == {"min": 0, "max": 999999}
+
+
+def test_loader_recovers_imported_dashboard_inputs_from_source_files(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "unknown" / "recovered" / "0.1.0"
+    (package_dir / "source-files").mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": "unknown__recovered__0.1.0", "name": "Recovered", "version": "0.1.0"},
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": _GRAPH,
+                "custom_nodes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [],
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                ],
+            }
+        ],
+    }
+    source_dashboard = {
+        **dashboard,
+        "inputs": [
+            {
+                "id": "prompt",
+                "label": "Prompt",
+                "control": "textarea",
+                "binding": {"node_id": "1", "input_name": "text"},
+                "default": "hello",
+                "validation": {},
+            }
+        ],
+    }
+    (package_dir / "dashboard.json").write_text(json.dumps(dashboard), encoding="utf-8")
+    (package_dir / "source-files" / "dashboard.json").write_text(json.dumps(source_dashboard), encoding="utf-8")
+
+    loader = WorkflowPackageLoader(Path("missing-bundled"), imported_packages_dir=tmp_path / "packages")
+    package = loader.get_package("unknown__recovered__0.1.0")
+
+    assert [item.id for item in package.inputs] == ["prompt"]
