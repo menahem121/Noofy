@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { resolveBackendUrl } from "../../lib/api/client";
+import type { NativeWorkflowImportRequest } from "../../lib/nativeWorkflowFiles";
 
 // Replace with your real Reddit community URL when ready.
 const REDDIT_URL = "https://www.reddit.com/r/noofy";
@@ -302,6 +303,7 @@ function trustLevelTone(level?: string) {
 
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
+  nativeImportRequest?: NativeWorkflowImportRequest | null;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onEditDashboard?: (schema: DashboardSchema) => void;
@@ -310,6 +312,7 @@ interface HomePageProps {
 
 export function HomePage({
   onOpenWorkflow,
+  nativeImportRequest,
   onConfigureDashboard,
   onEditWidgets,
   onEditDashboard,
@@ -328,6 +331,7 @@ export function HomePage({
   const [homeSearch, setHomeSearch] = useState("");
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [highlightedSearchIndex, setHighlightedSearchIndex] = useState(-1);
+  const [handledNativeImportId, setHandledNativeImportId] = useState<number | null>(null);
   const debouncedHomeSearch = useDebouncedValue(homeSearch, 160);
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
@@ -420,13 +424,7 @@ export function HomePage({
     }
   }
 
-  async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) {
-      return;
-    }
-
+  async function startWorkflowImport(file: File) {
     setHomeData((current) => ({
       ...current,
       importing: true,
@@ -471,6 +469,36 @@ export function HomePage({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
+  }
+
+  useEffect(() => {
+    if (!nativeImportRequest || handledNativeImportId === nativeImportRequest.id) return;
+    setHandledNativeImportId(nativeImportRequest.id);
+    if (nativeImportRequest.error || !nativeImportRequest.file) {
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        downloadingModels: false,
+        downloadJob: null,
+        verificationJob: null,
+        pendingImport: null,
+        importResult: null,
+        importError:
+          nativeImportRequest.error ??
+          `Noofy could not open ${nativeImportRequest.filename ?? "the selected workflow package"}.`,
+      }));
+      return;
+    }
+    void startWorkflowImport(nativeImportRequest.file);
+  }, [handledNativeImportId, nativeImportRequest]);
+
+  async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+    await startWorkflowImport(file);
   }
 
   async function handleDownloadMissingModels() {

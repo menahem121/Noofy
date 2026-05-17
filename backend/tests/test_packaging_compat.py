@@ -15,6 +15,7 @@ See docs/NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md §2 for the
 decision to keep `backend/app` as the permanent package name.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -74,6 +75,41 @@ def test_tauri_conf_maps_backend_app():
     assert "noofy-runtime" in content, (
         "frontend/src-tauri/tauri.conf.json must reference noofy-runtime"
     )
+
+
+def test_tauri_conf_registers_noofy_file_association():
+    """Desktop bundles must register .noofy packages with the native app."""
+    tauri_conf = REPO_ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
+    if not tauri_conf.exists():
+        return
+    config = json.loads(tauri_conf.read_text())
+    associations = config.get("bundle", {}).get("fileAssociations", [])
+    noofy_association = next(
+        (item for item in associations if "noofy" in item.get("ext", [])),
+        None,
+    )
+    assert noofy_association is not None, (
+        "frontend/src-tauri/tauri.conf.json must associate .noofy files with Noofy"
+    )
+    assert noofy_association.get("mimeType") == "application/x-noofy-workflow"
+    assert noofy_association.get("exportedType", {}).get("identifier") == "app.noofy.workflow-package"
+
+
+def test_tauri_shell_handles_native_noofy_open_requests():
+    """The desktop shell must relay OS-opened .noofy files to the frontend."""
+    main_rs = REPO_ROOT / "frontend" / "src-tauri" / "src" / "main.rs"
+    cargo_toml = REPO_ROOT / "frontend" / "src-tauri" / "Cargo.toml"
+    if not main_rs.exists() or not cargo_toml.exists():
+        return
+    main_content = main_rs.read_text()
+    cargo_content = cargo_toml.read_text()
+    assert "tauri-plugin-single-instance" in cargo_content, (
+        "frontend/src-tauri/Cargo.toml must include the single-instance plugin for file-open handoff"
+    )
+    assert "pending_noofy_open_file" in main_content
+    assert "read_noofy_file" in main_content
+    assert "RunEvent::Opened" in main_content
+    assert "noofy-open-workflow-file" in main_content
 
 
 def test_packaged_runtime_script_references_backend_app():

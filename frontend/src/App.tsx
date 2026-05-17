@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
@@ -21,6 +21,13 @@ import {
   closeWorkflowRunnerLease,
   fetchJobProgress,
 } from "./lib/api/noofyApi";
+import {
+  consumePendingNativeWorkflowFile,
+  listenForNativeWorkflowOpen,
+  readNativeWorkflowFile,
+  type NativeWorkflowImportRequest,
+  type NativeWorkflowOpenPayload,
+} from "./lib/nativeWorkflowFiles";
 
 type AppRoute =
   | { name: "home" }
@@ -50,8 +57,64 @@ export default function App() {
 function AppContent() {
   const [route, setRoute] = useState<AppRoute>({ name: "home" });
   const [closeDialog, setCloseDialog] = useState<WorkflowCloseDialogState | null>(null);
+  const [nativeWorkflowImport, setNativeWorkflowImport] = useState<NativeWorkflowImportRequest | null>(null);
+  const nativeWorkflowImportIdRef = useRef(0);
   const workflowLibrary = useWorkflowLibrary();
   const workflowTabs = useWorkflowTabs();
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    async function openNativeWorkflow(payload: NativeWorkflowOpenPayload) {
+      const id = nativeWorkflowImportIdRef.current + 1;
+      nativeWorkflowImportIdRef.current = id;
+      try {
+        const file = await readNativeWorkflowFile(payload.path);
+        if (!active) return;
+        setNativeWorkflowImport({ id, file, filename: payload.filename });
+        setRoute({ name: "home" });
+      } catch (error) {
+        if (!active) return;
+        setNativeWorkflowImport({
+          id,
+          filename: payload.filename,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setRoute({ name: "home" });
+      }
+    }
+
+    async function openPendingNativeWorkflow(fallback?: NativeWorkflowOpenPayload) {
+      try {
+        const payload = await consumePendingNativeWorkflowFile();
+        if (payload) {
+          await openNativeWorkflow(payload);
+          return;
+        }
+      } catch {
+        // Browser/dev mode can run without the native desktop commands.
+      }
+      if (fallback) await openNativeWorkflow(fallback);
+    }
+
+    listenForNativeWorkflowOpen((payload) => {
+      void openPendingNativeWorkflow(payload);
+    })
+      .then((handler) => {
+        unlisten = handler;
+        void openPendingNativeWorkflow();
+      })
+      .catch(() => {
+        // Browser/dev mode can run without the native desktop event bridge.
+        void openPendingNativeWorkflow();
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   function workflowNameFor(workflowId: string, providedName?: string) {
     if (providedName) return providedName;
@@ -235,6 +298,7 @@ function AppContent() {
     return (
       <HomePage
         onOpenWorkflow={openWorkflow}
+        nativeImportRequest={nativeWorkflowImport}
         onConfigureDashboard={(workflowId, workflowName) =>
           setRoute({
             name: "dashboard-builder",

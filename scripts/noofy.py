@@ -485,7 +485,7 @@ def terminate_processes(
 ) -> None:
     with suppress_cleanup_interrupts() as interrupted:
         for process in processes:
-            if process is except_process or process.poll() is not None:
+            if process is except_process:
                 continue
             signal_process_tree(process, signal.SIGTERM)
 
@@ -497,7 +497,7 @@ def terminate_processes(
         )
 
         for process in processes:
-            if process is except_process or process.poll() is not None:
+            if process is except_process:
                 continue
             kill_process_tree(process)
 

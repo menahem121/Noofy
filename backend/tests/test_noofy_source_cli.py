@@ -79,6 +79,41 @@ def test_signal_process_tree_targets_posix_process_group(monkeypatch) -> None:
     assert calls == [(1234, signal.SIGTERM)]
 
 
+def test_terminate_processes_signals_exited_process_group(monkeypatch) -> None:
+    cli = load_noofy_cli()
+    signals = []
+    waits = []
+    kills = []
+
+    class Process:
+        pid = 1234
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(
+        cli,
+        "signal_process_tree",
+        lambda process, sig: signals.append((process.pid, sig)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_process_shutdown",
+        lambda processes, **kwargs: waits.append(
+            [process.pid for process in processes]
+        ),
+    )
+    monkeypatch.setattr(
+        cli, "kill_process_tree", lambda process: kills.append(process.pid)
+    )
+
+    cli.terminate_processes([Process()])
+
+    assert signals == [(1234, signal.SIGTERM)]
+    assert waits == [[1234], [1234]]
+    assert kills == [1234]
+
+
 def test_runtime_bootstrap_command_delegates_to_backend_service(tmp_path: Path) -> None:
     cli = load_noofy_cli()
     command = cli.bootstrap_runtime_command(tmp_path / "backend" / ".venv" / "bin" / "python")

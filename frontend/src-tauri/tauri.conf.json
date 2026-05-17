@@ -17,6 +17,20 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": ["noofy"],
+        "name": "Noofy Workflow Package",
+        "description": "Noofy workflow package",
+        "mimeType": "application/x-noofy-workflow",
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "app.noofy.workflow-package",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
     "resources": {
       "resources/noofy-runtime": "noofy-runtime",
       "../../backend/app": "noofy-runtime/backend/app",

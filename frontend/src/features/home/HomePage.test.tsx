@@ -102,6 +102,7 @@ function renderHomePage(options: {
   skipInitialRefresh?: boolean;
   workflowState?: ComponentProps<typeof WorkflowLibraryProvider>["initialWorkflowState"];
   onConfigureDashboard?: typeof onConfigureDashboard;
+  nativeImportRequest?: ComponentProps<typeof HomePage>["nativeImportRequest"];
 } = {}) {
   return render(
     <RuntimeStatusProvider
@@ -111,6 +112,7 @@ function renderHomePage(options: {
       <WorkflowLibraryProvider initialWorkflowState={options.workflowState}>
         <HomePage
           onOpenWorkflow={onOpenWorkflow}
+          nativeImportRequest={options.nativeImportRequest}
           onConfigureDashboard={options.onConfigureDashboard}
           onNavigate={onNavigate}
         />
@@ -1143,6 +1145,88 @@ describe("HomePage", () => {
     expect(readyCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
     expect(readyCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
     expect(onOpenWorkflow).toHaveBeenCalledWith("ready_workflow");
+  });
+
+  it("starts the staged import flow for a workflow file opened by the operating system", async () => {
+    const missingModel = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "native-open.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "known",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Download before running.",
+    };
+    const pendingImport = {
+      import_session_id: "native-open-session",
+      workflow_id: "native_open_workflow",
+      status: "imported",
+      user_facing_message: "Review models before importing.",
+      workflow: {
+        id: "native_open_workflow",
+        name: "Native Open Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "quarantined_community",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "native_open_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [missingModel],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith("/api/workflows/import/preview?filename=native-open.noofy&allow_unverified_community_preparation=true") &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      nativeImportRequest: {
+        id: 1,
+        file: new File(["archive"], "native-open.noofy"),
+        filename: "native-open.noofy",
+      },
+    });
+
+    expect(await screen.findByRole("dialog", { name: "Native Open Workflow" })).toBeInTheDocument();
+    expect(screen.getByText("native-open.safetensors")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workflows/import/preview?filename=native-open.noofy&allow_unverified_community_preparation=true",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(ArrayBuffer),
+      }),
+    );
   });
 
   it("shows a single open action after downloaded models make the import ready", async () => {

@@ -12,16 +12,21 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const BACKEND_HANDOFF_PREFIX: &str = "NOOFY_BACKEND_API_BASE_URL=";
 const NOOFY_RUNTIME_RESOURCE_DIR: &str = "noofy-runtime";
+const OPEN_WORKFLOW_FILE_EVENT: &str = "noofy-open-workflow-file";
+const MAX_NOOFY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 struct BackendRuntime {
     child: Child,
     api_base_url: String,
     api_token: String,
 }
+
+#[derive(Clone, Debug)]
+struct PendingNoofyOpenFile(Arc<Mutex<Option<NoofyOpenFile>>>);
 
 #[derive(Clone, Debug)]
 struct BackendLaunchSpec {
@@ -59,9 +64,47 @@ struct FrontendRuntimeConfig {
     api_token: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoofyOpenFile {
+    path: String,
+    filename: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeNoofyFile {
+    path: String,
+    filename: String,
+    bytes: Vec<u8>,
+}
+
 #[tauri::command]
 fn noofy_runtime_config(config: tauri::State<'_, FrontendRuntimeConfig>) -> FrontendRuntimeConfig {
     config.inner().clone()
+}
+
+#[tauri::command]
+fn pending_noofy_open_file(
+    pending: tauri::State<'_, PendingNoofyOpenFile>,
+) -> Result<Option<NoofyOpenFile>, String> {
+    let mut guard = pending
+        .0
+        .lock()
+        .map_err(|_| "pending workflow file lock is poisoned".to_string())?;
+    Ok(guard.take())
+}
+
+#[tauri::command]
+fn read_noofy_file(path: String) -> Result<NativeNoofyFile, String> {
+    let path = PathBuf::from(path);
+    let filename = validate_noofy_file_path(&path)?;
+    let bytes = fs::read(&path).map_err(|e| format!("failed to read workflow package: {e}"))?;
+    Ok(NativeNoofyFile {
+        path: path.to_string_lossy().to_string(),
+        filename,
+        bytes,
+    })
 }
 
 #[tauri::command]
@@ -156,10 +199,28 @@ fn main() {
     let backend_for_setup = Arc::clone(&backend_process);
     let backend_for_window = Arc::clone(&backend_process);
     let backend_for_exit = Arc::clone(&backend_process);
+    let pending_open_file = PendingNoofyOpenFile(Arc::new(Mutex::new(first_noofy_file_from_args(
+        std::env::args_os().skip(1),
+        None,
+    ))));
+    let pending_for_single_instance = pending_open_file.clone();
+    let pending_for_run_event = pending_open_file.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
+            let cwd = PathBuf::from(cwd);
+            if let Some(file) = first_noofy_file_from_strings(args, Some(&cwd)) {
+                handle_noofy_open_request(app, &pending_for_single_instance, file);
+            } else if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             noofy_runtime_config,
+            pending_noofy_open_file,
+            read_noofy_file,
             open_external_url,
             select_folder,
             select_model_files,
@@ -174,6 +235,7 @@ fn main() {
                 api_base_url: runtime.api_base_url.clone(),
                 api_token: runtime.api_token.clone(),
             });
+            app.manage(pending_open_file.clone());
 
             let mut backend_guard = backend_for_setup.lock().map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "backend process lock is poisoned")
@@ -197,11 +259,111 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build Noofy Tauri application")
-        .run(move |_app_handle, event| {
-            if let RunEvent::ExitRequested { .. } = event {
-                terminate_backend(&backend_for_exit);
+        .run(move |app_handle, event| {
+            match event {
+                RunEvent::Opened { urls } => {
+                    if let Some(file) = first_noofy_file_from_urls(urls) {
+                        handle_noofy_open_request(app_handle, &pending_for_run_event, file);
+                    }
+                }
+                RunEvent::ExitRequested { .. } => {
+                    terminate_backend(&backend_for_exit);
+                }
+                _ => {}
             }
         });
+}
+
+fn handle_noofy_open_request(
+    app: &tauri::AppHandle,
+    pending: &PendingNoofyOpenFile,
+    file: NoofyOpenFile,
+) {
+    if let Ok(mut guard) = pending.0.lock() {
+        *guard = Some(file.clone());
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit(OPEN_WORKFLOW_FILE_EVENT, file);
+    }
+}
+
+fn first_noofy_file_from_args<I>(args: I, cwd: Option<&Path>) -> Option<NoofyOpenFile>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    args.into_iter()
+        .filter_map(|arg| arg.into_string().ok())
+        .find_map(|arg| noofy_file_from_arg(&arg, cwd))
+}
+
+fn first_noofy_file_from_strings<I>(args: I, cwd: Option<&Path>) -> Option<NoofyOpenFile>
+where
+    I: IntoIterator<Item = String>,
+{
+    args.into_iter()
+        .find_map(|arg| noofy_file_from_arg(&arg, cwd))
+}
+
+fn first_noofy_file_from_urls(urls: Vec<url::Url>) -> Option<NoofyOpenFile> {
+    urls.into_iter().find_map(|url| {
+        let path = url.to_file_path().ok()?;
+        noofy_open_file_from_path(path)
+    })
+}
+
+fn noofy_file_from_arg(arg: &str, cwd: Option<&Path>) -> Option<NoofyOpenFile> {
+    if arg.starts_with('-') {
+        return None;
+    }
+
+    if let Ok(url) = url::Url::parse(arg) {
+        if url.scheme() == "file" {
+            return url.to_file_path().ok().and_then(noofy_open_file_from_path);
+        }
+    }
+
+    let raw_path = PathBuf::from(arg);
+    let path = if raw_path.is_absolute() {
+        raw_path
+    } else {
+        cwd.map(|base| base.join(&raw_path)).unwrap_or(raw_path)
+    };
+    noofy_open_file_from_path(path)
+}
+
+fn noofy_open_file_from_path(path: PathBuf) -> Option<NoofyOpenFile> {
+    let filename = validate_noofy_file_path(&path).ok()?;
+    Some(NoofyOpenFile {
+        path: path.to_string_lossy().to_string(),
+        filename,
+    })
+}
+
+fn validate_noofy_file_path(path: &Path) -> Result<String, String> {
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "workflow package path has no filename".to_string())?
+        .to_string();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("noofy") {
+        return Err("selected file is not a .noofy workflow package".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|e| format!("workflow package is unavailable: {e}"))?;
+    if !metadata.is_file() {
+        return Err("workflow package path is not a file".to_string());
+    }
+    if metadata.len() > MAX_NOOFY_FILE_BYTES {
+        return Err("workflow package is too large to open from the desktop shell".to_string());
+    }
+    Ok(filename)
 }
 
 fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error::Error>> {
