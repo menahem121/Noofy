@@ -37,6 +37,7 @@ import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderConte
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
+import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
@@ -143,6 +144,7 @@ export function WorkflowsPage({
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [exportDialog, setExportDialog] = useState<{ workflowName: string; exportUrl: string } | null>(null);
 
   useEffect(() => {
     void runtimeStatus.refreshRuntime({ silent: true });
@@ -458,6 +460,9 @@ export function WorkflowsPage({
                   onCloseMenu={() => setMenuOpenFor(null)}
                   onEditDashboard={() => void handleEditDashboard(workflow)}
                   onEditWidgets={() => void handleEditWidgets(workflow)}
+                  onExportNoofy={() =>
+                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowUrl(workflow.id) })
+                  }
                   onRemove={() => void handleRemove(workflow)}
                 />
               ))}
@@ -488,11 +493,19 @@ export function WorkflowsPage({
                 onClose={closeDetailsPanel}
                 onOpen={() => onOpenWorkflow(selectedDetails.id)}
                 onSave={(payload) => handleMetadataSave(selectedDetails.id, payload)}
+                onExportNoofy={(workflowName, exportUrl) => setExportDialog({ workflowName, exportUrl })}
               />
             ) : null}
           </aside>
         ) : null}
       </div>
+      {exportDialog ? (
+        <WorkflowExportDialog
+          workflowName={exportDialog.workflowName}
+          exportUrl={exportDialog.exportUrl}
+          onClose={() => setExportDialog(null)}
+        />
+      ) : null}
     </AppLayout>
   );
 }
@@ -562,6 +575,7 @@ function WorkflowRow({
   onCloseMenu,
   onEditDashboard,
   onEditWidgets,
+  onExportNoofy,
   onRemove,
 }: {
   workflow: WorkflowSummary;
@@ -573,6 +587,7 @@ function WorkflowRow({
   onCloseMenu: () => void;
   onEditDashboard: () => void;
   onEditWidgets: () => void;
+  onExportNoofy: () => void;
   onRemove: () => void;
 }) {
   const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
@@ -626,6 +641,7 @@ function WorkflowRow({
           onCloseMenu={onCloseMenu}
           onEditDashboard={onEditDashboard}
           onEditWidgets={onEditWidgets}
+          onExportNoofy={onExportNoofy}
           onRemove={onRemove}
         />
       </div>
@@ -638,11 +654,13 @@ function WorkflowDetailsDrawer({
   onClose,
   onOpen,
   onSave,
+  onExportNoofy,
 }: {
   workflow: WorkflowDetails;
   onClose: () => void;
   onOpen: () => void;
   onSave: (payload: WorkflowMetadataUpdate) => Promise<void> | void;
+  onExportNoofy: (workflowName: string, exportUrl: string) => void;
 }) {
   const workflowMetadataDraft = useMemo<WorkflowMetadataUpdate>(() => ({
     description: workflow.overview.description,
@@ -687,6 +705,13 @@ function WorkflowDetailsDrawer({
         return;
       }
       window.location.href = url;
+    });
+  }
+
+  function handleNoofyExportClick() {
+    void saveDraft().then((saved) => {
+      if (!saved) return;
+      onExportNoofy(workflow.name, exportWorkflowUrl(workflow.id));
     });
   }
 
@@ -796,19 +821,14 @@ function WorkflowDetailsDrawer({
 
       <div className="workflow-detail-export-actions" aria-label="Workflow export actions">
         {workflow.advanced.can_export_noofy ? (
-          <a
+          <button
             className="primary-button secondary-button--full"
-            href={exportWorkflowUrl(workflow.id)}
-            download
-            onClick={(event) => handleExportClick(
-              event,
-              exportWorkflowUrl(workflow.id),
-              workflowExportFilename(workflow.name, ".noofy"),
-            )}
+            type="button"
+            onClick={handleNoofyExportClick}
           >
             <Download size={15} aria-hidden="true" />
             Export .Noofy
-          </a>
+          </button>
         ) : null}
         <a
           className="secondary-button secondary-button--full"

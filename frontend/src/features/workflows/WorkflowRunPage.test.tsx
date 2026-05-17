@@ -1327,10 +1327,11 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(optionsButton);
 
     expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /export as noofy/i })).toHaveAttribute(
-      "href",
-      "/api/workflows/text_to_image_v0/export",
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /export as noofy/i }));
+    expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Filename")).toHaveValue("Text to Image.noofy");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(optionsButton);
     expect(screen.getByRole("menuitem", { name: /export comfyui json/i })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: /edit dashboard layout/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /edit widgets/i })).toBeInTheDocument();

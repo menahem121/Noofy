@@ -306,11 +306,7 @@ describe("WorkflowsPage", () => {
     const panel = await screen.findByRole("complementary", { name: "Details for Cleanup Flow" });
     expect(panel).toHaveClass("workflow-detail-drawer");
     expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
-    const noofyExport = screen.getByRole("link", { name: "Export .Noofy" });
-    expect(noofyExport).toHaveAttribute(
-      "href",
-      "/api/workflows/imported_cleanup/export",
-    );
+    const noofyExport = screen.getByRole("button", { name: "Export .Noofy" });
     const comfyExport = screen.getByRole("link", { name: "Export ComfyUI JSON" });
     expect(comfyExport).toHaveAttribute(
       "href",
@@ -319,7 +315,7 @@ describe("WorkflowsPage", () => {
     const exportActions = noofyExport.closest(".workflow-detail-export-actions");
     expect(exportActions).not.toBeNull();
     expect(comfyExport.closest(".workflow-detail-export-actions")).toBe(exportActions);
-    expect(Array.from(exportActions!.querySelectorAll("a")).map((link) => link.textContent?.trim())).toEqual([
+    expect(Array.from(exportActions!.querySelectorAll("button, a")).map((action) => action.textContent?.trim())).toEqual([
       "Export .Noofy",
       "Export ComfyUI JSON",
     ]);
@@ -429,11 +425,12 @@ describe("WorkflowsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
 
     expect(screen.queryByRole("menuitem", { name: /remove workflow/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Export .Noofy" })).toHaveAttribute(
-      "href",
-      "/api/workflows/native_text/export",
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export .Noofy" }));
+    expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Filename")).toHaveValue("Native Text.noofy");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
     fireEvent.click(screen.getAllByRole("menuitem", { name: "Open" })[0]);
     expect(onOpenWorkflow).toHaveBeenCalledWith("native_text");
   });

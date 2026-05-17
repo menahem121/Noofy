@@ -9,7 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { exportWorkflowComfyJsonUrl, exportWorkflowUrl } from "../../lib/api/noofyApi";
+import { exportWorkflowComfyJsonUrl } from "../../lib/api/noofyApi";
 import { handleNativeWorkflowExportClick, workflowExportFilename } from "../../lib/workflowExport";
 
 export interface WorkflowActionMenuWorkflow {
@@ -31,6 +31,7 @@ interface WorkflowActionMenuProps {
   onCloseMenu: () => void;
   onEditDashboard: () => void;
   onEditWidgets: () => void;
+  onExportNoofy: () => void;
   onRemove: () => void;
 }
 
@@ -45,11 +46,11 @@ export function WorkflowActionMenu({
   onCloseMenu,
   onEditDashboard,
   onEditWidgets,
+  onExportNoofy,
   onRemove,
 }: WorkflowActionMenuProps) {
   const menuClasses = ["workflow-action-menu", menuClassName].filter(Boolean).join(" ");
   const canExportComfyJson = workflow.can_export_comfyui_json !== false;
-  const exportNoofyUrl = exportWorkflowUrl(workflow.id);
   const exportComfyJsonUrl = exportWorkflowComfyJsonUrl(workflow.id);
 
   function handleExportClick(
@@ -92,19 +93,17 @@ export function WorkflowActionMenu({
             Edit Widgets
           </button>
           {workflow.can_export_noofy ? (
-            <a
+            <button
               role="menuitem"
-              href={exportNoofyUrl}
-              download
-              onClick={(event) => handleExportClick(
-                event,
-                exportNoofyUrl,
-                workflowExportFilename(workflow.name, ".noofy"),
-              )}
+              type="button"
+              onClick={() => {
+                onCloseMenu();
+                onExportNoofy();
+              }}
             >
               <Download size={14} aria-hidden="true" />
               Export .Noofy
-            </a>
+            </button>
           ) : null}
           {canExportComfyJson ? (
             <a

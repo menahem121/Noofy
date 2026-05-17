@@ -24,6 +24,7 @@ import {
   cancelWorkflowImport,
   commitWorkflowImport,
   downloadImportMissingModels,
+  exportWorkflowUrl,
   fetchImportModelDownloadStatus,
   fetchImportModelVerificationStatus,
   fetchWorkflowPackage,
@@ -40,6 +41,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
+import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
 import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
 import {
   fallbackWorkflow,
@@ -311,6 +313,7 @@ export function HomePage({
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
+  const [exportDialog, setExportDialog] = useState<{ workflowName: string; exportUrl: string } | null>(null);
   const [selectedNativeVariants, setSelectedNativeVariants] = useState<Record<string, string | undefined>>({});
   const [homeSearch, setHomeSearch] = useState("");
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
@@ -996,10 +999,20 @@ export function HomePage({
                 }
                 onEditDashboard={() => void handleEditWorkflowCard(workflow, onEditDashboard)}
                 onEditWidgets={() => void handleEditWorkflowCard(workflow, onEditWidgets)}
+                onExportNoofy={() =>
+                  setExportDialog({ workflowName: activeWorkflowTitle(workflow), exportUrl: exportWorkflowUrl(activeWorkflowId(workflow)) })
+                }
                 onRemove={() => void handleRemoveWorkflowCard(workflow)}
               />
             ))}
           </section>
+          {exportDialog ? (
+            <WorkflowExportDialog
+              workflowName={exportDialog.workflowName}
+              exportUrl={exportDialog.exportUrl}
+              onClose={() => setExportDialog(null)}
+            />
+          ) : null}
     </AppLayout>
   );
 }
@@ -1320,6 +1333,7 @@ function WorkflowCardView({
   onVariantChange,
   onEditDashboard,
   onEditWidgets,
+  onExportNoofy,
   onRemove,
 }: {
   workflow: WorkflowCard;
@@ -1332,6 +1346,7 @@ function WorkflowCardView({
   onVariantChange: (workflowId: string) => void;
   onEditDashboard: () => void;
   onEditWidgets: () => void;
+  onExportNoofy: () => void;
   onRemove: () => void;
 }) {
   const StatusIcon = workflowIconStatus(workflow.status);
@@ -1388,6 +1403,7 @@ function WorkflowCardView({
               onCloseMenu={onCloseMenu}
               onEditDashboard={onEditDashboard}
               onEditWidgets={onEditWidgets}
+              onExportNoofy={onExportNoofy}
               onRemove={onRemove}
             />
           ) : null}

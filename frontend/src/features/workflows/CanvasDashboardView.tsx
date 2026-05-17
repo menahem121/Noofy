@@ -28,7 +28,6 @@ import {
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
 import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { handleNativeWorkflowExportClick } from "../../lib/workflowExport";
 import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
@@ -45,6 +44,7 @@ import {
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
+import { WorkflowExportDialog } from "./WorkflowExportDialog";
 
 export interface CanvasRunState {
   isRunning: boolean;
@@ -107,6 +107,7 @@ export function CanvasDashboardView({
   const [movePreview, setMovePreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [dropPreview, setDropPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
@@ -323,18 +324,17 @@ export function CanvasDashboardView({
 
                 {optionsOpen ? (
                   <div className="canvas-options-menu__content" role="menu" aria-label="Workflow options">
-                    <a
+                    <button
                       className="canvas-options-menu__item"
                       role="menuitem"
-                      href={exportNoofyUrl}
-                      download
-                      onClick={(event) => {
+                      type="button"
+                      onClick={() => {
                         setOptionsOpen(false);
-                        handleNativeWorkflowExportClick(event, exportNoofyUrl, exportNoofyFilename);
+                        setExportDialogOpen(true);
                       }}
                     >
                       Export as Noofy
-                    </a>
+                    </button>
                     <button className="canvas-options-menu__item" role="menuitem" type="button" disabled>
                       Export ComfyUI JSON
                     </button>
@@ -444,6 +444,13 @@ export function CanvasDashboardView({
           })}
         </DashboardCanvasSurface>
       </DashboardCanvasFrame>
+      {exportDialogOpen ? (
+        <WorkflowExportDialog
+          workflowName={exportNoofyFilename}
+          exportUrl={exportNoofyUrl}
+          onClose={() => setExportDialogOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

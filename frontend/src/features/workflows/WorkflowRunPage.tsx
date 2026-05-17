@@ -47,7 +47,7 @@ import {
   type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
-import { handleNativeWorkflowExportClick, workflowExportFilename } from "../../lib/workflowExport";
+import { workflowExportFilename } from "../../lib/workflowExport";
 import type {
   DashboardSchema,
   DashboardWidget,
@@ -63,6 +63,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
 import { CanvasDashboardView } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
+import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
 
 interface WorkflowRunPageProps {
@@ -124,6 +125,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -646,20 +648,15 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         </p>
       </div>
       <div className="button-row">
-        <a
+        <button
           className="secondary-button"
-          href={exportWorkflowUrl(workflowId)}
-          download
+          type="button"
           aria-label="Share / Save as .noofy"
-          onClick={(event) => handleNativeWorkflowExportClick(
-            event,
-            exportWorkflowUrl(workflowId),
-            workflowExportFilename(workflowSummary?.name ?? state.packageData?.metadata?.name, ".noofy"),
-          )}
+          onClick={() => setExportDialogOpen(true)}
         >
           <Share2 size={15} aria-hidden="true" />
           Share
-        </a>
+        </button>
         <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
           <RotateCcw size={16} aria-hidden="true" />
           Check Again
@@ -750,6 +747,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       }
     />
   ) : null;
+  const workflowDisplayName = workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow";
+  const exportDialogElement = exportDialogOpen ? (
+    <WorkflowExportDialog
+      workflowName={workflowDisplayName}
+      exportUrl={exportWorkflowUrl(workflowId)}
+      onClose={() => setExportDialogOpen(false)}
+    />
+  ) : null;
 
   if (showCanvasView) {
     return (
@@ -797,6 +802,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         />
         {failureDialogElement}
         {loraBrowserElement}
+        {exportDialogElement}
       </AppLayout>
     );
   }
@@ -886,6 +892,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       </section>
       {failureDialogElement}
       {loraBrowserElement}
+      {exportDialogElement}
     </AppLayout>
   );
 }

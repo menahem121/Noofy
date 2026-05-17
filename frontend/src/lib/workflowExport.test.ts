@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { saveWorkflowExportToNativeFile, workflowExportFilename } from "./workflowExport";
+import {
+  saveWorkflowExportToNativeFile,
+  saveWorkflowExportWithFilename,
+  validateNoofyExportFilename,
+  workflowExportFilename,
+} from "./workflowExport";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -57,6 +62,43 @@ describe("workflowExport", () => {
 
   it("builds filesystem-safe export filenames", () => {
     expect(workflowExportFilename("Portrait/Restore: v1.noofy", ".noofy")).toBe("Portrait-Restore- v1.noofy");
+    expect(workflowExportFilename("text2img", ".noofy")).toBe("text2img.noofy");
+    expect(workflowExportFilename("unknown__text2img__0.1.0", ".noofy")).toBe("text2img.noofy");
     expect(workflowExportFilename("", ".json")).toBe("workflow.json");
+  });
+
+  it("validates and normalizes editable noofy export filenames", () => {
+    expect(validateNoofyExportFilename("text2img")).toMatchObject({
+      valid: true,
+      filename: "text2img.noofy",
+    });
+    expect(validateNoofyExportFilename("bad/name:noofy")).toMatchObject({
+      valid: true,
+      filename: "bad-name-noofy.noofy",
+    });
+    expect(validateNoofyExportFilename("   ")).toMatchObject({
+      valid: false,
+      message: "Enter a filename.",
+    });
+  });
+
+  it("downloads browser exports with the selected filename", async () => {
+    delete window.__TAURI_INTERNALS__;
+    const clicked: string[] = [];
+    const createObjectUrl = vi.fn(() => "blob:noofy-export");
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.download);
+    });
+    fetchMock.mockResolvedValue(new Response(new Uint8Array([110, 111, 111, 102, 121])));
+
+    await expect(saveWorkflowExportWithFilename("/api/workflows/text_to_image_v0/export", "text2img.noofy"))
+      .resolves.toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/workflows/text_to_image_v0/export");
+    expect(clicked).toEqual(["text2img.noofy"]);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:noofy-export");
   });
 });
