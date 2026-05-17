@@ -12,13 +12,14 @@ import json
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.bindings import apply_input_bindings
 from app.workflows.library import WorkflowLibraryMetadata, WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
-from app.workflows.store_paths import mutable_package_dir
+from app.workflows.store_paths import mutable_package_dir, path_is_within
 from app.workflows.user_state import UserStateService
 
 
@@ -71,12 +72,9 @@ class WorkflowExporter:
             zf.writestr("package.json", json.dumps(package_json, indent=2, sort_keys=True))
             self._write_workflow_icon_asset(zf, package_json)
 
-            # comfyui_graph.json — export-time snapshot with current dashboard values applied.
-            bound_graph = self._bound_comfyui_graph(
-                package,
-                package_dir=package_dir,
-                input_values=input_values,
-            )
+            # comfyui_graph.json — the stored opaque execution graph. Portable
+            # package export must not leak local user-state values.
+            bound_graph = self._portable_comfyui_graph(package, package_dir=package_dir)
             zf.writestr(
                 "comfyui_graph.json",
                 json.dumps(bound_graph, indent=2, sort_keys=True),
@@ -93,11 +91,7 @@ class WorkflowExporter:
                 dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
             if not dashboard_data.get("outputs") and package.outputs:
                 dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
-            dashboard_data = self._dashboard_with_user_state(
-                package.metadata.id,
-                dashboard_data,
-                input_values=input_values,
-            )
+            dashboard_data = self._portable_dashboard(dashboard_data)
             zf.writestr("dashboard.json", json.dumps(dashboard_data, indent=2, sort_keys=True))
 
             # capsule.lock.json — if present.
@@ -131,86 +125,26 @@ class WorkflowExporter:
         payload = json.dumps(graph, indent=2, sort_keys=True).encode("utf-8")
         return payload, f"{_safe_filename(workflow_id)}.comfyui.json"
 
-    def _dashboard_with_user_state(
-        self,
-        workflow_id: str,
-        dashboard_data: dict[str, Any],
-        *,
-        input_values: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def _portable_dashboard(self, dashboard_data: dict[str, Any]) -> dict[str, Any]:
         exported = json.loads(json.dumps(dashboard_data))
-
-        values: dict[str, Any] = {}
-        if self.user_state_service is not None:
-            user_state = self.user_state_service.get(workflow_id)
-            values.update(user_state.values or {})
-        if input_values is not None:
-            values.update(input_values)
-        credential_input_ids = _credential_input_ids(exported)
-        if values:
-            for item in exported.get("inputs") or []:
-                if not isinstance(item, dict):
-                    continue
-                input_id = item.get("id")
-                if isinstance(input_id, str) and input_id in values:
-                    item["default"] = _export_safe_user_value(
-                        values[input_id],
-                        credential=bool(input_id in credential_input_ids),
-                    )
-
-        layout_overrides = {}
-        output_preferences = {}
-        if self.user_state_service is not None:
-            user_state = self.user_state_service.get(workflow_id)
-            layout_overrides = user_state.layout_overrides or {}
-            output_preferences = user_state.output_preferences or {}
         for section in exported.get("sections") or []:
             if not isinstance(section, dict):
                 continue
-            grouped_control_ids: set[str] = set()
-            for group in section.get("groups") or []:
-                if not isinstance(group, dict):
-                    continue
-                for control_id in group.get("control_ids") or []:
-                    if isinstance(control_id, str):
-                        grouped_control_ids.add(control_id)
-                group_id = group.get("id")
-                if not isinstance(group_id, str):
-                    continue
-                layout = layout_overrides.get(group_id)
-                if layout is not None:
-                    existing = group.get("layout") if isinstance(group.get("layout"), dict) else {}
-                    group["layout"] = {
-                        **existing,
-                        "x": layout.x,
-                        "y": layout.y,
-                        "w": layout.w,
-                        "h": layout.h,
-                    }
             for control in section.get("controls") or []:
                 if not isinstance(control, dict):
                     continue
-                control_id = control.get("id")
-                if not isinstance(control_id, str):
-                    continue
-                layout = layout_overrides.get(control_id)
-                if layout is not None and control_id not in grouped_control_ids:
-                    existing = control.get("layout") if isinstance(control.get("layout"), dict) else {}
-                    control["layout"] = {
-                        **existing,
-                        "x": layout.x,
-                        "y": layout.y,
-                        "w": layout.w,
-                        "h": layout.h,
-                    }
-                preference = output_preferences.get(control_id)
-                if preference is not None:
-                    control["show_download"] = preference.auto_save
                 if control.get("type") == "api_credential":
                     control.pop("configured", None)
                     control.pop("last_four", None)
                     control.pop("value", None)
 
+        credential_input_ids = _credential_input_ids(exported)
+        for item in exported.get("inputs") or []:
+            if not isinstance(item, dict):
+                continue
+            input_id = item.get("id")
+            if isinstance(input_id, str) and input_id in credential_input_ids:
+                item["default"] = None
         return exported
 
     # ------------------------------------------------------------------
@@ -229,6 +163,17 @@ class WorkflowExporter:
         if stored_graph is not None:
             package = package.model_copy(update={"comfyui_graph": stored_graph})
         return apply_input_bindings(package, values)
+
+    def _portable_comfyui_graph(
+        self,
+        package: WorkflowPackage,
+        *,
+        package_dir: Path | None,
+    ) -> dict[str, Any]:
+        stored_graph = self._stored_comfyui_graph(package_dir)
+        if stored_graph is not None:
+            return stored_graph
+        return json.loads(json.dumps(package.comfyui_graph))
 
     def _write_workflow_icon_asset(
         self,
@@ -292,7 +237,11 @@ class WorkflowExporter:
     def _find_package_dir(self, workflow_id: str) -> Path | None:
         package = self._get_package(workflow_id)
         candidate = mutable_package_dir(self.workflow_store_dir, package)
-        if candidate is not None and candidate.exists():
+        if (
+            candidate is not None
+            and candidate.exists()
+            and path_is_within(self.workflow_store_dir, candidate)
+        ):
             return candidate
 
         for root in self._package_search_roots():
@@ -308,7 +257,11 @@ class WorkflowExporter:
                 except Exception:
                     continue
                 metadata = data.get("metadata")
-                if isinstance(metadata, dict) and metadata.get("id") == workflow_id:
+                if (
+                    isinstance(metadata, dict)
+                    and metadata.get("id") == workflow_id
+                    and path_is_within(root, package_file)
+                ):
                     return package_file.parent
         return None
 
@@ -335,38 +288,45 @@ def _build_export_package_json(
     Strips trust signatures. Sets source_policy to 'local'.
     Never embeds dashboard data.
     """
-    # Try to read the stored package.json as the base (it was written during import).
     stored_file = package_dir / "package.json" if package_dir is not None else None
-    if stored_file is not None and stored_file.exists():
-        with stored_file.open("r", encoding="utf-8") as f:
-            base: dict[str, Any] = json.load(f)
-    else:
-        base = package.model_dump(mode="json", exclude_none=True)
-
-    # Remove trust artefacts so the recipient knows this is not verified.
-    base.pop("signature", None)
-    base.pop("signatures", None)
-    base.pop("signed_registry_metadata", None)
-
-    # Mark as local/user-authored community, not verified.
-    base["source_policy"] = "local"
-    base["trust_level"] = "quarantined_community"
-
-    # Ensure dashboard data is not embedded.
-    base.pop("inputs", None)
-    base.pop("outputs", None)
-    base.pop("dashboard", None)
-    base.pop("comfyui_graph", None)
-
-    # Ensure publisher and package identifiers are present.
+    stored = _read_stored_package_json(stored_file)
+    package_metadata = package.metadata.model_dump(mode="json")
     if package.identity:
-        base.setdefault("publisher_id", package.identity.publisher_id)
-        base.setdefault("package_id", package.identity.package_id)
-        base.setdefault("version", package.identity.version)
+        publisher_id = package.identity.publisher_id
+        package_id = package.identity.package_id
+        version = package.identity.version
     else:
-        base.setdefault("publisher_id", "noofy")
-        base.setdefault("package_id", package.metadata.id)
-        base.setdefault("version", package.metadata.version)
+        publisher_id = "noofy"
+        package_id = package.metadata.id
+        version = package.metadata.version
+
+    base: dict[str, Any] = {
+        "schema_version": _stored_string(stored, "schema_version", "0.1.0"),
+        "engine": package.engine,
+        "metadata": package_metadata,
+        "display_name": package_metadata["name"],
+        "description": package_metadata.get("description", ""),
+        "author": package_metadata.get("author", ""),
+        "website": package_metadata.get("website", ""),
+        "category": package_metadata.get("category", ""),
+        "tags": package_metadata.get("tags", []),
+        "icon": package_metadata.get("icon", ""),
+        "publisher_id": publisher_id,
+        "package_id": package_id,
+        "version": version,
+        "required_models": _export_safe_required_models(
+            [
+                model.model_dump(mode="json", exclude_none=True)
+                for model in package.required_models
+            ]
+        ),
+        "custom_nodes": _export_safe_custom_nodes(package),
+        "source_policy": "local",
+        "trust_level": "quarantined_community",
+    }
+    smoke_tests = package.smoke_tests.model_dump(mode="json", exclude_none=True)
+    if smoke_tests:
+        base["smoke_tests"] = smoke_tests
 
     if metadata is not None:
         _apply_library_metadata(base, metadata)
@@ -374,6 +334,21 @@ def _build_export_package_json(
         _apply_export_metadata(base, export_metadata)
 
     return base
+
+
+def _read_stored_package_json(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_string(data: dict[str, Any], key: str, fallback: str) -> str:
+    value = data.get(key)
+    return value if isinstance(value, str) and value.strip() else fallback
 
 
 def stored_comfyui_graph_file(package_dir: Path) -> Path:
@@ -432,6 +407,76 @@ def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> No
         base["tags"] = cleaned_tags
 
     base["metadata"] = package_metadata
+
+
+def _export_safe_required_models(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    models: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        exported = dict(item)
+        exported.pop("local_file_available_at_export", None)
+        exported.pop("asset_ownership", None)
+        source_url = exported.get("source_url")
+        if isinstance(source_url, str):
+            exported["source_url"] = _redact_url_secret(source_url)
+        source_urls = exported.get("source_urls")
+        if isinstance(source_urls, list):
+            exported["source_urls"] = [
+                _redact_url_secret(url) for url in source_urls if isinstance(url, str)
+            ]
+        models.append(exported)
+    return models
+
+
+def _export_safe_custom_nodes(package: WorkflowPackage) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for node in package.custom_nodes:
+        exported = node.model_dump(mode="json", exclude_none=True)
+        exported.pop("source_cache_ref", None)
+        nodes.append(exported)
+    return nodes
+
+
+def _redact_url_secret(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    redacted = [
+        (key, "[redacted]" if _is_secret_query_key(key) else value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+    ]
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            parts.path,
+            urlencode(redacted, doseq=True),
+            parts.fragment,
+        )
+    )
+
+
+def _is_secret_query_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return normalized in {
+        "api_key",
+        "apikey",
+        "access_token",
+        "token",
+        "auth",
+        "authorization",
+        "secret",
+        "password",
+        "signature",
+        "x_amz_signature",
+        "x_goog_signature",
+    }
 
 
 def _package_metadata_icon(package_json: dict[str, Any]) -> str | None:

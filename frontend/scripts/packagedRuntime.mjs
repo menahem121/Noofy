@@ -43,9 +43,6 @@ export function currentRuntimeTarget() {
     assertSupportedRuntimeTarget(explicitTarget);
     return explicitTarget;
   }
-  if (process.platform === "darwin") {
-    return "macos-arm64";
-  }
   return runtimeTargetFor(process.platform, process.arch);
 }
 

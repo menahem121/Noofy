@@ -43,5 +43,5 @@ export async function openFolder(path: string): Promise<void> {
     await invoke("open_folder", { path });
     return;
   }
-  console.info("[noofy] folder path:", path);
+  window.alert("Folder opening is only available in the desktop app.");
 }

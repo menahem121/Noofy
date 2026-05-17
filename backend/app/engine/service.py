@@ -42,7 +42,6 @@ from app.runtime.comfyui.comfyui_updates import (
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
     InstallState,
-    InstallStatus,
 )
 from app.runtime.comfyui.launch_settings import (
     ComfyUILaunchSettings,
@@ -160,6 +159,8 @@ class EngineService:
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
         self.model_ownership_store = None
+        if self.dashboard_authoring is not None:
+            self.dashboard_authoring.object_info_provider = self._fetch_core_object_info_for_authoring
         self.workflow_library_service: WorkflowLibraryService = workflow_library_service or WorkflowLibraryService(
             workflow_loader=self.workflow_loader,
             model_availability_service=self.model_availability_service,
@@ -185,6 +186,7 @@ class EngineService:
         self.run_job_service: RunJobService = run_job_service or RunJobService(
             runner_supervisor=runner_supervisor,
             log_store=log_store,
+            workflow_loader=self.workflow_loader,
         )
         self.model_availability_service.cleanup_interrupted_downloads()
         self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
@@ -271,6 +273,7 @@ class EngineService:
                 runtime_manager=self.runtime_manager,
                 memory_service=self.memory_service,
                 imported_package_store=self.imported_package_store,
+                workflow_summary=self.workflow_library_service.workflow_summary,
             )
         )
 
@@ -385,37 +388,10 @@ class EngineService:
         )
 
     def workflow_status(self, workflow_id: str) -> dict[str, object]:
-        package = self.workflow_loader.get_package(workflow_id)
-        install = self.get_install_state(workflow_id)
-        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
-        required_actions = _required_actions_for_workflow(package, install)
-        return {
-            "workflow_id": workflow_id,
-            "workflow": self._workflow_summary(package),
-            "install": install,
-            "required_actions": required_actions,
-            "compatibility_guidance": _compatibility_guidance(package),
-            "runner": runner.model_dump(mode="json") if runner is not None else None,
-            "runner_status": runner.status.value if runner is not None else "not_started",
-            "can_prepare": install["status"] not in {InstallStatus.UNSUPPORTED.value, InstallStatus.BLOCKED_BY_POLICY.value},
-            "can_cancel_preparation": False,
-            "can_cancel_job": runner.current_job_id is not None if runner is not None else False,
-        }
+        return self.workflow_runner_lifecycle_service.workflow_status(workflow_id)
 
     def cancel_preparation(self, workflow_id: str) -> dict[str, object]:
-        self.log_store.add(
-            "info",
-            "Workflow preparation cancellation requested",
-            "engine.service",
-            workflow_id=workflow_id,
-            details={"status": "no_active_cancelable_preparation"},
-        )
-        return {
-            "workflow_id": workflow_id,
-            "status": "no_active_cancelable_preparation",
-            "user_facing_message": "No preparation is currently running for this workflow.",
-            "cancelable": False,
-        }
+        return self.workflow_runner_lifecycle_service.cancel_preparation(workflow_id)
 
     def diagnostics_payload(
         self,
@@ -520,10 +496,18 @@ class EngineService:
             raise KeyError("Workflow import is not configured.")
         return self.workflow_import_orchestrator.cancel_import_model_download_job(import_session_id, job_id)
 
-    def commit_workflow_import(self, import_session_id: str) -> StagedWorkflowImportResponse:
+    def commit_workflow_import(
+        self,
+        import_session_id: str,
+        *,
+        duplicate_action: str | None = None,
+    ) -> StagedWorkflowImportResponse:
         if self.workflow_import_orchestrator is None:
             raise NoofyImportError("Workflow import is not configured.")
-        return self.workflow_import_orchestrator.commit_workflow_import(import_session_id)
+        return self.workflow_import_orchestrator.commit_workflow_import(
+            import_session_id,
+            duplicate_action=duplicate_action,
+        )
 
     def cancel_workflow_import(self, import_session_id: str) -> dict[str, object]:
         if self.workflow_import_orchestrator is None:
@@ -644,11 +628,8 @@ class EngineService:
         self, workflow_id: str, filename: str, data: bytes, content_type: str
     ) -> dict[str, str]:
         """Upload or stage an image through the workflow-selected engine adapter."""
-        package = self.workflow_loader.get_package(workflow_id)
-        runner = self.runner_supervisor.acquire_runner(package)
-        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
-        return await adapter.upload_workflow_image(
-            package,
+        return await self.run_job_service.upload_workflow_image(
+            workflow_id,
             filename,
             data,
             content_type,
@@ -996,54 +977,6 @@ class EngineService:
         queue_id: str | None = None,
     ) -> dict[str, Any]:
         return self.memory_service.memory_status_payload(decision, queue_id=queue_id)
-
-
-def _required_actions_for_workflow(package: WorkflowPackage, install: dict[str, object]) -> list[dict[str, object]]:
-    actions: list[dict[str, object]] = []
-    if package.unresolved_runtime_inputs:
-        actions.append(
-            {
-                "kind": "input_setup",
-                "status": "required",
-                "user_facing_message": "Choose the missing input files before running this workflow.",
-                "count": len(package.unresolved_runtime_inputs),
-            }
-        )
-    status = install.get("status")
-    if status in {InstallStatus.PENDING.value, InstallStatus.IMPORTED.value, InstallStatus.NEEDS_INPUT_SETUP.value}:
-        actions.append(
-            {
-                "kind": "prepare_workflow",
-                "status": "available",
-                "user_facing_message": "Prepare this workflow before running it.",
-            }
-        )
-    if status in {
-        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value,
-        InstallStatus.BLOCKED_BY_POLICY.value,
-        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE.value,
-        InstallStatus.FAILED.value,
-        InstallStatus.UNSUPPORTED.value,
-    }:
-        actions.append(
-            {
-                "kind": "review_preparation_issue",
-                "status": "required",
-                "user_facing_message": install.get("user_facing_message") or "This workflow needs attention.",
-            }
-        )
-    return actions
-
-
-def _compatibility_guidance(package: WorkflowPackage) -> dict[str, object] | None:
-    observed = package.observed_hardware or {}
-    if not observed:
-        return None
-    return {
-        "kind": "observed_creator_hardware",
-        "user_facing_message": "This hardware information is guidance from previous runs, not a guaranteed requirement.",
-        "observed_hardware": observed,
-    }
 
 
 def _install_developer_details(state: InstallState) -> dict[str, object]:

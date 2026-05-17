@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.diagnostics.store import LogStore
+from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, JobProgress, LogLevel
 from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerSupervisor
+from app.workflows.loader import WorkflowPackageLoader
 
 
 class RunJobService:
@@ -15,9 +16,15 @@ class RunJobService:
     remains injected from EngineService until that state becomes a service.
     """
 
-    def __init__(self, runner_supervisor: RunnerSupervisor, log_store: LogStore) -> None:
+    def __init__(
+        self,
+        runner_supervisor: RunnerSupervisor,
+        log_store: DiagnosticsStore,
+        workflow_loader: WorkflowPackageLoader | None = None,
+    ) -> None:
         self.runner_supervisor = runner_supervisor
         self.log_store = log_store
+        self.workflow_loader = workflow_loader
         self.queued_workflow_run_progress: Callable[[str], JobProgress | None] | None = None
         self.cancel_queued_workflow_run: Callable[[str], JobProgress | None] | None = None
 
@@ -36,7 +43,10 @@ class RunJobService:
             if canceled is not None:
                 return canceled
         adapter = self._adapter_for_job(job_id)
-        return await adapter.cancel_job(job_id)
+        progress = await adapter.cancel_job(job_id)
+        if progress.status in {"completed", "failed", "canceled"}:
+            self.mark_job_finished(job_id)
+        return progress
 
     async def fetch_output(
         self,
@@ -47,6 +57,25 @@ class RunJobService:
     ) -> tuple[bytes, str]:
         adapter = self._adapter_for_job(job_id)
         return await adapter.fetch_output(job_id, filename, subfolder, output_type)
+
+    async def upload_workflow_image(
+        self,
+        workflow_id: str,
+        filename: str,
+        data: bytes,
+        content_type: str,
+    ) -> dict[str, str]:
+        if self.workflow_loader is None:
+            raise KeyError(f"Workflow image uploads are not configured: {workflow_id}")
+        package = self.workflow_loader.get_package(workflow_id)
+        runner = self.runner_supervisor.acquire_runner(package)
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+        return await adapter.upload_workflow_image(
+            package,
+            filename,
+            data,
+            content_type,
+        )
 
     def list_job_logs(
         self,
@@ -59,6 +88,13 @@ class RunJobService:
 
     def adapter_for_job(self, job_id: str) -> EngineAdapter:
         return self._adapter_for_job(job_id)
+
+    def mark_job_finished(self, job_id: str) -> None:
+        try:
+            runner = self.runner_supervisor.runner_for_job(job_id)
+        except JobRunnerNotFoundError:
+            return
+        self.runner_supervisor.mark_runner_job_finished(runner.runner_id, job_id)
 
     def _adapter_for_job(self, job_id: str) -> EngineAdapter:
         try:

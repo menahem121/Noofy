@@ -8,6 +8,7 @@ from app.composition import ApiServices
 from app.engine.service import EngineService
 from app.gallery import GalleryStore
 from app.history import HistoryService
+from app.models.civitai_loras import CivitaiLoraBrowserService
 from app.models.downloads import ModelDownloadJobService
 from app.models.inventory import ModelInventoryService
 from app.models.tags import ModelTagStore
@@ -97,6 +98,14 @@ def get_model_inventory_service(
     return services.model_inventory_service
 
 
+def get_civitai_lora_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> CivitaiLoraBrowserService:
+    if services.civitai_lora_service is None:
+        raise RuntimeError("CivitaiLoraBrowserService is not configured.")
+    return services.civitai_lora_service
+
+
 EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
 ComfyUISidecarServiceDep = Annotated[ComfyUISidecarService, Depends(get_comfyui_sidecar_service)]
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
@@ -107,6 +116,7 @@ ModelFolderServiceDep = Annotated[ModelFolderSettingsService, Depends(get_model_
 ModelTagStoreDep = Annotated[ModelTagStore, Depends(get_model_tag_store)]
 ModelDownloadServiceDep = Annotated[ModelDownloadJobService, Depends(get_model_download_service)]
 ModelInventoryServiceDep = Annotated[ModelInventoryService, Depends(get_model_inventory_service)]
+CivitaiLoraServiceDep = Annotated[CivitaiLoraBrowserService, Depends(get_civitai_lora_service)]
 
 
 def get_workflow_library_service(
@@ -143,9 +153,9 @@ WorkflowExporterDep = Annotated[WorkflowExporter, Depends(get_workflow_exporter)
 def get_workflow_import_orchestrator(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> WorkflowImportOrchestrator:
-    if services.workflow_import_orchestrator is not None:
-        return services.workflow_import_orchestrator
-    return cast(WorkflowImportOrchestrator, services.engine_service)
+    if services.workflow_import_orchestrator is None:
+        raise RuntimeError("WorkflowImportOrchestrator is not configured.")
+    return services.workflow_import_orchestrator
 
 
 WorkflowImportOrchestratorDep = Annotated[
@@ -157,9 +167,9 @@ WorkflowImportOrchestratorDep = Annotated[
 def get_workflow_runner_lifecycle_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> WorkflowRunnerLifecycleService:
-    if services.workflow_runner_lifecycle_service is not None:
-        return services.workflow_runner_lifecycle_service
-    return cast(WorkflowRunnerLifecycleService, services.engine_service)
+    if services.workflow_runner_lifecycle_service is None:
+        raise RuntimeError("WorkflowRunnerLifecycleService is not configured.")
+    return services.workflow_runner_lifecycle_service
 
 
 WorkflowRunnerLifecycleServiceDep = Annotated[
@@ -171,9 +181,9 @@ WorkflowRunnerLifecycleServiceDep = Annotated[
 def get_run_job_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> RunJobService:
-    if services.run_job_service is not None:
-        return services.run_job_service
-    return cast(RunJobService, services.engine_service)
+    if services.run_job_service is None:
+        raise RuntimeError("RunJobService is not configured.")
+    return services.run_job_service
 
 
 RunJobServiceDep = Annotated[RunJobService, Depends(get_run_job_service)]
@@ -182,9 +192,9 @@ RunJobServiceDep = Annotated[RunJobService, Depends(get_run_job_service)]
 def get_run_orchestrator(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> RunOrchestrator:
-    if services.run_orchestrator is not None:
-        return services.run_orchestrator
-    return cast(RunOrchestrator, services.engine_service)
+    if services.run_orchestrator is None:
+        raise RuntimeError("RunOrchestrator is not configured.")
+    return services.run_orchestrator
 
 
 RunOrchestratorDep = Annotated[RunOrchestrator, Depends(get_run_orchestrator)]
@@ -193,9 +203,9 @@ RunOrchestratorDep = Annotated[RunOrchestrator, Depends(get_run_orchestrator)]
 def get_run_result_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> RunResultService:
-    if services.run_result_service is not None:
-        return services.run_result_service
-    return cast(RunResultService, services.engine_service)
+    if services.run_result_service is None:
+        raise RuntimeError("RunResultService is not configured.")
+    return services.run_result_service
 
 
 RunResultServiceDep = Annotated[RunResultService, Depends(get_run_result_service)]

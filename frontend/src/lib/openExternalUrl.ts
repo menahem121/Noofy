@@ -7,6 +7,6 @@ export async function openExternalUrl(url: string): Promise<void> {
       window.open(url, "_blank", "noopener,noreferrer");
     }
   } catch (error) {
-    console.error("[noofy] failed to open external URL:", url, error);
+    console.error("[noofy] failed to open external URL:", error);
   }
 }

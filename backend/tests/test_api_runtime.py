@@ -2,15 +2,16 @@ import asyncio
 import types
 
 import pytest
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from app.api.schemas import ComfyUILaunchSettings
-from app.composition import create_api_services
+from app.composition import ApiServices, create_api_services
 from app.core.config import settings as real_settings
 from app.diagnostics import LogStore
 from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
 from app import main as main_module
-from app.main import create_app
+from app.main import create_app, _sanitized_request_validation_exception_handler
 from app.runtime.comfyui.launch_settings import comfyui_launch_response
 
 
@@ -51,6 +52,14 @@ class FakeEngineService:
             "error": None,
         }
 
+    async def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+class FakeRunJobService:
+    def __init__(self, log_store: LogStore | None = None) -> None:
+        self.log_store = log_store
+
     async def fetch_output(
         self,
         job_id: str,
@@ -64,8 +73,35 @@ class FakeEngineService:
         assert output_type == "output"
         return b"image-bytes", "image/png"
 
-    async def shutdown(self) -> None:
-        self.shutdown_called = True
+    def list_job_logs(self, job_id: str, *, level=None, limit: int = 200):
+        assert self.log_store is not None
+        return self.log_store.list_events(job_id=job_id, level=level, limit=limit)
+
+
+def _services(engine_service=None, *, run_job_service=None) -> ApiServices:
+    placeholder = object()
+    return ApiServices(
+        engine_service=engine_service or FakeEngineService(),
+        comfyui_sidecar_service=placeholder,
+        user_state_service=placeholder,
+        asset_service=placeholder,
+        gallery_store=placeholder,
+        api_key_service=placeholder,
+        model_folder_service=placeholder,
+        model_tag_store=placeholder,
+        model_ownership_store=placeholder,
+        model_inventory_service=placeholder,
+        model_download_service=placeholder,
+        workflow_library_service=None,
+        dashboard_authoring_service=None,
+        workflow_exporter=None,
+        workflow_import_orchestrator=None,
+        workflow_runner_lifecycle_service=None,
+        run_job_service=run_job_service,
+        run_orchestrator=None,
+        run_result_service=None,
+        history_service=None,
+    )
 
 
 class FakeComfyUISidecarService:
@@ -177,7 +213,14 @@ def test_diagnostic_api_endpoints_read_from_shared_injected_store(monkeypatch) -
     log_store.add("warning", "Job diagnostic", "test", job_id="job-1")
     latest_error = log_store.add("error", "Latest failure", "test", job_id="job-1")
 
-    with TestClient(create_app(engine_service=SharedDiagnosticsEngineService(log_store))) as client:
+    with TestClient(
+        create_app(
+            services=_services(
+                SharedDiagnosticsEngineService(log_store),
+                run_job_service=FakeRunJobService(log_store),
+            )
+        )
+    ) as client:
         logs_response = client.get("/api/logs")
         job_logs_response = client.get("/api/jobs/job-1/logs")
         health_response = client.get("/api/health")
@@ -200,6 +243,29 @@ def test_diagnostic_api_endpoints_read_from_shared_injected_store(monkeypatch) -
     assert health_payload["latest_error"]["message"] == "Latest failure"
 
 
+@pytest.mark.anyio
+async def test_request_validation_handler_does_not_echo_request_inputs() -> None:
+    response = await _sanitized_request_validation_exception_handler(
+        request=object(),
+        exc=RequestValidationError(
+            [
+                {
+                    "loc": ("body", "inputs", "prompt"),
+                    "msg": "Input should be a valid string",
+                    "type": "string_type",
+                    "input": "private prompt with api_key=secret",
+                }
+            ]
+        ),
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 422
+    assert "Request validation failed." in body
+    assert "private prompt" not in body
+    assert "secret" not in body
+
+
 def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
     fake_service = FakeEngineService()
 
@@ -215,7 +281,11 @@ def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
 
 def test_job_output_view_endpoint_returns_backend_owned_media(monkeypatch) -> None:
 
-    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+    with TestClient(
+        create_app(
+            services=_services(run_job_service=FakeRunJobService()),
+        )
+    ) as client:
         response = client.get(
             "/api/jobs/job-1/outputs/view",
             params={

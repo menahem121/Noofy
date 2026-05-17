@@ -88,6 +88,27 @@ def test_diagnostic_payload_redacts_private_paths_from_default_message() -> None
     assert "[local-path-redacted]" in payload["message"]
 
 
+def test_log_store_redacts_prompt_like_details_and_truncates_large_payloads() -> None:
+    store = LogStore()
+    event = store.add(
+        "warning",
+        "payload was too large",
+        "test",
+        details={
+            "prompt": "a private full user prompt",
+            "prompt_id": "job-1",
+            "items": list(range(60)),
+            "large_text": "x" * 2500,
+        },
+    )
+
+    assert event.details["prompt"] == "[redacted]"
+    assert event.details["prompt_id"] == "job-1"
+    assert len(event.details["items"]) == 51
+    assert event.details["items"][-1] == "[truncated 10 more items]"
+    assert "[truncated 500 chars]" in event.details["large_text"]
+
+
 def test_install_developer_details_redacts_private_paths() -> None:
     state = InstallState(
         schema_version="0.1.0",

@@ -38,6 +38,8 @@ export interface WorkflowSummary {
   trust?: WorkflowTrustSummary;
   status?: string;
   status_label?: string;
+  dashboard_status?: "configured" | "not_configured" | "invalid" | string;
+  dashboard_ready?: boolean;
   unresolved_input_count?: number;
   custom_node_count?: number;
   required_model_count?: number;
@@ -313,6 +315,13 @@ export interface WorkflowImportResponse {
   custom_node_count: number;
   unresolved_input_count: number;
   model_summary?: RequiredModelSummary | null;
+  duplicate_identity?: {
+    status: string;
+    user_facing_message: string;
+    existing_workflow?: WorkflowSummary;
+    incoming_workflow?: WorkflowSummary;
+    actions?: string[];
+  } | null;
 }
 
 // ─── Workflow package ─────────────────────────────────────────────────────────
@@ -593,9 +602,10 @@ export function cancelImportModelDownload(importSessionId: string, jobId: string
   );
 }
 
-export function commitWorkflowImport(importSessionId: string) {
+export function commitWorkflowImport(importSessionId: string, duplicateAction?: "replace" | "copy") {
   return postJson<WorkflowImportResponse>(
     `/workflows/import/${encodeURIComponent(importSessionId)}/commit`,
+    duplicateAction ? { duplicate_action: duplicateAction } : undefined,
   );
 }
 
@@ -676,7 +686,7 @@ export async function uploadDashboardAsset(
     `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/image`,
     { method: "POST", headers, body: formData },
   );
-  if (!response.ok) throw new Error(`Asset upload failed: ${response.status}`);
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   return response.json() as Promise<DashboardAssetUploadResponse>;
 }
 
@@ -704,7 +714,7 @@ export async function fetchAssetBlobUrl(assetId: string): Promise<string> {
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${getApiBaseUrl()}/assets/${encodeURIComponent(assetId)}`, { headers });
-  if (!response.ok) throw new Error(`Asset not found: ${response.status}`);
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 }
@@ -723,6 +733,6 @@ export async function uploadWorkflowImage(workflowId: string, file: File): Promi
     `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/uploads/image`,
     { method: "POST", headers, body: formData },
   );
-  if (!response.ok) throw new Error(`Image upload failed: ${response.status}`);
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   return response.json() as Promise<{ filename: string }>;
 }

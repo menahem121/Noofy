@@ -10,6 +10,9 @@ from app.workflows.assets import AssetUploadError, DashboardAssetService
 
 
 class FakeEngineService:
+    def __init__(self) -> None:
+        self.workflow_library_service = self
+
     def list_workflows(self):
         return []
 
@@ -19,6 +22,7 @@ class FakeEngineService:
 
 class IconInUseEngineService(FakeEngineService):
     def __init__(self, icon_id: str) -> None:
+        super().__init__()
         self.icon_id = icon_id
 
     def list_workflows(self):

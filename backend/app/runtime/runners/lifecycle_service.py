@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Callable
 
 from pydantic import ValidationError
 
@@ -71,6 +72,7 @@ class WorkflowRunnerLifecycleService:
         runtime_manager: RuntimeManager | None = None,
         memory_service: object | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
+        workflow_summary: Callable[[WorkflowPackage], dict[str, object]] | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -81,6 +83,7 @@ class WorkflowRunnerLifecycleService:
         self.runtime_manager = runtime_manager
         self.memory_service = memory_service
         self.imported_package_store = imported_package_store
+        self.workflow_summary = workflow_summary
 
     # ------------------------------------------------------------------
     # Queued start handoff and cancellation (existing)
@@ -235,6 +238,49 @@ class WorkflowRunnerLifecycleService:
         return {
             "workflow_id": workflow_id,
             "developer_details": _install_developer_details(state),
+        }
+
+    def workflow_status(self, workflow_id: str) -> dict[str, object]:
+        package = self.workflow_loader.get_package(workflow_id)
+        install = self.get_install_state(workflow_id)
+        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "workflow": self._workflow_summary(package),
+            "install": install,
+            "required_actions": _required_actions_for_workflow(package, install),
+            "compatibility_guidance": _compatibility_guidance(package),
+            "runner": runner.model_dump(mode="json") if runner is not None else None,
+            "runner_status": runner.status.value if runner is not None else "not_started",
+            "can_prepare": install["status"]
+            not in {InstallStatus.UNSUPPORTED.value, InstallStatus.BLOCKED_BY_POLICY.value},
+            "can_cancel_preparation": False,
+            "can_cancel_job": runner.current_job_id is not None if runner is not None else False,
+        }
+
+    def cancel_preparation(self, workflow_id: str) -> dict[str, object]:
+        self.workflow_loader.get_package(workflow_id)
+        self.log_store.add(
+            "info",
+            "Workflow preparation cancellation requested",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={"status": "no_active_cancelable_preparation"},
+        )
+        return {
+            "workflow_id": workflow_id,
+            "status": "no_active_cancelable_preparation",
+            "user_facing_message": "No preparation is currently running for this workflow.",
+            "cancelable": False,
+        }
+
+    def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
+        if self.workflow_summary is not None:
+            return self.workflow_summary(package)
+        return {
+            "id": package.metadata.id,
+            "name": package.metadata.name,
+            "version": package.metadata.version,
         }
 
     def preparable_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
@@ -1013,6 +1059,62 @@ def _effective_prepare_source_policy(
     else:
         model_source_trust = policy.model_source_trust
     return policy.model_copy(update={"model_source_trust": model_source_trust})
+
+
+def _required_actions_for_workflow(
+    package: WorkflowPackage,
+    install: dict[str, object],
+) -> list[dict[str, object]]:
+    actions: list[dict[str, object]] = []
+    if package.unresolved_runtime_inputs:
+        actions.append(
+            {
+                "kind": "input_setup",
+                "status": "required",
+                "user_facing_message": "Choose the missing input files before running this workflow.",
+                "count": len(package.unresolved_runtime_inputs),
+            }
+        )
+    status = install.get("status")
+    if status in {
+        InstallStatus.PENDING.value,
+        InstallStatus.IMPORTED.value,
+        InstallStatus.NEEDS_INPUT_SETUP.value,
+    }:
+        actions.append(
+            {
+                "kind": "prepare_workflow",
+                "status": "available",
+                "user_facing_message": "Prepare this workflow before running it.",
+            }
+        )
+    if status in {
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value,
+        InstallStatus.BLOCKED_BY_POLICY.value,
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE.value,
+        InstallStatus.FAILED.value,
+        InstallStatus.UNSUPPORTED.value,
+    }:
+        actions.append(
+            {
+                "kind": "review_preparation_issue",
+                "status": "required",
+                "user_facing_message": install.get("user_facing_message")
+                or "This workflow needs attention.",
+            }
+        )
+    return actions
+
+
+def _compatibility_guidance(package: WorkflowPackage) -> dict[str, object] | None:
+    observed = package.observed_hardware or {}
+    if not observed:
+        return None
+    return {
+        "kind": "observed_creator_hardware",
+        "user_facing_message": "This hardware information is guidance from previous runs, not a guaranteed requirement.",
+        "observed_hardware": observed,
+    }
 
 
 def _install_developer_details(state: InstallState) -> dict[str, object]:

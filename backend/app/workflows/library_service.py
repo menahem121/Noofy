@@ -15,7 +15,11 @@ from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import WorkflowPackage
-from app.workflows.store_paths import mutable_package_dir, safe_store_segment
+from app.workflows.store_paths import (
+    assert_path_within,
+    mutable_package_dir,
+    safe_store_segment,
+)
 
 
 class WorkflowLibraryService:
@@ -113,6 +117,9 @@ class WorkflowLibraryService:
             },
         }
 
+    def workflow_package_payload(self, workflow_id: str) -> dict[str, object]:
+        return self.workflow_loader.get_package(workflow_id).model_dump()
+
     def update_workflow_metadata(
         self,
         workflow_id: str,
@@ -150,6 +157,14 @@ class WorkflowLibraryService:
         package_dir = self._mutable_package_dir(package)
         if package_dir is None or not package_dir.exists() or not self._can_remove_workflow(package):
             raise ValueError("Native Noofy workflows cannot be removed.")
+        root_dir = (
+            self.imported_package_store.root_dir
+            if self.imported_package_store is not None
+            else settings.paths.workflow_packages_store_dir
+        )
+        assert_path_within(root_dir, package_dir, purpose="remove workflow")
+        if package_dir.is_symlink() or not package_dir.is_dir():
+            raise ValueError("Workflow package path is not a removable directory.")
         workflow_snapshot = self.workflow_summary(package)
         shutil.rmtree(package_dir)
         if self.workflow_library_store is not None:
@@ -194,22 +209,17 @@ class WorkflowLibraryService:
         )
 
     def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
-        status = package.import_metadata.status if package.import_metadata else "installed"
-        user_facing_status = (
-            package.import_metadata.user_facing_message
-            if package.import_metadata
-            else "Installed"
-        )
+        status = _effective_workflow_status(package)
+        user_facing_status = _effective_workflow_status_label(package, status)
         metadata = self._library_metadata(package)
         history = self._run_history_summary(package)
         model_counts = self._model_count_summary(package)
         missing_model_count = model_counts["missing_model_count"]
-        needs_setup = status in {
-            "needs_input_setup",
+        needs_setup = _dashboard_needs_setup(package) or status in {
             "cannot_prepare_automatically",
             "blocked_by_policy",
             "unsupported",
-        } or bool(package.unresolved_runtime_inputs)
+        }
         return {
             "id": package.metadata.id,
             "name": package.metadata.name,
@@ -237,6 +247,8 @@ class WorkflowLibraryService:
             ),
             "status": status,
             "status_label": user_facing_status,
+            "dashboard_status": package.dashboard.status,
+            "dashboard_ready": not _dashboard_needs_setup(package),
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
             "custom_node_count": len(package.custom_nodes),
             "required_model_count": len(package.required_models),
@@ -443,6 +455,12 @@ class WorkflowLibraryService:
         package_file = package_dir / "package.json"
         if not package_file.exists():
             return
+        root_dir = (
+            self.imported_package_store.root_dir
+            if self.imported_package_store is not None
+            else settings.paths.workflow_packages_store_dir
+        )
+        assert_path_within(root_dir, package_file, purpose="update workflow metadata")
         data = json.loads(package_file.read_text(encoding="utf-8"))
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):
@@ -475,3 +493,28 @@ class WorkflowLibraryService:
 def _is_primary_model_type(model_type: str | None, folder: str | None) -> bool:
     value = f"{model_type or ''} {folder or ''}".casefold()
     return any(token in value for token in ("checkpoint", "diffusion", "unet", "ckpt"))
+
+
+def _dashboard_needs_setup(package: WorkflowPackage) -> bool:
+    return (
+        package.dashboard.status != "configured"
+        or bool(package.unresolved_runtime_inputs)
+        or not any(section.controls for section in package.dashboard.sections)
+    )
+
+
+def _effective_workflow_status(package: WorkflowPackage) -> str:
+    raw_status = package.import_metadata.status if package.import_metadata else "installed"
+    if raw_status == "needs_input_setup" and not _dashboard_needs_setup(package):
+        return "imported"
+    return raw_status
+
+
+def _effective_workflow_status_label(package: WorkflowPackage, status: str) -> str:
+    if status == "imported":
+        return "Imported"
+    if status == "needs_input_setup":
+        return "Needs input setup"
+    if package.import_metadata is not None:
+        return package.import_metadata.user_facing_message
+    return "Installed"

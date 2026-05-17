@@ -129,6 +129,23 @@ For core-only workflows that do not declare a fixture, Noofy may use a safe mode
 
 For packages that declare custom nodes, the smoke fixture should exercise at least one declared custom node type when possible. Registration-only checks prove the staged runner imported the node package, but execution smoke is the stronger signal before Noofy promotes isolated runtime artifacts.
 
+## Duplicate Imports
+
+Noofy must not silently replace an installed package with the same
+publisher/package/version identity. A duplicate import is staged until the user
+chooses to replace the existing workflow, import the archive as a separate
+local copy, or cancel.
+
+Replacing updates only the internal package copy and does not mutate the
+original imported archive. Stale local state that is tied to the previous
+package/dashboard, such as user values, layout overrides, output preferences,
+and package-local install state, must not be silently reused after replacement.
+
+Importing as copy changes the internal identity and user-facing name so it
+cannot conflict with the existing workflow. Because the identity changed, the
+copy must not pretend to keep the original verified/signature identity; trust
+and source metadata must remain honest about the copied local package.
+
 ## Model Handling
 
 The first version validates required models before running a workflow.

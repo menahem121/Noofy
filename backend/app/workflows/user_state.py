@@ -72,6 +72,12 @@ class UserStateService:
         cleared = state.model_copy(update={"layout_overrides": {}})
         return self.save(cleared)
 
+    def delete(self, workflow_id: str) -> None:
+        try:
+            self._path(workflow_id).unlink()
+        except FileNotFoundError:
+            return
+
 
 def _atomic_write_json(target: Path, data: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)

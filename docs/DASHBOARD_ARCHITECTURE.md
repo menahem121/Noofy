@@ -58,6 +58,21 @@ Routing rules:
 
 Import and setup inspect workflow files as data. Community custom-node imports, compatibility checks, and smoke tests happen only inside isolated runner processes.
 
+Duplicate package identity is an explicit user decision. If an imported
+archive has the same publisher/package/version identity as an existing local
+workflow, Noofy stages the import and offers three choices:
+
+- Replace existing workflow: deliberately replaces the internal package copy.
+  The original imported archive remains unchanged, and stale local dashboard
+  values, layout overrides, output preferences, install state, and other
+  package-local state are not silently reused.
+- Import as copy: creates a separate local workflow with a distinct internal
+  identity and understandable copy name. Because the identity changes, trust
+  and signature metadata are not presented as if the copied package were still
+  the original signed identity.
+- Cancel import: removes the staged session and leaves the existing workflow
+  untouched.
+
 ## Dashboard Builder
 
 The builder has two responsibilities:

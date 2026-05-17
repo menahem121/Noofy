@@ -110,7 +110,8 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert data["summary"]["missing_count"] == 1
     assert by_key["checkpoints/base.safetensors"]["source_label"] == "Noofy Models"
     assert by_key["checkpoints/base.safetensors"]["ownership"] == "noofy_local"
-    assert by_key["checkpoints/base.safetensors"]["can_delete"] is True
+    assert by_key["checkpoints/base.safetensors"]["can_delete"] is False
+    assert by_key["checkpoints/base.safetensors"]["delete_unavailable_reason"] == "Only models imported or downloaded by Noofy can be deleted."
     assert by_key["checkpoints/base.safetensors"]["tag_ids"] == [tag_id]
     assert by_key["loras/style.safetensors"]["source_label"] == "ComfyUI models folder"
     assert by_key["loras/style.safetensors"]["can_delete"] is False
@@ -171,21 +172,28 @@ def test_model_inventory_ignores_partial_import_transactions(tmp_path: Path) -> 
     assert "checkpoints/partial.safetensors" not in keys
 
 
-def test_model_delete_only_removes_noofy_model_files(tmp_path: Path) -> None:
+def test_model_delete_only_removes_noofy_owned_model_files(tmp_path: Path) -> None:
     noofy_model = tmp_path / "Noofy Models" / "checkpoints" / "base.safetensors"
     noofy_model.parent.mkdir(parents=True)
     noofy_model.write_bytes(b"base")
+    owned_model = tmp_path / "Noofy Models" / "checkpoints" / "owned.safetensors"
+    owned_model.write_bytes(b"owned")
     external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
     external_model.parent.mkdir(parents=True)
     external_model.write_bytes(b"style")
+    ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json").mark_imported("checkpoints/owned.safetensors")
 
     with _client(tmp_path, []) as client:
-        deleted = client.delete("/api/models/checkpoints/base.safetensors")
+        blocked_local = client.delete("/api/models/checkpoints/base.safetensors")
+        deleted = client.delete("/api/models/checkpoints/owned.safetensors")
         missing_external = client.delete("/api/models/loras/style.safetensors")
 
+    assert blocked_local.status_code == 400
+    assert blocked_local.json()["detail"]["message"] == "Noofy can delete only models it imported or downloaded."
+    assert noofy_model.exists()
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
-    assert not noofy_model.exists()
+    assert not owned_model.exists()
     assert missing_external.status_code == 404
     assert external_model.exists()
 

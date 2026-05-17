@@ -6,18 +6,23 @@ from pydantic import BaseModel, Field
 from app.api.deps import (
     DashboardAssetServiceDep,
     DashboardAuthoringServiceDep,
-    EngineServiceDep,
     RunOrchestratorDep,
+    RunJobServiceDep,
     UserStateServiceDep,
+    WorkflowExporterDep,
     WorkflowImportOrchestratorDep,
     WorkflowRunnerLifecycleServiceDep,
     WorkflowLibraryServiceDep,
 )
 from app.engine.models import WorkflowRunRequest
 from app.runs.credentials import credential_input_ids
-from app.workflows.import_orchestrator import ImportSessionExpiredError
+from app.workflows.import_orchestrator import (
+    DuplicateWorkflowIdentityError,
+    ImportSessionExpiredError,
+)
 from app.workflows.assets import AssetUploadError
 from app.workflows.authoring import DashboardAuthoringError
+from app.workflows.exporter import WorkflowExportError
 from app.workflows.importer import NoofyImportError
 from app.workflows.library import WorkflowMetadataUpdate
 from app.workflows.user_state import WorkflowUserState
@@ -30,6 +35,10 @@ class WorkflowExportRequest(BaseModel):
     export_metadata: dict[str, Any] | None = Field(default=None)
 
 
+class WorkflowImportCommitRequest(BaseModel):
+    duplicate_action: str | None = Field(default=None)
+
+
 # ─── Workflow library ────────────────────────────────────────────────────────
 
 @router.get("/workflows")
@@ -38,9 +47,9 @@ async def list_workflows(library: WorkflowLibraryServiceDep) -> list[dict[str, o
 
 
 @router.get("/workflows/{workflow_id}/package")
-async def get_workflow_package(workflow_id: str, engine_service: EngineServiceDep):
+async def get_workflow_package(workflow_id: str, library: WorkflowLibraryServiceDep):
     try:
-        return engine_service.get_workflow_package(workflow_id)
+        return library.workflow_package_payload(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -102,9 +111,12 @@ async def get_workflow_install_state_developer_details(
 
 
 @router.get("/workflows/{workflow_id}/status")
-async def get_workflow_status(workflow_id: str, engine_service: EngineServiceDep):
+async def get_workflow_status(
+    workflow_id: str,
+    runner_lifecycle: WorkflowRunnerLifecycleServiceDep,
+):
     try:
-        return engine_service.workflow_status(workflow_id)
+        return runner_lifecycle.workflow_status(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -203,13 +215,19 @@ async def cancel_import_model_download(
 async def commit_workflow_import(
     import_session_id: str,
     import_orchestrator: WorkflowImportOrchestratorDep,
+    request: WorkflowImportCommitRequest | None = None,
 ):
     try:
-        return import_orchestrator.commit_workflow_import(import_session_id)
+        return import_orchestrator.commit_workflow_import(
+            import_session_id,
+            duplicate_action=request.duplicate_action if request is not None else None,
+        )
     except ImportSessionExpiredError as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DuplicateWorkflowIdentityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except NoofyImportError as exc:
@@ -238,8 +256,14 @@ async def prepare_workflow(
 
 
 @router.delete("/workflows/{workflow_id}/prepare")
-async def cancel_workflow_preparation(workflow_id: str, engine_service: EngineServiceDep):
-    return engine_service.cancel_preparation(workflow_id)
+async def cancel_workflow_preparation(
+    workflow_id: str,
+    runner_lifecycle: WorkflowRunnerLifecycleServiceDep,
+):
+    try:
+        return runner_lifecycle.cancel_preparation(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/workflows/{workflow_id}/runner/start")
@@ -321,19 +345,23 @@ async def run_workflow(
 # ─── Dashboard authoring ─────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/bindable-inputs")
-async def get_bindable_inputs(workflow_id: str, engine_service: EngineServiceDep):
+async def get_bindable_inputs(workflow_id: str, authoring: DashboardAuthoringServiceDep):
     try:
-        return engine_service.get_bindable_inputs(workflow_id)
+        return authoring.get_bindable_inputs(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DashboardAuthoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workflows/{workflow_id}/unresolved-inputs")
 async def get_unresolved_inputs(workflow_id: str, authoring: DashboardAuthoringServiceDep):
     try:
         return authoring.get_unresolved_inputs(workflow_id)
-    except (KeyError, DashboardAuthoringError) as exc:
+    except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DashboardAuthoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workflows/{workflow_id}/dashboard/validate")
@@ -349,8 +377,10 @@ async def validate_dashboard(
             inputs=body.get("inputs", []),
             dashboard=body.get("dashboard", {}),
         )
-    except (KeyError, DashboardAuthoringError) as exc:
+    except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DashboardAuthoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -377,19 +407,19 @@ async def save_dashboard(
 # ─── Export ──────────────────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/export")
-async def export_workflow(workflow_id: str, engine_service: EngineServiceDep):
-    return _workflow_archive_response(workflow_id, engine_service, input_values=None)
+async def export_workflow(workflow_id: str, exporter: WorkflowExporterDep):
+    return _workflow_archive_response(workflow_id, exporter, input_values=None)
 
 
 @router.post("/workflows/{workflow_id}/export")
 async def export_workflow_with_values(
     workflow_id: str,
     request: WorkflowExportRequest,
-    engine_service: EngineServiceDep,
+    exporter: WorkflowExporterDep,
 ):
     return _workflow_archive_response(
         workflow_id,
-        engine_service,
+        exporter,
         input_values=request.input_values,
         export_metadata=request.export_metadata,
     )
@@ -397,23 +427,23 @@ async def export_workflow_with_values(
 
 def _workflow_archive_response(
     workflow_id: str,
-    engine_service: EngineServiceDep,
+    exporter,
     *,
     input_values: dict[str, Any] | None,
     export_metadata: dict[str, Any] | None = None,
 ):
     try:
         if input_values is None and export_metadata is None:
-            archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
+            archive_bytes, filename = exporter.export_archive(workflow_id)
         else:
-            archive_bytes, filename = engine_service.export_workflow_archive(
+            archive_bytes, filename = exporter.export_archive(
                 workflow_id,
                 input_values=input_values,
                 export_metadata=export_metadata,
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (ValueError, WorkflowExportError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     from fastapi.responses import Response
     return Response(
@@ -424,40 +454,40 @@ def _workflow_archive_response(
 
 
 @router.get("/workflows/{workflow_id}/export/comfyui-json")
-async def export_workflow_comfyui_json(workflow_id: str, engine_service: EngineServiceDep):
-    return _workflow_comfyui_json_response(workflow_id, engine_service, input_values=None)
+async def export_workflow_comfyui_json(workflow_id: str, exporter: WorkflowExporterDep):
+    return _workflow_comfyui_json_response(workflow_id, exporter, input_values=None)
 
 
 @router.post("/workflows/{workflow_id}/export/comfyui-json")
 async def export_workflow_comfyui_json_with_values(
     workflow_id: str,
     request: WorkflowExportRequest,
-    engine_service: EngineServiceDep,
+    exporter: WorkflowExporterDep,
 ):
     return _workflow_comfyui_json_response(
         workflow_id,
-        engine_service,
+        exporter,
         input_values=request.input_values,
     )
 
 
 def _workflow_comfyui_json_response(
     workflow_id: str,
-    engine_service: EngineServiceDep,
+    exporter,
     *,
     input_values: dict[str, Any] | None,
 ):
     try:
         if input_values is None:
-            graph_bytes, filename = engine_service.export_workflow_comfyui_graph(workflow_id)
+            graph_bytes, filename = exporter.export_comfyui_graph(workflow_id)
         else:
-            graph_bytes, filename = engine_service.export_workflow_comfyui_graph(
+            graph_bytes, filename = exporter.export_comfyui_graph(
                 workflow_id,
                 input_values=input_values,
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (ValueError, WorkflowExportError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     from fastapi.responses import Response
     return Response(
@@ -470,12 +500,12 @@ def _workflow_comfyui_json_response(
 @router.post("/workflows/{workflow_id}/uploads/image")
 async def upload_workflow_image(
     workflow_id: str,
-    engine_service: EngineServiceDep,
+    job_service: RunJobServiceDep,
     image: UploadFile = File(...),
 ):
     try:
         data = await image.read()
-        return await engine_service.upload_workflow_image(
+        return await job_service.upload_workflow_image(
             workflow_id,
             filename=image.filename or "upload.png",
             data=data,

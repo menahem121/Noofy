@@ -71,15 +71,16 @@ function AppContent() {
       nativeWorkflowImportIdRef.current = id;
       try {
         const file = await readNativeWorkflowFile(payload.path);
-        if (!active) return;
+        if (!active || nativeWorkflowImportIdRef.current !== id) return;
         setNativeWorkflowImport({ id, file, filename: payload.filename });
         setRoute({ name: "home" });
       } catch (error) {
-        if (!active) return;
+        if (!active || nativeWorkflowImportIdRef.current !== id) return;
+        const message = error instanceof Error ? error.message : String(error);
         setNativeWorkflowImport({
           id,
           filename: payload.filename,
-          error: error instanceof Error ? error.message : String(error),
+          error: `Noofy could not open ${payload.filename}. ${message}`,
         });
         setRoute({ name: "home" });
       }

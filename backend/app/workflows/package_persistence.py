@@ -9,6 +9,7 @@ from pathlib import Path
 from app.runtime.dependencies.isolation import CapsuleLock
 from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.package import WorkflowPackage
+from app.workflows.store_paths import assert_path_within
 
 
 def write_imported_package_transaction(
@@ -23,10 +24,14 @@ def write_imported_package_transaction(
     schema_version: str,
     extract_source_files: Callable[[Path], None],
     dashboard_assets_dir: Path | None = None,
+    replace_existing: bool = False,
 ) -> None:
     transaction_dir = root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
+    assert_path_within(root_dir, transaction_dir, purpose="write import transaction")
+    assert_path_within(root_dir, target_dir, purpose="write imported package")
     try:
         source_files_dir = transaction_dir / "source-files"
+        assert_path_within(root_dir, source_files_dir, purpose="extract imported package")
         transaction_dir.mkdir(parents=True, exist_ok=False)
         extract_source_files(source_files_dir)
         if dashboard_assets_dir is not None:
@@ -57,6 +62,13 @@ def write_imported_package_transaction(
         )
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         if target_dir.exists():
+            if not replace_existing:
+                raise FileExistsError(
+                    "A workflow package with this identity already exists. "
+                    "Remove it before importing a replacement."
+                )
+            if target_dir.is_symlink() or not target_dir.is_dir():
+                raise ValueError("Existing workflow package path is not a directory.")
             shutil.rmtree(target_dir)
         transaction_dir.replace(target_dir)
     except Exception:

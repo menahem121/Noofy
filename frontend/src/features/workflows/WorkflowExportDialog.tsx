@@ -84,7 +84,7 @@ export function WorkflowExportDialog({
       const exported = await saveWorkflowExportWithFilename(
         workflowExportDownloadRequest(
           exportUrl,
-          inputValues,
+          isNoofyExport ? undefined : inputValues,
           isNoofyExport ? normalizedMetadata(metadataDraft, tagInput, selectedCategory) : undefined,
         ),
         validation.filename,

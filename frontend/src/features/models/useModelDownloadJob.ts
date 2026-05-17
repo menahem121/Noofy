@@ -31,7 +31,9 @@ export function useModelDownloadJob(onFinished: () => void) {
         }
       })
       .catch(() => {
-        window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+        if (mounted) {
+          setDownloadError("Could not check the active model download yet.");
+        }
       });
     return () => {
       mounted = false;
@@ -53,12 +55,6 @@ export function useModelDownloadJob(onFinished: () => void) {
         })
         .catch((error) => {
           setDownloadError(error instanceof Error ? error.message : "Could not check model download progress.");
-          setDownloadJob((current) =>
-            current
-              ? { ...current, status: "failed", user_facing_message: "Could not check model download progress." }
-              : current,
-          );
-          window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
         });
     }, 700);
     return () => window.clearInterval(interval);

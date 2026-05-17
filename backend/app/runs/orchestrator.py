@@ -111,6 +111,20 @@ class RunOrchestrator:
                 valid=False,
                 errors=[unavailable],
             )
+        dashboard_unavailable = _dashboard_unavailable_reason(package)
+        if dashboard_unavailable is not None:
+            self.log_store.add(
+                "warning",
+                "Workflow validation blocked because dashboard setup is incomplete",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": dashboard_unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[dashboard_unavailable],
+            )
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
         validation = await self.validate_package(package, adapter)
@@ -143,10 +157,41 @@ class RunOrchestrator:
         options: dict[str, Any],
         *,
         memory_retry_after_cleanup: bool = False,
+        validated_before_queue: bool = False,
         output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
         run_submission_snapshot: RunSubmissionSnapshot | None = None,
     ):
         package = self.workflow_loader.get_package(workflow_id)
+        unavailable = self.unavailable_package_reason(package)
+        if unavailable is not None:
+            self._record_run_blocked(package, unavailable)
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked because no preparable capsule is available",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[unavailable],
+            )
+        dashboard_unavailable = _dashboard_unavailable_reason(package)
+        if dashboard_unavailable is not None:
+            self._record_run_blocked(package, dashboard_unavailable)
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked because dashboard setup is incomplete",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": dashboard_unavailable},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[dashboard_unavailable],
+            )
         try:
             credential_plan = build_credential_injection_plan(
                 package=package,
@@ -175,39 +220,25 @@ class RunOrchestrator:
             output_preferences_snapshot=output_preferences_snapshot,
             run_submission_snapshot=run_submission_snapshot,
         )
-        unavailable = self.unavailable_package_reason(package)
-        if unavailable is not None:
-            self._record_run_blocked(package, unavailable)
-            self.log_store.add(
-                "warning",
-                "Workflow run blocked because no preparable capsule is available",
-                "runs.orchestrator",
-                workflow_id=workflow_id,
-                details={"error": unavailable},
-            )
-            return WorkflowValidationResult(
-                workflow_id=workflow_id,
-                valid=False,
-                errors=[unavailable],
-            )
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
 
-        validation = await self.validate_package(package, adapter)
-        if not validation.valid:
-            self._record_run_blocked(package, "; ".join(validation.errors) or "Workflow validation failed")
-            self.log_store.add(
-                "warning",
-                "Workflow run blocked by validation failure",
-                "runs.orchestrator",
-                workflow_id=workflow_id,
-                details={
-                    "runner_id": runner.runner_id,
-                    "missing_models": [model.model_dump() for model in validation.missing_models],
-                    "errors": validation.errors,
-                },
-            )
-            return validation
+        if not validated_before_queue:
+            validation = await self.validate_package(package, adapter)
+            if not validation.valid:
+                self._record_run_blocked(package, "; ".join(validation.errors) or "Workflow validation failed")
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked by validation failure",
+                    "runs.orchestrator",
+                    workflow_id=workflow_id,
+                    details={
+                        "runner_id": runner.runner_id,
+                        "missing_models": [model.model_dump() for model in validation.missing_models],
+                        "errors": validation.errors,
+                    },
+                )
+                return validation
 
         graph = self.apply_input_bindings(package, runtime_inputs)
 
@@ -404,6 +435,7 @@ class RunOrchestrator:
         )
         job = await adapter.run_workflow(package, graph, inputs, adapter_options)
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
+        self.runner_supervisor.mark_runner_job_started(runner.runner_id, job.job_id)
         self.job_workflows[job.job_id] = workflow_id
         self.job_started_at[job.job_id] = datetime.now(UTC)
         self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), safe_options_for_storage(options))
@@ -433,3 +465,13 @@ class RunOrchestrator:
             details={"runner_id": runner.runner_id},
         )
         return job
+
+
+def _dashboard_unavailable_reason(package: WorkflowPackage) -> str | None:
+    if package.unresolved_runtime_inputs:
+        return "Dashboard setup is incomplete because the workflow has unresolved runtime inputs."
+    if package.dashboard.status != "configured":
+        return "Dashboard setup is incomplete. Configure the dashboard before running this workflow."
+    if not any(section.controls for section in package.dashboard.sections):
+        return "Dashboard setup is incomplete. Add at least one dashboard widget before running this workflow."
+    return None

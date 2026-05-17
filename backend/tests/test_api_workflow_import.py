@@ -59,11 +59,14 @@ class FakeAvailabilityService:
 
 class FakeImportService:
     def __init__(self) -> None:
+        self.workflow_import_orchestrator = self
+        self.workflow_library_service = self
         self.imported_payload: bytes | None = None
         self.imported_filename: str | None = None
         self.previewed_payload: bytes | None = None
         self.previewed_filename: str | None = None
         self.allow_unverified_community_preparation = False
+        self.committed_duplicate_action: str | None = None
         self.pending_sessions: set[str] = {"import-session-1"}
         self.shutdown_called = False
 
@@ -212,7 +215,8 @@ class FakeImportService:
         status["user_facing_message"] = "Model download was canceled."
         return status
 
-    def commit_workflow_import(self, import_session_id: str):
+    def commit_workflow_import(self, import_session_id: str, *, duplicate_action: str | None = None):
+        self.committed_duplicate_action = duplicate_action
         if import_session_id not in self.pending_sessions:
             raise KeyError(import_session_id)
         self.pending_sessions.remove(import_session_id)
@@ -252,6 +256,9 @@ class FakeImportService:
             "custom_nodes": [],
             "required_models": [],
         }
+
+    def workflow_package_payload(self, workflow_id: str):
+        return self.get_workflow_package(workflow_id)
 
     def trust_policy_payload(self):
         return {
@@ -526,6 +533,20 @@ def test_staged_import_download_commit_and_cancel_endpoints(monkeypatch) -> None
     assert commit.json()["workflow_id"] == "unknown__model_workflow__0.1.0"
     assert cancel.status_code == 200
     assert cancel.json()["status"] == "not_found"
+
+
+def test_staged_import_commit_accepts_duplicate_action(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.post(
+            "/api/workflows/import/import-session-1/commit",
+            json={"duplicate_action": "copy"},
+        )
+
+    assert response.status_code == 200
+    assert fake_service.committed_duplicate_action == "copy"
 
 
 def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) -> None:

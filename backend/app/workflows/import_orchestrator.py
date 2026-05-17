@@ -21,12 +21,17 @@ from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportErro
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowPackage
+from app.workflows.user_state import UserStateService
 
 IMPORT_SESSION_TTL = timedelta(hours=1)
 
 
 class ImportSessionExpiredError(KeyError):
     """Raised when a staged workflow import session has expired."""
+
+
+class DuplicateWorkflowIdentityError(RuntimeError):
+    """Raised when a duplicate import needs an explicit user decision."""
 
 
 @dataclass
@@ -39,6 +44,7 @@ class _PendingWorkflowImport:
     updated_at: datetime
     active_download_job_id: str | None = None
     active_verification_job_id: str | None = None
+    duplicate_identity: dict[str, object] | None = None
 
 
 @dataclass
@@ -108,6 +114,7 @@ class WorkflowImportOrchestrator:
         log_store: DiagnosticsSink,
         model_ownership_store: object | None = None,
         history_service: HistoryService | None = None,
+        user_state_service: UserStateService | None = None,
     ) -> None:
         self.imported_package_store = imported_package_store
         self.workflow_library_service = workflow_library_service
@@ -115,6 +122,7 @@ class WorkflowImportOrchestrator:
         self.log_store = log_store
         self.model_ownership_store = model_ownership_store
         self.history_service = history_service
+        self.user_state_service = user_state_service
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
         self._import_model_verification_jobs: dict[str, _ImportModelVerificationJob] = {}
@@ -125,17 +133,21 @@ class WorkflowImportOrchestrator:
         *,
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
+        duplicate_action: str | None = None,
     ) -> dict[str, object]:
         try:
             package = self.imported_package_store.import_archive(
                 data,
                 original_filename=original_filename,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
+                duplicate_action=duplicate_action,
             )
         except Exception as exc:
             if self.history_service is not None:
                 self.history_service.record_import_failed(filename=original_filename, error=str(exc))
             raise
+        if duplicate_action == "replace" and self.user_state_service is not None:
+            self.user_state_service.delete(package.metadata.id)
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
         response = {
@@ -164,7 +176,8 @@ class WorkflowImportOrchestrator:
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
-        if not package.required_models:
+        duplicate_identity = self._duplicate_identity_payload(package)
+        if not package.required_models and duplicate_identity is None:
             committed = self.import_workflow_archive(
                 data,
                 original_filename=original_filename,
@@ -175,7 +188,7 @@ class WorkflowImportOrchestrator:
                 model_summary=None,
                 **committed,
             )
-        model_summary = self._checking_model_summary(package)
+        model_summary = self._checking_model_summary(package) if package.required_models else None
         session_id = f"import-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
         self._pending_workflow_imports[session_id] = _PendingWorkflowImport(
@@ -185,10 +198,15 @@ class WorkflowImportOrchestrator:
             package=package,
             created_at=now,
             updated_at=now,
+            duplicate_identity=duplicate_identity,
         )
-        self._start_model_verification_for_import(session_id)
+        if package.required_models:
+            self._start_model_verification_for_import(session_id)
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
+        if duplicate_identity is not None:
+            status = "duplicate_identity"
+            message = "This workflow is already in Noofy. Choose how to import it."
         self.log_store.add(
             "info",
             "Workflow import preview created",
@@ -197,6 +215,7 @@ class WorkflowImportOrchestrator:
             details={
                 "import_session_id": session_id,
                 "required_model_count": len(package.required_models),
+                "duplicate_identity": duplicate_identity is not None,
             },
         )
         return StagedWorkflowImportResponse(
@@ -209,6 +228,7 @@ class WorkflowImportOrchestrator:
             custom_node_count=len(package.custom_nodes),
             unresolved_input_count=len(package.unresolved_runtime_inputs),
             model_summary=model_summary,
+            duplicate_identity=duplicate_identity,
         )
 
     def start_missing_model_download_for_import(
@@ -312,10 +332,19 @@ class WorkflowImportOrchestrator:
             job.updated_at = datetime.now(UTC)
         return self._import_download_job_status(job)
 
-    def commit_workflow_import(self, import_session_id: str) -> StagedWorkflowImportResponse:
+    def commit_workflow_import(
+        self,
+        import_session_id: str,
+        *,
+        duplicate_action: str | None = None,
+    ) -> StagedWorkflowImportResponse:
         pending = self._pending_import_or_raise(import_session_id)
         if self._has_active_import_download(pending):
             raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        if pending.duplicate_identity is not None and duplicate_action not in {"replace", "copy"}:
+            raise DuplicateWorkflowIdentityError(
+                "This workflow is already in Noofy. Choose Replace existing workflow, Import as copy, or Cancel import."
+            )
         started_at = datetime.now(UTC)
         self._pending_workflow_imports.pop(import_session_id, None)
         model_summary = self.workflow_library_service.model_availability_summary_for_package(
@@ -327,6 +356,7 @@ class WorkflowImportOrchestrator:
             pending.data,
             original_filename=pending.original_filename,
             allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+            duplicate_action=duplicate_action,
         )
         finished_at = datetime.now(UTC)
         self.log_store.add(
@@ -338,6 +368,7 @@ class WorkflowImportOrchestrator:
                 "import_session_id": import_session_id,
                 "duration_ms": round((finished_at - started_at).total_seconds() * 1000, 1),
                 "reused_preview_package": True,
+                "duplicate_action": duplicate_action,
             },
         )
         return StagedWorkflowImportResponse(
@@ -686,6 +717,34 @@ class WorkflowImportOrchestrator:
             package,
             [self._checking_model_availability(model) for model in package.required_models],
         )
+
+    def _duplicate_identity_payload(self, package: WorkflowPackage) -> dict[str, object] | None:
+        has_identity = getattr(self.imported_package_store, "has_package_identity", None)
+        if callable(has_identity):
+            exists = bool(has_identity(package))
+        else:
+            package_dir = getattr(self.imported_package_store, "package_dir", lambda _package: None)(package)
+            exists = bool(package_dir is not None and package_dir.exists())
+        if not exists:
+            return None
+
+        try:
+            existing_package = self.workflow_library_service.workflow_loader.get_package(package.metadata.id)
+            existing_workflow = self.workflow_library_service.workflow_summary(existing_package)
+        except Exception:
+            existing_workflow = {
+                "id": package.metadata.id,
+                "name": package.metadata.name,
+                "version": package.metadata.version,
+            }
+
+        return {
+            "status": "conflict",
+            "user_facing_message": "A workflow with this identity already exists in Noofy.",
+            "existing_workflow": existing_workflow,
+            "incoming_workflow": self.workflow_library_service.workflow_summary(package),
+            "actions": ["replace", "copy", "cancel"],
+        }
 
     def _checking_model_availability(self, model: RequiredModel) -> RequiredModelAvailability:
         source_urls = list(getattr(model, "source_urls", []) or [])

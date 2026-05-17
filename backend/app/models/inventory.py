@@ -119,6 +119,9 @@ class ModelInventoryService:
             raise FileNotFoundError("This model is not in the Noofy Models folder.")
         if not target_path.is_file():
             raise ValueError("Only model files can be deleted.")
+        origin = self.ownership_store.origin_for_model(model_key_value)
+        if origin not in {"downloaded", "imported"}:
+            raise ValueError("Noofy can delete only models it imported or downloaded.")
         target_path.unlink()
         self.tag_store.clear_model_tags(model_key_value)
         self.ownership_store.forget_model(model_key_value)
@@ -161,7 +164,11 @@ class ModelInventoryService:
                 except OSError:
                     size_bytes = None
                 ownership, ownership_label = self._ownership_for_file(key, source)
-                can_delete = source == "noofy" and self._path_is_inside_noofy(file_path)
+                can_delete = (
+                    source == "noofy"
+                    and ownership in {"noofy_downloaded", "noofy_imported"}
+                    and self._path_is_inside_noofy(file_path)
+                )
                 entries[key] = ModelInventoryEntry(
                     model_key=key,
                     filename=relative_filename,
@@ -175,7 +182,7 @@ class ModelInventoryService:
                     ownership=ownership,
                     ownership_label=ownership_label,
                     can_delete=can_delete,
-                    delete_unavailable_reason=None if can_delete else "Only files inside Noofy Models can be deleted.",
+                    delete_unavailable_reason=None if can_delete else _delete_unavailable_reason(source, ownership),
                     path=str(file_path),
                     matched_root=str(root),
                 )
@@ -340,6 +347,12 @@ def _inventory_status_for_required_status(status: str) -> ModelInventoryStatus:
     if status == "missing":
         return "missing"
     return "needs_attention"
+
+
+def _delete_unavailable_reason(source: ModelInventorySource, ownership: ModelOwnership) -> str:
+    if source == "noofy" and ownership == "noofy_local":
+        return "Only models imported or downloaded by Noofy can be deleted."
+    return "Only files inside Noofy Models can be deleted."
 
 
 __all__ = [

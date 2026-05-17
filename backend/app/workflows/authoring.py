@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -39,11 +39,13 @@ class DashboardAuthoringService:
         *,
         log_store: DiagnosticsSink,
         validator: WorkflowPackageValidator | None = None,
+        object_info_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
         self.validator = validator or WorkflowPackageValidator()
         self.log_store = log_store
+        self.object_info_provider = object_info_provider
 
     # ------------------------------------------------------------------
     # Read
@@ -57,6 +59,8 @@ class DashboardAuthoringService:
     ) -> dict[str, Any]:
         """Return a list of bindable graph inputs derived from the graph and node definitions."""
         package = self._get_package(workflow_id)
+        if object_info is None and self.object_info_provider is not None:
+            object_info = self.object_info_provider(workflow_id)
         nodes = _classify_graph_inputs(package.comfyui_graph, object_info=object_info)
         return {
             "workflow_id": workflow_id,
@@ -146,13 +150,6 @@ class DashboardAuthoringService:
         # Atomic write: write to a temp file in the same dir, then rename.
         dashboard_file = package_dir / "dashboard.json"
         _atomic_write_json(dashboard_file, on_disk)
-
-        # If package.json still has import_metadata.status = "needs_input_setup",
-        # promote it to "imported" now that the dashboard is configured.
-        package_file = package_dir / "package.json"
-        if package_file.exists() and package.import_metadata is not None:
-            if package.import_metadata.status == "needs_input_setup":
-                _promote_import_status(package_file)
 
         self.log_store.add(
             "info",

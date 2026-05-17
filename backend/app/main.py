@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -35,8 +36,20 @@ logger = logging.getLogger(__name__)
 async def _start_comfyui_background(sidecar_service: ComfyUISidecarService) -> None:
     try:
         result = await sidecar_service.start_comfyui()
+        sidecar_service.runtime_manager.log_store.add(
+            "info",
+            "Managed ComfyUI background startup finished",
+            "app.lifespan",
+            details={"status": result.status},
+        )
         logger.info("Managed ComfyUI startup: status=%s", result.status)
-    except Exception:
+    except Exception as exc:
+        sidecar_service.runtime_manager.log_store.add(
+            "error",
+            "Managed ComfyUI failed to start during backend startup",
+            "app.lifespan",
+            details={"error": str(exc), "error_type": type(exc).__name__},
+        )
         logger.exception("Managed ComfyUI failed to start during backend startup")
 
 
@@ -130,6 +143,7 @@ def create_app(
         allow_headers=["Accept", "Authorization", "Content-Type"],
     )
     app.add_exception_handler(StarletteHTTPException, _sanitized_http_exception_handler)
+    app.add_exception_handler(RequestValidationError, _sanitized_request_validation_exception_handler)
     app.include_router(_api_router, prefix="/api")
     return app
 
@@ -143,6 +157,27 @@ async def _sanitized_http_exception_handler(
         {"detail": sanitize(exc.detail)},
         status_code=exc.status_code,
         headers=getattr(exc, "headers", None),
+    )
+
+
+async def _sanitized_request_validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    del request
+    return JSONResponse(
+        {
+            "detail": "Request validation failed.",
+            "errors": [
+                {
+                    "loc": error.get("loc", ()),
+                    "msg": sanitize(error.get("msg", "Invalid request.")),
+                    "type": error.get("type", "validation_error"),
+                }
+                for error in exc.errors()
+            ],
+        },
+        status_code=422,
     )
 
 

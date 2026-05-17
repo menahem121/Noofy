@@ -16,6 +16,7 @@ use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Window
 
 const BACKEND_HANDOFF_PREFIX: &str = "NOOFY_BACKEND_API_BASE_URL=";
 const NOOFY_RUNTIME_RESOURCE_DIR: &str = "noofy-runtime";
+const RUNTIME_MANIFEST_NAME: &str = "runtime-manifest.json";
 const OPEN_WORKFLOW_FILE_EVENT: &str = "noofy-open-workflow-file";
 const MAX_NOOFY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -462,9 +463,11 @@ impl BackendLaunchContext {
 }
 
 fn backend_launch_spec(context: &BackendLaunchContext) -> io::Result<BackendLaunchSpec> {
-    if let Some(sidecar) = env_path(context, "NOOFY_BACKEND_SIDECAR") {
-        let developer_overrides_enabled =
-            env_flag(&context.env, "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES");
+    let developer_overrides_enabled = developer_backend_overrides_enabled(context);
+    if (!context.packaged_mode || developer_overrides_enabled)
+        && env_path(context, "NOOFY_BACKEND_SIDECAR").is_some()
+    {
+        let sidecar = env_path(context, "NOOFY_BACKEND_SIDECAR").expect("checked above");
         let mut spec = BackendLaunchSpec {
             program: sidecar.into_os_string(),
             args: backend_sidecar_args(),
@@ -484,8 +487,7 @@ fn backend_launch_spec(context: &BackendLaunchContext) -> io::Result<BackendLaun
         return Ok(spec);
     }
 
-    if context.packaged_mode && !env_flag(&context.env, "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES")
-    {
+    if context.packaged_mode && !developer_overrides_enabled {
         return packaged_backend_launch_spec(context);
     }
 
@@ -493,6 +495,7 @@ fn backend_launch_spec(context: &BackendLaunchContext) -> io::Result<BackendLaun
 }
 
 fn packaged_backend_launch_spec(context: &BackendLaunchContext) -> io::Result<BackendLaunchSpec> {
+    let expected_target = supported_packaged_runtime_target()?;
     let layout = packaged_runtime_layout(context);
     let python = layout.python_executable.clone().ok_or_else(|| {
         io::Error::new(
@@ -503,7 +506,6 @@ fn packaged_backend_launch_spec(context: &BackendLaunchContext) -> io::Result<Ba
             ),
         )
     })?;
-
     let mut spec = if let Some(sidecar) = layout.backend_sidecar.clone() {
         BackendLaunchSpec {
             program: sidecar.into_os_string(),
@@ -531,6 +533,7 @@ fn packaged_backend_launch_spec(context: &BackendLaunchContext) -> io::Result<Ba
         }
     };
     apply_backend_environment(context, &mut spec, true)?;
+    validate_packaged_runtime_layout(&layout, expected_target)?;
     Ok(spec)
 }
 
@@ -621,7 +624,10 @@ fn packaged_runtime_layout(context: &BackendLaunchContext) -> PackagedRuntimeLay
 }
 
 fn packaged_runtime_root(context: &BackendLaunchContext) -> PathBuf {
-    if let Some(path) = env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR") {
+    if (!context.packaged_mode || developer_backend_overrides_enabled(context))
+        && env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR").is_some()
+    {
+        let path = env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR").expect("checked above");
         return path;
     }
     if let Some(resource_dir) = &context.resource_dir {
@@ -694,17 +700,117 @@ fn first_existing(candidates: Vec<PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.exists())
 }
 
+fn validate_packaged_runtime_layout(
+    layout: &PackagedRuntimeLayout,
+    expected_target: &str,
+) -> io::Result<()> {
+    let manifest_path = layout.root_dir.join(RUNTIME_MANIFEST_NAME);
+    if !manifest_path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Packaged Noofy is missing its runtime manifest. Expected {}.",
+                manifest_path.display()
+            ),
+        ));
+    }
+
+    let manifest_text = fs::read_to_string(&manifest_path)?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_text).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Packaged Noofy runtime manifest is not valid JSON at {}: {error}.",
+                manifest_path.display()
+            ),
+        )
+    })?;
+    let manifest_target = manifest.get("target").and_then(|value| value.as_str());
+    if manifest_target != Some(expected_target) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Packaged Noofy runtime target mismatch. Expected {expected_target}, found {}.",
+                manifest_target.unwrap_or("<missing>")
+            ),
+        ));
+    }
+    if manifest
+        .pointer("/backend/packagedPath")
+        .and_then(|value| value.as_str())
+        != Some("backend")
+        || manifest
+            .pointer("/backend/appPath")
+            .and_then(|value| value.as_str())
+            != Some("backend/app")
+        || manifest
+            .pointer("/backend/pyprojectPath")
+            .and_then(|value| value.as_str())
+            != Some("backend/pyproject.toml")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Packaged Noofy runtime manifest backend paths do not match the bundled resource layout.",
+        ));
+    }
+
+    for (path, label) in [
+        (
+            layout.backend_dir.join("app").join("__main__.py"),
+            "backend module entrypoint",
+        ),
+        (layout.backend_dir.join("pyproject.toml"), "backend metadata"),
+        (layout.comfyui_dir.join("main.py"), "bundled ComfyUI entrypoint"),
+        (
+            layout.workflows_dir.clone(),
+            "bundled starter workflow packages",
+        ),
+    ] {
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "Packaged Noofy is missing its {label}. Expected {}.",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn supported_packaged_runtime_target() -> io::Result<&'static str> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Ok("macos-arm64");
+    }
+    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        return Ok("windows-x64");
+    }
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        return Ok("linux-x64");
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "This Noofy desktop build does not include a supported packaged runtime for this platform. Supported packaged runtimes are macOS Apple Silicon, Windows x64, and Linux x64.",
+    ))
+}
+
 fn apply_backend_environment(
     context: &BackendLaunchContext,
     spec: &mut BackendLaunchSpec,
     require_packaged_python: bool,
 ) -> io::Result<()> {
-    set_env_default(
-        context,
-        spec,
-        "COMFYUI_RUNTIME_MODE",
-        OsString::from("managed"),
-    );
+    if require_packaged_python {
+        set_env(spec, "COMFYUI_RUNTIME_MODE", OsString::from("managed"));
+    } else {
+        set_env_default(
+            context,
+            spec,
+            "COMFYUI_RUNTIME_MODE",
+            OsString::from("managed"),
+        );
+    }
 
     let layout = packaged_runtime_layout(context);
     if let Some(resource_dir) = packaged_resource_dir(context, &layout.root_dir) {
@@ -769,11 +875,20 @@ fn packaged_resource_dir(context: &BackendLaunchContext, root_dir: &Path) -> Opt
 
 fn packaged_env_removals() -> Vec<String> {
     [
-        "COMFYUI_REPO_DIR",
+        "COMFYUI_BASE_URL",
+        "COMFYUI_MANAGED_HOST",
+        "COMFYUI_MANAGED_PORT",
         "COMFYUI_PYTHON_EXECUTABLE",
+        "COMFYUI_REPO_DIR",
+        "COMFYUI_RUNTIME_MODE",
+        "COMFYUI_WS_URL",
         "CONDA_PREFIX",
         "NOOFY_BACKEND_DIR",
         "NOOFY_BACKEND_PYTHON",
+        "NOOFY_BACKEND_SIDECAR",
+        "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES",
+        "NOOFY_FORCE_PACKAGED_BACKEND",
+        "NOOFY_PACKAGED_RUNTIME_DIR",
         "PYTHONHOME",
         "PYTHONPATH",
         "VIRTUAL_ENV",
@@ -810,6 +925,10 @@ fn env_flag(env: &HashMap<String, OsString>, key: &str) -> bool {
         .and_then(|value| value.to_str())
         .map(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
+}
+
+fn developer_backend_overrides_enabled(context: &BackendLaunchContext) -> bool {
+    cfg!(debug_assertions) && env_flag(&context.env, "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES")
 }
 
 fn generate_api_token() -> String {
@@ -863,9 +982,44 @@ mod tests {
         fs::write(path, "").expect("write file");
     }
 
+    fn write_runtime_manifest(runtime: &Path) {
+        let target = supported_packaged_runtime_target().expect("supported test host");
+        fs::write(
+            runtime.join(RUNTIME_MANIFEST_NAME),
+            format!(
+                r#"{{
+  "schemaVersion": 1,
+  "layoutVersion": 1,
+  "target": "{target}",
+  "backend": {{
+    "packagedPath": "backend",
+    "appPath": "backend/app",
+    "pyprojectPath": "backend/pyproject.toml"
+  }}
+}}
+"#
+            ),
+        )
+        .expect("write runtime manifest");
+    }
+
     fn context(resource_dir: PathBuf, packaged_mode: bool) -> BackendLaunchContext {
         BackendLaunchContext {
             env: HashMap::new(),
+            manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
+            current_exe: resource_dir.join("Noofy"),
+            resource_dir: Some(resource_dir),
+            packaged_mode,
+        }
+    }
+
+    fn context_with_env(
+        resource_dir: PathBuf,
+        packaged_mode: bool,
+        env: HashMap<String, OsString>,
+    ) -> BackendLaunchContext {
+        BackendLaunchContext {
+            env,
             manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
             current_exe: resource_dir.join("Noofy"),
             resource_dir: Some(resource_dir),
@@ -907,6 +1061,7 @@ mod tests {
         touch(&python);
         touch(&uv);
         touch(&runtime.join("backend").join("app").join("__main__.py"));
+        touch(&runtime.join("backend").join("pyproject.toml"));
         touch(
             &runtime
                 .join("backend")
@@ -916,6 +1071,7 @@ mod tests {
                 .join(".keep"),
         );
         touch(&runtime.join("comfyui").join("main.py"));
+        write_runtime_manifest(&runtime);
 
         let spec = backend_launch_spec(&context(resource_dir.clone(), true))
             .expect("packaged launch spec");
@@ -948,6 +1104,72 @@ mod tests {
     }
 
     #[test]
+    fn packaged_backend_ignores_release_unsafe_developer_overrides() {
+        let resource_dir = temp_dir("release-overrides");
+        let runtime = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
+        let python = if cfg!(windows) {
+            runtime.join("python").join("python.exe")
+        } else {
+            runtime.join("python").join("bin").join("python3")
+        };
+        let uv = if cfg!(windows) {
+            runtime.join("python").join("Scripts").join("uv.exe")
+        } else {
+            runtime.join("python").join("bin").join("uv")
+        };
+        touch(&python);
+        touch(&uv);
+        touch(&runtime.join("backend").join("app").join("__main__.py"));
+        touch(&runtime.join("backend").join("pyproject.toml"));
+        touch(
+            &runtime
+                .join("backend")
+                .join("app")
+                .join("workflows")
+                .join("packages")
+                .join(".keep"),
+        );
+        touch(&runtime.join("comfyui").join("main.py"));
+        write_runtime_manifest(&runtime);
+
+        let alternate_runtime = temp_dir("alternate-runtime");
+        let mut env = HashMap::new();
+        env.insert(
+            "NOOFY_BACKEND_SIDECAR".to_string(),
+            OsString::from("/tmp/noofy-dev-sidecar"),
+        );
+        env.insert(
+            "NOOFY_PACKAGED_RUNTIME_DIR".to_string(),
+            alternate_runtime.into_os_string(),
+        );
+        env.insert(
+            "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES".to_string(),
+            OsString::from("0"),
+        );
+        env.insert("COMFYUI_RUNTIME_MODE".to_string(), OsString::from("external"));
+        env.insert(
+            "NOOFY_BACKEND_DIR".to_string(),
+            OsString::from("/tmp/noofy-repo/backend"),
+        );
+
+        let spec = backend_launch_spec(&context_with_env(resource_dir, true, env))
+            .expect("packaged launch spec");
+
+        assert_eq!(PathBuf::from(spec.program.clone()), python);
+        assert_eq!(
+            env_value(&spec, "COMFYUI_RUNTIME_MODE"),
+            Some(&OsString::from("managed"))
+        );
+        assert!(spec
+            .remove_env
+            .contains(&"NOOFY_PACKAGED_RUNTIME_DIR".to_string()));
+        assert!(spec
+            .remove_env
+            .contains(&"NOOFY_BACKEND_SIDECAR".to_string()));
+        assert!(spec.remove_env.contains(&"COMFYUI_RUNTIME_MODE".to_string()));
+    }
+
+    #[test]
     fn packaged_backend_prefers_sidecar_when_available() {
         let resource_dir = temp_dir("sidecar-runtime");
         let runtime = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
@@ -970,6 +1192,17 @@ mod tests {
         touch(&uv);
         touch(&sidecar);
         touch(&runtime.join("backend").join("app").join("__main__.py"));
+        touch(&runtime.join("backend").join("pyproject.toml"));
+        touch(
+            &runtime
+                .join("backend")
+                .join("app")
+                .join("workflows")
+                .join("packages")
+                .join(".keep"),
+        );
+        touch(&runtime.join("comfyui").join("main.py"));
+        write_runtime_manifest(&runtime);
 
         let spec = backend_launch_spec(&context(resource_dir, true)).expect("packaged launch spec");
 

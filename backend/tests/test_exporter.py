@@ -150,6 +150,23 @@ def _archive_with_package_update(
     return dst.getvalue()
 
 
+def _archive_with_json_updates(
+    archive_bytes: bytes,
+    updates: dict[str, Any],
+) -> bytes:
+    src = io.BytesIO(archive_bytes)
+    dst = io.BytesIO()
+    with zipfile.ZipFile(src, "r") as source, zipfile.ZipFile(dst, "w") as target:
+        for item in source.infolist():
+            if item.filename in updates:
+                data = json.loads(source.read(item.filename))
+                updates[item.filename](data)
+                target.writestr(item.filename, json.dumps(data))
+            else:
+                target.writestr(item, source.read(item.filename))
+    return dst.getvalue()
+
+
 def _setup_with_configured_dashboard(
     tmp_path: Path,
     *,
@@ -258,7 +275,7 @@ def test_export_backfills_dashboard_inputs_when_stored_dashboard_lost_them(tmp_p
     assert [item["id"] for item in exported_dashboard["inputs"]] == ["prompt"]
 
 
-def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Path) -> None:
+def test_exported_archive_does_not_leak_user_state(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -280,15 +297,15 @@ def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Pat
         dashboard_data = json.loads(zf.read("dashboard.json"))
         graph_data = json.loads(zf.read("comfyui_graph.json"))
 
-    assert dashboard_data["inputs"][0]["default"] == "latest prompt"
-    assert graph_data["1"]["inputs"]["text"] == "latest prompt"
+    assert dashboard_data["inputs"][0]["default"] == "hello"
+    assert graph_data["1"]["inputs"]["text"] == "hi"
     first_control = dashboard_data["sections"][0]["controls"][0]
-    assert first_control["layout"] == {"x": 2, "y": 3, "w": 10, "h": 5}
+    assert "layout" not in first_control
     second_control = dashboard_data["sections"][0]["controls"][1]
-    assert second_control["show_download"] is True
+    assert second_control.get("show_download") is not True
 
 
-def test_exported_archive_applies_group_layout_overrides(tmp_path: Path) -> None:
+def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -325,11 +342,11 @@ def test_exported_archive_applies_group_layout_overrides(tmp_path: Path) -> None
         exported_dashboard = json.loads(zf.read("dashboard.json"))
 
     group = exported_dashboard["sections"][0]["groups"][0]
-    assert group["layout"] == {"x": 4, "y": 5, "w": 18, "h": 12}
+    assert group["layout"] == {"x": 0, "y": 0, "w": 16, "h": 10}
     assert "layout" not in exported_dashboard["sections"][0]["controls"][0]
 
 
-def test_exported_archive_applies_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
+def test_exported_archive_ignores_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
     exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
     package_dir = exporter._find_package_dir(workflow_id)
     assert package_dir is not None
@@ -345,8 +362,8 @@ def test_exported_archive_applies_explicit_dashboard_values_without_mutating_sto
         graph_data = json.loads(zf.read("comfyui_graph.json"))
         dashboard_data = json.loads(zf.read("dashboard.json"))
 
-    assert graph_data["1"]["inputs"]["text"] == "visible dashboard prompt"
-    assert dashboard_data["inputs"][0]["default"] == "visible dashboard prompt"
+    assert graph_data["1"]["inputs"]["text"] == "hi"
+    assert dashboard_data["inputs"][0]["default"] == "hello"
     assert json.loads(graph_file.read_text(encoding="utf-8")) == before
 
 
@@ -383,6 +400,50 @@ def test_exported_archive_applies_export_only_metadata_without_mutating_store(tm
     assert package_data["metadata"]["tags"] == ["portrait", "cleanup"]
     assert package_data["metadata"]["icon"] == "image"
     assert json.loads(package_file.read_text(encoding="utf-8")) == before
+
+
+def test_exported_package_json_excludes_internal_import_state(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    package_file = package_dir / "package.json"
+    package_data = json.loads(package_file.read_text(encoding="utf-8"))
+    package_data.update(
+        {
+            "import_metadata": {"original_filename": "/Users/me/private/source.noofy"},
+            "exported_package": {"private": "/Users/me/private/package.json"},
+            "exported_capsule": {"private": "/Users/me/private/capsule.lock.json"},
+            "export_report": {"private": "/Users/me/private/report.json"},
+            "observed_hardware": {"gpu_name": "Local GPU"},
+            "custom_nodes": [
+                {
+                    "id": "example-node",
+                    "folder_name": "example-node",
+                    "source": "https://example.test/example-node.zip",
+                    "included": True,
+                    "node_types": ["ExampleNode"],
+                    "source_cache_ref": "local-cache/source",
+                }
+            ],
+        }
+    )
+    package_file.write_text(json.dumps(package_data), encoding="utf-8")
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        exported_package = json.loads(zf.read("package.json"))
+    exported_text = json.dumps(exported_package)
+    for key in (
+        "import_metadata",
+        "exported_package",
+        "exported_capsule",
+        "export_report",
+        "observed_hardware",
+    ):
+        assert key not in exported_package
+    assert "/Users/me/private" not in exported_text
+    assert "source_cache_ref" not in exported_package["custom_nodes"][0]
 
 
 def test_exported_archive_includes_selected_custom_icon_asset(tmp_path: Path) -> None:
@@ -526,14 +587,84 @@ def test_exported_archive_strips_api_credential_status_and_raw_values(tmp_path: 
     assert "configured" not in control
     assert "last_four" not in control
     assert "value" not in control
-    assert dashboard_data["inputs"][0]["default"] == {
-        "kind": "api_key_ref",
-        "provider": "comfy_org",
-        "secret_ref": "api-key:comfy_org",
-    }
+    assert dashboard_data["inputs"][0]["default"] is None
 
 
-def test_export_supports_bundled_workflow_with_user_preferences(tmp_path: Path) -> None:
+def test_exported_archive_strips_local_model_state_and_source_url_secrets(tmp_path: Path) -> None:
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(),
+        {
+            "capsule.lock.json": lambda capsule: capsule.update(
+                {
+                    "models": [
+                        {
+                            "comfyui_folder": "checkpoints",
+                            "filename": "private.safetensors",
+                            "source_urls": [
+                                "https://example.test/private.safetensors?token=secret-token",
+                                "https://example.test/private.safetensors?api_key=secret-key",
+                                "https://example.test/public.safetensors",
+                            ],
+                            "sha256": "sha256:" + ("a" * 64),
+                            "size_bytes": 10,
+                            "verification_level": "sha256_size",
+                            "local_file_available_at_export": True,
+                            "asset_ownership": "noofy_downloaded",
+                        }
+                    ]
+                }
+            ),
+            "package.json": lambda package: package.update(
+                {
+                    "required_models": [
+                        {
+                            "folder": "checkpoints",
+                            "filename": "private.safetensors",
+                            "source_url": "https://example.test/private.safetensors?token=secret-token",
+                            "source_urls": [
+                                "https://example.test/private.safetensors?api_key=secret-key",
+                                "https://example.test/public.safetensors",
+                            ],
+                            "sha256": "sha256:" + ("a" * 64),
+                            "size_bytes": 10,
+                            "verification_level": "sha256_size",
+                            "local_file_available_at_export": True,
+                            "asset_ownership": "noofy_downloaded",
+                        }
+                    ]
+                }
+            ),
+        },
+    )
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+    pkg = store.import_archive(archive_bytes, original_filename="model_state.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    exported, _ = exporter.export_archive(pkg.metadata.id)
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+    exposed = json.dumps(package_data)
+    model = package_data["required_models"][0]
+    assert "local_file_available_at_export" not in model
+    assert "asset_ownership" not in model
+    assert "secret-token" not in exposed
+    assert "secret-key" not in exposed
+    assert model["source_url"].endswith("token=%5Bredacted%5D")
+    assert model["source_urls"][0].endswith("token=%5Bredacted%5D")
+    assert model["source_urls"][1].endswith("api_key=%5Bredacted%5D")
+    assert model["source_urls"][2] == "https://example.test/public.safetensors"
+
+
+def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     loader = WorkflowPackageLoader(Path(__file__).resolve().parents[1] / "app/workflows/packages")
     exporter = WorkflowExporter(
@@ -563,6 +694,6 @@ def test_export_supports_bundled_workflow_with_user_preferences(tmp_path: Path) 
     assert package_data["publisher_id"] == "noofy"
     assert package_data["package_id"] == "text_to_image_v0"
     assert "dashboard" not in package_data
-    assert dashboard_data["inputs"][0]["default"] == "native export prompt"
-    assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 1, "y": 2, "w": 20, "h": 5}
-    assert graph_data["6"]["inputs"]["text"] == "native export prompt"
+    assert dashboard_data["inputs"][0]["default"] == "a cinematic photo of a mountain lake"
+    assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 0, "y": 0, "w": 32, "h": 6}
+    assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"

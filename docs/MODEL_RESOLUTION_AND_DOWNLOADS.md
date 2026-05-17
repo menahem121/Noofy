@@ -33,8 +33,10 @@ Invariants:
 - Noofy never writes models into the external ComfyUI folder or into
   `third_party/comfyui/`.
 - Delete actions are allowed only for files that resolve inside the configured
-  Noofy Models folder. External ComfyUI folder files and engine-visible
-  references are never deleted by the Models page.
+  Noofy Models folder and are recorded as Noofy-imported or Noofy-downloaded.
+  Arbitrary user-owned files that the user placed in Noofy Models are reusable
+  by Noofy but are not deletable from the Models page. External ComfyUI folder
+  files and engine-visible references are never deleted by the Models page.
 - The managed ComfyUI sidecar sees the Noofy Models folder (and the optional
   external ComfyUI folder) through a generated `extra-model-paths.yaml` under
   the runtime store. Noofy Models is registered as the default category root.
@@ -62,7 +64,10 @@ The Models page is backed by Noofy API endpoints, not by direct ComfyUI calls.
   row includes stable `model_key`, source, ownership (`noofy_downloaded`,
   `noofy_imported`, `noofy_local`, `external_reference`, `engine_reference`, or
   `workflow_requirement`), `can_delete`, workflow usage, download references,
-  and persisted tag IDs.
+  and persisted tag IDs. `can_delete` is true only for `noofy_downloaded` and
+  `noofy_imported` files inside Noofy Models; `noofy_local` means user-owned
+  local file in the Noofy Models folder and is intentionally not deletable by
+  Noofy.
 - `POST /api/models/import` — copies one or more local file paths into a selected
   Noofy Models category. The backend validates the category, rejects path escapes,
   rejects filename collisions unless `overwrite` is true, and never writes into
@@ -70,9 +75,11 @@ The Models page is backed by Noofy API endpoints, not by direct ComfyUI calls.
   and then atomically moved into the selected category so interrupted imports do
   not appear as installed models.
 - `DELETE /api/models/{model_key}` — deletes only an existing regular file that
-  resolves inside the configured Noofy Models folder. It also clears local app
-  tag and ownership metadata for that model key. It cannot delete external
-  ComfyUI folder files, engine-visible references, or missing requirements.
+  resolves inside the configured Noofy Models folder and has Noofy-owned
+  provenance (`noofy_imported` or `noofy_downloaded`). It also clears local app
+  tag and ownership metadata for that model key. It cannot delete arbitrary
+  user-owned `noofy_local` files, external ComfyUI folder files,
+  engine-visible references, or missing requirements.
 - `POST /api/models/tags` and `PUT /api/models/{model_key}/tags` — persist
   local app tags and model/tag assignments under Noofy settings data. Tags are
   app-local organization metadata and are not exported in workflow packages.

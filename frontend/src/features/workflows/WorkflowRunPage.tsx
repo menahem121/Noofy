@@ -497,27 +497,34 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }
 
   async function pollJobOnce(jobId: string) {
-    const progress = await fetchJobProgress(jobId);
-    setState((current) => ({ ...current, progress }));
-    recordWorkflowProgress(progress);
+    try {
+      const progress = await fetchJobProgress(jobId);
+      setState((current) => ({ ...current, progress, error: null }));
+      recordWorkflowProgress(progress);
 
-    if (terminalStatuses.has(progress.status)) {
-      setIsSubmittingRun(false);
-      cleanupJobWatchers();
-      const result = await fetchJobResult(jobId);
-      if (isEngineJob(result)) {
-        setSubmittedJob(result);
-        if (isWatchableJob(result)) {
-          watchJob(result.job_id);
-          await pollJobOnce(result.job_id);
+      if (terminalStatuses.has(progress.status)) {
+        setIsSubmittingRun(false);
+        cleanupJobWatchers();
+        const result = await fetchJobResult(jobId);
+        if (isEngineJob(result)) {
+          setSubmittedJob(result);
+          if (isWatchableJob(result)) {
+            watchJob(result.job_id);
+            await pollJobOnce(result.job_id);
+          }
+          return;
         }
-        return;
+        setState((current) => ({ ...current, result }));
+        recordWorkflowTerminalResult(result);
+        if (result.status === "failed") {
+          void openFailureDialog(result.error ?? progress.message ?? "The local engine could not finish this run.", jobId);
+        }
       }
-      setState((current) => ({ ...current, result }));
-      recordWorkflowTerminalResult(result);
-      if (result.status === "failed") {
-        void openFailureDialog(result.error ?? progress.message ?? "The local engine could not finish this run.", jobId);
-      }
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Could not check workflow progress.",
+      }));
     }
   }
 
@@ -801,7 +808,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       workflowName={workflowDisplayName}
       exportUrl={exportDialog.url}
       extension={exportDialog.extension}
-      inputValues={inputValues as Record<string, unknown>}
+      inputValues={exportDialog.extension === ".json" ? inputValues as Record<string, unknown> : undefined}
       review={exportDialog.extension === ".noofy" ? exportReview : undefined}
       onClose={() => setExportDialog(null)}
     />

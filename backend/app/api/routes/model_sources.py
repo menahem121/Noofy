@@ -5,13 +5,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from app.api.deps import (
-    ApiKeyServiceDep,
-    EngineServiceDep,
-    ModelDownloadServiceDep,
-    ModelFolderServiceDep,
+    CivitaiLoraServiceDep,
 )
 from app.models.civitai_loras import (
-    CivitaiLoraBrowserService,
     CivitaiLoraDownloadRequest,
     CivitaiLoraError,
     CivitaiLoraSearchRequest,
@@ -27,18 +23,8 @@ MAX_CIVITAI_PREVIEW_REDIRECTS = 3
 @router.post("/model-sources/civitai/search-loras")
 async def search_civitai_loras(
     request: CivitaiLoraSearchRequest,
-    engine_service: EngineServiceDep,
-    api_key_service: ApiKeyServiceDep,
-    model_folder_service: ModelFolderServiceDep,
-    model_download_service: ModelDownloadServiceDep,
+    service: CivitaiLoraServiceDep,
 ):
-    service = CivitaiLoraBrowserService(
-        engine_service=engine_service,
-        api_key_service=api_key_service,
-        model_folder_service=model_folder_service,
-        model_download_service=model_download_service,
-        log_store=getattr(engine_service, "log_store", None),
-    )
     try:
         return await service.search_loras(request)
     except CivitaiLoraError as exc:
@@ -51,18 +37,8 @@ async def search_civitai_loras(
 @router.post("/model-sources/civitai/download")
 async def download_civitai_lora(
     request: CivitaiLoraDownloadRequest,
-    engine_service: EngineServiceDep,
-    api_key_service: ApiKeyServiceDep,
-    model_folder_service: ModelFolderServiceDep,
-    model_download_service: ModelDownloadServiceDep,
+    service: CivitaiLoraServiceDep,
 ):
-    service = CivitaiLoraBrowserService(
-        engine_service=engine_service,
-        api_key_service=api_key_service,
-        model_folder_service=model_folder_service,
-        model_download_service=model_download_service,
-        log_store=getattr(engine_service, "log_store", None),
-    )
     try:
         return await service.start_download(request)
     except CivitaiLoraError as exc:

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.composition import ApiServices
 from app.engine.models import ComfyUIRuntimeStatus
 from app.main import create_app
 
@@ -18,20 +19,60 @@ class FakeEngineService:
             pid=123,
         )
 
+    async def shutdown(self) -> None:
+        return None
+
+
+class FakeRunResultService:
     async def stream_progress_events(self, job_id: str):
         yield 'event: progress\ndata: {"job_id":"' + job_id + '","status":"running"}\n\n'
 
+
+class FakeRunJobService:
     async def fetch_output(self, job_id: str, filename: str, subfolder: str, output_type: str):
         return b"image-bytes", "image/png"
 
-    def export_workflow_archive(self, workflow_id: str):
+
+class FakeWorkflowExporter:
+    def export_archive(self, workflow_id: str, input_values=None, export_metadata=None):
+        del input_values, export_metadata
         return b"noofy-archive", f"{workflow_id}.noofy"
 
-    def export_workflow_comfyui_graph(self, workflow_id: str):
+    def export_comfyui_graph(self, workflow_id: str, input_values=None):
+        del input_values
         return b'{"workflow": true}', f"{workflow_id}.json"
 
-    async def shutdown(self) -> None:
-        return None
+
+def _services(
+    engine_service=None,
+    *,
+    run_job_service=None,
+    run_result_service=None,
+    workflow_exporter=None,
+) -> ApiServices:
+    placeholder = object()
+    return ApiServices(
+        engine_service=engine_service or FakeEngineService(),
+        comfyui_sidecar_service=placeholder,
+        user_state_service=placeholder,
+        asset_service=placeholder,
+        gallery_store=placeholder,
+        api_key_service=placeholder,
+        model_folder_service=placeholder,
+        model_tag_store=placeholder,
+        model_ownership_store=placeholder,
+        model_inventory_service=placeholder,
+        model_download_service=placeholder,
+        workflow_library_service=None,
+        dashboard_authoring_service=None,
+        workflow_exporter=workflow_exporter,
+        workflow_import_orchestrator=None,
+        workflow_runner_lifecycle_service=None,
+        run_job_service=run_job_service,
+        run_orchestrator=None,
+        run_result_service=run_result_service,
+        history_service=None,
+    )
 
 
 def test_api_requests_succeed_without_configured_token(monkeypatch) -> None:
@@ -90,7 +131,11 @@ def test_cors_preflight_for_tauri_origin_succeeds_with_token_enabled(monkeypatch
 def test_job_event_stream_accepts_query_token(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
-    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+    with TestClient(
+        create_app(
+            services=_services(run_result_service=FakeRunResultService()),
+        )
+    ) as client:
         response = client.get("/api/jobs/job-1/events?token=secret-token")
 
     assert response.status_code == 200
@@ -100,7 +145,11 @@ def test_job_event_stream_accepts_query_token(monkeypatch) -> None:
 def test_job_event_stream_rejects_missing_or_wrong_query_token(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
-    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+    with TestClient(
+        create_app(
+            services=_services(run_result_service=FakeRunResultService()),
+        )
+    ) as client:
         missing = client.get("/api/jobs/job-1/events")
         wrong = client.get("/api/jobs/job-1/events?token=wrong-token")
 
@@ -111,7 +160,11 @@ def test_job_event_stream_rejects_missing_or_wrong_query_token(monkeypatch) -> N
 def test_job_output_view_accepts_query_token(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
-    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+    with TestClient(
+        create_app(
+            services=_services(run_job_service=FakeRunJobService()),
+        )
+    ) as client:
         response = client.get(
             "/api/jobs/job-1/outputs/view?filename=result.png&type=output&token=secret-token"
         )
@@ -123,7 +176,11 @@ def test_job_output_view_accepts_query_token(monkeypatch) -> None:
 def test_workflow_export_downloads_accept_query_token(monkeypatch) -> None:
     monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
 
-    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+    with TestClient(
+        create_app(
+            services=_services(workflow_exporter=FakeWorkflowExporter()),
+        )
+    ) as client:
         noofy_export = client.get("/api/workflows/text_to_image_v0/export?token=secret-token")
         comfy_export = client.get(
             "/api/workflows/text_to_image_v0/export/comfyui-json?token=secret-token"
@@ -138,24 +195,28 @@ def test_workflow_export_downloads_accept_query_token(monkeypatch) -> None:
 def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
 
-    class RecordingEngineService(FakeEngineService):
+    class RecordingWorkflowExporter(FakeWorkflowExporter):
         archive_values = None
         graph_values = None
 
         export_metadata = None
 
-        def export_workflow_archive(self, workflow_id: str, input_values=None, export_metadata=None):
+        def export_archive(self, workflow_id: str, input_values=None, export_metadata=None):
             self.archive_values = input_values
             self.export_metadata = export_metadata
             return b"noofy-archive", f"{workflow_id}.noofy"
 
-        def export_workflow_comfyui_graph(self, workflow_id: str, input_values=None):
+        def export_comfyui_graph(self, workflow_id: str, input_values=None):
             self.graph_values = input_values
             return b'{"workflow": true}', f"{workflow_id}.json"
 
-    engine_service = RecordingEngineService()
+    workflow_exporter = RecordingWorkflowExporter()
 
-    with TestClient(create_app(engine_service=engine_service)) as client:
+    with TestClient(
+        create_app(
+            services=_services(workflow_exporter=workflow_exporter),
+        )
+    ) as client:
         noofy_export = client.post(
             "/api/workflows/text_to_image_v0/export",
             json={
@@ -170,6 +231,6 @@ def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
 
     assert noofy_export.status_code == 200
     assert comfy_export.status_code == 200
-    assert engine_service.archive_values == {"prompt": "visible prompt"}
-    assert engine_service.export_metadata == {"name": "Reviewed Export"}
-    assert engine_service.graph_values == {"prompt": "visible prompt"}
+    assert workflow_exporter.archive_values == {"prompt": "visible prompt"}
+    assert workflow_exporter.export_metadata == {"name": "Reviewed Export"}
+    assert workflow_exporter.graph_values == {"prompt": "visible prompt"}

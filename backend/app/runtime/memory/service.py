@@ -541,6 +541,7 @@ class MemoryGovernorService:
             workflow_id,
             inputs,
             options,
+            validated_before_queue=True,
             run_submission_snapshot=run_submission_snapshot,
         )
         if isinstance(result, EngineJob):

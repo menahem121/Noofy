@@ -196,16 +196,7 @@ def test_save_dashboard_writes_only_dashboard_json(tmp_path: Path) -> None:
     assert result["valid"] is True
     assert result["errors"] == []
 
-    # package.json import_metadata.status must be promoted to "imported".
-    package_after = json.loads(package_json_path.read_text())
-    assert (
-        package_after.get("import_metadata", {}).get("status") == "imported"
-    ), "save_dashboard must promote import_metadata.status to 'imported'"
-    # All other package.json fields must remain structurally unchanged.
-    before = json.loads(package_json_bytes_before)
-    assert package_after.get("engine") == before.get("engine")
-    assert package_after.get("comfyui_graph") == before.get("comfyui_graph")
-    assert package_after.get("identity") == before.get("identity")
+    assert package_json_path.read_bytes() == package_json_bytes_before
 
     # dashboard.json must now exist and carry status: configured.
     dashboard_json_path = package_json_path.parent / "dashboard.json"

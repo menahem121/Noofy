@@ -46,6 +46,24 @@ def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() 
     assert access_filter.filter(import_preview_record) is True
 
 
+def test_access_log_filter_drops_query_token_requests() -> None:
+    access_filter = SuppressResourceMonitorAccessLogFilter()
+    event_record = logging_record((
+        "127.0.0.1:1234",
+        "GET",
+        "/api/jobs/job-1/events?token=runtime-secret",
+        "1.1",
+        200,
+    ))
+    output_record = logging_record((
+        "127.0.0.1:1234",
+        "GET /api/jobs/job-1/outputs/view?filename=result.png&token=runtime-secret HTTP/1.1",
+    ))
+
+    assert access_filter.filter(event_record) is False
+    assert access_filter.filter(output_record) is False
+
+
 def test_backend_module_starts_on_free_port_and_serves_paths() -> None:
     env = os.environ.copy()
     env.pop("NOOFY_API_TOKEN", None)

@@ -160,8 +160,33 @@ class ComfyUIEngineAdapter:
         return self.job_store.get_progress(job_id)
 
     async def cancel_job(self, job_id: str) -> JobProgress:
-        async with httpx.AsyncClient(timeout=30) as client:
-            await client.post(f"{self.base_url}/interrupt", json={"prompt_id": job_id})
+        queue_status = await self._get_queue_status(job_id)
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                if queue_status is not None and queue_status.status == "queued":
+                    response = await client.post(
+                        f"{self.base_url}/queue",
+                        json={"delete": [job_id]},
+                    )
+                    response.raise_for_status()
+                else:
+                    response = await client.post(
+                        f"{self.base_url}/interrupt",
+                        json={"prompt_id": job_id},
+                    )
+                    response.raise_for_status()
+        except httpx.HTTPError as exc:
+            self.log_store.add(
+                "error",
+                "Failed to cancel ComfyUI job",
+                "comfyui.adapter",
+                job_id=job_id,
+                details={
+                    "error": str(exc),
+                    "queue_status": queue_status.status if queue_status is not None else None,
+                },
+            )
+            raise ValueError(f"Failed to cancel workflow run: {sanitize_text(str(exc))}") from exc
 
         progress = JobProgress(
             job_id=job_id, status="canceled", message="Cancel requested"
@@ -228,7 +253,12 @@ class ComfyUIEngineAdapter:
         subfolder: str,
         output_type: str,
     ) -> tuple[bytes, str]:
-        del job_id
+        await self._ensure_output_belongs_to_job(
+            job_id=job_id,
+            filename=filename,
+            subfolder=subfolder,
+            output_type=output_type,
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self.base_url}/view",
@@ -245,6 +275,75 @@ class ComfyUIEngineAdapter:
             response.content,
             response.headers.get("content-type", "application/octet-stream"),
         )
+
+    async def _ensure_output_belongs_to_job(
+        self,
+        *,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> None:
+        result = self.job_store.get_result(job_id)
+        if not self._result_contains_output(
+            result,
+            filename=filename,
+            subfolder=subfolder,
+            output_type=output_type,
+        ):
+            history_entry = await self._get_history_entry(job_id)
+            if history_entry is not None:
+                result = self._result_from_history(job_id, history_entry)
+                self.job_store.set_result(result)
+                self.job_store.set_progress(
+                    self._progress_from_history(job_id, history_entry)
+                )
+
+        if not self._result_contains_output(
+            self.job_store.get_result(job_id),
+            filename=filename,
+            subfolder=subfolder,
+            output_type=output_type,
+        ):
+            self.log_store.add(
+                "warning",
+                "Blocked output fetch for file not produced by job",
+                "comfyui.adapter",
+                job_id=job_id,
+                details={
+                    "filename": filename,
+                    "subfolder": subfolder,
+                    "type": output_type,
+                },
+            )
+            raise ValueError("Requested output is not part of this workflow job.")
+
+    def _result_contains_output(
+        self,
+        result: JobResult,
+        *,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+    ) -> bool:
+        for output in result.outputs:
+            payload = output.get("output")
+            if not isinstance(payload, dict):
+                continue
+            for media_kind in ("images", "audio", "video"):
+                items = payload.get(media_kind)
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if (
+                        str(item.get("filename") or "") == filename
+                        and str(item.get("subfolder") or "") == subfolder
+                        and str(item.get("type") or "output") == output_type
+                    ):
+                        return True
+        return False
 
     async def _list_available_models_from_api(self) -> list[ModelInfo]:
         try:

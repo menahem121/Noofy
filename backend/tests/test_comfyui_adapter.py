@@ -6,7 +6,7 @@ import pytest
 
 from app.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
-from app.engine.models import JobProgress
+from app.engine.models import JobProgress, JobResult
 from app.engine.service import EngineService
 from app.runs.credentials import (
     CredentialRequirementError,
@@ -353,6 +353,26 @@ async def test_fetch_output_reads_from_configured_view_endpoint(
     adapter = ComfyUIEngineAdapter(
         "http://comfyui.test", tmp_path, log_store=LogStore()
     )
+    adapter.job_store.set_result(
+        JobResult(
+            job_id="job-1",
+            status="completed",
+            outputs=[
+                {
+                    "node_id": "9",
+                    "output": {
+                        "images": [
+                            {
+                                "filename": "result.png",
+                                "subfolder": "preview",
+                                "type": "output",
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+    )
 
     content, media_type = await adapter.fetch_output(
         "job-1",
@@ -364,6 +384,37 @@ async def test_fetch_output_reads_from_configured_view_endpoint(
     assert content == b"image-bytes"
     assert media_type == "image/png"
     assert len(requests) == 1
+
+
+@pytest.mark.anyio
+async def test_fetch_output_rejects_files_not_owned_by_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/history/job-1":
+            return httpx.Response(200, json={"job-1": {"outputs": {}, "status": {}}})
+        return httpx.Response(200, content=b"leaked-bytes")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
+
+    with pytest.raises(ValueError, match="not part of this workflow job"):
+        await adapter.fetch_output("job-1", "other.png", "", "output")
+
+    assert [request.url.path for request in requests] == ["/history/job-1"]
 
 
 def test_terminal_progress_logs_once(tmp_path: Path) -> None:
@@ -667,6 +718,11 @@ async def test_cancel_job_cleans_staged_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={"queue_running": [[0, "job-cancel"]], "queue_pending": []},
+            )
         assert request.url.path == "/interrupt"
         return httpx.Response(200, json={})
 
@@ -692,6 +748,46 @@ async def test_cancel_job_cleans_staged_files(
 
     assert not staged_file.exists()
     assert "job-cancel" not in adapter._staged_files
+
+
+@pytest.mark.anyio
+async def test_cancel_pending_job_deletes_queue_item_without_interrupting_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET" and request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={"queue_running": [], "queue_pending": [[0, "job-pending"]]},
+            )
+        if request.method == "POST" and request.url.path == "/queue":
+            assert json_payload(request) == {"delete": ["job-pending"]}
+            return httpx.Response(200, json={})
+        return httpx.Response(500)
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
+
+    progress = await adapter.cancel_job("job-pending")
+
+    assert progress.status == "canceled"
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/queue"),
+        ("POST", "/queue"),
+    ]
 
 
 @pytest.mark.anyio

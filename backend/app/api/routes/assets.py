@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.deps import DashboardAssetServiceDep, EngineServiceDep
+from app.api.deps import DashboardAssetServiceDep, WorkflowLibraryServiceDep
 from app.workflows.assets import AssetUploadError
 
 router = APIRouter()
@@ -30,16 +30,13 @@ async def upload_workflow_icon(
 async def delete_workflow_icon(
     icon_id: str,
     asset_service: DashboardAssetServiceDep,
-    engine_service: EngineServiceDep,
+    library: WorkflowLibraryServiceDep,
 ):
-    users = []
-    list_workflows = getattr(engine_service, "list_workflows", None)
-    if callable(list_workflows):
-        users = [
-            workflow["name"]
-            for workflow in list_workflows()
-            if workflow.get("icon") == icon_id
-        ]
+    users = [
+        workflow["name"]
+        for workflow in library.list_workflows()
+        if workflow.get("icon") == icon_id
+    ]
     if users:
         raise HTTPException(
             status_code=409,

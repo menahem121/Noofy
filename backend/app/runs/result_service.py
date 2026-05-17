@@ -54,13 +54,17 @@ class RunResultService:
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
         adapter = self.job_service.adapter_for_job(job_id)
         result = await adapter.get_result(job_id)
-        await self.finish_memory_sampling(result.job_id)
-        self.record_memory_observation(result)
-        retry_job = await self.maybe_retry_after_memory_cleanup(result)
-        if retry_job is not None:
-            return retry_job
-        gallery_items = await self._capture_gallery_outputs(result)
-        self._record_run_history_and_activity(result, gallery_items)
+        if result.status in {"completed", "failed", "canceled"}:
+            mark_job_finished = getattr(self.job_service, "mark_job_finished", None)
+            if callable(mark_job_finished):
+                mark_job_finished(result.job_id)
+            await self.finish_memory_sampling(result.job_id)
+            self.record_memory_observation(result)
+            retry_job = await self.maybe_retry_after_memory_cleanup(result)
+            if retry_job is not None:
+                return retry_job
+            gallery_items = await self._capture_gallery_outputs(result)
+            self._record_run_history_and_activity(result, gallery_items)
         return result
 
     async def stream_progress_events(self, job_id: str):

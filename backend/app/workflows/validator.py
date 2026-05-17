@@ -1,5 +1,5 @@
 from app.engine.models import MissingModel, WorkflowValidationResult
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import DASHBOARD_CONTROL_TYPES, WorkflowPackage
 
 _GRID_COLUMNS = 32
 
@@ -29,6 +29,19 @@ class WorkflowPackageValidator:
                 errors.append(
                     f"Input '{workflow_input.id}' references missing node '{workflow_input.binding.node_id}'."
                 )
+                continue
+            node = package.comfyui_graph.get(workflow_input.binding.node_id)
+            node_inputs = node.get("inputs") if isinstance(node, dict) else None
+            if isinstance(node_inputs, dict) and workflow_input.binding.input_name not in node_inputs:
+                errors.append(
+                    f"Input '{workflow_input.id}' references missing input '{workflow_input.binding.input_name}' on node '{workflow_input.binding.node_id}'."
+                )
+
+        for workflow_output in package.outputs:
+            if workflow_output.node_id not in graph_node_ids:
+                errors.append(
+                    f"Output '{workflow_output.id}' references missing node '{workflow_output.node_id}'."
+                )
 
         # Validate dashboard controls.
         seen_control_ids: set[str] = set()
@@ -36,6 +49,10 @@ class WorkflowPackageValidator:
         seen_grouped_control_ids: set[str] = set()
         layouts_with_id: list[tuple[str, dict]] = []
         input_ids_referenced: set[str] = set()
+        if package.dashboard.status == "configured" and not any(
+            section.controls for section in package.dashboard.sections
+        ):
+            errors.append("Configured dashboard has no controls.")
 
         for section in package.dashboard.sections:
             section_control_ids = {control.id for control in section.controls}
@@ -45,6 +62,10 @@ class WorkflowPackageValidator:
                 if control.id in seen_control_ids:
                     errors.append(f"Duplicate dashboard control id '{control.id}'.")
                 seen_control_ids.add(control.id)
+                if control.type not in DASHBOARD_CONTROL_TYPES:
+                    errors.append(
+                        f"Dashboard control '{control.id}' uses unsupported type '{control.type}'."
+                    )
 
                 # input_id must reference a known input.
                 if control.type == "api_credential":
@@ -70,6 +91,10 @@ class WorkflowPackageValidator:
                         )
                     else:
                         input_ids_referenced.add(control.input_id)
+                elif control.type not in {"display_image", "result_image"}:
+                    errors.append(
+                        f"Dashboard control '{control.id}' has no input_id."
+                    )
 
                 # Output image controls must reference a known output.
                 if control.type in {"display_image", "result_image"}:

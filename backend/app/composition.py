@@ -9,6 +9,7 @@ from app.engine.service import EngineService
 from app.gallery import GalleryCaptureService, GalleryStore
 from app.history import ActivityLogStore, HistoryService
 from app.models.downloads import ModelDownloadJobService
+from app.models.civitai_loras import CivitaiLoraBrowserService
 from app.models.inventory import ModelInventoryService
 from app.models.ownership import ModelOwnershipStore
 from app.models.tags import ModelTagStore
@@ -54,6 +55,7 @@ class ApiServices:
     run_orchestrator: RunOrchestrator | None
     run_result_service: RunResultService | None
     history_service: HistoryService | None
+    civitai_lora_service: CivitaiLoraBrowserService | None = None
 
 
 def create_default_api_services() -> ApiServices:
@@ -133,6 +135,9 @@ def create_api_services(
         setattr(workflow_import_orchestrator, "model_ownership_store", ownership)
     if workflow_import_orchestrator is not None:
         workflow_import_orchestrator.history_service = history
+    user_state = user_state_service or UserStateService(settings.paths.user_state_dir)
+    if workflow_import_orchestrator is not None:
+        workflow_import_orchestrator.user_state_service = user_state
     folders = model_folder_service or ModelFolderSettingsService(
         store=ModelFolderSettingsStore(settings.paths.settings_dir / "model-folders.json"),
         default_noofy_models_dir=default_noofy_models_dir(settings.paths.data_dir),
@@ -161,6 +166,19 @@ def create_api_services(
     provider_resolver = getattr(model_availability_service, "provider_resolver", None)
     if provider_resolver is not None:
         provider_resolver.api_key_resolver = api_keys.get_key
+    downloads = model_download_service or ModelDownloadJobService(
+        engine_service=engine_service,
+        model_folder_service=folders,
+        ownership_store=ownership,
+        log_store=getattr(engine_service, "log_store", None),
+    )
+    civitai_lora_service = CivitaiLoraBrowserService(
+        engine_service=engine_service,
+        api_key_service=api_keys,
+        model_folder_service=folders,
+        model_download_service=downloads,
+        log_store=getattr(engine_service, "log_store", None),
+    )
 
     return ApiServices(
         engine_service=engine_service,
@@ -169,7 +187,7 @@ def create_api_services(
             if comfyui_sidecar_service is not None
             else getattr(engine_service, "comfyui_sidecar_service", engine_service)
         ),
-        user_state_service=user_state_service or UserStateService(settings.paths.user_state_dir),
+        user_state_service=user_state,
         asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
         gallery_store=gallery,
         api_key_service=api_keys,
@@ -177,13 +195,7 @@ def create_api_services(
         model_tag_store=tags,
         model_ownership_store=ownership,
         model_inventory_service=inventory,
-        model_download_service=model_download_service
-        or ModelDownloadJobService(
-            engine_service=engine_service,
-            model_folder_service=folders,
-            ownership_store=ownership,
-            log_store=getattr(engine_service, "log_store", None),
-        ),
+        model_download_service=downloads,
         workflow_library_service=workflow_library_service,
         dashboard_authoring_service=getattr(engine_service, "dashboard_authoring", None),
         workflow_exporter=getattr(engine_service, "workflow_exporter", None),
@@ -193,6 +205,7 @@ def create_api_services(
         run_orchestrator=run_orchestrator,
         run_result_service=run_result_service,
         history_service=history,
+        civitai_lora_service=civitai_lora_service,
     )
 
 

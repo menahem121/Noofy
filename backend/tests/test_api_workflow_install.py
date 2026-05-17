@@ -6,6 +6,8 @@ from app.runtime.runners.supervisor import RunnerDescriptor, RunnerKind, RunnerS
 
 class FakeEngineService:
     def __init__(self) -> None:
+        self.workflow_runner_lifecycle_service = self
+        self.run_orchestrator = self
         self.prepared_workflows: list[str] = []
         self.started_workflow_runners: list[str] = []
         self.stopped_workflow_runners: list[str] = []

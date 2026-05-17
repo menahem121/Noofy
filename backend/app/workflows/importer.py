@@ -103,6 +103,7 @@ from app.workflows.import_capsule_lock import (
 from app.workflows.store_paths import (
     imported_workflow_id,
     mutable_package_dir,
+    package_identity_dir,
     safe_store_segment,
 )
 
@@ -163,6 +164,7 @@ class ImportedWorkflowPackageStore:
         *,
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
+        duplicate_action: str | None = None,
     ) -> WorkflowPackage:
         try:
             importer = NoofyArchiveImporter(data, original_filename=original_filename)
@@ -170,6 +172,8 @@ class ImportedWorkflowPackageStore:
             package = self._with_verified_import_trust(
                 package, importer.trust_payload()
             )
+            if duplicate_action == "copy":
+                package = _package_imported_as_copy(package, self.root_dir)
             package = _package_with_source_policy(
                 package,
                 community_preparation_opted_in=allow_unverified_community_preparation,
@@ -201,18 +205,22 @@ class ImportedWorkflowPackageStore:
                     app_capsule_lock = None
                 else:
                     raise NoofyImportError(str(exc)) from exc
-            write_imported_package_transaction(
-                root_dir=self.root_dir,
-                target_dir=target_dir,
-                package=package,
-                app_capsule_lock=app_capsule_lock,
-                runtime_resolution_unavailable=runtime_resolution_unavailable,
-                archive_data=data,
-                original_filename=original_filename,
-                schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
-                extract_source_files=importer.extract_source_files,
-                dashboard_assets_dir=self.dashboard_assets_dir,
-            )
+            try:
+                write_imported_package_transaction(
+                    root_dir=self.root_dir,
+                    target_dir=target_dir,
+                    package=package,
+                    app_capsule_lock=app_capsule_lock,
+                    runtime_resolution_unavailable=runtime_resolution_unavailable,
+                    archive_data=data,
+                    original_filename=original_filename,
+                    schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
+                    extract_source_files=importer.extract_source_files,
+                    dashboard_assets_dir=self.dashboard_assets_dir,
+                    replace_existing=duplicate_action == "replace",
+                )
+            except FileExistsError as exc:
+                raise NoofyImportError(str(exc)) from exc
         except Exception as exc:
             self.log_store.add(
                 "warning",
@@ -248,6 +256,10 @@ class ImportedWorkflowPackageStore:
         if package_dir is None:
             raise NoofyImportError("Imported package is missing identity metadata")
         return package_dir
+
+    def has_package_identity(self, package: WorkflowPackage) -> bool:
+        package_dir = mutable_package_dir(self.root_dir, package)
+        return package_dir is not None and package_dir.exists()
 
     def _with_resolved_community_sources(
         self,
@@ -591,6 +603,8 @@ class NoofyArchiveImporter:
             if info.is_dir():
                 continue
             target = target_dir.joinpath(*PurePosixPath(name).parts)
+            if not _path_is_within(target_dir, target):
+                raise NoofyImportError("Workflow package contains an unsafe path.")
             target.parent.mkdir(parents=True, exist_ok=True)
             with self.archive.open(info, "r") as source, target.open("wb") as dest:
                 shutil.copyfileobj(source, dest)
@@ -717,6 +731,62 @@ def _strip_wrapper_root(name: str, root_prefix: str | None) -> str | None:
 
 def _safe_store_segment(value: str) -> str:
     return safe_store_segment(value)
+
+
+def _package_imported_as_copy(package: WorkflowPackage, root_dir: Path) -> WorkflowPackage:
+    if package.identity is None:
+        raise NoofyImportError("Cannot import a copy of a package without identity metadata.")
+
+    original_identity = package.identity
+    copy_index = 1
+    while True:
+        suffix = "-copy" if copy_index == 1 else f"-copy-{copy_index}"
+        package_id = f"{original_identity.package_id}{suffix}"
+        name_suffix = " Copy" if copy_index == 1 else f" Copy {copy_index}"
+        identity = WorkflowPackageIdentity(
+            publisher_id="local",
+            package_id=package_id,
+            version=original_identity.version,
+            trust_level=TrustLevel.QUARANTINED_COMMUNITY.value,
+            source="local_copy",
+            signature=None,
+            signatures=[],
+            signed_registry_metadata=None,
+        )
+        if not package_identity_dir(root_dir, identity).exists():
+            workflow_id = imported_workflow_id(
+                identity.publisher_id,
+                identity.package_id,
+                identity.version,
+            )
+            import_metadata = package.import_metadata
+            if import_metadata is not None:
+                developer_details = dict(import_metadata.developer_details)
+                developer_details.pop("trust_verification", None)
+                developer_details["copied_from_identity"] = original_identity.model_dump(mode="json")
+                import_metadata = import_metadata.model_copy(
+                    update={"developer_details": developer_details}
+                )
+            return package.model_copy(
+                update={
+                    "identity": identity,
+                    "metadata": package.metadata.model_copy(
+                        update={
+                            "id": workflow_id,
+                            "name": f"{package.metadata.name}{name_suffix}",
+                        }
+                    ),
+                    "import_metadata": import_metadata,
+                    "source_policy": None,
+                }
+            )
+        copy_index += 1
+
+
+def _path_is_within(root_dir: Path, path: Path) -> bool:
+    root = root_dir.resolve(strict=False)
+    candidate = path.resolve(strict=False)
+    return candidate == root or candidate.is_relative_to(root)
 
 
 def _zip_member_is_symlink(info: zipfile.ZipInfo) -> bool:

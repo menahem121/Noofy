@@ -75,6 +75,14 @@ export async function apiErrorMessage(response: Response): Promise<string> {
         if (typeof message === "string" && message.trim()) return message;
       }
     }
+    if (payload && typeof payload === "object" && "errors" in payload) {
+      const errors = (payload as { errors?: unknown }).errors;
+      if (Array.isArray(errors)) {
+        const first = errors.find((item) => item && typeof item === "object" && "msg" in item);
+        const message = first && typeof (first as { msg?: unknown }).msg === "string" ? (first as { msg: string }).msg : null;
+        if (message?.trim()) return message;
+      }
+    }
   } catch {
     // Use the stable fallback below.
   }

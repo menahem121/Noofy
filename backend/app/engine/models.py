@@ -99,6 +99,7 @@ class StagedWorkflowImportResponse(BaseModel):
     custom_node_count: int
     unresolved_input_count: int
     model_summary: RequiredModelSummary | None = None
+    duplicate_identity: dict[str, object] | None = None
 
 
 class ModelDownloadSummary(BaseModel):

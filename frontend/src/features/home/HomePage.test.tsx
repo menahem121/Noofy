@@ -222,6 +222,25 @@ describe("HomePage", () => {
     expect(onOpenWorkflow).toHaveBeenCalledWith("portrait_restore");
   });
 
+  it("routes Home page primary and view-all actions to their real destinations", async () => {
+    mockSearchableHome();
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      onConfigureDashboard,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
+    expect(onConfigureDashboard).toHaveBeenCalledWith();
+
+    const viewAllButtons = screen.getAllByRole("button", { name: "View all" });
+    fireEvent.click(viewAllButtons[0]);
+    expect(onNavigate).toHaveBeenCalledWith("history");
+
+    fireEvent.click(viewAllButtons[1]);
+    expect(onNavigate).toHaveBeenCalledWith("workflows");
+  });
+
   it("pressing Enter on Home search navigates to Workflows with the query preserved", async () => {
     mockSearchableHome();
     renderHomePage({
@@ -752,6 +771,95 @@ describe("HomePage", () => {
     expect(screen.getAllByRole("heading", { name: "EraserV4.5" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Imported")).toBeInTheDocument();
     expect(screen.getAllByText("Community").length).toBeGreaterThan(0);
+  });
+
+  it("asks before importing a duplicate workflow identity", async () => {
+    const duplicateImport = {
+      import_session_id: "duplicate-session",
+      workflow_id: "unknown__portrait__0.1.0",
+      status: "duplicate_identity",
+      user_facing_message: "This workflow is already in Noofy. Choose how to import it.",
+      workflow: {
+        id: "unknown__portrait__0.1.0",
+        name: "Portrait Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "quarantined_community",
+      },
+      required_model_count: 0,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: null,
+      duplicate_identity: {
+        status: "conflict",
+        user_facing_message: "A workflow with this identity already exists in Noofy.",
+        existing_workflow: {
+          id: "unknown__portrait__0.1.0",
+          name: "Portrait Workflow",
+          version: "0.1.0",
+        },
+        incoming_workflow: {
+          id: "unknown__portrait__0.1.0",
+          name: "Portrait Workflow",
+          version: "0.1.0",
+        },
+        actions: ["replace", "copy", "cancel"],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=portrait.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(duplicateImport));
+      }
+      if (url.endsWith("/api/workflows/import/duplicate-session/commit") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            ...duplicateImport,
+            import_session_id: null,
+            workflow_id: "local__portrait-copy__0.1.0",
+            user_facing_message: "Imported",
+            workflow: {
+              ...duplicateImport.workflow,
+              id: "local__portrait-copy__0.1.0",
+              name: "Portrait Workflow Copy",
+            },
+            duplicate_identity: null,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "portrait.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Portrait Workflow" })).toBeInTheDocument();
+    expect(screen.getByText("No silent replacement")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Import as Copy" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/duplicate-session/commit", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ duplicate_action: "copy" }),
+      });
+    });
   });
 
   it("shows immediate feedback while continuing an import without downloading", async () => {

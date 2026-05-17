@@ -106,8 +106,16 @@ def _archive_bytes() -> bytes:
         "version": "0.1.0",
         "status": "configured",
         "inputs": [],
-        "outputs": [],
-        "sections": [],
+        "outputs": [{"id": "image", "label": "Image", "node_id": "2", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Main",
+                "controls": [
+                    {"id": "result", "type": "result_image", "label": "Result", "output_id": "image"}
+                ],
+            }
+        ],
     }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -178,6 +186,26 @@ def _native_run_service(tmp_path: Path) -> tuple[EngineService, str]:
         ),
         encoding="utf-8",
     )
+    (package_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "status": "configured",
+                "inputs": [],
+                "outputs": [{"id": "image", "label": "Image", "node_id": "1", "type": "image"}],
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "result", "type": "result_image", "label": "Result", "output_id": "image"}
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     loader = WorkflowPackageLoader(packages_dir)
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(
@@ -228,11 +256,31 @@ def test_workflow_list_includes_missing_model_count_without_details_payload(tmp_
                 "required_models": [
                     {"folder": "checkpoints", "filename": "missing.safetensors", "model_type": "checkpoint"}
                 ],
-                "comfyui_graph": {},
+                    "comfyui_graph": {"1": {"class_type": "SaveImage", "inputs": {}}},
                 "inputs": [],
                 "outputs": [],
                 "custom_nodes": [],
                 "unresolved_runtime_inputs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "status": "configured",
+                "inputs": [],
+                "outputs": [{"id": "image", "label": "Image", "node_id": "1", "type": "image"}],
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "result", "type": "result_image", "label": "Result", "output_id": "image"}
+                        ],
+                    }
+                ],
             }
         ),
         encoding="utf-8",

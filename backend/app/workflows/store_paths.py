@@ -45,3 +45,14 @@ def mutable_package_dir(root_dir: Path, package: WorkflowPackage) -> Path | None
     if package.identity is None:
         return None
     return package_identity_dir(root_dir, package.identity)
+
+
+def path_is_within(root_dir: Path, path: Path) -> bool:
+    root = root_dir.resolve(strict=False)
+    candidate = path.resolve(strict=False)
+    return candidate == root or candidate.is_relative_to(root)
+
+
+def assert_path_within(root_dir: Path, path: Path, *, purpose: str) -> None:
+    if not path_is_within(root_dir, path):
+        raise ValueError(f"Refusing to {purpose} outside the workflow store.")

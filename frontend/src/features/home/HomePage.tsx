@@ -438,7 +438,13 @@ export function HomePage({
 
     try {
       const importResult = await previewWorkflowPackageImport(file, homeData.allowCommunityPreparation);
-      if (importResult.import_session_id && importResult.model_summary && importResult.model_summary.total_count > 0) {
+      if (
+        importResult.import_session_id &&
+        (
+          importResult.duplicate_identity ||
+          (importResult.model_summary && importResult.model_summary.total_count > 0)
+        )
+      ) {
         setHomeData((current) => ({
           ...current,
           importing: false,
@@ -569,6 +575,38 @@ export function HomePage({
         importResult,
         importError: null,
       }));
+    } catch (error) {
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
+  async function handleDuplicateImport(action: "replace" | "copy") {
+    const sessionId = homeData.pendingImport?.import_session_id;
+    if (!sessionId) return;
+    setHomeData((current) => ({ ...current, importing: true, importError: null }));
+    try {
+      const importResult = await commitWorkflowImport(sessionId, action);
+      const workflows = await fetchWorkflows();
+      setWorkflowsFromResponse(workflows);
+      setHomeData((current) => ({
+        ...current,
+        importing: false,
+        downloadingModels: false,
+        pendingImport: null,
+        downloadJob: null,
+        verificationJob: null,
+        importResult,
+        importError: null,
+      }));
+      if (importResult.status === "needs_input_setup" && onConfigureDashboard) {
+        onConfigureDashboard(importResult.workflow.id, importResult.workflow.name);
+        return;
+      }
+      onOpenWorkflow(importResult.workflow.id);
     } catch (error) {
       setHomeData((current) => ({
         ...current,
@@ -775,7 +813,7 @@ export function HomePage({
                 Noofy turns advanced image workflows into simple creative tools that run privately on your machine.
               </p>
             </div>
-            <button className="primary-button" type="button">
+            <button className="primary-button" type="button" onClick={() => onConfigureDashboard?.()}>
               <Plus size={18} aria-hidden="true" />
               New Workflow
             </button>
@@ -837,6 +875,16 @@ export function HomePage({
             </div>
           ) : null}
 
+          {homeData.pendingImport?.duplicate_identity && !homeData.pendingImport.model_summary ? (
+            <DuplicateWorkflowModal
+              importResult={homeData.pendingImport}
+              busy={homeData.importing}
+              onReplace={() => void handleDuplicateImport("replace")}
+              onCopy={() => void handleDuplicateImport("copy")}
+              onCancel={() => void handleCancelImport()}
+            />
+          ) : null}
+
           {homeData.pendingImport?.model_summary ? (
             <RequiredModelsModal
               importResult={homeData.pendingImport}
@@ -847,6 +895,8 @@ export function HomePage({
               onDownload={() => void handleDownloadMissingModels()}
               onCancelDownload={() => void handleCancelModelDownload()}
               onContinue={() => void handleContinueImport()}
+              onReplace={() => void handleDuplicateImport("replace")}
+              onCopy={() => void handleDuplicateImport("copy")}
               onReadyAction={() => void handleReadyImportAction()}
               onCancel={() => void handleCancelImport()}
             />
@@ -861,7 +911,10 @@ export function HomePage({
                 <h2>Open Workflow File</h2>
                 <p>Choose a saved workflow package and run it through Noofy.</p>
               </div>
-              <label className="secondary-button action-card__button">
+              <label
+                className={`secondary-button action-card__button${homeData.importing ? " is-disabled" : ""}`}
+                aria-disabled={homeData.importing}
+              >
                 <input
                   className="sr-only"
                   type="file"
@@ -973,7 +1026,7 @@ export function HomePage({
                 <h2 id="recent-title">Recently Opened</h2>
                 <p>Continue from a workflow you opened before.</p>
               </div>
-              <button className="ghost-button" type="button">
+              <button className="ghost-button" type="button" onClick={() => onNavigate("history")}>
                 View all
                 <ArrowRight size={16} aria-hidden="true" />
               </button>
@@ -1015,7 +1068,7 @@ export function HomePage({
                   : "Starter workflows will appear here as packages are added."}
               </p>
             </div>
-            <button className="ghost-button" type="button">
+            <button className="ghost-button" type="button" onClick={() => onNavigate("workflows")}>
               View all
               <ArrowRight size={16} aria-hidden="true" />
             </button>
@@ -1093,6 +1146,72 @@ function nativeVariantSelectionKey(workflow: WorkflowCard) {
   return workflow.id;
 }
 
+function DuplicateWorkflowModal({
+  importResult,
+  busy,
+  onReplace,
+  onCopy,
+  onCancel,
+}: {
+  importResult: WorkflowImportResponse;
+  busy: boolean;
+  onReplace: () => void;
+  onCopy: () => void;
+  onCancel: () => void;
+}) {
+  const duplicate = importResult.duplicate_identity;
+  if (!duplicate) return null;
+  const existingName = duplicate.existing_workflow?.name ?? importResult.workflow.name;
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="duplicate-import-title">
+      <section className="required-models-modal" aria-busy={busy}>
+        <header className="required-models-modal__header">
+          <div>
+            <p className="eyebrow">Workflow already exists</p>
+            <h2 id="duplicate-import-title">{importResult.workflow.name}</h2>
+            <p>
+              Noofy already has {existingName}. Choose whether to replace that local workflow, import this file as a
+              separate copy, or cancel.
+            </p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="notice notice--warning" role="status">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>No silent replacement</strong>
+            <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
+          </div>
+        </div>
+
+        {busy ? (
+          <div className="required-models-modal__processing" role="status" aria-live="polite">
+            <Loader2 className="spin" size={16} aria-hidden="true" />
+            <span>Preparing workflow import...</span>
+          </div>
+        ) : null}
+
+        <footer className="required-models-modal__footer required-models-modal__footer--ready">
+          <button className="primary-button" type="button" disabled={busy} onClick={onReplace}>
+            {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+            {busy ? "Replacing..." : "Replace Existing Workflow"}
+          </button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={onCopy}>
+            Import as Copy
+          </button>
+          <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+            Cancel Import
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function RequiredModelsModal({
   importResult,
   busy,
@@ -1102,6 +1221,8 @@ function RequiredModelsModal({
   onDownload,
   onCancelDownload,
   onContinue,
+  onReplace,
+  onCopy,
   onReadyAction,
   onCancel,
 }: {
@@ -1113,11 +1234,14 @@ function RequiredModelsModal({
   onDownload: () => void;
   onCancelDownload: () => void;
   onContinue: () => void;
+  onReplace: () => void;
+  onCopy: () => void;
   onReadyAction: () => void;
   onCancel: () => void;
 }) {
   const summary = verificationJob?.model_summary ?? importResult.model_summary;
   if (!summary) return null;
+  const duplicate = importResult.duplicate_identity;
   const retryableStatuses = new Set([
     "missing",
     "download_failed",
@@ -1155,6 +1279,16 @@ function RequiredModelsModal({
           </button>
         </header>
 
+        {duplicate ? (
+          <div className="notice notice--warning" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>Workflow already exists</strong>
+              <span>{duplicate.user_facing_message}</span>
+            </div>
+          </div>
+        ) : null}
+
         <div className="required-models-list">
           {summary.models.map((model) => (
             <RequiredModelRow key={model.requirement_id} model={model} progress={jobModels.get(model.requirement_id)} />
@@ -1172,7 +1306,31 @@ function RequiredModelsModal({
         ) : null}
 
         <footer className={`required-models-modal__footer${readyToRun ? " required-models-modal__footer--ready" : ""}`}>
-          {readyToRun ? (
+          {duplicate ? (
+            <>
+              {!readyToRun ? (
+                <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
+                  <Download size={16} aria-hidden="true" />
+                  {activeDownload ? "Downloading..." : "Download Missing Models"}
+                </button>
+              ) : null}
+              {activeDownload ? (
+                <button className="secondary-button" type="button" onClick={onCancelDownload}>
+                  Cancel Download
+                </button>
+              ) : null}
+              <button className="primary-button" type="button" disabled={busy || activeVerification} onClick={onReplace}>
+                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+                {importing ? "Replacing..." : "Replace Existing Workflow"}
+              </button>
+              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onCopy}>
+                Import as Copy
+              </button>
+              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+                Cancel Import
+              </button>
+            </>
+          ) : readyToRun ? (
             <button className="primary-button" type="button" disabled={busy} onClick={onReadyAction}>
               {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
               {importing ? "Preparing..." : readyActionLabel}
@@ -1222,14 +1380,14 @@ function RequiredModelRow({
       <div className="required-model-row__main">
         <h3>{model.filename}</h3>
         <p>
-          {[model.model_type ?? "AI model", model.folder, formatModelSize(model.size_bytes)]
+          {[friendlyModelType(model.model_type), formatModelSize(model.size_bytes)]
             .filter(Boolean)
             .join(" · ")}
         </p>
         {message ? <span className="required-model-row__message">{message}</span> : null}
       </div>
       <div className="required-model-row__meta">
-        <span className="model-identity">{model.verification_level.replace(/_/g, " + ")}</span>
+        <span className="model-identity">{verificationLabel(model.verification_level)}</span>
         <span className={`model-status-pill model-status-pill--${status}`}>{statusLabel}</span>
         <span className="model-source">{modelSourceLabel(model)}</span>
       </div>
@@ -1345,9 +1503,27 @@ function formatModelSpeed(bytesPerSecond: number) {
   return size ? `${size}/s` : null;
 }
 
+function friendlyModelType(type?: string | null) {
+  const normalized = (type ?? "").toLowerCase();
+  if (!normalized) return "AI model";
+  if (normalized.includes("checkpoint")) return "AI model";
+  if (normalized.includes("lora")) return "Style add-on";
+  if (normalized.includes("controlnet")) return "Guidance model";
+  if (normalized.includes("vae")) return "Image helper";
+  if (normalized.includes("upscale")) return "Upscale model";
+  return "AI model";
+}
+
+function verificationLabel(level: string) {
+  if (level === "sha256_size") return "Verified file";
+  if (level === "filename_size") return "Name and size match";
+  if (level === "filename_only") return "Name match";
+  return "Model check";
+}
+
 function modelSourceLabel(model: RequiredModelAvailability) {
   if (model.source_urls.length > 0) return "Download source known";
-  if (model.source_availability === "resolvable") return "Can search Hugging Face and Civitai";
+  if (model.source_availability === "resolvable") return "Can search known sources";
   return "No download source";
 }
 

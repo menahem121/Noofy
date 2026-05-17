@@ -882,6 +882,73 @@ def test_import_store_persists_normalized_package_and_original_source_files(
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
 
 
+def test_import_store_rejects_silent_replacement_of_existing_package(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+
+    package = store.import_archive(_archive_bytes(), original_filename="first.noofy")
+    package_dir = store.package_dir(package)
+    original_archive = (package_dir / "source-archive.noofy").read_bytes()
+
+    with pytest.raises(NoofyImportError, match="already exists"):
+        store.import_archive(_archive_bytes(), original_filename="second.noofy")
+
+    assert (package_dir / "source-archive.noofy").read_bytes() == original_archive
+
+
+def test_import_store_replaces_existing_package_only_when_explicit(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+
+    package = store.import_archive(_archive_bytes(), original_filename="first.noofy")
+    package_dir = store.package_dir(package)
+    (package_dir / "local-only.txt").write_text("stale", encoding="utf-8")
+
+    replaced = store.import_archive(
+        _archive_bytes(),
+        original_filename="replacement.noofy",
+        duplicate_action="replace",
+    )
+
+    assert replaced.metadata.id == package.metadata.id
+    assert package_dir.exists()
+    assert not (package_dir / "local-only.txt").exists()
+    assert json.loads((package_dir / "import-report.json").read_text(encoding="utf-8"))["original_filename"] == "replacement.noofy"
+
+
+def test_import_store_imports_duplicate_as_honest_local_copy(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+
+    original = store.import_archive(_archive_bytes(), original_filename="first.noofy")
+    copied = store.import_archive(
+        _archive_bytes(),
+        original_filename="copy.noofy",
+        duplicate_action="copy",
+    )
+
+    assert copied.metadata.id != original.metadata.id
+    assert copied.metadata.name.endswith(" Copy")
+    assert copied.identity is not None
+    assert copied.identity.publisher_id == "local"
+    assert copied.identity.trust_level == "quarantined_community"
+    assert copied.identity.signature is None
+    assert copied.identity.signatures == []
+    assert copied.identity.signed_registry_metadata is None
+    assert copied.source_policy is not None
+    assert copied.source_policy.trust_level == "quarantined_community"
+    copy_report = json.loads((store.package_dir(copied) / "import-report.json").read_text(encoding="utf-8"))
+    assert copy_report["trust_verification"] == {}
+    assert store.package_dir(original).exists()
+    assert store.package_dir(copied).exists()
+
+
 def test_import_store_allows_macos_intel_dashboard_import_without_capsule_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

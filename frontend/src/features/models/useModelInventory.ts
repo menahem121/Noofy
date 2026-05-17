@@ -18,11 +18,11 @@ export function useModelInventory() {
       setInventoryState({ loading: false, inventory, error: null });
       return inventory;
     } catch (error) {
-      setInventoryState({
+      setInventoryState((current) => ({
         loading: false,
-        inventory: null,
+        inventory: options.silent ? current.inventory : null,
         error: error instanceof Error ? error.message : String(error),
-      });
+      }));
       return null;
     }
   }, []);

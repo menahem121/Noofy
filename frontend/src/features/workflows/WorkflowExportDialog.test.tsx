@@ -87,6 +87,7 @@ describe("WorkflowExportDialog", () => {
         workflowName="Cleanup Flow"
         exportUrl="/api/workflows/cleanup/export"
         extension=".noofy"
+        inputValues={{ prompt: "local prompt should stay local" }}
         review={{ name: "Cleanup Flow", description: "Clean up images." }}
         onClose={vi.fn()}
       />,
@@ -119,6 +120,7 @@ describe("WorkflowExportDialog", () => {
         icon: "sparkles",
       },
     });
+    expect(JSON.parse(String((init as RequestInit).body))).not.toHaveProperty("input_values");
   });
 
   it("imports and deletes custom icons", async () => {

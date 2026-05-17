@@ -9,6 +9,7 @@ import process from "node:process";
 import {
   backendArtifactMetadata,
   currentRuntimeTarget,
+  runtimeTargetFor,
   runtimeManifestName,
   sha256File,
   verifyPackagedRuntime,
@@ -20,6 +21,17 @@ test("verifyPackagedRuntime rejects a missing manifest", () => {
   assert.throws(
     () => verifyPackagedRuntime({ runtimeRoot, target: currentRuntimeTarget(), requireBuiltFrontend: false }),
     /Packaged runtime manifest is missing/,
+  );
+});
+
+test("runtimeTargetFor rejects unsupported desktop packaging platforms", () => {
+  assert.throws(
+    () => runtimeTargetFor("darwin", "x64"),
+    /Unsupported packaged runtime target/,
+  );
+  assert.throws(
+    () => runtimeTargetFor("linux", "arm64"),
+    /Unsupported packaged runtime target/,
   );
 });
 

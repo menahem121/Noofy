@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+MAX_DIAGNOSTIC_STRING_LENGTH = 2000
+MAX_DIAGNOSTIC_SEQUENCE_LENGTH = 50
+
 
 class SecretRedactor:
     def __init__(self) -> None:
@@ -18,14 +21,23 @@ class SecretRedactor:
 
     def sanitize(self, value: Any) -> Any:
         if isinstance(value, dict):
-            return {
-                key: "[redacted]" if _is_sensitive_key(str(key)) else self.sanitize(item)
-                for key, item in value.items()
-            }
+            sanitized: dict[Any, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= MAX_DIAGNOSTIC_SEQUENCE_LENGTH:
+                    sanitized["[truncated]"] = f"{len(value) - MAX_DIAGNOSTIC_SEQUENCE_LENGTH} more keys"
+                    break
+                sanitized[key] = "[redacted]" if _is_sensitive_key(str(key)) else self.sanitize(item)
+            return sanitized
         if isinstance(value, list):
-            return [self.sanitize(item) for item in value]
+            sanitized_items = [self.sanitize(item) for item in value[:MAX_DIAGNOSTIC_SEQUENCE_LENGTH]]
+            if len(value) > MAX_DIAGNOSTIC_SEQUENCE_LENGTH:
+                sanitized_items.append(f"[truncated {len(value) - MAX_DIAGNOSTIC_SEQUENCE_LENGTH} more items]")
+            return sanitized_items
         if isinstance(value, tuple):
-            return tuple(self.sanitize(item) for item in value)
+            sanitized_items = tuple(self.sanitize(item) for item in value[:MAX_DIAGNOSTIC_SEQUENCE_LENGTH])
+            if len(value) > MAX_DIAGNOSTIC_SEQUENCE_LENGTH:
+                return sanitized_items + (f"[truncated {len(value) - MAX_DIAGNOSTIC_SEQUENCE_LENGTH} more items]",)
+            return sanitized_items
         if isinstance(value, str):
             return self.sanitize_text(value)
         return value
@@ -54,6 +66,16 @@ class SecretRedactor:
             r"\1[redacted]\2",
             redacted,
         )
+        redacted = re.sub(
+            r"(?i)(https?://)([^/\s:@]+):([^@\s/]+)@",
+            r"\1[redacted]:[redacted]@",
+            redacted,
+        )
+        if len(redacted) > MAX_DIAGNOSTIC_STRING_LENGTH:
+            redacted = (
+                redacted[:MAX_DIAGNOSTIC_STRING_LENGTH]
+                + f"... [truncated {len(redacted) - MAX_DIAGNOSTIC_STRING_LENGTH} chars]"
+            )
         return redacted
 
 
@@ -81,9 +103,10 @@ def _is_sensitive_key(key: str) -> bool:
             "accesstoken",
             "authorization",
             "bearertoken",
+            "credential",
             "secret",
             "password",
             "token",
             "signedurl",
         )
-    )
+    ) or normalized in {"prompt", "positiveprompt", "negativeprompt", "fullprompt", "systemprompt"}

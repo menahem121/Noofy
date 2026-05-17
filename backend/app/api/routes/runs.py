@@ -31,7 +31,10 @@ async def stream_job_events(job_id: str, result_service: RunResultServiceDep):
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str, job_service: RunJobServiceDep):
-    return await job_service.cancel_job(job_id)
+    try:
+        return await job_service.cancel_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}/result")
