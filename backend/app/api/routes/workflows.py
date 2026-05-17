@@ -218,9 +218,10 @@ async def commit_workflow_import(
     request: WorkflowImportCommitRequest | None = None,
 ):
     try:
+        if request is None:
+            return import_orchestrator.commit_workflow_import(import_session_id)
         return import_orchestrator.commit_workflow_import(
-            import_session_id,
-            duplicate_action=request.duplicate_action if request is not None else None,
+            import_session_id, duplicate_action=request.duplicate_action
         )
     except ImportSessionExpiredError as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
