@@ -27,6 +27,8 @@ FRONTEND_DIR = REPO_ROOT / "frontend"
 DEFAULT_DATA_DIR = REPO_ROOT / ".noofy-runtime" / "data"
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_BACKEND_PORT = 8765
+RUNTIME_BOOTSTRAP_READY_STATUSES = {"prepared", "already_prepared"}
+RUNTIME_BOOTSTRAP_NONFATAL_INSTALL_STATUSES = {"platform_unsupported"}
 
 BOOTSTRAP_RUNTIME_CODE = r"""
 import asyncio
@@ -40,8 +42,6 @@ async def main():
     try:
         result = await service.bootstrap_comfyui_runtime()
         print(json.dumps(result.model_dump(mode="json"), sort_keys=True))
-        if result.status not in {"prepared", "already_prepared"}:
-            raise SystemExit(1)
     finally:
         await service.shutdown()
 
@@ -212,9 +212,16 @@ class NoofyCheckout:
             self.install_frontend_dependencies()
         data_dir.mkdir(parents=True, exist_ok=True)
         if not skip_runtime:
-            self.bootstrap_managed_runtime(data_dir=data_dir)
+            runtime_ready = self.bootstrap_managed_runtime(data_dir=data_dir)
+        else:
+            runtime_ready = None
         print()
         print("Noofy source checkout is installed.")
+        if runtime_ready is False:
+            print("Managed ComfyUI runtime was not prepared on this machine.")
+            print("Workflow execution that requires managed ComfyUI will be unavailable.")
+        if runtime_ready is None:
+            print("Managed ComfyUI runtime preparation was skipped.")
         print("Run it with: make run")
 
     def ensure_backend_venv(self) -> None:
@@ -250,7 +257,7 @@ class NoofyCheckout:
         print(f"Installing frontend dependencies with {' '.join(command)}")
         self.command_runner(command, self.frontend_dir, None, False)
 
-    def bootstrap_managed_runtime(self, *, data_dir: Path) -> None:
+    def bootstrap_managed_runtime(self, *, data_dir: Path) -> bool:
         print("Preparing managed ComfyUI runtime through the backend bootstrap service")
         env = source_checkout_env(data_dir=data_dir)
         env["PATH"] = str(self.backend_venv_bin_dir) + os.pathsep + env.get("PATH", "")
@@ -270,6 +277,14 @@ class NoofyCheckout:
             print(f"Managed runtime Python: {python_executable}")
         if isinstance(torch_plan, dict) and torch_plan.get("index_url"):
             print(f"PyTorch wheel index: {torch_plan['index_url']}")
+        error = environment.get("error") if isinstance(environment, dict) else None
+        if error:
+            print(f"Managed runtime note: {error}")
+        if status in RUNTIME_BOOTSTRAP_READY_STATUSES:
+            return True
+        if status in RUNTIME_BOOTSTRAP_NONFATAL_INSTALL_STATUSES:
+            return False
+        raise SystemExit(f"Managed ComfyUI runtime preparation failed with status: {status}")
 
     def doctor(self, *, data_dir: Path = DEFAULT_DATA_DIR) -> int:
         print("Noofy source-checkout doctor")

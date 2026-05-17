@@ -3,6 +3,8 @@ import signal
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def load_noofy_cli():
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "noofy.py"
@@ -153,3 +155,63 @@ def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Pa
     assert not any("torch" in part for command in calls for part in command[:3])
     assert captured_envs[0]["COMFYUI_RUNTIME_MODE"] == "managed"
     assert captured_envs[0]["NOOFY_DATA_DIR"] == str(data_dir)
+
+
+def test_install_allows_unsupported_managed_runtime_platform(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cli = load_noofy_cli()
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "frontend").mkdir()
+
+    def runner(command, cwd, env, capture):
+        if command[1:3] == ["-m", "venv"]:
+            backend_python = cli.backend_python_path(tmp_path)
+            backend_python.parent.mkdir(parents=True)
+            backend_python.write_text("", encoding="utf-8")
+        if capture:
+            return cli.CommandResult(
+                returncode=0,
+                stdout=(
+                    '{"status":"platform_unsupported","environment":'
+                    '{"error":"macOS Intel is unsupported for Noofy managed ComfyUI runtime."}}\n'
+                ),
+            )
+        return cli.CommandResult(returncode=0)
+
+    cli.NoofyCheckout(root=tmp_path, python_executable="/usr/bin/python3", command_runner=runner).install(
+        skip_frontend=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "Managed ComfyUI runtime status: platform_unsupported" in output
+    assert "Managed runtime note: macOS Intel is unsupported" in output
+    assert "Noofy source checkout is installed." in output
+
+
+def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "frontend").mkdir()
+
+    def runner(command, cwd, env, capture):
+        if command[1:3] == ["-m", "venv"]:
+            backend_python = cli.backend_python_path(tmp_path)
+            backend_python.parent.mkdir(parents=True)
+            backend_python.write_text("", encoding="utf-8")
+        if capture:
+            return cli.CommandResult(
+                returncode=0,
+                stdout='{"status":"requirements_missing","environment":{}}\n',
+            )
+        return cli.CommandResult(returncode=0)
+
+    checkout = cli.NoofyCheckout(
+        root=tmp_path,
+        python_executable="/usr/bin/python3",
+        command_runner=runner,
+    )
+
+    with pytest.raises(SystemExit, match="requirements_missing"):
+        checkout.install(skip_frontend=True)

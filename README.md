@@ -160,6 +160,11 @@ cd Noofy
 frontend dependencies, and prepares Noofy's managed ComfyUI runtime under
 `.noofy-runtime/data`.
 
+On macOS Intel, `make install` still installs the source-checkout backend and
+frontend dependencies, but managed ComfyUI runtime preparation is skipped with an
+unsupported-platform message. Workflow execution that requires managed ComfyUI is
+not available on that machine.
+
 PyTorch and ComfyUI dependencies are installed into the managed runtime
 environment, not globally and not into the trusted backend venv.
 
