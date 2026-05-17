@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import io
 import json
+import struct
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from app.diagnostics import LogStore
+from app.workflows.assets import DashboardAssetService
 from app.workflows.exporter import WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
@@ -67,6 +69,25 @@ _CONFIGURED_DASHBOARD = {
 }
 
 
+def _png_bytes() -> bytes:
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
+        + chunk(b"IEND", b"")
+    )
+
+
 def _make_archive(
     with_signature: bool = False,
     dashboard: dict[str, Any] | None = None,
@@ -112,10 +133,28 @@ def _make_archive(
     return buf.getvalue()
 
 
+def _archive_with_package_update(
+    archive_bytes: bytes,
+    update: Any,
+) -> bytes:
+    src = io.BytesIO(archive_bytes)
+    dst = io.BytesIO()
+    with zipfile.ZipFile(src, "r") as source, zipfile.ZipFile(dst, "w") as target:
+        package_data = json.loads(source.read("package.json"))
+        update(package_data)
+        for item in source.infolist():
+            if item.filename == "package.json":
+                target.writestr("package.json", json.dumps(package_data))
+            else:
+                target.writestr(item, source.read(item.filename))
+    return dst.getvalue()
+
+
 def _setup_with_configured_dashboard(
     tmp_path: Path,
     *,
     user_state_service: UserStateService | None = None,
+    dashboard_assets_dir: Path | None = None,
 ):
     archive_bytes = _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD)
     log_store = LogStore()
@@ -135,6 +174,7 @@ def _setup_with_configured_dashboard(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=loader,
         user_state_service=user_state_service,
+        dashboard_assets_dir=dashboard_assets_dir,
     )
     return exporter, workflow_id, archive_bytes
 
@@ -292,6 +332,7 @@ def test_exported_archive_applies_export_only_metadata_without_mutating_store(tm
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
         package_data = json.loads(zf.read("package.json"))
 
+    assert package_data["trust_level"] == "quarantined_community"
     assert package_data["metadata"]["name"] == "Reviewed Export"
     assert package_data["display_name"] == "Reviewed Export"
     assert package_data["metadata"]["description"] == "Export-ready description"
@@ -301,6 +342,56 @@ def test_exported_archive_applies_export_only_metadata_without_mutating_store(tm
     assert package_data["metadata"]["tags"] == ["portrait", "cleanup"]
     assert package_data["metadata"]["icon"] == "image"
     assert json.loads(package_file.read_text(encoding="utf-8")) == before
+
+
+def test_exported_archive_includes_selected_custom_icon_asset(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    asset_service = DashboardAssetService(assets_dir)
+    icon = asset_service.store_workflow_icon(_png_bytes(), "image/png", "custom-icon.png")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        dashboard_assets_dir=assets_dir,
+    )
+
+    archive_bytes, _ = exporter.export_archive(
+        workflow_id,
+        export_metadata={"icon": icon["id"]},
+    )
+
+    asset_id = icon["asset_id"]
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+        assert package_data["metadata"]["icon"] == icon["id"]
+        assert zf.read(f"assets/workflow-icons/{asset_id}") == (assets_dir / asset_id).read_bytes()
+        assert f"assets/workflow-icons/{asset_id}.meta.json" in zf.namelist()
+
+    roundtrip_assets_dir = tmp_path / "roundtrip-assets"
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "roundtrip-packages",
+        log_store=LogStore(),
+        dashboard_assets_dir=roundtrip_assets_dir,
+    )
+    imported = store.import_archive(archive_bytes, original_filename="roundtrip.noofy")
+
+    assert imported.identity is not None
+    assert imported.identity.trust_level == "quarantined_community"
+    assert imported.metadata.icon == icon["id"]
+    assert (roundtrip_assets_dir / asset_id).read_bytes() == (assets_dir / asset_id).read_bytes()
+    assert json.loads((roundtrip_assets_dir / f"{asset_id}.meta.json").read_text(encoding="utf-8"))["kind"] == "workflow_icon"
+
+
+def test_import_treats_legacy_local_noofy_export_as_community(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+    archive_bytes = _archive_with_package_update(archive_bytes, lambda package: package.pop("trust_level", None))
+
+    store = ImportedWorkflowPackageStore(tmp_path / "legacy-roundtrip", log_store=LogStore())
+    imported = store.import_archive(archive_bytes, original_filename="legacy-local.noofy")
+
+    assert imported.identity is not None
+    assert imported.identity.trust_level == "quarantined_community"
+    assert imported.import_metadata is not None
+    assert imported.import_metadata.status == "imported"
 
 
 def test_comfyui_json_export_applies_explicit_dashboard_values(tmp_path: Path) -> None:

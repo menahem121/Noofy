@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.bindings import apply_input_bindings
 from app.workflows.library import WorkflowLibraryMetadata, WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
@@ -32,11 +33,13 @@ class WorkflowExporter:
         workflow_loader: WorkflowPackageLoader,
         user_state_service: UserStateService | None = None,
         workflow_library_store: WorkflowLibraryStore | None = None,
+        dashboard_assets_dir: Path | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
         self.user_state_service = user_state_service
         self.workflow_library_store = workflow_library_store
+        self.dashboard_assets_dir = dashboard_assets_dir
 
     def export_archive(
         self,
@@ -66,6 +69,7 @@ class WorkflowExporter:
                 export_metadata=export_metadata,
             )
             zf.writestr("package.json", json.dumps(package_json, indent=2, sort_keys=True))
+            self._write_workflow_icon_asset(zf, package_json)
 
             # comfyui_graph.json — export-time snapshot with current dashboard values applied.
             bound_graph = self._bound_comfyui_graph(
@@ -206,6 +210,28 @@ class WorkflowExporter:
             package = package.model_copy(update={"comfyui_graph": stored_graph})
         return apply_input_bindings(package, values)
 
+    def _write_workflow_icon_asset(
+        self,
+        zf: zipfile.ZipFile,
+        package_json: dict[str, Any],
+    ) -> None:
+        if self.dashboard_assets_dir is None:
+            return
+        icon_id = _package_metadata_icon(package_json)
+        if not icon_id:
+            return
+        try:
+            asset_id = workflow_icon_asset_id(icon_id)
+        except ValueError:
+            return
+        asset_path = self.dashboard_assets_dir / asset_id
+        if not asset_path.exists():
+            return
+        zf.write(asset_path, f"assets/workflow-icons/{asset_id}")
+        meta_path = self.dashboard_assets_dir / f"{asset_id}.meta.json"
+        if meta_path.exists():
+            zf.write(meta_path, f"assets/workflow-icons/{asset_id}.meta.json")
+
     def _stored_comfyui_graph(self, package_dir: Path | None) -> dict[str, Any] | None:
         if package_dir is None:
             return None
@@ -302,8 +328,9 @@ def _build_export_package_json(
     base.pop("signatures", None)
     base.pop("signed_registry_metadata", None)
 
-    # Mark as local/user-authored.
+    # Mark as local/user-authored community, not verified.
     base["source_policy"] = "local"
+    base["trust_level"] = "quarantined_community"
 
     # Ensure dashboard data is not embedded.
     base.pop("inputs", None)
@@ -385,6 +412,18 @@ def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> No
         base["tags"] = cleaned_tags
 
     base["metadata"] = package_metadata
+
+
+def _package_metadata_icon(package_json: dict[str, Any]) -> str | None:
+    metadata = package_json.get("metadata")
+    if isinstance(metadata, dict):
+        icon = metadata.get("icon")
+        if isinstance(icon, str) and icon.strip():
+            return icon.strip()
+    icon = package_json.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        return icon.strip()
+    return None
 
 
 def _credential_input_ids(dashboard_data: dict[str, Any]) -> set[str]:

@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { resolveBackendUrl } from "../../lib/api/client";
 
 // Replace with your real Reddit community URL when ready.
 const REDDIT_URL = "https://www.reddit.com/r/noofy";
@@ -44,6 +45,7 @@ import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
+import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
 import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
 import {
   fallbackWorkflow,
@@ -128,7 +130,8 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       canRemove: Boolean(workflow.can_remove),
       canExportNoofy: Boolean(workflow.can_export_noofy),
       canExportComfyJson: workflow.can_export_comfyui_json !== false,
-      Icon: fallbackWorkflow.Icon,
+      icon: workflow.icon,
+      Icon: WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? fallbackWorkflow.Icon,
       source: "backend",
     };
   });
@@ -1404,7 +1407,7 @@ function WorkflowCardView({
     <article className={`workflow-card workflow-card--${workflow.status}`}>
       <div className="workflow-card__topline">
         <div className="workflow-card__icon" aria-hidden="true">
-          <workflow.Icon size={22} />
+          <WorkflowCardIcon workflow={workflow} />
         </div>
         <div className="workflow-card__meta">
           <div className="workflow-card__badges">
@@ -1471,4 +1474,18 @@ function WorkflowCardView({
       </div>
     </article>
   );
+}
+
+function WorkflowCardIcon({ workflow }: { workflow: WorkflowCard }) {
+  if (workflow.icon?.startsWith("asset:")) {
+    const assetId = workflow.icon.slice("asset:".length);
+    return (
+      <img
+        className="workflow-custom-icon"
+        src={resolveBackendUrl(`/api/assets/${encodeURIComponent(assetId)}`, { includeToken: true })}
+        alt=""
+      />
+    );
+  }
+  return <workflow.Icon size={22} />;
 }

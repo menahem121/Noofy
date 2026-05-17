@@ -467,6 +467,7 @@ def create_default_engine_service() -> EngineService:
             workflow_loader=loader,
             user_state_service=user_state_service,
             workflow_library_store=workflow_library_store,
+            dashboard_assets_dir=paths.dashboard_assets_dir,
         ),
         model_roots_ref=model_roots,
         model_availability_service=model_availability_service,

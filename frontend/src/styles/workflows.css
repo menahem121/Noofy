@@ -192,6 +192,10 @@
   gap: 8px;
 }
 
+.workflow-metadata-icon-picker {
+  margin-top: 4px;
+}
+
 .workflow-export-icon-picker__label {
   color: var(--text-muted);
   font-size: 11px;

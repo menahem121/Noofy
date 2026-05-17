@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.runtime.dependencies.isolation import CapsuleLock
+from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.package import WorkflowPackage
 
 
@@ -21,12 +22,19 @@ def write_imported_package_transaction(
     original_filename: str | None,
     schema_version: str,
     extract_source_files: Callable[[Path], None],
+    dashboard_assets_dir: Path | None = None,
 ) -> None:
     transaction_dir = root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
     try:
         source_files_dir = transaction_dir / "source-files"
         transaction_dir.mkdir(parents=True, exist_ok=False)
         extract_source_files(source_files_dir)
+        if dashboard_assets_dir is not None:
+            _restore_packaged_workflow_icon(
+                source_files_dir=source_files_dir,
+                package=package,
+                dashboard_assets_dir=dashboard_assets_dir,
+            )
         (transaction_dir / "source-archive.noofy").write_bytes(archive_data)
         _write_dashboard(transaction_dir, package)
         _write_package_metadata(transaction_dir, package)
@@ -54,6 +62,45 @@ def write_imported_package_transaction(
     except Exception:
         shutil.rmtree(transaction_dir, ignore_errors=True)
         raise
+
+
+def _restore_packaged_workflow_icon(
+    *,
+    source_files_dir: Path,
+    package: WorkflowPackage,
+    dashboard_assets_dir: Path,
+) -> None:
+    icon_id = package.metadata.icon
+    if not icon_id:
+        return
+    try:
+        asset_id = workflow_icon_asset_id(icon_id)
+    except ValueError:
+        return
+    source_asset = source_files_dir / "assets" / "workflow-icons" / asset_id
+    if not source_asset.exists():
+        return
+    dashboard_assets_dir.mkdir(parents=True, exist_ok=True)
+    target_asset = dashboard_assets_dir / asset_id
+    if not target_asset.exists():
+        shutil.copyfile(source_asset, target_asset)
+    source_meta = source_files_dir / "assets" / "workflow-icons" / f"{asset_id}.meta.json"
+    target_meta = dashboard_assets_dir / f"{asset_id}.meta.json"
+    if source_meta.exists() and not target_meta.exists():
+        shutil.copyfile(source_meta, target_meta)
+    elif not target_meta.exists():
+        target_meta.write_text(
+            json.dumps(
+                {
+                    "asset_id": asset_id,
+                    "kind": "workflow_icon",
+                    "original_filename": asset_id,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
 
 
 def _write_dashboard(transaction_dir: Path, package: WorkflowPackage) -> None:

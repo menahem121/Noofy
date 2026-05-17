@@ -937,6 +937,13 @@
   border-radius: 11px;
 }
 
+.model-type-icon .workflow-custom-icon {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  border-radius: 7px;
+}
+
 .model-main-body {
   min-width: 0;
   flex: 1;

@@ -194,6 +194,10 @@ def _asset_id_from_icon_id(icon_id: str) -> str:
     return _validate_asset_id(icon_id.removeprefix("asset:"))
 
 
+def workflow_icon_asset_id(icon_id: str) -> str:
+    return _asset_id_from_icon_id(icon_id)
+
+
 def _detect_image_content_type(data: bytes) -> str | None:
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"

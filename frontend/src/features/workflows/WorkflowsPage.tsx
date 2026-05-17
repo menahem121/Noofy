@@ -1,28 +1,37 @@
-import { ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
   FileUp,
+  Loader2,
   PackageOpen,
   Play,
   Search,
   Sparkles,
+  Trash2,
+  UploadCloud,
   X,
+  type LucideIcon,
 } from "lucide-react";
 
 import {
   commitWorkflowImport,
+  deleteWorkflowIcon,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchWorkflowDetails,
+  fetchWorkflowIcons,
   fetchWorkflowPackage,
   previewWorkflowPackageImport,
   removeWorkflow,
   updateWorkflowMetadata,
+  uploadWorkflowIcon,
   type WorkflowDetails,
+  type WorkflowIconOption,
   type WorkflowMetadataUpdate,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
+import { resolveBackendUrl } from "../../lib/api/client";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
@@ -31,7 +40,7 @@ import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
-import { WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS } from "./workflowMetadataOptions";
+import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS } from "./workflowMetadataOptions";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
@@ -499,7 +508,7 @@ function WorkflowDetailsFallback({
       <div className="detail-panel__header">
         <div className="detail-panel__title-group">
           <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
-            <Icon size={20} />
+            <WorkflowIconVisual icon={workflow.icon} size={20} Icon={Icon} />
           </div>
           <div className="detail-panel__title-text">
             <h2 className="detail-panel__title">{workflow.name}</h2>
@@ -536,6 +545,28 @@ function FilterSelect({
       <ChevronDown size={13} aria-hidden="true" />
     </div>
   );
+}
+
+function WorkflowIconVisual({
+  icon,
+  size,
+  Icon,
+}: {
+  icon?: string;
+  size: number;
+  Icon: LucideIcon;
+}) {
+  if (icon?.startsWith("asset:")) {
+    const assetId = icon.slice("asset:".length);
+    return (
+      <img
+        className="workflow-custom-icon"
+        src={resolveBackendUrl(`/api/assets/${encodeURIComponent(assetId)}`, { includeToken: true })}
+        alt=""
+      />
+    );
+  }
+  return <Icon size={size} />;
 }
 
 function workflowSummaryExportReview(workflow: WorkflowSummary): WorkflowExportReviewModel {
@@ -609,7 +640,7 @@ function WorkflowRow({
     >
       <div className="workflow-col workflow-col-main">
         <div className="model-type-icon" aria-hidden="true">
-          <Icon size={16} />
+          <WorkflowIconVisual icon={workflow.icon} size={16} Icon={Icon} />
         </div>
         <div className="model-main-body">
           <div className="model-name-text" title={workflow.name}>{workflow.name}</div>
@@ -688,24 +719,84 @@ function WorkflowDetailsDrawer({
   const [draft, setDraft] = useState<WorkflowMetadataUpdate>(() => workflowMetadataDraft);
   const [savedDraft, setSavedDraft] = useState<WorkflowMetadataUpdate>(() => workflowMetadataDraft);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const Icon = WORKFLOW_ICONS[(workflow.organization.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
+  const [customIcons, setCustomIcons] = useState<WorkflowIconOption[]>([]);
+  const [iconError, setIconError] = useState<string | null>(null);
+  const [importingIcon, setImportingIcon] = useState(false);
+  const iconInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedIcon = draft.icon || workflow.organization.icon || "sparkles";
+  const Icon = WORKFLOW_ICONS[(selectedIcon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
 
   useEffect(() => {
     setDraft(workflowMetadataDraft);
     setSavedDraft(workflowMetadataDraft);
     setSaveError(null);
+    setIconError(null);
   }, [workflowMetadataDraft]);
 
-  async function saveDraft() {
-    if (metadataDraftsEqual(draft, savedDraft)) return true;
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorkflowIcons()
+      .then((response) => {
+        if (!cancelled) setCustomIcons(response.icons);
+      })
+      .catch((error) => {
+        if (!cancelled) setIconError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveDraft(nextDraft: WorkflowMetadataUpdate = draft) {
+    if (metadataDraftsEqual(nextDraft, savedDraft)) return true;
     setSaveError(null);
     try {
-      await onSave(draft);
-      setSavedDraft(draft);
+      await onSave(nextDraft);
+      setSavedDraft(nextDraft);
       return true;
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
       return false;
+    }
+  }
+
+  function selectIcon(icon: string) {
+    const nextDraft = { ...draft, icon };
+    setDraft(nextDraft);
+    setIconError(null);
+    void saveDraft(nextDraft);
+  }
+
+  async function handleIconImport(file: File | undefined) {
+    if (!file) return;
+    setIconError(null);
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+      setIconError("Use a PNG, JPEG, WebP, or GIF image for custom workflow icons.");
+      return;
+    }
+    setImportingIcon(true);
+    try {
+      const icon = await uploadWorkflowIcon(file);
+      setCustomIcons((current) => [...current.filter((item) => item.id !== icon.id), icon]);
+      selectIcon(icon.id);
+    } catch (error) {
+      setIconError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImportingIcon(false);
+      if (iconInputRef.current) iconInputRef.current.value = "";
+    }
+  }
+
+  async function handleIconDelete(icon: WorkflowIconOption) {
+    setIconError(null);
+    try {
+      await deleteWorkflowIcon(icon.id);
+      setCustomIcons((current) => current.filter((item) => item.id !== icon.id));
+      if (selectedIcon === icon.id) {
+        selectIcon("sparkles");
+      }
+    } catch (error) {
+      setIconError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -727,7 +818,7 @@ function WorkflowDetailsDrawer({
         <div className="detail-panel__header">
           <div className="detail-panel__title-group">
             <div className="model-type-icon model-type-icon--lg" aria-hidden="true">
-              <Icon size={20} />
+              <WorkflowIconVisual icon={selectedIcon} size={20} Icon={Icon} />
             </div>
             <div className="detail-panel__title-text">
               <h2 className="detail-panel__title">{workflow.name}</h2>
@@ -808,11 +899,15 @@ function WorkflowDetailsDrawer({
           onBlur={() => void saveDraft()}
           onChange={(tags) => setDraft((current) => ({ ...current, tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean) }))}
         />
-        <EditableField
-          label="Icon"
-          value={draft.icon ?? ""}
-          onBlur={() => void saveDraft()}
-          onChange={(icon) => setDraft((current) => ({ ...current, icon }))}
+        <WorkflowMetadataIconPicker
+          selectedIcon={selectedIcon}
+          customIcons={customIcons}
+          importingIcon={importingIcon}
+          iconInputRef={iconInputRef}
+          iconError={iconError}
+          onImportIcon={handleIconImport}
+          onDeleteIcon={handleIconDelete}
+          onSelectIcon={selectIcon}
         />
         {saveError ? <p className="workflow-edit-error">{saveError}</p> : null}
       </DetailSection>
@@ -845,6 +940,96 @@ function WorkflowDetailsDrawer({
         </button>
       </div>
     </>
+  );
+}
+
+function WorkflowMetadataIconPicker({
+  selectedIcon,
+  customIcons,
+  importingIcon,
+  iconInputRef,
+  iconError,
+  onImportIcon,
+  onDeleteIcon,
+  onSelectIcon,
+}: {
+  selectedIcon: string;
+  customIcons: WorkflowIconOption[];
+  importingIcon: boolean;
+  iconInputRef: MutableRefObject<HTMLInputElement | null>;
+  iconError: string | null;
+  onImportIcon: (file: File | undefined) => void;
+  onDeleteIcon: (icon: WorkflowIconOption) => void;
+  onSelectIcon: (icon: string) => void;
+}) {
+  return (
+    <div className="workflow-export-icon-picker workflow-metadata-icon-picker">
+      <div className="workflow-export-icon-picker__label">Icon</div>
+      <div className="workflow-export-icon-grid" role="radiogroup" aria-label="Workflow icon">
+        <button
+          className="workflow-export-icon-tile workflow-export-icon-tile--import"
+          type="button"
+          onClick={() => iconInputRef.current?.click()}
+          disabled={importingIcon}
+        >
+          {importingIcon ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <UploadCloud size={18} aria-hidden="true" />}
+          <span>Import icon</span>
+        </button>
+        <input
+          ref={(node) => {
+            iconInputRef.current = node;
+          }}
+          className="visually-hidden"
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(event) => onImportIcon(event.target.files?.[0])}
+        />
+        {NATIVE_WORKFLOW_ICON_OPTIONS.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            className={`workflow-export-icon-tile${selectedIcon === id ? " workflow-export-icon-tile--selected" : ""}`}
+            type="button"
+            role="radio"
+            aria-checked={selectedIcon === id}
+            aria-label={label}
+            onClick={() => onSelectIcon(id)}
+          >
+            <Icon size={20} aria-hidden="true" />
+          </button>
+        ))}
+        {customIcons.map((icon) => (
+          <div
+            key={icon.id}
+            className={`workflow-export-icon-tile workflow-export-icon-tile--custom${selectedIcon === icon.id ? " workflow-export-icon-tile--selected" : ""}`}
+            role="radio"
+            tabIndex={0}
+            aria-checked={selectedIcon === icon.id}
+            aria-label={icon.label}
+            onClick={() => onSelectIcon(icon.id)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onSelectIcon(icon.id);
+            }}
+          >
+            <img src={resolveBackendUrl(icon.url, { includeToken: true })} alt="" />
+            <span>{icon.label}</span>
+            <button
+              type="button"
+              className="workflow-export-icon-tile__delete"
+              aria-label={`Delete ${icon.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onDeleteIcon(icon);
+              }}
+            >
+              <Trash2 size={12} aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
+      {iconError ? <p className="workflow-export-modal__help workflow-export-modal__help--error">{iconError}</p> : null}
+    </div>
   );
 }
 

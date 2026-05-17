@@ -35,6 +35,7 @@ export interface WorkflowCard {
   canRemove?: boolean;
   canExportNoofy?: boolean;
   canExportComfyJson?: boolean;
+  icon?: string;
   Icon: LucideIcon;
   source: "backend" | "starter";
   variants?: WorkflowCardVariant[];

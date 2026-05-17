@@ -223,6 +223,17 @@ describe("WorkflowsPage", () => {
       if (url.endsWith("/api/workflows")) {
         return Promise.resolve(jsonResponse(workflows));
       }
+      if (url.endsWith("/api/workflow-icons")) {
+        return Promise.resolve(jsonResponse({
+          icons: [{
+            id: "asset:custom-icon.png",
+            asset_id: "custom-icon.png",
+            label: "Custom icon",
+            kind: "custom",
+            url: "/api/assets/custom-icon.png",
+          }],
+        }));
+      }
       if (url.endsWith("/api/workflows/imported_cleanup/details")) {
         return Promise.resolve(jsonResponse(details));
       }
@@ -273,6 +284,41 @@ describe("WorkflowsPage", () => {
 
     expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+  });
+
+  it("renders custom imported workflow icons in the row", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse({
+          mode: "managed",
+          reachable: true,
+          base_url: "http://127.0.0.1:8188",
+          repo_dir: "",
+          managed_process_running: true,
+          sidecar_starting: false,
+          pid: 1,
+          error: null,
+          environment: null,
+          crash_count: 0,
+          restart_attempt: 0,
+          max_restart_attempts: 3,
+          uptime_seconds: 1,
+          last_crash_at: null,
+        }));
+      }
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(jsonResponse([{ ...workflows[1], icon: "asset:custom-icon.png", trust_level: "quarantined_community" }]));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const view = renderPage();
+
+    expect(await screen.findByText("Cleanup Flow")).toBeInTheDocument();
+    const icon = view.container.querySelector(".workflow-row .model-type-icon img") as HTMLImageElement | null;
+    expect(icon?.src).toContain("/api/assets/custom-icon.png");
   });
 
   it("applies an incoming search query immediately", async () => {
@@ -409,6 +455,97 @@ describe("WorkflowsPage", () => {
         expect.objectContaining({
           method: "PUT",
           body: expect.stringContaining("Updated cleanup description."),
+        }),
+      );
+    });
+  });
+
+  it("uses a visual icon picker in workflow details and persists icon choices", async () => {
+    renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    fireEvent.click(rowTitle.closest("article")!);
+
+    expect(await screen.findByRole("radiogroup", { name: "Workflow icon" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import icon" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Controls" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"icon":"sliders"'),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Custom icon" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"icon":"asset:custom-icon.png"'),
+        }),
+      );
+    });
+  });
+
+  it("imports a custom icon from workflow details and selects it", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse({
+          mode: "managed",
+          reachable: true,
+          base_url: "http://127.0.0.1:8188",
+          repo_dir: "",
+          managed_process_running: true,
+          sidecar_starting: false,
+          pid: 1,
+          error: null,
+          environment: null,
+          crash_count: 0,
+          restart_attempt: 0,
+          max_restart_attempts: 3,
+          uptime_seconds: 1,
+          last_crash_at: null,
+        }));
+      }
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse(workflows));
+      if (url.endsWith("/api/workflow-icons") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({
+          id: "asset:imported-icon.png",
+          asset_id: "imported-icon.png",
+          label: "imported-icon.png",
+          kind: "custom",
+          url: "/api/assets/imported-icon.png",
+        }));
+      }
+      if (url.endsWith("/api/workflow-icons")) return Promise.resolve(jsonResponse({ icons: [] }));
+      if (url.endsWith("/api/workflows/imported_cleanup/details")) return Promise.resolve(jsonResponse(details));
+      if (url.endsWith("/api/workflows/imported_cleanup/metadata")) return Promise.resolve(jsonResponse({ workflow_id: "imported_cleanup", metadata: {} }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const view = renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    fireEvent.click(rowTitle.closest("article")!);
+    await screen.findByRole("button", { name: "Import icon" });
+
+    const fileInput = view.container.querySelector('input[accept="image/png,image/jpeg,image/webp,image/gif"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["png"], "imported-icon.png", { type: "image/png" })] } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"icon":"asset:imported-icon.png"'),
         }),
       );
     });

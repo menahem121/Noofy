@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
 from app.runtime.node_registry import (
@@ -128,12 +129,14 @@ class ImportedWorkflowPackageStore:
         root_dir: Path,
         *,
         log_store: DiagnosticsSink,
+        dashboard_assets_dir: Path | None = None,
         node_registry_resolver: NodeRegistryResolver | None = None,
         custom_node_source_cache: CustomNodeSourceCache | None = None,
         trust_verifier: TrustVerifier | None = None,
     ) -> None:
         self.root_dir = root_dir
         self.log_store = log_store
+        self.dashboard_assets_dir = dashboard_assets_dir or settings.paths.dashboard_assets_dir
         self.node_registry_resolver = node_registry_resolver
         self.custom_node_source_cache = custom_node_source_cache
         self.trust_verifier = trust_verifier or TrustVerifier()
@@ -208,6 +211,7 @@ class ImportedWorkflowPackageStore:
                 original_filename=original_filename,
                 schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
                 extract_source_files=importer.extract_source_files,
+                dashboard_assets_dir=self.dashboard_assets_dir,
             )
         except Exception as exc:
             self.log_store.add(
@@ -454,8 +458,9 @@ class NoofyArchiveImporter:
         package_id = _string_field(package_json, "package_id", fallback="workflow")
         version = _string_field(package_json, "version", fallback="0.1.0")
         workflow_id = imported_workflow_id(publisher_id, package_id, version)
-        trust_level = _normalize_trust_level(package_json.get("trust_level"))
+        trust_level = _normalized_package_trust_level(package_json)
         display_name = _normalized_display_name(package_json, fallback=package_id)
+        metadata_fields = _normalized_metadata_fields(package_json)
 
         models = _normalize_models(capsule_json)
         custom_nodes = _normalize_custom_nodes(capsule_json)
@@ -513,8 +518,12 @@ class NoofyArchiveImporter:
                     id=workflow_id,
                     name=display_name,
                     version=version,
-                    description=_string_field(package_json, "description", fallback=""),
-                    author=publisher_id,
+                    description=metadata_fields["description"],
+                    author=metadata_fields["author"] or publisher_id,
+                    website=metadata_fields["website"],
+                    category=metadata_fields["category"],
+                    tags=metadata_fields["tags"],
+                    icon=metadata_fields["icon"],
                 ),
                 identity=WorkflowPackageIdentity(
                     publisher_id=publisher_id,
@@ -726,8 +735,55 @@ def _normalized_display_name(data: dict[str, Any], *, fallback: str) -> str:
     return normalized_display_name(data, fallback=fallback)
 
 
+def _normalized_metadata_fields(data: dict[str, Any]) -> dict[str, Any]:
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    def text(key: str) -> str:
+        nested = metadata.get(key)
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return ""
+
+    tags_value = metadata.get("tags")
+    if not isinstance(tags_value, list):
+        tags_value = data.get("tags")
+    tags = []
+    seen = set()
+    if isinstance(tags_value, list):
+        for item in tags_value:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if not cleaned or cleaned.casefold() in seen:
+                continue
+            seen.add(cleaned.casefold())
+            tags.append(cleaned)
+
+    return {
+        "description": text("description"),
+        "author": text("author"),
+        "website": text("website"),
+        "category": text("category"),
+        "tags": tags,
+        "icon": text("icon"),
+    }
+
+
 def _normalize_trust_level(value: Any) -> str:
     return normalize_trust_level(value)
+
+
+def _normalized_package_trust_level(package_json: dict[str, Any]) -> str:
+    trust_level = _normalize_trust_level(package_json.get("trust_level"))
+    source_policy = package_json.get("source_policy")
+    if trust_level == "unsupported" and source_policy == "local":
+        return "quarantined_community"
+    return trust_level
 
 
 def _normalize_signatures(value: Any) -> list[WorkflowPackageSignature]:

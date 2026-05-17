@@ -480,6 +480,51 @@ describe("HomePage", () => {
     expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
   });
 
+  it("renders imported Noofy re-exports as Community with their custom icon", () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return new Promise<Response>(() => {});
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const view = renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [{
+          id: "unknown__text2img__0.1.0",
+          name: "text2img",
+          version: "0.1.0",
+          description: "Round-tripped from Noofy.",
+          icon: "asset:custom-icon.png",
+          trust_level: "quarantined_community",
+          trust: {
+            level: "quarantined_community",
+            label: "Community",
+            summary: "Community workflow.",
+            badge_tone: "community",
+            can_prepare_automatically: true,
+            requires_explicit_opt_in: true,
+            source_policy: "explicit_opt_in_and_isolated_capsule_required",
+            signature_status: "not_required",
+          },
+          source_label: "Imported",
+          status: "imported",
+          status_label: "Imported",
+        }],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: "text2img" })).toBeInTheDocument();
+    expect(screen.getByText("Community")).toBeInTheDocument();
+    expect(screen.queryByText("Unsupported")).not.toBeInTheDocument();
+    const icon = view.container.querySelector(".workflow-card__icon img") as HTMLImageElement | null;
+    expect(icon?.src).toContain("/api/assets/custom-icon.png");
+  });
+
   it("preserves cached workflows and shows a warning when workflow refresh fails", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
