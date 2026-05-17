@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { DownloadCloud } from "lucide-react";
 
 import {
@@ -49,7 +49,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -57,18 +57,19 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}</>;
 }
 
 function renderControl(
   control: DashboardControlDef,
+  input: WorkflowInputDef,
   value: unknown,
   validation: Record<string, unknown>,
   disabled: boolean,
@@ -131,30 +132,7 @@ function renderControl(
       );
 
     case "slider":
-      return (
-        <div className={variant === "canvas" ? "canvas-widget-slider" : undefined}>
-          <input
-            type="range"
-            min={typeof validation.min === "number" ? validation.min : 0}
-            max={typeof validation.max === "number" ? validation.max : 100}
-            step={typeof validation.step === "number" ? validation.step : 1}
-            value={typeof value === "number" ? value : 0}
-            disabled={disabled}
-            onChange={(event) => onChange(Number(event.target.value))}
-          />
-          {variant === "canvas" ? (
-            <span className="canvas-widget-slider__value">
-              {typeof value === "number" ? value : 0}
-              {typeof validation.unit === "string" ? validation.unit : ""}
-            </span>
-          ) : (
-            <small>
-              {typeof value === "number" ? value : 0}
-              {typeof validation.unit === "string" ? validation.unit : "px"}
-            </small>
-          )}
-        </div>
-      );
+      return renderSliderControl(control, input, value, validation, disabled, variant, onChange);
 
     case "toggle":
       return (
@@ -226,6 +204,72 @@ function renderControl(
         />
       );
   }
+}
+
+function renderSliderControl(
+  control: DashboardControlDef,
+  input: WorkflowInputDef,
+  value: unknown,
+  validation: Record<string, unknown>,
+  disabled: boolean,
+  variant: DashboardInputControlVariant,
+  onChange: (value: unknown) => void,
+) {
+  const min = typeof validation.min === "number" ? validation.min : 0;
+  const max = typeof validation.max === "number" ? validation.max : 100;
+  const step = typeof validation.step === "number" ? validation.step : 1;
+  const numericValue = typeof value === "number" ? value : min;
+  const progress = max > min ? clamp(((numericValue - min) / (max - min)) * 100, 0, 100) : 0;
+  const unit = sliderUnit(control, input, validation);
+  const className = `dashboard-slider dashboard-slider--${variant}${
+    variant === "canvas" ? " canvas-widget-slider" : ""
+  }`;
+
+  return (
+    <div
+      className={className}
+      style={{ "--dashboard-slider-progress": `${progress}%` } as CSSProperties}
+    >
+      <div className="dashboard-slider__control-row">
+        <input
+          className="dashboard-slider__input"
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={numericValue}
+          disabled={disabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <output className="dashboard-slider__value">
+          {formatSliderValue(numericValue, unit)}
+        </output>
+      </div>
+      <div className="dashboard-slider__range-labels" aria-hidden="true">
+        <span>{formatSliderValue(min, unit)}</span>
+        <span>{formatSliderValue(max, unit)}</span>
+      </div>
+    </div>
+  );
+}
+
+function sliderUnit(
+  control: DashboardControlDef,
+  input: WorkflowInputDef,
+  validation: Record<string, unknown>,
+): string {
+  if (typeof validation.unit === "string") return validation.unit;
+
+  const identity = `${control.id} ${control.label ?? ""} ${input.id} ${input.label}`.toLowerCase();
+  return /\b(width|height)\b/.test(identity) ? "px" : "";
+}
+
+function formatSliderValue(value: number, unit: string): string {
+  return `${value}${unit}`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function ModelSelect({
