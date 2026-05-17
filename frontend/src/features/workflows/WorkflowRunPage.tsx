@@ -5,6 +5,7 @@ import {
   Clipboard,
   CheckCircle2,
   Download,
+  FileJson,
   Image,
   Loader2,
   Play,
@@ -17,6 +18,7 @@ import {
 import {
   cancelJob,
   createJobEventsUrl,
+  exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchApiKeySettings,
   fetchJobLogs,
@@ -47,7 +49,6 @@ import {
   type WorkflowStatusResponse,
   type WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
-import { workflowExportFilename } from "../../lib/workflowExport";
 import type {
   DashboardSchema,
   DashboardWidget,
@@ -125,7 +126,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
-  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
   const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -652,10 +653,18 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           className="secondary-button"
           type="button"
           aria-label="Share / Save as .noofy"
-          onClick={() => setExportDialogOpen(true)}
+          onClick={() => setExportDialog({ extension: ".noofy", url: exportWorkflowUrl(workflowId) })}
         >
           <Share2 size={15} aria-hidden="true" />
           Share
+        </button>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => setExportDialog({ extension: ".json", url: exportWorkflowComfyJsonUrl(workflowId) })}
+        >
+          <FileJson size={15} aria-hidden="true" />
+          Export JSON
         </button>
         <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
           <RotateCcw size={16} aria-hidden="true" />
@@ -748,11 +757,13 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     />
   ) : null;
   const workflowDisplayName = workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow";
-  const exportDialogElement = exportDialogOpen ? (
+  const exportDialogElement = exportDialog ? (
     <WorkflowExportDialog
       workflowName={workflowDisplayName}
-      exportUrl={exportWorkflowUrl(workflowId)}
-      onClose={() => setExportDialogOpen(false)}
+      exportUrl={exportDialog.url}
+      extension={exportDialog.extension}
+      inputValues={inputValues as Record<string, unknown>}
+      onClose={() => setExportDialog(null)}
     />
   ) : null;
 
@@ -781,10 +792,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
             canCancel,
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
-          exportNoofyFilename={workflowExportFilename(
-            workflowSummary?.name ?? state.packageData?.metadata?.name,
-            ".noofy",
-          )}
+          exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
+          exportWorkflowName={workflowSummary?.name ?? state.packageData?.metadata?.name}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
           loraBrowserFor={loraBrowserFor}

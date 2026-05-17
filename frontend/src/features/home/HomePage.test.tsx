@@ -325,10 +325,11 @@ describe("HomePage", () => {
     expect(screen.getByLabelText("Filename")).toHaveValue("Cleanup Flow.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
-    expect(screen.getByRole("menuitem", { name: "Export ComfyUI JSON" })).toHaveAttribute(
-      "href",
-      "/api/workflows/imported_cleanup/export/comfyui-json",
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export ComfyUI JSON" }));
+    expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Filename")).toHaveValue("Cleanup Flow.json");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
     expect(screen.getByRole("menuitem", { name: "Remove workflow" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));

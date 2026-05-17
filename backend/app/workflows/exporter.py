@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from app.workflows.bindings import apply_input_bindings
 from app.workflows.library import WorkflowLibraryMetadata, WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
@@ -37,7 +38,11 @@ class WorkflowExporter:
         self.user_state_service = user_state_service
         self.workflow_library_store = workflow_library_store
 
-    def export_archive(self, workflow_id: str) -> tuple[bytes, str]:
+    def export_archive(
+        self,
+        workflow_id: str,
+        input_values: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
         """Return (archive_bytes, suggested_filename).
 
         Raises WorkflowExportError if the workflow is unknown.
@@ -56,16 +61,16 @@ class WorkflowExporter:
             package_json = _build_export_package_json(package_dir, package, metadata)
             zf.writestr("package.json", json.dumps(package_json, indent=2, sort_keys=True))
 
-            # comfyui_graph.json — unchanged from store.
-            graph_file = stored_comfyui_graph_file(package_dir) if package_dir is not None else None
-            if graph_file is not None and graph_file.exists():
-                zf.write(graph_file, "comfyui_graph.json")
-            else:
-                # Fall back to in-memory graph if file is absent.
-                zf.writestr(
-                    "comfyui_graph.json",
-                    json.dumps(package.comfyui_graph, indent=2, sort_keys=True),
-                )
+            # comfyui_graph.json — export-time snapshot with current dashboard values applied.
+            bound_graph = self._bound_comfyui_graph(
+                package,
+                package_dir=package_dir,
+                input_values=input_values,
+            )
+            zf.writestr(
+                "comfyui_graph.json",
+                json.dumps(bound_graph, indent=2, sort_keys=True),
+            )
 
             # dashboard.json — the configured dashboard (inputs, outputs, sections, status).
             dashboard_file = package_dir / "dashboard.json" if package_dir is not None else None
@@ -76,7 +81,11 @@ class WorkflowExporter:
                 dashboard_data: dict[str, Any] = package.dashboard.model_dump(mode="json")
                 dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
                 dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
-            dashboard_data = self._dashboard_with_user_state(package.metadata.id, dashboard_data)
+            dashboard_data = self._dashboard_with_user_state(
+                package.metadata.id,
+                dashboard_data,
+                input_values=input_values,
+            )
             zf.writestr("dashboard.json", json.dumps(dashboard_data, indent=2, sort_keys=True))
 
             # capsule.lock.json — if present.
@@ -94,18 +103,37 @@ class WorkflowExporter:
         filename = f"{_safe_filename(workflow_id)}.noofy"
         return buf.getvalue(), filename
 
+    def export_comfyui_graph(
+        self,
+        workflow_id: str,
+        input_values: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
+        """Return a bound comfyui_graph.json snapshot for download."""
+        package = self._get_package(workflow_id)
+        package_dir = self._find_package_dir(workflow_id)
+        graph = self._bound_comfyui_graph(
+            package,
+            package_dir=package_dir,
+            input_values=input_values,
+        )
+        payload = json.dumps(graph, indent=2, sort_keys=True).encode("utf-8")
+        return payload, f"{_safe_filename(workflow_id)}.comfyui.json"
+
     def _dashboard_with_user_state(
         self,
         workflow_id: str,
         dashboard_data: dict[str, Any],
+        *,
+        input_values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if self.user_state_service is None:
-            return dashboard_data
-
-        user_state = self.user_state_service.get(workflow_id)
         exported = json.loads(json.dumps(dashboard_data))
 
-        values = user_state.values or {}
+        values: dict[str, Any] = {}
+        if self.user_state_service is not None:
+            user_state = self.user_state_service.get(workflow_id)
+            values.update(user_state.values or {})
+        if input_values is not None:
+            values.update(input_values)
         credential_input_ids = _credential_input_ids(exported)
         if values:
             for item in exported.get("inputs") or []:
@@ -118,8 +146,12 @@ class WorkflowExporter:
                         credential=bool(input_id in credential_input_ids),
                     )
 
-        layout_overrides = user_state.layout_overrides or {}
-        output_preferences = user_state.output_preferences or {}
+        layout_overrides = {}
+        output_preferences = {}
+        if self.user_state_service is not None:
+            user_state = self.user_state_service.get(workflow_id)
+            layout_overrides = user_state.layout_overrides or {}
+            output_preferences = user_state.output_preferences or {}
         for section in exported.get("sections") or []:
             if not isinstance(section, dict):
                 continue
@@ -152,6 +184,50 @@ class WorkflowExporter:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _bound_comfyui_graph(
+        self,
+        package: WorkflowPackage,
+        *,
+        package_dir: Path | None,
+        input_values: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        values = self._export_input_values(package, input_values=input_values)
+        stored_graph = self._stored_comfyui_graph(package_dir)
+        if stored_graph is not None:
+            package = package.model_copy(update={"comfyui_graph": stored_graph})
+        return apply_input_bindings(package, values)
+
+    def _stored_comfyui_graph(self, package_dir: Path | None) -> dict[str, Any] | None:
+        if package_dir is None:
+            return None
+        graph_file = stored_comfyui_graph_file(package_dir)
+        if not graph_file.exists():
+            return None
+        return json.loads(graph_file.read_text(encoding="utf-8"))
+
+    def _export_input_values(
+        self,
+        package: WorkflowPackage,
+        input_values: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        values = {item.id: item.default for item in package.inputs}
+        if self.user_state_service is not None:
+            user_state = self.user_state_service.get(package.metadata.id)
+            values.update(user_state.values or {})
+        if input_values is not None:
+            values.update(input_values)
+
+        credential_input_ids = {
+            item.id for item in package.inputs if item.control == "api_credential"
+        }
+        for input_id in credential_input_ids:
+            if input_id in values:
+                values[input_id] = _export_safe_user_value(
+                    values[input_id],
+                    credential=True,
+                )
+        return values
 
     def _get_package(self, workflow_id: str) -> WorkflowPackage:
         try:

@@ -307,15 +307,11 @@ describe("WorkflowsPage", () => {
     expect(panel).toHaveClass("workflow-detail-drawer");
     expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
     const noofyExport = screen.getByRole("button", { name: "Export .Noofy" });
-    const comfyExport = screen.getByRole("link", { name: "Export ComfyUI JSON" });
-    expect(comfyExport).toHaveAttribute(
-      "href",
-      "/api/workflows/imported_cleanup/export/comfyui-json",
-    );
+    const comfyExport = screen.getByRole("button", { name: "Export ComfyUI JSON" });
     const exportActions = noofyExport.closest(".workflow-detail-export-actions");
     expect(exportActions).not.toBeNull();
     expect(comfyExport.closest(".workflow-detail-export-actions")).toBe(exportActions);
-    expect(Array.from(exportActions!.querySelectorAll("button, a")).map((action) => action.textContent?.trim())).toEqual([
+    expect(Array.from(exportActions!.querySelectorAll("button")).map((action) => action.textContent?.trim())).toEqual([
       "Export .Noofy",
       "Export ComfyUI JSON",
     ]);

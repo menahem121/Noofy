@@ -3,21 +3,33 @@ import { Download, Loader2 } from "lucide-react";
 
 import {
   saveWorkflowExportWithFilename,
-  validateNoofyExportFilename,
+  validateWorkflowExportFilename,
+  workflowExportDownloadRequest,
   workflowExportFilename,
 } from "../../lib/workflowExport";
 
 interface WorkflowExportDialogProps {
   workflowName: string | null | undefined;
   exportUrl: string;
+  extension?: ".noofy" | ".json";
+  inputValues?: Record<string, unknown>;
   onClose: () => void;
 }
 
-export function WorkflowExportDialog({ workflowName, exportUrl, onClose }: WorkflowExportDialogProps) {
-  const [filenameInput, setFilenameInput] = useState(() => workflowExportFilename(workflowName, ".noofy"));
+export function WorkflowExportDialog({
+  workflowName,
+  exportUrl,
+  extension = ".noofy",
+  inputValues,
+  onClose,
+}: WorkflowExportDialogProps) {
+  const [filenameInput, setFilenameInput] = useState(() => workflowExportFilename(workflowName, extension));
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const validation = useMemo(() => validateNoofyExportFilename(filenameInput), [filenameInput]);
+  const validation = useMemo(
+    () => validateWorkflowExportFilename(filenameInput, extension),
+    [extension, filenameInput],
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -25,7 +37,10 @@ export function WorkflowExportDialog({ workflowName, exportUrl, onClose }: Workf
     setExporting(true);
     setExportError(null);
     try {
-      const exported = await saveWorkflowExportWithFilename(exportUrl, validation.filename);
+      const exported = await saveWorkflowExportWithFilename(
+        workflowExportDownloadRequest(exportUrl, inputValues),
+        validation.filename,
+      );
       if (exported) onClose();
       else setExporting(false);
     } catch (error) {
@@ -47,7 +62,7 @@ export function WorkflowExportDialog({ workflowName, exportUrl, onClose }: Workf
           </div>
           <div>
             <h2 id="workflow-export-title">Export workflow</h2>
-            <p>Choose the .noofy package filename before saving.</p>
+            <p>Choose the {extension} filename before saving.</p>
           </div>
         </header>
 

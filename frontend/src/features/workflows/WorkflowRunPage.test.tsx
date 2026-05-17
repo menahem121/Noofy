@@ -283,7 +283,7 @@ function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
   runtimeResponse = readyRuntime,
 ) {
-  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
     if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
@@ -292,6 +292,12 @@ function mockConfiguredDashboardFetch(
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
     if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
     if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+    if (url.endsWith("/api/workflows/text_to_image_v0/export") && init?.method === "POST") {
+      return Promise.resolve(new Response(new Uint8Array([110, 111, 111, 102, 121])));
+    }
+    if (url.endsWith("/api/workflows/text_to_image_v0/export/comfyui-json") && init?.method === "POST") {
+      return Promise.resolve(new Response(JSON.stringify({ workflow: true })));
+    }
     if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
       return Promise.resolve(
         jsonResponse({
@@ -1332,7 +1338,11 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByLabelText("Filename")).toHaveValue("Text to Image.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(optionsButton);
-    expect(screen.getByRole("menuitem", { name: /export comfyui json/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: /export comfyui json/i }));
+    expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Filename")).toHaveValue("Text to Image.json");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(optionsButton);
     expect(screen.getByRole("menuitem", { name: /edit dashboard layout/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /edit widgets/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i })).toBeInTheDocument();
@@ -1344,6 +1354,33 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
+  });
+
+  it("posts the current dashboard values when exporting ComfyUI JSON from the canvas", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+    const createObjectUrl = vi.fn(() => "blob:workflow-json");
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    renderRunPage();
+
+    const promptInput = await screen.findByRole("textbox");
+    fireEvent.change(promptInput, { target: { value: "current visible prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /export comfyui json/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() => {
+      const exportCall = fetchMock.mock.calls.find(([input, init]) =>
+        String(input).endsWith("/api/workflows/text_to_image_v0/export/comfyui-json") &&
+        (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(exportCall).toBeTruthy();
+      const body = JSON.parse(String((exportCall?.[1] as RequestInit).body));
+      expect(body.input_values.prompt).toBe("current visible prompt");
+    });
   });
 
   it("disables input controls while editing the canvas layout", async () => {

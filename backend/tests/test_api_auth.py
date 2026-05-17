@@ -133,3 +133,36 @@ def test_workflow_export_downloads_accept_query_token(monkeypatch) -> None:
     assert noofy_export.content == b"noofy-archive"
     assert comfy_export.status_code == 200
     assert comfy_export.content == b'{"workflow": true}'
+
+
+def test_workflow_export_posts_pass_current_input_values(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+
+    class RecordingEngineService(FakeEngineService):
+        archive_values = None
+        graph_values = None
+
+        def export_workflow_archive(self, workflow_id: str, input_values=None):
+            self.archive_values = input_values
+            return b"noofy-archive", f"{workflow_id}.noofy"
+
+        def export_workflow_comfyui_graph(self, workflow_id: str, input_values=None):
+            self.graph_values = input_values
+            return b'{"workflow": true}', f"{workflow_id}.json"
+
+    engine_service = RecordingEngineService()
+
+    with TestClient(create_app(engine_service=engine_service)) as client:
+        noofy_export = client.post(
+            "/api/workflows/text_to_image_v0/export",
+            json={"input_values": {"prompt": "visible prompt"}},
+        )
+        comfy_export = client.post(
+            "/api/workflows/text_to_image_v0/export/comfyui-json",
+            json={"input_values": {"prompt": "visible prompt"}},
+        )
+
+    assert noofy_export.status_code == 200
+    assert comfy_export.status_code == 200
+    assert engine_service.archive_values == {"prompt": "visible prompt"}
+    assert engine_service.graph_values == {"prompt": "visible prompt"}

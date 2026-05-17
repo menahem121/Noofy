@@ -1,4 +1,7 @@
+from typing import Any
+
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field
 
 from app.api.deps import (
     DashboardAssetServiceDep,
@@ -20,6 +23,10 @@ from app.workflows.library import WorkflowMetadataUpdate
 from app.workflows.user_state import WorkflowUserState
 
 router = APIRouter()
+
+
+class WorkflowExportRequest(BaseModel):
+    input_values: dict[str, Any] | None = Field(default=None)
 
 
 # ─── Workflow library ────────────────────────────────────────────────────────
@@ -370,8 +377,36 @@ async def save_dashboard(
 
 @router.get("/workflows/{workflow_id}/export")
 async def export_workflow(workflow_id: str, engine_service: EngineServiceDep):
+    return _workflow_archive_response(workflow_id, engine_service, input_values=None)
+
+
+@router.post("/workflows/{workflow_id}/export")
+async def export_workflow_with_values(
+    workflow_id: str,
+    request: WorkflowExportRequest,
+    engine_service: EngineServiceDep,
+):
+    return _workflow_archive_response(
+        workflow_id,
+        engine_service,
+        input_values=request.input_values,
+    )
+
+
+def _workflow_archive_response(
+    workflow_id: str,
+    engine_service: EngineServiceDep,
+    *,
+    input_values: dict[str, Any] | None,
+):
     try:
-        archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
+        if input_values is None:
+            archive_bytes, filename = engine_service.export_workflow_archive(workflow_id)
+        else:
+            archive_bytes, filename = engine_service.export_workflow_archive(
+                workflow_id,
+                input_values=input_values,
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -386,10 +421,40 @@ async def export_workflow(workflow_id: str, engine_service: EngineServiceDep):
 
 @router.get("/workflows/{workflow_id}/export/comfyui-json")
 async def export_workflow_comfyui_json(workflow_id: str, engine_service: EngineServiceDep):
+    return _workflow_comfyui_json_response(workflow_id, engine_service, input_values=None)
+
+
+@router.post("/workflows/{workflow_id}/export/comfyui-json")
+async def export_workflow_comfyui_json_with_values(
+    workflow_id: str,
+    request: WorkflowExportRequest,
+    engine_service: EngineServiceDep,
+):
+    return _workflow_comfyui_json_response(
+        workflow_id,
+        engine_service,
+        input_values=request.input_values,
+    )
+
+
+def _workflow_comfyui_json_response(
+    workflow_id: str,
+    engine_service: EngineServiceDep,
+    *,
+    input_values: dict[str, Any] | None,
+):
     try:
-        graph_bytes, filename = engine_service.export_workflow_comfyui_graph(workflow_id)
+        if input_values is None:
+            graph_bytes, filename = engine_service.export_workflow_comfyui_graph(workflow_id)
+        else:
+            graph_bytes, filename = engine_service.export_workflow_comfyui_graph(
+                workflow_id,
+                input_values=input_values,
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     from fastapi.responses import Response
     return Response(
         content=graph_bytes,

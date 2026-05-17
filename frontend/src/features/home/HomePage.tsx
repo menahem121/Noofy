@@ -24,6 +24,7 @@ import {
   cancelWorkflowImport,
   commitWorkflowImport,
   downloadImportMissingModels,
+  exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchImportModelDownloadStatus,
   fetchImportModelVerificationStatus,
@@ -313,7 +314,11 @@ export function HomePage({
   const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
-  const [exportDialog, setExportDialog] = useState<{ workflowName: string; exportUrl: string } | null>(null);
+  const [exportDialog, setExportDialog] = useState<{
+    workflowName: string;
+    exportUrl: string;
+    extension: ".noofy" | ".json";
+  } | null>(null);
   const [selectedNativeVariants, setSelectedNativeVariants] = useState<Record<string, string | undefined>>({});
   const [homeSearch, setHomeSearch] = useState("");
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
@@ -1000,7 +1005,18 @@ export function HomePage({
                 onEditDashboard={() => void handleEditWorkflowCard(workflow, onEditDashboard)}
                 onEditWidgets={() => void handleEditWorkflowCard(workflow, onEditWidgets)}
                 onExportNoofy={() =>
-                  setExportDialog({ workflowName: activeWorkflowTitle(workflow), exportUrl: exportWorkflowUrl(activeWorkflowId(workflow)) })
+                  setExportDialog({
+                    workflowName: activeWorkflowTitle(workflow),
+                    exportUrl: exportWorkflowUrl(activeWorkflowId(workflow)),
+                    extension: ".noofy",
+                  })
+                }
+                onExportComfyJson={() =>
+                  setExportDialog({
+                    workflowName: activeWorkflowTitle(workflow),
+                    exportUrl: exportWorkflowComfyJsonUrl(activeWorkflowId(workflow)),
+                    extension: ".json",
+                  })
                 }
                 onRemove={() => void handleRemoveWorkflowCard(workflow)}
               />
@@ -1010,6 +1026,7 @@ export function HomePage({
             <WorkflowExportDialog
               workflowName={exportDialog.workflowName}
               exportUrl={exportDialog.exportUrl}
+              extension={exportDialog.extension}
               onClose={() => setExportDialog(null)}
             />
           ) : null}
@@ -1334,6 +1351,7 @@ function WorkflowCardView({
   onEditDashboard,
   onEditWidgets,
   onExportNoofy,
+  onExportComfyJson,
   onRemove,
 }: {
   workflow: WorkflowCard;
@@ -1347,6 +1365,7 @@ function WorkflowCardView({
   onEditDashboard: () => void;
   onEditWidgets: () => void;
   onExportNoofy: () => void;
+  onExportComfyJson: () => void;
   onRemove: () => void;
 }) {
   const StatusIcon = workflowIconStatus(workflow.status);
@@ -1404,6 +1423,7 @@ function WorkflowCardView({
               onEditDashboard={onEditDashboard}
               onEditWidgets={onEditWidgets}
               onExportNoofy={onExportNoofy}
+              onExportComfyJson={onExportComfyJson}
               onRemove={onRemove}
             />
           ) : null}

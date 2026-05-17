@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.diagnostics import LogStore
-from app.workflows.exporter import WorkflowExporter
+from app.workflows.exporter import WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.user_state import (
@@ -220,12 +220,47 @@ def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Pat
 
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
         dashboard_data = json.loads(zf.read("dashboard.json"))
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
 
     assert dashboard_data["inputs"][0]["default"] == "latest prompt"
+    assert graph_data["1"]["inputs"]["text"] == "latest prompt"
     first_control = dashboard_data["sections"][0]["controls"][0]
     assert first_control["layout"] == {"x": 2, "y": 3, "w": 10, "h": 5}
     second_control = dashboard_data["sections"][0]["controls"][1]
     assert second_control["show_download"] is True
+
+
+def test_exported_archive_applies_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    graph_file = stored_comfyui_graph_file(package_dir)
+    before = json.loads(graph_file.read_text(encoding="utf-8"))
+
+    archive_bytes, _ = exporter.export_archive(
+        workflow_id,
+        input_values={"prompt": "visible dashboard prompt"},
+    )
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+
+    assert graph_data["1"]["inputs"]["text"] == "visible dashboard prompt"
+    assert dashboard_data["inputs"][0]["default"] == "visible dashboard prompt"
+    assert json.loads(graph_file.read_text(encoding="utf-8")) == before
+
+
+def test_comfyui_json_export_applies_explicit_dashboard_values(tmp_path: Path) -> None:
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
+
+    graph_bytes, filename = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": "json export prompt"},
+    )
+
+    assert filename.endswith(".comfyui.json")
+    assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "json export prompt"
 
 
 def test_exported_archive_strips_api_credential_status_and_raw_values(tmp_path: Path) -> None:
@@ -346,4 +381,4 @@ def test_export_supports_bundled_workflow_with_user_preferences(tmp_path: Path) 
     assert "dashboard" not in package_data
     assert dashboard_data["inputs"][0]["default"] == "native export prompt"
     assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 1, "y": 2, "w": 20, "h": 5}
-    assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"
+    assert graph_data["6"]["inputs"]["text"] == "native export prompt"

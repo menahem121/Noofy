@@ -1,5 +1,4 @@
 import re
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +79,7 @@ from app.runs.job_service import RunJobService
 from app.runs.orchestrator import RunOrchestrator
 from app.runs.result_service import RunResultService
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
+from app.workflows.bindings import apply_input_bindings
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.exporter import WorkflowExportError, WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
@@ -322,7 +322,21 @@ class EngineService:
     def remove_workflow(self, workflow_id: str) -> dict[str, object]:
         return self.workflow_library_service.remove_workflow(workflow_id)
 
-    def export_workflow_comfyui_graph(self, workflow_id: str) -> tuple[bytes, str]:
+    def export_workflow_comfyui_graph(
+        self,
+        workflow_id: str,
+        input_values: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
+        if self.workflow_exporter is not None:
+            try:
+                if input_values is None:
+                    return self.workflow_exporter.export_comfyui_graph(workflow_id)
+                return self.workflow_exporter.export_comfyui_graph(
+                    workflow_id,
+                    input_values=input_values,
+                )
+            except WorkflowExportError as exc:
+                raise ValueError(str(exc)) from exc
         return self.workflow_library_service.export_workflow_comfyui_graph(workflow_id)
 
     def list_runners(self) -> list[RunnerDescriptor]:
@@ -606,12 +620,21 @@ class EngineService:
         except DashboardAuthoringError as exc:
             raise ValueError(str(exc)) from exc
 
-    def export_workflow_archive(self, workflow_id: str) -> tuple[bytes, str]:
+    def export_workflow_archive(
+        self,
+        workflow_id: str,
+        input_values: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
         """Return (archive_bytes, suggested_filename) for download."""
         if self.workflow_exporter is None:
             raise KeyError(f"Workflow export not configured: {workflow_id}")
         try:
-            return self.workflow_exporter.export_archive(workflow_id)
+            if input_values is None:
+                return self.workflow_exporter.export_archive(workflow_id)
+            return self.workflow_exporter.export_archive(
+                workflow_id,
+                input_values=input_values,
+            )
         except WorkflowExportError as exc:
             raise ValueError(str(exc)) from exc
 
@@ -902,19 +925,7 @@ class EngineService:
         return payload
 
     def _apply_input_bindings(self, package: WorkflowPackage, inputs: dict[str, Any]) -> dict[str, Any]:
-        graph = deepcopy(package.comfyui_graph)
-        for exposed_input in package.inputs:
-            if exposed_input.id not in inputs:
-                continue
-
-            node_id = exposed_input.binding.node_id
-            input_name = exposed_input.binding.input_name
-            if node_id not in graph:
-                raise ValueError(f"Input binding references unknown node: {node_id}")
-
-            node_inputs = graph[node_id].setdefault("inputs", {})
-            node_inputs[input_name] = inputs[exposed_input.id]
-        return graph
+        return apply_input_bindings(package, inputs)
 
     async def _api_nodes_unavailable_reason(
         self,

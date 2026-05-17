@@ -1,4 +1,4 @@
-import { ChangeEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
@@ -26,11 +26,6 @@ import {
   type WorkflowMetadataUpdate,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
-import {
-  isNativeWorkflowExportAvailable,
-  saveWorkflowExportToNativeFileWithAlert,
-  workflowExportFilename,
-} from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
@@ -144,7 +139,11 @@ export function WorkflowsPage({
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [exportDialog, setExportDialog] = useState<{ workflowName: string; exportUrl: string } | null>(null);
+  const [exportDialog, setExportDialog] = useState<{
+    workflowName: string;
+    exportUrl: string;
+    extension: ".noofy" | ".json";
+  } | null>(null);
 
   useEffect(() => {
     void runtimeStatus.refreshRuntime({ silent: true });
@@ -461,7 +460,10 @@ export function WorkflowsPage({
                   onEditDashboard={() => void handleEditDashboard(workflow)}
                   onEditWidgets={() => void handleEditWidgets(workflow)}
                   onExportNoofy={() =>
-                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowUrl(workflow.id) })
+                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowUrl(workflow.id), extension: ".noofy" })
+                  }
+                  onExportComfyJson={() =>
+                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowComfyJsonUrl(workflow.id), extension: ".json" })
                   }
                   onRemove={() => void handleRemove(workflow)}
                 />
@@ -493,7 +495,7 @@ export function WorkflowsPage({
                 onClose={closeDetailsPanel}
                 onOpen={() => onOpenWorkflow(selectedDetails.id)}
                 onSave={(payload) => handleMetadataSave(selectedDetails.id, payload)}
-                onExportNoofy={(workflowName, exportUrl) => setExportDialog({ workflowName, exportUrl })}
+                onExport={(workflowName, exportUrl, extension) => setExportDialog({ workflowName, exportUrl, extension })}
               />
             ) : null}
           </aside>
@@ -503,6 +505,7 @@ export function WorkflowsPage({
         <WorkflowExportDialog
           workflowName={exportDialog.workflowName}
           exportUrl={exportDialog.exportUrl}
+          extension={exportDialog.extension}
           onClose={() => setExportDialog(null)}
         />
       ) : null}
@@ -576,6 +579,7 @@ function WorkflowRow({
   onEditDashboard,
   onEditWidgets,
   onExportNoofy,
+  onExportComfyJson,
   onRemove,
 }: {
   workflow: WorkflowSummary;
@@ -588,6 +592,7 @@ function WorkflowRow({
   onEditDashboard: () => void;
   onEditWidgets: () => void;
   onExportNoofy: () => void;
+  onExportComfyJson: () => void;
   onRemove: () => void;
 }) {
   const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
@@ -642,6 +647,7 @@ function WorkflowRow({
           onEditDashboard={onEditDashboard}
           onEditWidgets={onEditWidgets}
           onExportNoofy={onExportNoofy}
+          onExportComfyJson={onExportComfyJson}
           onRemove={onRemove}
         />
       </div>
@@ -654,13 +660,13 @@ function WorkflowDetailsDrawer({
   onClose,
   onOpen,
   onSave,
-  onExportNoofy,
+  onExport,
 }: {
   workflow: WorkflowDetails;
   onClose: () => void;
   onOpen: () => void;
   onSave: (payload: WorkflowMetadataUpdate) => Promise<void> | void;
-  onExportNoofy: (workflowName: string, exportUrl: string) => void;
+  onExport: (workflowName: string, exportUrl: string, extension: ".noofy" | ".json") => void;
 }) {
   const workflowMetadataDraft = useMemo<WorkflowMetadataUpdate>(() => ({
     description: workflow.overview.description,
@@ -694,24 +700,10 @@ function WorkflowDetailsDrawer({
     }
   }
 
-  function handleExportClick(event: MouseEvent<HTMLAnchorElement>, url: string, defaultFilename: string) {
-    const needsNativeExport = isNativeWorkflowExportAvailable();
-    if (metadataDraftsEqual(draft, savedDraft) && !needsNativeExport) return;
-    event.preventDefault();
+  function handleExportClick(exportUrl: string, extension: ".noofy" | ".json") {
     void saveDraft().then((saved) => {
       if (!saved) return;
-      if (needsNativeExport) {
-        void saveWorkflowExportToNativeFileWithAlert(url, defaultFilename);
-        return;
-      }
-      window.location.href = url;
-    });
-  }
-
-  function handleNoofyExportClick() {
-    void saveDraft().then((saved) => {
-      if (!saved) return;
-      onExportNoofy(workflow.name, exportWorkflowUrl(workflow.id));
+      onExport(workflow.name, exportUrl, extension);
     });
   }
 
@@ -824,24 +816,19 @@ function WorkflowDetailsDrawer({
           <button
             className="primary-button secondary-button--full"
             type="button"
-            onClick={handleNoofyExportClick}
+            onClick={() => handleExportClick(exportWorkflowUrl(workflow.id), ".noofy")}
           >
             <Download size={15} aria-hidden="true" />
             Export .Noofy
           </button>
         ) : null}
-        <a
+        <button
           className="secondary-button secondary-button--full"
-          href={exportWorkflowComfyJsonUrl(workflow.id)}
-          download
-          onClick={(event) => handleExportClick(
-            event,
-            exportWorkflowComfyJsonUrl(workflow.id),
-            workflowExportFilename(workflow.name, ".json"),
-          )}
+          type="button"
+          onClick={() => handleExportClick(exportWorkflowComfyJsonUrl(workflow.id), ".json")}
         >
           Export ComfyUI JSON
-        </a>
+        </button>
       </div>
     </>
   );

@@ -9,9 +9,6 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { exportWorkflowComfyJsonUrl } from "../../lib/api/noofyApi";
-import { handleNativeWorkflowExportClick, workflowExportFilename } from "../../lib/workflowExport";
-
 export interface WorkflowActionMenuWorkflow {
   id: string;
   name: string;
@@ -32,6 +29,7 @@ interface WorkflowActionMenuProps {
   onEditDashboard: () => void;
   onEditWidgets: () => void;
   onExportNoofy: () => void;
+  onExportComfyJson: () => void;
   onRemove: () => void;
 }
 
@@ -47,20 +45,11 @@ export function WorkflowActionMenu({
   onEditDashboard,
   onEditWidgets,
   onExportNoofy,
+  onExportComfyJson,
   onRemove,
 }: WorkflowActionMenuProps) {
   const menuClasses = ["workflow-action-menu", menuClassName].filter(Boolean).join(" ");
   const canExportComfyJson = workflow.can_export_comfyui_json !== false;
-  const exportComfyJsonUrl = exportWorkflowComfyJsonUrl(workflow.id);
-
-  function handleExportClick(
-    event: { preventDefault: () => void },
-    url: string,
-    defaultFilename: string,
-  ) {
-    onCloseMenu();
-    handleNativeWorkflowExportClick(event, url, defaultFilename);
-  }
 
   return (
     <div className={menuClasses}>
@@ -106,19 +95,17 @@ export function WorkflowActionMenu({
             </button>
           ) : null}
           {canExportComfyJson ? (
-            <a
+            <button
               role="menuitem"
-              href={exportComfyJsonUrl}
-              download
-              onClick={(event) => handleExportClick(
-                event,
-                exportComfyJsonUrl,
-                workflowExportFilename(workflow.name, ".json"),
-              )}
+              type="button"
+              onClick={() => {
+                onCloseMenu();
+                onExportComfyJson();
+              }}
             >
               <FileJson size={14} aria-hidden="true" />
               Export ComfyUI JSON
-            </a>
+            </button>
           ) : null}
           {workflow.can_remove ? (
             <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>

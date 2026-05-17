@@ -4,6 +4,8 @@ import {
   saveWorkflowExportToNativeFile,
   saveWorkflowExportWithFilename,
   validateNoofyExportFilename,
+  validateWorkflowExportFilename,
+  workflowExportDownloadRequest,
   workflowExportFilename,
 } from "./workflowExport";
 
@@ -82,6 +84,17 @@ describe("workflowExport", () => {
     });
   });
 
+  it("validates editable json export filenames", () => {
+    expect(validateWorkflowExportFilename("text2img", ".json")).toMatchObject({
+      valid: true,
+      filename: "text2img.json",
+    });
+    expect(validateWorkflowExportFilename("bad/name:graph", ".json")).toMatchObject({
+      valid: true,
+      filename: "bad-name-graph.json",
+    });
+  });
+
   it("downloads browser exports with the selected filename", async () => {
     delete window.__TAURI_INTERNALS__;
     const clicked: string[] = [];
@@ -100,5 +113,29 @@ describe("workflowExport", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/workflows/text_to_image_v0/export");
     expect(clicked).toEqual(["text2img.noofy"]);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:noofy-export");
+  });
+
+  it("posts current dashboard values when a download request includes input values", async () => {
+    delete window.__TAURI_INTERNALS__;
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:json-export") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ workflow: true })));
+
+    await expect(saveWorkflowExportWithFilename(
+      workflowExportDownloadRequest(
+        "/api/workflows/text_to_image_v0/export/comfyui-json",
+        { prompt: "visible prompt" },
+      ),
+      "text2img.json",
+    )).resolves.toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workflows/text_to_image_v0/export/comfyui-json",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ input_values: { prompt: "visible prompt" } }),
+      }),
+    );
   });
 });

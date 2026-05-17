@@ -1,4 +1,4 @@
-import { apiErrorMessage } from "./api/client";
+import { apiErrorMessage, apiHeaders } from "./api/client";
 import { saveBinaryFile, selectSaveFile } from "./folderDialogs";
 
 export function isNativeWorkflowExportAvailable() {
@@ -24,6 +24,11 @@ export interface WorkflowExportFilenameValidation {
   sanitized: boolean;
 }
 
+export interface WorkflowExportDownloadRequest {
+  url: string;
+  requestInit?: RequestInit;
+}
+
 function cleanDefaultExportName(name: string, extension: ".noofy" | ".json") {
   if (extension !== ".noofy") return name;
   const trimmed = name.trim();
@@ -35,26 +40,30 @@ function cleanDefaultExportName(name: string, extension: ".noofy" | ".json") {
   return trimmed;
 }
 
-export function validateNoofyExportFilename(input: string): WorkflowExportFilenameValidation {
+export function validateWorkflowExportFilename(
+  input: string,
+  extension: ".noofy" | ".json",
+): WorkflowExportFilenameValidation {
   const trimmed = input.trim();
   if (!trimmed) {
     return { filename: "", valid: false, message: "Enter a filename.", sanitized: false };
   }
 
-  const withExtension = /\.noofy$/i.test(trimmed) ? trimmed : `${trimmed}.noofy`;
+  const extensionPattern = new RegExp(`${extension.replace(".", "\\.")}$`, "i");
+  const withExtension = extensionPattern.test(trimmed) ? trimmed : `${trimmed}${extension}`;
   const withoutPathSeparators = withExtension.replace(/[\\/]+/g, "-");
   const sanitized = withoutPathSeparators
     .replace(/[:*?"<>|]+/g, "-")
     .replace(/[\x00-\x1f]+/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  const stem = sanitized.replace(/\.noofy$/i, "").replace(/[.\s-]+/g, "");
+  const stem = sanitized.replace(extensionPattern, "").replace(/[.\s-]+/g, "");
 
   if (!sanitized || !stem) {
     return {
       filename: sanitized,
       valid: false,
-      message: "Use at least one letter or number before .noofy.",
+      message: `Use at least one letter or number before ${extension}.`,
       sanitized: sanitized !== withExtension,
     };
   }
@@ -67,32 +76,70 @@ export function validateNoofyExportFilename(input: string): WorkflowExportFilena
   };
 }
 
-export async function saveWorkflowExportToNativeFile(url: string, defaultFilename: string): Promise<string | null> {
+export function validateNoofyExportFilename(input: string): WorkflowExportFilenameValidation {
+  return validateWorkflowExportFilename(input, ".noofy");
+}
+
+export function workflowExportDownloadRequest(
+  url: string,
+  inputValues?: Record<string, unknown>,
+): WorkflowExportDownloadRequest {
+  if (inputValues === undefined) return { url };
+  return {
+    url,
+    requestInit: {
+      method: "POST",
+      headers: apiHeaders("application/json"),
+      body: JSON.stringify({ input_values: inputValues }),
+    },
+  };
+}
+
+function normalizeDownloadRequest(request: string | WorkflowExportDownloadRequest): WorkflowExportDownloadRequest {
+  return typeof request === "string" ? { url: request } : request;
+}
+
+function fetchWorkflowExport(request: WorkflowExportDownloadRequest): Promise<Response> {
+  if (request.requestInit === undefined) return fetch(request.url);
+  return fetch(request.url, request.requestInit);
+}
+
+export async function saveWorkflowExportToNativeFile(
+  request: string | WorkflowExportDownloadRequest,
+  defaultFilename: string,
+): Promise<string | null> {
   const targetPath = await selectSaveFile(defaultFilename);
   if (!targetPath) return null;
 
-  const response = await fetch(url);
+  const response = await fetchWorkflowExport(normalizeDownloadRequest(request));
   if (!response.ok) throw new Error(await apiErrorMessage(response));
 
   const bytes = Array.from(new Uint8Array(await response.arrayBuffer()));
   return saveBinaryFile(targetPath, bytes);
 }
 
-export async function saveWorkflowExportToNativeFileWithAlert(url: string, defaultFilename: string): Promise<boolean> {
+export async function saveWorkflowExportToNativeFileWithAlert(
+  request: string | WorkflowExportDownloadRequest,
+  defaultFilename: string,
+): Promise<boolean> {
   try {
-    return Boolean(await saveWorkflowExportToNativeFile(url, defaultFilename));
+    return Boolean(await saveWorkflowExportToNativeFile(request, defaultFilename));
   } catch (error) {
     window.alert(error instanceof Error ? error.message : String(error));
     return false;
   }
 }
 
-export async function saveWorkflowExportWithFilename(url: string, filename: string): Promise<boolean> {
+export async function saveWorkflowExportWithFilename(
+  request: string | WorkflowExportDownloadRequest,
+  filename: string,
+): Promise<boolean> {
+  const normalizedRequest = normalizeDownloadRequest(request);
   if (isNativeWorkflowExportAvailable()) {
-    return Boolean(await saveWorkflowExportToNativeFile(url, filename));
+    return Boolean(await saveWorkflowExportToNativeFile(normalizedRequest, filename));
   }
 
-  const response = await fetch(url);
+  const response = await fetchWorkflowExport(normalizedRequest);
   if (!response.ok) throw new Error(await apiErrorMessage(response));
 
   const blob = await response.blob();

@@ -63,7 +63,8 @@ interface CanvasDashboardViewProps {
   isEditingLayout: boolean;
   runState: CanvasRunState;
   exportNoofyUrl: string;
-  exportNoofyFilename?: string;
+  exportComfyJsonUrl: string;
+  exportWorkflowName?: string | null;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
@@ -89,7 +90,8 @@ export function CanvasDashboardView({
   isEditingLayout,
   runState,
   exportNoofyUrl,
-  exportNoofyFilename = "workflow.noofy",
+  exportComfyJsonUrl,
+  exportWorkflowName,
   onChange,
   onImageUpload,
   loraBrowserFor,
@@ -107,7 +109,7 @@ export function CanvasDashboardView({
   const [movePreview, setMovePreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [dropPreview, setDropPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
@@ -330,12 +332,20 @@ export function CanvasDashboardView({
                       type="button"
                       onClick={() => {
                         setOptionsOpen(false);
-                        setExportDialogOpen(true);
+                        setExportDialog({ extension: ".noofy", url: exportNoofyUrl });
                       }}
                     >
                       Export as Noofy
                     </button>
-                    <button className="canvas-options-menu__item" role="menuitem" type="button" disabled>
+                    <button
+                      className="canvas-options-menu__item"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setOptionsOpen(false);
+                        setExportDialog({ extension: ".json", url: exportComfyJsonUrl });
+                      }}
+                    >
                       Export ComfyUI JSON
                     </button>
                     <button
@@ -444,11 +454,13 @@ export function CanvasDashboardView({
           })}
         </DashboardCanvasSurface>
       </DashboardCanvasFrame>
-      {exportDialogOpen ? (
+      {exportDialog ? (
         <WorkflowExportDialog
-          workflowName={exportNoofyFilename}
-          exportUrl={exportNoofyUrl}
-          onClose={() => setExportDialogOpen(false)}
+          workflowName={exportWorkflowName}
+          exportUrl={exportDialog.url}
+          extension={exportDialog.extension}
+          inputValues={inputValues}
+          onClose={() => setExportDialog(null)}
         />
       ) : null}
     </div>
