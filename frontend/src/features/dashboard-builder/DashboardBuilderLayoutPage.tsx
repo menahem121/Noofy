@@ -92,6 +92,11 @@ export function DashboardBuilderLayoutPage({
   onSaveComplete,
   onNavigate,
 }: DashboardBuilderLayoutPageProps) {
+  const activeWorkflowId = workflowId ?? MOCK_WORKFLOW.id;
+  const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
+  const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
+  const saveSequenceRef = useRef(0);
+  const activeWorkflowIdRef = useRef(activeWorkflowId);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
 
   useEffect(() => {
@@ -111,13 +116,15 @@ export function DashboardBuilderLayoutPage({
   const workflow: MockWorkflow = useMemo(() => {
     return {
       ...MOCK_WORKFLOW,
-      id: workflowId ?? MOCK_WORKFLOW.id,
-      name: workflowName ?? MOCK_WORKFLOW.name,
+      id: activeWorkflowId,
+      name: activeWorkflowName,
+      source: workflowId ? "imported_noofy_package" : MOCK_WORKFLOW.source,
+      nodes: workflowId ? [] : MOCK_WORKFLOW.nodes,
     };
-  }, [workflowId, workflowName]);
+  }, [activeWorkflowId, activeWorkflowName, workflowId]);
 
   const [schema, setSchema] = useState<DashboardSchema>(
-    () => initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow),
+    () => scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
   );
   const schemaRef = useRef(schema);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
@@ -146,21 +153,36 @@ export function DashboardBuilderLayoutPage({
     dropLayout: DashboardWidgetLayout;
   } | null>(null);
 
-  useEffect(() => {
-    setSchema(initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow));
+  useLayoutEffect(() => {
+    activeWorkflowIdRef.current = activeWorkflowId;
+    saveSequenceRef.current += 1;
+    const nextSchema = scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow);
+    setSchema(nextSchema);
     setSelectedWidgetId(null);
-  }, [workflow, initialSchema]);
+    setActiveDragWidgetId(null);
+    setDragPreview(null);
+    setMovePreview(null);
+    setDropPreview(null);
+    setSavedFlash(null);
+    setSavedWorkflowId(null);
+    setSaveError(null);
+    setIsSavingDashboard(false);
+    resizeStateRef.current = null;
+    moveStateRef.current = null;
+    schemaRef.current = nextSchema;
+  }, [activeWorkflowId]);
 
   useLayoutEffect(() => {
     schemaRef.current = schema;
   }, [schema]);
 
   const appStatus = runtimeStatusCopy(runtimeState);
-  const unplacedWidgets = schema.widgets.filter((widget) => !widget.layout);
-  const placedWidgets = schema.widgets.filter((widget) => widget.layout);
-  const allWidgetsPlaced = schema.widgets.length > 0 && unplacedWidgets.length === 0;
+  const schemaReady = schema.workflowId === activeWorkflowId;
+  const unplacedWidgets = schemaReady ? schema.widgets.filter((widget) => !widget.layout) : [];
+  const placedWidgets = schemaReady ? schema.widgets.filter((widget) => widget.layout) : [];
+  const allWidgetsPlaced = schemaReady && schema.widgets.length > 0 && unplacedWidgets.length === 0;
   const helperCopy = allWidgetsPlaced ? "Dashboard ready to save." : "Place all widgets on the canvas before saving.";
-  const canvasRows = canvasRowsForItems(schema.widgets);
+  const canvasRows = schemaReady ? canvasRowsForItems(schema.widgets) : 0;
 
   function handleTrayPointerStart(event: PointerEvent<HTMLElement>, widgetId: string) {
     event.preventDefault();
@@ -442,6 +464,7 @@ export function DashboardBuilderLayoutPage({
   }
 
   function handleSaveDraft() {
+    if (!schemaReady) return;
     saveDashboardDraft(schema);
     setSavedWorkflowId(null);
     setSaveError(null);
@@ -450,18 +473,21 @@ export function DashboardBuilderLayoutPage({
   }
 
   function handleSaveDashboard() {
-    if (!allWidgetsPlaced || isSavingDashboard) return;
-    const targetId = workflowId ?? schema.workflowId;
+    if (!schemaReady || !allWidgetsPlaced || isSavingDashboard) return;
+    const targetId = activeWorkflowId;
+    const saveSequence = ++saveSequenceRef.current;
     const payload = toBackendPayload(schema);
     setIsSavingDashboard(true);
     setSaveError(null);
     saveDashboard(targetId, payload)
       .then(() => {
+        if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         clearDashboardDraft(targetId);
         setSavedWorkflowId(targetId);
         setSavedFlash("saved");
       })
       .catch((error) => {
+        if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         saveDashboardDraft({ ...schema, workflowId: targetId });
         setSavedFlash(null);
         setSaveError(
@@ -471,6 +497,7 @@ export function DashboardBuilderLayoutPage({
         );
       })
       .finally(() => {
+        if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         setIsSavingDashboard(false);
       });
   }
@@ -486,7 +513,11 @@ export function DashboardBuilderLayoutPage({
       <div className="builder-layout-page">
         <header className="builder-layout-topbar" aria-labelledby="builder-layout-title">
           <div className="builder-layout-topbar__left">
-            <button className="ghost-button ghost-button--back" type="button" onClick={() => onBackToWidgets(schema)}>
+            <button
+              className="ghost-button ghost-button--back"
+              type="button"
+              onClick={() => onBackToWidgets(schemaReady ? schema : buildInitialDashboard(workflow))}
+            >
               <ArrowLeft size={15} aria-hidden="true" />
               Back to widgets
             </button>
@@ -512,7 +543,7 @@ export function DashboardBuilderLayoutPage({
                 {helperCopy}
               </p>
             )}
-            <button className="secondary-button" type="button" onClick={handleSaveDraft}>
+            <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!schemaReady}>
               <Save size={15} aria-hidden="true" />
               Save as draft
             </button>
@@ -537,7 +568,33 @@ export function DashboardBuilderLayoutPage({
           </div>
         </header>
 
-        <div className="builder-layout-workspace">
+        {!schemaReady ? (
+          <div className="builder-layout-loading" aria-live="polite" aria-busy="true">
+            <div className="builder-loading__panel builder-loading__panel--layout" role="status">
+              <div className="builder-loading__status">
+                <span className="builder-loading__spinner" aria-hidden="true">
+                  <LayoutGrid size={18} />
+                </span>
+                <div>
+                  <strong>Loading dashboard layout</strong>
+                  <span>Preparing this workflow's saved dashboard canvas.</span>
+                </div>
+              </div>
+              <div className="builder-loading__layout-preview" aria-hidden="true">
+                <div className="builder-loading__tray">
+                  <div className="builder-loading-line builder-loading-line--title" />
+                  <div className="builder-loading-block" />
+                  <div className="builder-loading-block builder-loading-block--short" />
+                </div>
+                <div className="builder-loading__canvas">
+                  <div className="builder-loading-canvas-widget builder-loading-canvas-widget--primary" />
+                  <div className="builder-loading-canvas-widget builder-loading-canvas-widget--secondary" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="builder-layout-workspace">
           <aside className="layout-widget-tray" aria-label="Widgets to place">
             <header className="layout-widget-tray__header">
               <div>
@@ -630,7 +687,8 @@ export function DashboardBuilderLayoutPage({
               ) : null}
             </DashboardCanvasSurface>
           </DashboardCanvasFrame>
-        </div>
+          </div>
+        )}
       </div>
     </AppLayout>
   );

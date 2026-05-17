@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -10,6 +10,7 @@ import {
   GripVertical,
   ImagePlus,
   LayoutGrid,
+  Loader2,
   Plus,
   Save,
   Search,
@@ -55,6 +56,22 @@ interface RuntimeState {
   runtime: RuntimeStatus | null;
 }
 
+interface WorkflowAuthoringState {
+  loading: boolean;
+  workflow: MockWorkflow | null;
+  error: string | null;
+}
+
+function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
+  return {
+    ...MOCK_WORKFLOW,
+    id: workflowId,
+    name: workflowName,
+    source: "imported_noofy_package",
+    nodes: [],
+  };
+}
+
 export function DashboardBuilderPage({
   workflowId,
   workflowName,
@@ -63,13 +80,27 @@ export function DashboardBuilderPage({
   onContinue,
   onNavigate,
 }: DashboardBuilderPageProps) {
+  const activeWorkflowId = workflowId ?? MOCK_WORKFLOW.id;
+  const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
+  const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
+  const loadSequenceRef = useRef(0);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
-  const [workflow, setWorkflow] = useState<MockWorkflow>(() => ({
-    ...MOCK_WORKFLOW,
-    id: workflowId ?? MOCK_WORKFLOW.id,
-    name: workflowName ?? MOCK_WORKFLOW.name,
-  }));
-  const [workflowLoading, setWorkflowLoading] = useState(Boolean(workflowId));
+  const [workflowState, setWorkflowState] = useState<WorkflowAuthoringState>(() => {
+    if (workflowId) return { loading: true, workflow: null, error: null };
+    return {
+      loading: false,
+      workflow: { ...MOCK_WORKFLOW, id: activeWorkflowId, name: activeWorkflowName },
+      error: null,
+    };
+  });
+  const [schema, setSchema] = useState<DashboardSchema>(
+    () => scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+  );
+  const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
+  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
+  const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -87,42 +118,53 @@ export function DashboardBuilderPage({
 
   useEffect(() => {
     if (!workflowId) {
-      setWorkflow({ ...MOCK_WORKFLOW, name: workflowName ?? MOCK_WORKFLOW.name });
-      setWorkflowLoading(false);
+      const workflow = { ...MOCK_WORKFLOW, id: activeWorkflowId, name: activeWorkflowName };
+      setWorkflowState({ loading: false, workflow, error: null });
       return;
     }
-    let mounted = true;
-    setWorkflowLoading(true);
+    const loadSequence = ++loadSequenceRef.current;
+    setWorkflowState({ loading: true, workflow: null, error: null });
     fetchBindableInputs(workflowId)
       .then((res) => {
-        if (!mounted) return;
-        setWorkflow(workflowFromBindableInputs(workflowId, workflowName ?? workflowId, res.nodes));
-        setWorkflowLoading(false);
+        if (loadSequence !== loadSequenceRef.current) return;
+        setWorkflowState({
+          loading: false,
+          workflow: workflowFromBindableInputs(workflowId, activeWorkflowName, res.nodes),
+          error: null,
+        });
       })
       .catch(() => {
-        if (!mounted) return;
-        setWorkflow({ ...MOCK_WORKFLOW, id: workflowId, name: workflowName ?? workflowId });
-        setWorkflowLoading(false);
+        if (loadSequence !== loadSequenceRef.current) return;
+        setWorkflowState({
+          loading: false,
+          workflow: emptyWorkflow(workflowId, activeWorkflowName),
+          error: "Workflow values could not be loaded.",
+        });
       });
     return () => {
-      mounted = false;
+      loadSequenceRef.current += 1;
     };
-  }, [workflowId, workflowName]);
+  }, [workflowId, activeWorkflowId, activeWorkflowName]);
 
   const appStatus = runtimeStatusCopy(runtimeState);
 
-  const [schema, setSchema] = useState<DashboardSchema>(
-    () => initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow),
-  );
-  const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
-  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set([workflow.nodes[0]?.id ?? ""]));
-  const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
+  useLayoutEffect(() => {
+    setSchema(
+      scopedInitialSchema ??
+        loadDashboardDraft(activeWorkflowId) ??
+        buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+    );
+    setSelectedValueId(null);
+    setSelectedWidgetId(null);
+    setSearch("");
+    setExpandedNodes(new Set());
+    setSavedFlash(null);
+  }, [activeWorkflowId]);
 
   useEffect(() => {
-    if (workflowLoading) return;
-    const nextSchema = initialSchema ?? loadDashboardDraft(workflow.id) ?? buildInitialDashboard(workflow);
+    const workflow = workflowState.workflow;
+    if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
+    const nextSchema = scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow);
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
     if (firstWidget) {
@@ -132,21 +174,35 @@ export function DashboardBuilderPage({
       setSelectedWidgetId(null);
       setSelectedValueId(null);
     }
-  }, [workflow, initialSchema]);
+    setExpandedNodes(new Set([workflow.nodes[0]?.id ?? ""]));
+  }, [workflowState, activeWorkflowId, scopedInitialSchema]);
+
+  const workflow = workflowState.workflow;
+  const builderReady =
+    !workflowState.loading &&
+    workflow !== null &&
+    workflow.id === activeWorkflowId &&
+    schema.workflowId === activeWorkflowId;
+  const displayWorkflowName = builderReady ? workflow.name : activeWorkflowName;
 
   const valueIndex = useMemo(() => {
     const map = new Map<string, { node: WorkflowNode; value: WorkflowNodeValue }>();
+    if (!builderReady || !workflow) return map;
     for (const node of workflow.nodes) {
       for (const value of node.values) {
         map.set(value.id, { node, value });
       }
     }
     return map;
-  }, [workflow]);
+  }, [builderReady, workflow]);
 
-  const exposedValueIds = useMemo(() => new Set(schema.widgets.map((c) => c.valueId)), [schema.widgets]);
+  const exposedValueIds = useMemo(
+    () => new Set(builderReady ? schema.widgets.map((c) => c.valueId) : []),
+    [builderReady, schema.widgets],
+  );
 
   const filteredNodes = useMemo(() => {
+    if (!builderReady || !workflow) return [];
     const query = search.trim().toLowerCase();
     if (!query) return workflow.nodes;
 
@@ -162,11 +218,11 @@ export function DashboardBuilderPage({
         return { ...node, values: filteredValues };
       })
       .filter((node) => node.values.length > 0);
-  }, [workflow.nodes, search]);
+  }, [builderReady, workflow, search]);
 
   const selectedWidget = useMemo(
-    () => (selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
-    [schema.widgets, selectedWidgetId],
+    () => (builderReady && selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
+    [builderReady, schema.widgets, selectedWidgetId],
   );
 
   const selectedValueRecord = selectedValueId ? valueIndex.get(selectedValueId) ?? null : null;
@@ -223,18 +279,19 @@ export function DashboardBuilderPage({
   }
 
   function handleSaveDraft() {
+    if (!builderReady) return;
     saveDashboardDraft(schema);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
   function handleContinue() {
-    if (schema.widgets.length === 0) return;
+    if (!builderReady || schema.widgets.length === 0) return;
     onContinue(schema);
   }
 
-  const simpleWidgets = schema.widgets.filter((c) => c.group === "simple");
-  const advancedWidgets = schema.widgets.filter((c) => c.group === "advanced");
+  const simpleWidgets = builderReady ? schema.widgets.filter((c) => c.group === "simple") : [];
+  const advancedWidgets = builderReady ? schema.widgets.filter((c) => c.group === "advanced") : [];
 
   return (
     <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
@@ -246,7 +303,7 @@ export function DashboardBuilderPage({
                 <ArrowLeft size={15} aria-hidden="true" />
                 Back to workflows
               </button>
-              <h1 id="builder-title" className="builder-heading__inline-title">Dashboard Builder · {workflow.name}</h1>
+              <h1 id="builder-title" className="builder-heading__inline-title">Dashboard Builder · {displayWorkflowName}</h1>
             </div>
             <p>Choose which workflow values become simple widgets.</p>
           </div>
@@ -257,7 +314,7 @@ export function DashboardBuilderPage({
               <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft dashboard"}</span>
             </div>
             <div className="button-row">
-              <button className="secondary-button" type="button" onClick={handleSaveDraft}>
+              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady}>
                 <Save size={15} aria-hidden="true" />
                 Save as draft
               </button>
@@ -265,7 +322,7 @@ export function DashboardBuilderPage({
                 className="primary-button primary-button--compact"
                 type="button"
                 onClick={handleContinue}
-                disabled={schema.widgets.length === 0}
+                disabled={!builderReady || schema.widgets.length === 0}
               >
                 <ArrowRight size={16} aria-hidden="true" />
                 Continue
@@ -288,7 +345,10 @@ export function DashboardBuilderPage({
           </div>
         ) : null}
 
-        <div className="builder-grid">
+        {!builderReady ? (
+          <DashboardBuilderLoadingState />
+        ) : (
+          <div className="builder-grid">
           <aside className="builder-pane builder-values" aria-label="Workflow values">
             <header className="builder-pane__header">
               <div>
@@ -310,7 +370,12 @@ export function DashboardBuilderPage({
             </div>
 
             <div className="builder-pane__scroll">
-              {filteredNodes.length === 0 ? (
+              {workflowState.error ? (
+                <div className="builder-empty builder-empty--small">
+                  <Search size={26} aria-hidden="true" />
+                  <p>{workflowState.error}</p>
+                </div>
+              ) : filteredNodes.length === 0 ? (
                 <div className="builder-empty builder-empty--small">
                   <Search size={26} aria-hidden="true" />
                   <p>No values match your search.</p>
@@ -398,9 +463,44 @@ export function DashboardBuilderPage({
               <p>Preview only. End-users will see this dashboard when they open the workflow.</p>
             </footer>
           </aside>
-        </div>
+          </div>
+        )}
       </div>
     </AppLayout>
+  );
+}
+
+function DashboardBuilderLoadingState() {
+  return (
+    <div className="builder-loading" aria-live="polite" aria-busy="true">
+      <div className="builder-loading__panel" role="status">
+        <div className="builder-loading__status">
+          <span className="builder-loading__spinner" aria-hidden="true">
+            <Loader2 className="spin" size={18} />
+          </span>
+          <div>
+            <strong>Loading dashboard builder</strong>
+            <span>Preparing this workflow's values, widgets, and saved dashboard draft.</span>
+          </div>
+        </div>
+        <div className="builder-loading__preview" aria-hidden="true">
+          <div className="builder-loading__sidebar">
+            <div className="builder-loading-line builder-loading-line--title" />
+            <div className="builder-loading-block" />
+            <div className="builder-loading-block" />
+            <div className="builder-loading-block builder-loading-block--short" />
+          </div>
+          <div className="builder-loading__main">
+            <div className="builder-loading-line builder-loading-line--wide" />
+            <div className="builder-loading-card-grid">
+              <div className="builder-loading-card" />
+              <div className="builder-loading-card" />
+            </div>
+            <div className="builder-loading-block builder-loading-block--wide" />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

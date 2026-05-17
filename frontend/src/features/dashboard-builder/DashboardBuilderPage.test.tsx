@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderPage } from "./DashboardBuilderPage";
@@ -43,6 +43,38 @@ const selectSchema: DashboardSchema = {
     },
   ],
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function bindableInputsResponse(nodeType: string, currentValue: string) {
+  return {
+    nodes: [
+      {
+        node_id: "6",
+        node_type: nodeType,
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: currentValue,
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+          },
+        ],
+      },
+    ],
+  };
+}
 
 describe("DashboardBuilderPage", () => {
   const fetchMock = vi.fn();
@@ -104,5 +136,87 @@ describe("DashboardBuilderPage", () => {
         ],
       }),
     );
+  });
+
+  it("hides the previous workflow while builder data for the next workflow is loading", async () => {
+    const workflowA = deferred<Response>();
+    const workflowB = deferred<Response>();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-a/bindable-inputs")) return workflowA.promise;
+      if (url.endsWith("/api/workflows/wf-b/bindable-inputs")) return workflowB.promise;
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const { rerender } = render(
+      <DashboardBuilderPage
+        workflowId="wf-a"
+        workflowName="Workflow A"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    workflowA.resolve(jsonResponse(bindableInputsResponse("AlphaNode", "alpha")));
+    await waitFor(() => expect(screen.getAllByText("AlphaNode").length).toBeGreaterThan(0));
+
+    rerender(
+      <DashboardBuilderPage
+        workflowId="wf-b"
+        workflowName="Workflow B"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Loading dashboard builder")).toBeInTheDocument();
+    expect(screen.queryAllByText("AlphaNode")).toHaveLength(0);
+
+    workflowB.resolve(jsonResponse(bindableInputsResponse("BetaNode", "beta")));
+    await waitFor(() => expect(screen.getAllByText("BetaNode").length).toBeGreaterThan(0));
+    expect(screen.queryAllByText("AlphaNode")).toHaveLength(0);
+  });
+
+  it("ignores a bindable-input response after navigating to another workflow", async () => {
+    const workflowA = deferred<Response>();
+    const workflowB = deferred<Response>();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-a/bindable-inputs")) return workflowA.promise;
+      if (url.endsWith("/api/workflows/wf-b/bindable-inputs")) return workflowB.promise;
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const { rerender } = render(
+      <DashboardBuilderPage
+        workflowId="wf-a"
+        workflowName="Workflow A"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    rerender(
+      <DashboardBuilderPage
+        workflowId="wf-b"
+        workflowName="Workflow B"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    workflowA.resolve(jsonResponse(bindableInputsResponse("AlphaNode", "alpha")));
+    await waitFor(() => expect(screen.getByText("Loading dashboard builder")).toBeInTheDocument());
+    expect(screen.queryAllByText("AlphaNode")).toHaveLength(0);
+
+    workflowB.resolve(jsonResponse(bindableInputsResponse("BetaNode", "beta")));
+    await waitFor(() => expect(screen.getAllByText("BetaNode").length).toBeGreaterThan(0));
+    expect(screen.queryAllByText("AlphaNode")).toHaveLength(0);
   });
 });

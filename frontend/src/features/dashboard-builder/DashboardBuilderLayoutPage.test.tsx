@@ -132,6 +132,42 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(onSaveComplete).toHaveBeenCalledWith("wf-1");
   });
 
+  it("does not keep the previous workflow canvas when the workflow id changes", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const { rerender } = render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow One"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox")).toBeInTheDocument();
+
+    rerender(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-2"
+        workflowName="Workflow Two"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize prompt/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Start building your dashboard")).toBeInTheDocument();
+  });
+
   it("uses resize handles instead of bottom size preset buttons", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
