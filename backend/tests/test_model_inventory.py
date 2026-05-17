@@ -53,7 +53,10 @@ class FakeEngineService:
         self.workflow_loader = FakeWorkflowLoader(packages)
 
     async def list_available_models(self) -> list[ModelInfo]:
-        return [ModelInfo(folder="vae", filename="engine-only.safetensors")]
+        return [
+            ModelInfo(folder="configs", filename="engine-config.yaml"),
+            ModelInfo(folder="vae", filename="engine-only.safetensors"),
+        ]
 
     async def shutdown(self) -> None:
         return None
@@ -88,6 +91,12 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
     external_model.parent.mkdir(parents=True)
     external_model.write_bytes(b"style")
+    noofy_config = tmp_path / "Noofy Models" / "configs" / "v1-inference.yaml"
+    noofy_config.parent.mkdir(parents=True)
+    noofy_config.write_text("model:\n  target: ignored\n", encoding="utf-8")
+    external_config = tmp_path / "ComfyUI" / "models" / "configs" / "anything_v3.yaml"
+    external_config.parent.mkdir(parents=True)
+    external_config.write_text("model:\n  target: ignored\n", encoding="utf-8")
     package = _package(
         [
             RequiredModel(folder="checkpoints", filename="base.safetensors", size_bytes=4, verification_level="filename_size"),
@@ -118,6 +127,9 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert by_key["vae/engine-only.safetensors"]["source_label"] == "Visible to engine"
     assert by_key["controlnet/missing.safetensors"]["source_label"] == "Required by workflow"
     assert by_key["controlnet/missing.safetensors"]["downloadable_references"][0]["workflow_id"] == "wf_text"
+    assert "configs/v1-inference.yaml" not in by_key
+    assert "configs/anything_v3.yaml" not in by_key
+    assert "configs/engine-config.yaml" not in by_key
 
 
 def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_path: Path) -> None:

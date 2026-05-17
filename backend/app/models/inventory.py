@@ -37,6 +37,23 @@ from app.models.tags import ModelTagStore
 from app.models.folders import COMFYUI_MODEL_CATEGORIES, ModelFolderSettingsService
 
 
+MODEL_ASSET_SUFFIXES = {
+    ".bin",
+    ".ckpt",
+    ".gguf",
+    ".h5",
+    ".msgpack",
+    ".onnx",
+    ".pb",
+    ".pickle",
+    ".pkl",
+    ".pt",
+    ".pth",
+    ".safetensors",
+    ".tflite",
+}
+
+
 class ModelInventoryService:
     def __init__(
         self,
@@ -213,6 +230,8 @@ class ModelInventoryService:
                         size_bytes = path.stat().st_size
                     except OSError:
                         size_bytes = None
+            if not _is_model_asset_filename(model.filename):
+                continue
             entries[key] = ModelInventoryEntry(
                 model_key=key,
                 filename=model.filename,
@@ -324,7 +343,13 @@ class ModelInventoryService:
             return True
         if file_path.name.startswith("put_"):
             return True
+        if not _is_model_asset_filename(file_path.name):
+            return True
         return ".tmp-" in file_path.name
+
+
+def _is_model_asset_filename(filename: str) -> bool:
+    return Path(filename).suffix.casefold() in MODEL_ASSET_SUFFIXES
 
 
 def _model_type_for(folder: str, model_type: str | None) -> str:
