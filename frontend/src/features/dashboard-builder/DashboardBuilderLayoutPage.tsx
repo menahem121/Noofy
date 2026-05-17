@@ -132,8 +132,7 @@ export function DashboardBuilderLayoutPage({
   const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [movePreview, setMovePreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
   const [dropPreview, setDropPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
-  const [savedFlash, setSavedFlash] = useState<"draft" | "saved" | null>(null);
-  const [savedWorkflowId, setSavedWorkflowId] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState<"draft" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -164,7 +163,6 @@ export function DashboardBuilderLayoutPage({
     setMovePreview(null);
     setDropPreview(null);
     setSavedFlash(null);
-    setSavedWorkflowId(null);
     setSaveError(null);
     setIsSavingDashboard(false);
     resizeStateRef.current = null;
@@ -281,7 +279,6 @@ export function DashboardBuilderLayoutPage({
       schemaRef.current = nextSchema;
       return nextSchema;
     });
-    setSavedWorkflowId(null);
     setSelectedWidgetId(widgetId);
   }
 
@@ -307,7 +304,6 @@ export function DashboardBuilderLayoutPage({
         return withoutLayout;
       }),
     }));
-    setSavedWorkflowId(null);
     setSelectedWidgetId((current) => (current === widgetId ? null : current));
   }
 
@@ -365,7 +361,6 @@ export function DashboardBuilderLayoutPage({
 
     function commitMove(finalLayout: DashboardWidgetLayout | undefined) {
       if (!finalLayout) return;
-      setSavedWorkflowId(null);
       setSchema((current) => {
         const nextSchema = {
           ...current,
@@ -412,7 +407,6 @@ export function DashboardBuilderLayoutPage({
     event.preventDefault();
     event.stopPropagation();
     capturePointer(event.currentTarget, event.pointerId);
-    setSavedWorkflowId(null);
     resizeStateRef.current = {
       widgetId,
       handle,
@@ -466,7 +460,6 @@ export function DashboardBuilderLayoutPage({
   function handleSaveDraft() {
     if (!schemaReady) return;
     saveDashboardDraft(schema);
-    setSavedWorkflowId(null);
     setSaveError(null);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
@@ -479,12 +472,13 @@ export function DashboardBuilderLayoutPage({
     const payload = toBackendPayload(schema);
     setIsSavingDashboard(true);
     setSaveError(null);
+    setSavedFlash(null);
     saveDashboard(targetId, payload)
       .then(() => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         clearDashboardDraft(targetId);
-        setSavedWorkflowId(targetId);
-        setSavedFlash("saved");
+        saveSequenceRef.current += 1;
+        onSaveComplete(targetId);
       })
       .catch((error) => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
@@ -531,7 +525,7 @@ export function DashboardBuilderLayoutPage({
             {savedFlash ? (
               <div className="status-pill status-pill--success" role="status">
                 <span />
-                <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft saved"}</span>
+                <span>Draft saved</span>
               </div>
             ) : saveError ? (
               <div className="status-pill status-pill--error" role="status" title={saveError}>
@@ -556,15 +550,6 @@ export function DashboardBuilderLayoutPage({
               <CheckCircle2 size={16} aria-hidden="true" />
               {isSavingDashboard ? "Saving..." : "Save Dashboard"}
             </button>
-            {savedWorkflowId ? (
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => onSaveComplete(savedWorkflowId)}
-              >
-                Open workflow
-              </button>
-            ) : null}
           </div>
         </header>
 

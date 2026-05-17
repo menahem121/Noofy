@@ -98,7 +98,7 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
   });
 
-  it("clears the local draft and keeps the saved canvas visible after backend save succeeds", async () => {
+  it("clears the local draft and opens the workflow after backend save succeeds", async () => {
     const onSaveComplete = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -122,14 +122,11 @@ describe("DashboardBuilderLayoutPage", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: /save dashboard/i }));
-    await screen.findByText("Dashboard saved");
 
+    await waitFor(() => expect(onSaveComplete).toHaveBeenCalledWith("wf-1"));
+    expect(onSaveComplete).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
-    expect(onSaveComplete).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /open workflow/i }));
-    expect(onSaveComplete).toHaveBeenCalledWith("wf-1");
+    expect(screen.queryByRole("button", { name: /open workflow/i })).not.toBeInTheDocument();
   });
 
   it("does not keep the previous workflow canvas when the workflow id changes", async () => {

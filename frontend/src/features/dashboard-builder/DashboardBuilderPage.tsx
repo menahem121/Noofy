@@ -73,6 +73,34 @@ function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
   };
 }
 
+function reconcileDashboardSchemaForWorkflow(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  let changed = false;
+  const widgets = schema.widgets.map((widget) => {
+    const currentValue = workflow.nodes
+      .flatMap((node) => node.values)
+      .find((value) => value.id === widget.valueId);
+    if (currentValue) return widget;
+
+    const boundValue = workflow.nodes
+      .flatMap((node) => node.values)
+      .find((value) => {
+        if (value.nodeId !== widget.binding.nodeId) return false;
+        if (value.inputName === widget.binding.inputName) return true;
+        return widget.widgetType === "display_image" && value.valueKind === "image_output";
+      });
+    if (!boundValue) return widget;
+
+    changed = true;
+    return {
+      ...widget,
+      valueId: boundValue.id,
+      binding: { nodeId: boundValue.nodeId, inputName: boundValue.inputName },
+    };
+  });
+
+  return changed ? { ...schema, widgets } : schema;
+}
+
 export function DashboardBuilderPage({
   workflowId,
   workflowName,
@@ -165,7 +193,10 @@ export function DashboardBuilderPage({
   useEffect(() => {
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
-    const nextSchema = scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow);
+    const nextSchema = reconcileDashboardSchemaForWorkflow(
+      scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
+      workflow,
+    );
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
     if (firstWidget) {

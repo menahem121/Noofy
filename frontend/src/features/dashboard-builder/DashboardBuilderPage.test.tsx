@@ -100,6 +100,43 @@ function bindableInputsResponse(nodeType: string, currentValue: string) {
   };
 }
 
+function savedDashboardBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "6",
+        node_type: "CLIPTextEncode",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: "a lake",
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+          },
+        ],
+      },
+      {
+        node_id: "3",
+        node_type: "KSampler",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "steps",
+            current_value: 20,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("DashboardBuilderPage", () => {
   const fetchMock = vi.fn();
 
@@ -189,6 +226,77 @@ describe("DashboardBuilderPage", () => {
     expect(onContinue).toHaveBeenCalledWith(
       expect.objectContaining({
         widgets: [expect.objectContaining({ defaultValue: 0.5, min: 0, max: 1, step: 0.25 })],
+      }),
+    );
+  });
+
+  it("opens existing saved widgets in the editor after loading live workflow values", async () => {
+    const savedSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-saved",
+      workflowName: "Saved workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      widgets: [
+        {
+          id: "prompt",
+          valueId: "prompt",
+          binding: { nodeId: "6", inputName: "text" },
+          widgetType: "textarea",
+          title: "Prompt",
+          description: "",
+          orientation: "vertical",
+          group: "simple",
+          defaultValue: "a lake",
+        },
+        {
+          id: "steps",
+          valueId: "steps",
+          binding: { nodeId: "3", inputName: "steps" },
+          widgetType: "int_field",
+          title: "Steps",
+          description: "",
+          orientation: "vertical",
+          group: "advanced",
+          defaultValue: 20,
+        },
+      ],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-saved/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-saved"
+        workflowName="Saved workflow"
+        initialSchema={savedSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Prompt");
+
+    const stepsWidget = screen.getByText("Steps").closest("article");
+    expect(stepsWidget).toBeInTheDocument();
+    fireEvent.click(stepsWidget!);
+
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Steps");
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: expect.arrayContaining([
+          expect.objectContaining({ id: "prompt", valueId: "node-6-text" }),
+          expect.objectContaining({ id: "steps", valueId: "node-3-steps" }),
+        ]),
       }),
     );
   });
