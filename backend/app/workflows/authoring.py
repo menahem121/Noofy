@@ -274,7 +274,9 @@ def _classify_graph_inputs(
             if isinstance(value, list):
                 continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
-            kind = "select" if option_spec.options else _value_kind(input_name, value, node_type)
+            kind = _value_kind(input_name, value, node_type)
+            if option_spec.options and kind != "lora":
+                kind = "select"
             if kind is None:
                 continue
             widget_types = _widget_types_for_kind(kind)

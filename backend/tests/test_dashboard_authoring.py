@@ -424,6 +424,52 @@ def test_get_bindable_inputs_uses_object_info_options_for_dropdowns(tmp_path: Pa
     assert inputs_by_name["scheduler"]["options"] == ["normal", "karras"]
 
 
+@pytest.mark.parametrize("node_type", ["LoraLoader", "LoraLoaderModelOnly"])
+def test_get_bindable_inputs_keeps_comfyui_lora_nodes_as_lora_loader_when_options_exist(
+    node_type: str,
+) -> None:
+    graph = {
+        "12": {
+            "class_type": node_type,
+            "inputs": {
+                "model": ["4", 0],
+                "clip": ["4", 1],
+                "lora_name": "None",
+                "strength_model": 1.0,
+            },
+        }
+    }
+    nodes = _classify_graph_inputs(
+        graph,
+        object_info={
+            node_type: {
+                "input": {
+                    "required": {
+                        "lora_name": [
+                            ["None", "cinematic.safetensors"],
+                            {"tooltip": "The LoRA model to load."},
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    lora_node = nodes[0]
+    inputs_by_name = {inp["input_name"]: inp for inp in lora_node["inputs"]}
+    assert lora_node["node_type"] == node_type
+    assert lora_node["is_lora_node"] is True
+    assert inputs_by_name["lora_name"] == {
+        "input_name": "lora_name",
+        "current_value": "None",
+        "kind": "lora",
+        "suggested_widget_type": "lora_loader",
+        "widget_types": ["lora_loader"],
+        "options": ["None", "cinematic.safetensors"],
+        "hint": "The LoRA model to load.",
+    }
+
+
 def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
     """Bundled workflows are read-only — save must raise DashboardAuthoringError."""
     loader = WorkflowPackageLoader(Path("app/workflows/packages"))
