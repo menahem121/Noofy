@@ -166,9 +166,12 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     return defaults;
   }, [state.packageData]);
 
-  const dashboardVersion = state.packageData?.dashboard?.version ?? "";
   const allControls = useMemo(
     () => state.packageData?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
+    [state.packageData],
+  );
+  const dashboardVersion = useMemo(
+    () => dashboardUserStateVersion(state.packageData),
     [state.packageData],
   );
   const dashboardControlIds = useMemo(() => allControls.map((control) => control.id), [allControls]);
@@ -1284,6 +1287,54 @@ function extractImageUrls(result: JobResult | null) {
     }
   }
   return urls;
+}
+
+function dashboardUserStateVersion(packageData: WorkflowPackageResponse | null): string {
+  if (!packageData) return "";
+
+  const valueStateShape = {
+    inputs: packageData.inputs.map((input) => ({
+      id: input.id,
+      control: input.control,
+      binding: input.binding,
+      default: input.default,
+      validation: input.validation,
+    })),
+    controls: packageData.dashboard.sections.flatMap((section) =>
+      section.controls.map((control) => ({
+        id: control.id,
+        type: control.type,
+        input_id: control.input_id,
+        output_id: control.output_id,
+        group: control.group,
+      })),
+    ),
+  };
+
+  return `${packageData.dashboard.version}:${hashString(stableJson(valueStateShape))}`;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hashString(value: string): string {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function buildDashboardSchemaForEditing(

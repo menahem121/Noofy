@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createDashboardWidgetForValue,
   dashboardDraftKey,
   loadDashboardDraft,
   saveDashboardDraft,
@@ -10,6 +11,40 @@ import {
 } from "./dashboardBuilderContent";
 
 describe("toBackendPayload", () => {
+  it("preserves slider range and decimal step validation", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      widgets: [
+        {
+          id: "ctrl-strength",
+          valueId: "node-3-denoise",
+          binding: { nodeId: "3", inputName: "denoise" },
+          widgetType: "slider",
+          title: "Transformation level",
+          description: "",
+          orientation: "vertical",
+          group: "advanced",
+          defaultValue: 0.5,
+          min: 0,
+          max: 1,
+          step: 0.25,
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs[0]).toMatchObject({
+      id: "ctrl-strength",
+      control: "slider",
+      default: 0.5,
+      validation: { min: 0, max: 1, step: 0.25 },
+    });
+  });
+
   it("writes dropdown choices into input validation", () => {
     const schema: DashboardSchema = {
       version: 1,
@@ -129,6 +164,50 @@ describe("saveDashboardDraft", () => {
 });
 
 describe("workflowFromBindableInputs", () => {
+  it("suggests sliders with image-dimension defaults for width and height inputs", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "5",
+        node_type: "EmptyLatentImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "width",
+            current_value: 1024,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+          {
+            input_name: "height",
+            current_value: 768,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+    ]);
+
+    const [widthValue, heightValue] = workflow.nodes[0].values;
+
+    expect(createDashboardWidgetForValue(widthValue, workflow.nodes[0])).toMatchObject({
+      widgetType: "slider",
+      min: 64,
+      max: 2048,
+      step: 64,
+      defaultValue: 1024,
+    });
+    expect(createDashboardWidgetForValue(heightValue, workflow.nodes[0])).toMatchObject({
+      widgetType: "slider",
+      min: 64,
+      max: 2048,
+      step: 64,
+      defaultValue: 768,
+    });
+  });
+
   it("turns option-enriched ComfyUI inputs into selectable workflow values", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

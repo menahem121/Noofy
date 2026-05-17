@@ -22,6 +22,62 @@ describe("DashboardInputControl", () => {
     fetchMock.mockReset();
   });
 
+  it("renders integer jump sliders with configured min, max, and step", () => {
+    const onChange = vi.fn();
+
+    render(
+      <DashboardInputControl
+        control={{ id: "width", type: "slider", label: "Width", input_id: "width" }}
+        input={{
+          id: "width",
+          label: "Width",
+          control: "slider",
+          binding: { node_id: "5", input_name: "width" },
+          default: 1024,
+          validation: { min: 0, max: 2048, step: 512 },
+        }}
+        value={1024}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const slider = screen.getByRole("slider");
+    expect(slider).toHaveAttribute("min", "0");
+    expect(slider).toHaveAttribute("max", "2048");
+    expect(slider).toHaveAttribute("step", "512");
+
+    fireEvent.change(slider, { target: { value: "1536" } });
+    expect(onChange).toHaveBeenCalledWith(1536);
+  });
+
+  it("renders decimal sliders with configured step size", () => {
+    const onChange = vi.fn();
+
+    render(
+      <DashboardInputControl
+        control={{ id: "strength", type: "slider", label: "Strength", input_id: "strength" }}
+        input={{
+          id: "strength",
+          label: "Strength",
+          control: "slider",
+          binding: { node_id: "3", input_name: "denoise" },
+          default: 0.5,
+          validation: { min: 0, max: 1, step: 0.25 },
+        }}
+        value={0.5}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const slider = screen.getByRole("slider");
+    expect(slider).toHaveAttribute("step", "0.25");
+
+    fireEvent.change(slider, { target: { value: "0.75" } });
+    expect(onChange).toHaveBeenCalledWith(0.75);
+  });
+
   it("shows the uploaded asset original filename in classic image controls", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

@@ -40,7 +40,7 @@ function pruneState(
   const validOutputControlIds = new Set(validControlIds);
   const prunedValues: Record<string, unknown> = {};
   for (const id of validInputIds) {
-    prunedValues[id] = id in state.values ? state.values[id] : packageDefaults[id];
+    prunedValues[id] = packageDefaults[id];
   }
 
   const prunedOverrides: Record<string, { x: number; y: number; w: number; h: number }> = {};
@@ -118,7 +118,7 @@ export function useWorkflowUserState(
         setUserState(merged);
         latestStateRef.current = merged;
         if (pruned.dashboard_version !== remote.dashboard_version) {
-          void saveUserState(workflowId, merged);
+          scheduleSave(merged);
         }
       })
       .catch(() => {

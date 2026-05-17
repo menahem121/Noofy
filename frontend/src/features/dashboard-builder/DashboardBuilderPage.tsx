@@ -30,6 +30,7 @@ import {
   VALUE_KIND_ICONS,
   buildInitialDashboard,
   createDashboardWidgetForValue,
+  defaultNumericRangeForValue,
   loadDashboardDraft,
   saveDashboardDraft,
   widgetTypesForKind,
@@ -226,6 +227,7 @@ export function DashboardBuilderPage({
   );
 
   const selectedValueRecord = selectedValueId ? valueIndex.get(selectedValueId) ?? null : null;
+  const hasValidationErrors = builderReady && schema.widgets.some((widget) => validateWidgetForSave(widget).length > 0);
 
   function handleSelectValue(valueId: string) {
     const record = valueIndex.get(valueId);
@@ -279,14 +281,14 @@ export function DashboardBuilderPage({
   }
 
   function handleSaveDraft() {
-    if (!builderReady) return;
+    if (!builderReady || hasValidationErrors) return;
     saveDashboardDraft(schema);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
   function handleContinue() {
-    if (!builderReady || schema.widgets.length === 0) return;
+    if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
     onContinue(schema);
   }
 
@@ -314,7 +316,7 @@ export function DashboardBuilderPage({
               <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft dashboard"}</span>
             </div>
             <div className="button-row">
-              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady}>
+              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady || hasValidationErrors}>
                 <Save size={15} aria-hidden="true" />
                 Save as draft
               </button>
@@ -322,7 +324,7 @@ export function DashboardBuilderPage({
                 className="primary-button primary-button--compact"
                 type="button"
                 onClick={handleContinue}
-                disabled={!builderReady || schema.widgets.length === 0}
+                disabled={!builderReady || schema.widgets.length === 0 || hasValidationErrors}
               >
                 <ArrowRight size={16} aria-hidden="true" />
                 Continue
@@ -571,6 +573,90 @@ function NodeListItem({
   );
 }
 
+type SliderValidationField = "defaultValue" | "min" | "max" | "step";
+
+interface SliderValidationError {
+  field: SliderValidationField;
+  message: string;
+}
+
+function validateWidgetForSave(widget: DashboardWidget): SliderValidationError[] {
+  return widget.widgetType === "slider" ? validateSliderWidget(widget) : [];
+}
+
+function validateSliderWidget(widget: DashboardWidget): SliderValidationError[] {
+  if (widget.widgetType !== "slider") return [];
+
+  const errors: SliderValidationError[] = [];
+  const defaultValue = finiteNumber(widget.defaultValue);
+  const min = finiteNumber(widget.min);
+  const max = finiteNumber(widget.max);
+  const step = finiteNumber(widget.step);
+
+  if (defaultValue === null) errors.push({ field: "defaultValue", message: "Enter a default value." });
+  if (min === null) errors.push({ field: "min", message: "Enter a minimum value." });
+  if (max === null) errors.push({ field: "max", message: "Enter a maximum value." });
+  if (step === null) {
+    errors.push({ field: "step", message: "Enter a step size." });
+  } else if (step <= 0) {
+    errors.push({ field: "step", message: "Step size must be greater than 0." });
+  }
+
+  if (min !== null && max !== null && max <= min) {
+    errors.push({ field: "max", message: "Maximum value must be greater than minimum value." });
+  }
+
+  if (defaultValue !== null && min !== null && max !== null && max > min) {
+    if (defaultValue < min || defaultValue > max) {
+      errors.push({ field: "defaultValue", message: "Default value must be between the minimum and maximum." });
+    }
+  }
+
+  if (min !== null && max !== null && max > min && step !== null && step > 0) {
+    if (!alignsWithStep(max, min, step)) {
+      errors.push({ field: "max", message: "Maximum value must match the step size from the minimum value." });
+    }
+    if (defaultValue !== null && defaultValue >= min && defaultValue <= max && !alignsWithStep(defaultValue, min, step)) {
+      errors.push({ field: "defaultValue", message: "Default value must match the step size from the minimum value." });
+    }
+  }
+
+  return errors;
+}
+
+function sliderDefaultsForValue(value: WorkflowNodeValue, widget: DashboardWidget): Partial<DashboardWidget> {
+  const range = defaultNumericRangeForValue(value) ?? { min: 0, max: 100, step: 1 };
+  const min = finiteNumber(widget.min) ?? range.min;
+  const max = finiteNumber(widget.max) ?? range.max;
+  const step = positiveFiniteNumber(widget.step) ?? range.step;
+  const defaultValue = finiteNumber(widget.defaultValue) ?? finiteNumber(value.rawValue) ?? min;
+
+  return { min, max, step, defaultValue };
+}
+
+function numericInputValue(value: unknown): number | "" {
+  const numeric = finiteNumber(value);
+  return numeric ?? "";
+}
+
+function parseNumberInput(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function positiveFiniteNumber(value: unknown): number | null {
+  const numeric = finiteNumber(value);
+  return numeric !== null && numeric > 0 ? numeric : null;
+}
+
+function alignsWithStep(value: number, min: number, step: number): boolean {
+  const stepIndex = (value - min) / step;
+  return Math.abs(stepIndex - Math.round(stepIndex)) < 1e-7;
+}
+
 function WidgetEditor({
   widget,
   value,
@@ -585,9 +671,13 @@ function WidgetEditor({
   onRemove: () => void;
 }) {
   const allowedTypes = widgetTypesForKind(value.valueKind);
-  const showSlider = widget.widgetType === "slider" || widget.widgetType === "int_field";
+  const showSliderSettings = widget.widgetType === "slider";
+  const showNumberRange = widget.widgetType === "int_field";
   const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
   const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
+  const sliderErrors = validateSliderWidget(widget);
+  const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
+  const defaultRange = defaultNumericRangeForValue(value);
 
   return (
     <div className="builder-config__inner">
@@ -633,7 +723,10 @@ function WidgetEditor({
             <select
               className="builder-input"
               value={widget.widgetType}
-              onChange={(event) => onPatch({ widgetType: event.target.value as WidgetType })}
+              onChange={(event) => {
+                const widgetType = event.target.value as WidgetType;
+                onPatch(widgetType === "slider" ? { widgetType, ...sliderDefaultsForValue(value, widget) } : { widgetType });
+              }}
             >
               {allowedTypes.map((type) => (
                 <option key={type} value={type}>
@@ -668,7 +761,59 @@ function WidgetEditor({
         </FieldRow>
       </FormCard>
 
-      {showSlider && value.numberRange ? (
+      {showSliderSettings ? (
+        <FormCard title="Slider settings">
+          <div className="builder-config__grid">
+            <FieldRow label="Default value" error={sliderErrorFor("defaultValue")}>
+              <input
+                type="number"
+                className="builder-input"
+                value={numericInputValue(widget.defaultValue)}
+                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+                aria-invalid={Boolean(sliderErrorFor("defaultValue"))}
+                onChange={(event) => onPatch({ defaultValue: parseNumberInput(event.target.value) })}
+              />
+            </FieldRow>
+            <FieldRow label="Minimum value" error={sliderErrorFor("min")}>
+              <input
+                type="number"
+                className="builder-input"
+                value={numericInputValue(widget.min)}
+                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+                aria-invalid={Boolean(sliderErrorFor("min"))}
+                onChange={(event) => onPatch({ min: parseNumberInput(event.target.value) })}
+              />
+            </FieldRow>
+            <FieldRow label="Maximum value" error={sliderErrorFor("max")}>
+              <input
+                type="number"
+                className="builder-input"
+                value={numericInputValue(widget.max)}
+                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+                aria-invalid={Boolean(sliderErrorFor("max"))}
+                onChange={(event) => onPatch({ max: parseNumberInput(event.target.value) })}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Step size"
+              hint="Controls how much the value changes each time the slider moves."
+              error={sliderErrorFor("step")}
+            >
+              <input
+                type="number"
+                className="builder-input"
+                value={numericInputValue(widget.step)}
+                min={0}
+                step="any"
+                aria-invalid={Boolean(sliderErrorFor("step"))}
+                onChange={(event) => onPatch({ step: parseNumberInput(event.target.value) })}
+              />
+            </FieldRow>
+          </div>
+        </FormCard>
+      ) : null}
+
+      {showNumberRange && value.numberRange ? (
         <FormCard title="Numeric range">
           <div className="builder-config__grid builder-config__grid--three">
             <FieldRow label="Minimum">
@@ -725,9 +870,11 @@ function WidgetEditor({
       ) : null}
 
       {widget.widgetType !== "display_image" ? (
-        <FormCard title="Default value">
-          <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
-        </FormCard>
+        widget.widgetType === "slider" ? null : (
+          <FormCard title="Default value">
+            <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
+          </FormCard>
+        )
       ) : null}
 
       <div className="builder-config__binding">
@@ -921,11 +1068,12 @@ function FormCard({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function FieldRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+function FieldRow({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
   return (
     <label className="builder-field">
       <span className="builder-field__label">{label}</span>
       {children}
+      {error ? <span className="builder-field__error">{error}</span> : null}
       {hint ? <span className="builder-field__hint">{hint}</span> : null}
     </label>
   );

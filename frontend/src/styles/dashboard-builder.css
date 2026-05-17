@@ -408,6 +408,13 @@
   line-height: 1.45;
 }
 
+.builder-field__error {
+  margin-top: 2px;
+  color: var(--error);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .builder-input {
   width: 100%;
   padding: 10px 12px;
@@ -424,6 +431,14 @@
 .builder-input:focus {
   border-color: rgba(139, 92, 246, 0.7);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);
+}
+
+.builder-input[aria-invalid="true"] {
+  border-color: rgba(248, 113, 113, 0.72);
+}
+
+.builder-input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16);
 }
 
 .builder-input--textarea {

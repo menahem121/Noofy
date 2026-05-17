@@ -132,7 +132,17 @@ function renderControl(
       );
 
     case "slider":
-      return renderSliderControl(control, input, value, validation, disabled, variant, onChange);
+      return (
+        <DashboardSliderControl
+          control={control}
+          input={input}
+          value={value}
+          validation={validation}
+          disabled={disabled}
+          variant={variant}
+          onChange={onChange}
+        />
+      );
 
     case "toggle":
       return (
@@ -206,24 +216,40 @@ function renderControl(
   }
 }
 
-function renderSliderControl(
-  control: DashboardControlDef,
-  input: WorkflowInputDef,
-  value: unknown,
-  validation: Record<string, unknown>,
-  disabled: boolean,
-  variant: DashboardInputControlVariant,
-  onChange: (value: unknown) => void,
-) {
+function DashboardSliderControl({
+  control,
+  input,
+  value,
+  validation,
+  disabled,
+  variant,
+  onChange,
+}: {
+  control: DashboardControlDef;
+  input: WorkflowInputDef;
+  value: unknown;
+  validation: Record<string, unknown>;
+  disabled: boolean;
+  variant: DashboardInputControlVariant;
+  onChange: (value: unknown) => void;
+}) {
   const min = typeof validation.min === "number" ? validation.min : 0;
-  const max = typeof validation.max === "number" ? validation.max : 100;
-  const step = typeof validation.step === "number" ? validation.step : 1;
-  const numericValue = typeof value === "number" ? value : min;
+  const rawMax = typeof validation.max === "number" ? validation.max : 100;
+  const step = typeof validation.step === "number" && validation.step > 0 ? validation.step : 1;
+  const max = rawMax > min ? rawMax : min + step;
+  const rawNumericValue = typeof value === "number" && Number.isFinite(value) ? value : min;
+  const numericValue = normalizeSliderValue(rawNumericValue, min, max, step);
   const progress = max > min ? clamp(((numericValue - min) / (max - min)) * 100, 0, 100) : 0;
   const unit = sliderUnit(control, input, validation);
   const className = `dashboard-slider dashboard-slider--${variant}${
     variant === "canvas" ? " canvas-widget-slider" : ""
   }`;
+
+  useEffect(() => {
+    if (!disabled && !approximatelyEqual(rawNumericValue, numericValue)) {
+      onChange(numericValue);
+    }
+  }, [disabled, numericValue, onChange, rawNumericValue]);
 
   return (
     <div
@@ -270,6 +296,26 @@ function formatSliderValue(value: number, unit: string): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeSliderValue(value: number, min: number, max: number, step: number): number {
+  const clamped = clamp(value, min, max);
+  const snapped = min + Math.round((clamped - min) / step) * step;
+  return roundSliderValue(clamp(snapped, min, max), step);
+}
+
+function roundSliderValue(value: number, step: number): number {
+  const decimals = decimalPlaces(step);
+  return decimals > 0 ? Number(value.toFixed(Math.min(decimals + 2, 12))) : value;
+}
+
+function decimalPlaces(value: number): number {
+  const [, decimal = ""] = String(value).split(".");
+  return decimal.length;
+}
+
+function approximatelyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 1e-9;
 }
 
 function ModelSelect({

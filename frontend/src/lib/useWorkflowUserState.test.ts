@@ -181,7 +181,7 @@ describe("useWorkflowUserState", () => {
     expect(result.current.hasLayoutOverrides).toBe(false);
   });
 
-  it("prunes stale keys when dashboard_version changes", async () => {
+  it("resets values to creator defaults and prunes stale keys when dashboard_version changes", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),
       dashboard_version: "0.9",
@@ -201,6 +201,8 @@ describe("useWorkflowUserState", () => {
 
     // old-input should be pruned (not in inputIndex)
     expect("old-input" in result.current.values).toBe(false);
+    // Existing values belong to the previous dashboard configuration, so the new creator default is used.
+    expect(result.current.values.prompt).toBe("default");
     // old-ctrl override should be pruned (not in inputIndex)
     expect(result.current.hasLayoutOverrides).toBe(false);
   });

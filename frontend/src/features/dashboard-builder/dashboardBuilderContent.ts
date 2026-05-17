@@ -239,7 +239,7 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "select") return "select";
 
   if (value.valueKind === "number") {
-    return value.numberRange ? "slider" : "int_field";
+    return value.numberRange || isImageDimensionValue(value) ? "slider" : "int_field";
   }
 
   if (value.valueKind === "string") {
@@ -250,6 +250,42 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   }
 
   return "string_field";
+}
+
+export function defaultNumericRangeForValue(value: WorkflowNodeValue): { min: number; max: number; step: number } | undefined {
+  if (value.valueKind !== "number" && value.valueKind !== "seed") return undefined;
+  if (value.numberRange) {
+    return { min: value.numberRange.min, max: value.numberRange.max, step: value.numberRange.step ?? 1 };
+  }
+
+  const raw = typeof value.rawValue === "number" && Number.isFinite(value.rawValue) ? value.rawValue : 0;
+  if (isImageDimensionValue(value)) {
+    const step = 64;
+    return {
+      min: 64,
+      max: Math.max(2048, Math.ceil(raw / step) * step),
+      step,
+    };
+  }
+
+  if (!Number.isInteger(raw)) {
+    return {
+      min: 0,
+      max: raw > 1 ? Math.max(10, Math.ceil(raw * 2)) : 1,
+      step: raw > 1 ? 0.1 : 0.01,
+    };
+  }
+
+  return {
+    min: 0,
+    max: Math.max(100, raw),
+    step: 1,
+  };
+}
+
+function isImageDimensionValue(value: Pick<WorkflowNodeValue, "inputName" | "label">): boolean {
+  const identity = `${value.inputName} ${value.label}`.toLowerCase();
+  return /\b(width|height)\b/.test(identity);
 }
 
 export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): string {
@@ -307,6 +343,7 @@ export function defaultGroupFor(value: WorkflowNodeValue): WidgetGroup {
 
 export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
   const widgetType = suggestWidgetType(value);
+  const numericRange = widgetType === "slider" ? defaultNumericRangeForValue(value) : value.numberRange;
   return {
     id: `ctrl-${value.id}`,
     valueId: value.id,
@@ -318,9 +355,9 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
     group: defaultGroupFor(value),
     defaultValue: value.rawValue,
     options: value.options,
-    min: value.numberRange?.min,
-    max: value.numberRange?.max,
-    step: value.numberRange?.step,
+    min: numericRange?.min,
+    max: numericRange?.max,
+    step: numericRange?.step,
     showDownload: widgetType === "display_image" ? true : undefined,
     drawMask: widgetType === "load_image_mask" ? true : undefined,
   };

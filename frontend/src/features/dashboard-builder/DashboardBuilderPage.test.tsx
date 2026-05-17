@@ -44,6 +44,30 @@ const selectSchema: DashboardSchema = {
   ],
 };
 
+const invalidSliderSchema: DashboardSchema = {
+  version: 1,
+  workflowId: "imported_text_to_image_demo",
+  workflowName: "Text to Image Demo",
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  widgets: [
+    {
+      id: "ctrl-node-3-denoise",
+      valueId: "node-3-denoise",
+      binding: { nodeId: "3", inputName: "denoise" },
+      widgetType: "slider",
+      title: "Transformation level",
+      description: "",
+      orientation: "vertical",
+      group: "advanced",
+      defaultValue: 0.3,
+      min: 0,
+      max: 1,
+      step: 0.25,
+      layout: { x: 0, y: 0, w: 10, h: 4 },
+    },
+  ],
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -134,6 +158,37 @@ describe("DashboardBuilderPage", () => {
             options: ["dpmpp_2m", "uni_pc", "dpm_2"],
           }),
         ],
+      }),
+    );
+  });
+
+  it("validates slider range, step size, and default value inline", async () => {
+    const onContinue = vi.fn();
+
+    render(
+      <DashboardBuilderPage
+        initialSchema={invalidSliderSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Default value must match the step size from the minimum value.")).toBeInTheDocument();
+    expect(screen.getByText("Controls how much the value changes each time the slider moves.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^continue$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save as draft/i })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/default value/i), { target: { value: "0.5" } });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Default value must match the step size from the minimum value.")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: [expect.objectContaining({ defaultValue: 0.5, min: 0, max: 1, step: 0.25 })],
       }),
     );
   });
