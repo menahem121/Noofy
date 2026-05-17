@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -59,6 +59,9 @@ function stageRuntime(stageRoot, runtimeRoot) {
   });
   copyFileSync(path.join(runtimeRoot, runtimeManifestName), path.join(stageRoot, runtimeManifestName));
   mkdirSync(path.join(stageRoot, "backend"), { recursive: true });
+  mkdirSync(path.join(stageRoot, "comfyui"), { recursive: true });
+  writeFileSync(path.join(stageRoot, "comfyui", "main.py"), "");
+  writeFileSync(path.join(stageRoot, "comfyui", "requirements.txt"), "");
   cpSync(path.join(backendSourceRoot, "app"), path.join(stageRoot, "backend", "app"), {
     recursive: true,
     force: true,
@@ -108,11 +111,20 @@ async function startAndStopBackend(stageRoot, target) {
 function packagedBackendEnv(stageRoot, uv, target) {
   const env = { ...process.env };
   for (const key of [
+    "COMFYUI_BASE_URL",
+    "COMFYUI_MANAGED_HOST",
+    "COMFYUI_MANAGED_PORT",
     "COMFYUI_REPO_DIR",
     "COMFYUI_PYTHON_EXECUTABLE",
+    "COMFYUI_RUNTIME_MODE",
+    "COMFYUI_WS_URL",
     "CONDA_PREFIX",
     "NOOFY_BACKEND_DIR",
     "NOOFY_BACKEND_PYTHON",
+    "NOOFY_BACKEND_SIDECAR",
+    "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES",
+    "NOOFY_FORCE_PACKAGED_BACKEND",
+    "NOOFY_PACKAGED_RUNTIME_DIR",
     "PYTHONHOME",
     "PYTHONPATH",
     "VIRTUAL_ENV",
@@ -123,6 +135,8 @@ function packagedBackendEnv(stageRoot, uv, target) {
   env.COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE = path.join(stageRoot, "python", target === "windows-x64" ? "python.exe" : "bin/python3");
   env.NOOFY_UV_EXECUTABLE = uv;
   env.NOOFY_BUNDLED_RESOURCE_DIR = stageRoot;
+  env.NOOFY_BUNDLED_COMFYUI_DIR = path.join(stageRoot, "comfyui");
+  env.NOOFY_BUNDLED_WORKFLOWS_DIR = path.join(stageRoot, "backend", "app", "workflows", "packages");
   env.PYTHONNOUSERSITE = "1";
   return env;
 }

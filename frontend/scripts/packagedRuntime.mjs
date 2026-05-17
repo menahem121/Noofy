@@ -387,16 +387,18 @@ export function verifyTauriBackendResourceMapping() {
   const config = readJson(configPath);
   const resources = config?.bundle?.resources;
   if (!resources || typeof resources !== "object") {
-    throw new Error("Tauri bundle.resources must map Noofy backend files into noofy-runtime.");
+    throw new Error("Tauri bundle.resources must map Noofy runtime resources into noofy-runtime.");
   }
   const expected = {
+    "resources/noofy-runtime": "noofy-runtime",
     "../../backend/app": `noofy-runtime/${backendAppPackagedPath}`,
     "../../backend/pyproject.toml": `noofy-runtime/${backendPyprojectPackagedPath}`,
+    "../../third_party/comfyui": "noofy-runtime/comfyui",
   };
   for (const [source, destination] of Object.entries(expected)) {
     if (resources[source] !== destination) {
       throw new Error(
-        `Tauri backend resource mapping is missing: ${source} must bundle to ${destination}.`,
+        `Tauri runtime resource mapping is missing: ${source} must bundle to ${destination}.`,
       );
     }
   }

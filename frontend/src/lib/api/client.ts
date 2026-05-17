@@ -11,14 +11,28 @@ const DEFAULT_API_BASE_URL = "/api";
 const configuredApiBaseUrl = import.meta.env.VITE_NOOFY_API_BASE_URL as string | undefined;
 const configuredApiToken = import.meta.env.VITE_NOOFY_API_TOKEN as string | undefined;
 
+function isDesktopRuntime() {
+  return Boolean(window.__TAURI_INTERNALS__);
+}
+
+function desktopRuntimeConfig() {
+  const config = window.__NOOFY_RUNTIME_CONFIG__;
+  if (!isDesktopRuntime()) return config;
+  if (!config?.apiBaseUrl || !config?.apiToken) {
+    throw new Error("Noofy desktop is missing its local backend runtime config.");
+  }
+  return config;
+}
+
 export function getApiBaseUrl() {
-  const runtimeBaseUrl = window.__NOOFY_RUNTIME_CONFIG__?.apiBaseUrl;
+  const runtimeBaseUrl = desktopRuntimeConfig()?.apiBaseUrl;
   const baseUrl = runtimeBaseUrl || configuredApiBaseUrl || DEFAULT_API_BASE_URL;
   return baseUrl.replace(/\/$/, "");
 }
 
 export function getApiToken() {
-  return window.__NOOFY_RUNTIME_CONFIG__?.apiToken || configuredApiToken || null;
+  const runtimeToken = desktopRuntimeConfig()?.apiToken;
+  return runtimeToken || (isDesktopRuntime() ? null : configuredApiToken) || null;
 }
 
 export function apiHeaders(contentType?: string) {

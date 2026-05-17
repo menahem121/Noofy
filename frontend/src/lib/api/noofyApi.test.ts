@@ -42,12 +42,14 @@ describe("noofyApi", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     delete window.__NOOFY_RUNTIME_CONFIG__;
+    delete window.__TAURI_INTERNALS__;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     delete window.__NOOFY_RUNTIME_CONFIG__;
+    delete window.__TAURI_INTERNALS__;
   });
 
   it("works without a token for browser development", async () => {
@@ -102,6 +104,13 @@ describe("noofyApi", () => {
         Accept: "application/json",
       },
     });
+  });
+
+  it("fails closed in desktop mode without runtime config", async () => {
+    window.__TAURI_INTERNALS__ = {};
+
+    await expect(fetchRuntimeStatus()).rejects.toThrow("local backend runtime config");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fetches resource snapshots through the Noofy backend API", async () => {

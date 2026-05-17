@@ -205,6 +205,7 @@ fn main() {
         None,
     ))));
     let pending_for_single_instance = pending_open_file.clone();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     let pending_for_run_event = pending_open_file.clone();
 
     tauri::Builder::default()
@@ -261,7 +262,10 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build Noofy Tauri application")
         .run(move |app_handle, event| {
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            let _ = app_handle;
             match event {
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
                 RunEvent::Opened { urls } => {
                     if let Some(file) = first_noofy_file_from_urls(urls) {
                         handle_noofy_open_request(app_handle, &pending_for_run_event, file);
@@ -309,6 +313,7 @@ where
         .find_map(|arg| noofy_file_from_arg(&arg, cwd))
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn first_noofy_file_from_urls(urls: Vec<url::Url>) -> Option<NoofyOpenFile> {
     urls.into_iter().find_map(|url| {
         let path = url.to_file_path().ok()?;
@@ -357,7 +362,8 @@ fn validate_noofy_file_path(path: &Path) -> Result<String, String> {
     if !extension.eq_ignore_ascii_case("noofy") {
         return Err("selected file is not a .noofy workflow package".to_string());
     }
-    let metadata = fs::metadata(path).map_err(|e| format!("workflow package is unavailable: {e}"))?;
+    let metadata =
+        fs::metadata(path).map_err(|e| format!("workflow package is unavailable: {e}"))?;
     if !metadata.is_file() {
         return Err("workflow package path is not a file".to_string());
     }
@@ -401,21 +407,29 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
     })?;
 
     let (handoff_sender, handoff_receiver) = mpsc::channel();
+    let stdout_api_token = api_token.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
             if line.starts_with(BACKEND_HANDOFF_PREFIX) {
                 let _ = handoff_sender.send(line);
             } else {
-                eprintln!("[noofy-backend] {line}");
+                eprintln!(
+                    "[noofy-backend] {}",
+                    redact_backend_log_line(&line, &stdout_api_token)
+                );
             }
         }
     });
 
+    let stderr_api_token = api_token.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            eprintln!("[noofy-backend] {line}");
+            eprintln!(
+                "[noofy-backend] {}",
+                redact_backend_log_line(&line, &stderr_api_token)
+            );
         }
     });
 
@@ -753,14 +767,64 @@ fn validate_packaged_runtime_layout(
             "Packaged Noofy runtime manifest backend paths do not match the bundled resource layout.",
         ));
     }
+    let manifest_python = manifest_runtime_file(
+        &manifest,
+        "/python/executable",
+        &layout.root_dir,
+        "Packaged Python executable",
+    )?;
+    let manifest_uv = manifest_runtime_file(
+        &manifest,
+        "/uv/executable",
+        &layout.root_dir,
+        "Packaged uv executable",
+    )?;
+    let Some(layout_python) = &layout.python_executable else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Packaged Noofy runtime manifest lists Python, but no bundled Python candidate was found.",
+        ));
+    };
+    let Some(layout_uv) = &layout.uv_executable else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Packaged Noofy runtime manifest lists uv, but no bundled uv candidate was found.",
+        ));
+    };
+    if !same_file(&manifest_python, layout_python)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Packaged Noofy runtime manifest Python path does not match the bundled launcher path. Manifest: {}; launcher: {}.",
+                manifest_python.display(),
+                layout_python.display(),
+            ),
+        ));
+    }
+    if !same_file(&manifest_uv, layout_uv)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Packaged Noofy runtime manifest uv path does not match the bundled launcher path. Manifest: {}; launcher: {}.",
+                manifest_uv.display(),
+                layout_uv.display(),
+            ),
+        ));
+    }
 
     for (path, label) in [
         (
             layout.backend_dir.join("app").join("__main__.py"),
             "backend module entrypoint",
         ),
-        (layout.backend_dir.join("pyproject.toml"), "backend metadata"),
-        (layout.comfyui_dir.join("main.py"), "bundled ComfyUI entrypoint"),
+        (
+            layout.backend_dir.join("pyproject.toml"),
+            "backend metadata",
+        ),
+        (
+            layout.comfyui_dir.join("main.py"),
+            "bundled ComfyUI entrypoint",
+        ),
         (
             layout.workflows_dir.clone(),
             "bundled starter workflow packages",
@@ -778,6 +842,46 @@ fn validate_packaged_runtime_layout(
     }
 
     Ok(())
+}
+
+fn manifest_runtime_file(
+    manifest: &serde_json::Value,
+    pointer: &str,
+    root_dir: &Path,
+    label: &str,
+) -> io::Result<PathBuf> {
+    let relative = manifest
+        .pointer(pointer)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{label} path is missing from the packaged runtime manifest."),
+            )
+        })?;
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} path must stay inside the packaged runtime root: {relative}."),
+        ));
+    }
+    let path = root_dir.join(relative_path);
+    if !path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{label} is missing: {}.", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
+fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
+    Ok(left.canonicalize()? == right.canonicalize()?)
 }
 
 fn supported_packaged_runtime_target() -> io::Result<&'static str> {
@@ -948,6 +1052,13 @@ fn runtime_config_script(
     Ok(format!("window.__NOOFY_RUNTIME_CONFIG__ = {config};"))
 }
 
+fn redact_backend_log_line(line: &str, api_token: &str) -> String {
+    if api_token.is_empty() {
+        return line.to_string();
+    }
+    line.replace(api_token, "[redacted]")
+}
+
 fn terminate_backend(process: &Arc<Mutex<Option<Child>>>) {
     let Ok(mut guard) = process.lock() else {
         return;
@@ -984,6 +1095,16 @@ mod tests {
 
     fn write_runtime_manifest(runtime: &Path) {
         let target = supported_packaged_runtime_target().expect("supported test host");
+        let python = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv = if cfg!(windows) {
+            "python/Scripts/uv.exe"
+        } else {
+            "python/bin/uv"
+        };
         fs::write(
             runtime.join(RUNTIME_MANIFEST_NAME),
             format!(
@@ -991,6 +1112,12 @@ mod tests {
   "schemaVersion": 1,
   "layoutVersion": 1,
   "target": "{target}",
+  "python": {{
+    "executable": "{python}"
+  }},
+  "uv": {{
+    "executable": "{uv}"
+  }},
   "backend": {{
     "packagedPath": "backend",
     "appPath": "backend/app",
@@ -1146,7 +1273,10 @@ mod tests {
             "NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES".to_string(),
             OsString::from("0"),
         );
-        env.insert("COMFYUI_RUNTIME_MODE".to_string(), OsString::from("external"));
+        env.insert(
+            "COMFYUI_RUNTIME_MODE".to_string(),
+            OsString::from("external"),
+        );
         env.insert(
             "NOOFY_BACKEND_DIR".to_string(),
             OsString::from("/tmp/noofy-repo/backend"),
@@ -1166,7 +1296,9 @@ mod tests {
         assert!(spec
             .remove_env
             .contains(&"NOOFY_BACKEND_SIDECAR".to_string()));
-        assert!(spec.remove_env.contains(&"COMFYUI_RUNTIME_MODE".to_string()));
+        assert!(spec
+            .remove_env
+            .contains(&"COMFYUI_RUNTIME_MODE".to_string()));
     }
 
     #[test]
@@ -1232,6 +1364,83 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains("bundled uv executable"));
+    }
+
+    #[test]
+    fn packaged_backend_rejects_manifest_python_path_mismatch() {
+        let resource_dir = temp_dir("manifest-python-mismatch");
+        let runtime = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
+        let python = if cfg!(windows) {
+            runtime.join("python").join("python.exe")
+        } else {
+            runtime.join("python").join("bin").join("python3")
+        };
+        let uv = if cfg!(windows) {
+            runtime.join("python").join("Scripts").join("uv.exe")
+        } else {
+            runtime.join("python").join("bin").join("uv")
+        };
+        touch(&python);
+        touch(&uv);
+        touch(&runtime.join("python").join("other-python"));
+        touch(&runtime.join("backend").join("app").join("__main__.py"));
+        touch(&runtime.join("backend").join("pyproject.toml"));
+        touch(
+            &runtime
+                .join("backend")
+                .join("app")
+                .join("workflows")
+                .join("packages")
+                .join(".keep"),
+        );
+        touch(&runtime.join("comfyui").join("main.py"));
+        let target = supported_packaged_runtime_target().expect("supported test host");
+        let manifest_python = "python/other-python";
+        let manifest_uv = if cfg!(windows) {
+            "python/Scripts/uv.exe"
+        } else {
+            "python/bin/uv"
+        };
+        fs::write(
+            runtime.join(RUNTIME_MANIFEST_NAME),
+            format!(
+                r#"{{
+  "schemaVersion": 1,
+  "layoutVersion": 1,
+  "target": "{target}",
+  "python": {{
+    "executable": "{manifest_python}"
+  }},
+  "uv": {{
+    "executable": "{manifest_uv}"
+  }},
+  "backend": {{
+    "packagedPath": "backend",
+    "appPath": "backend/app",
+    "pyprojectPath": "backend/pyproject.toml"
+  }}
+}}
+"#
+            ),
+        )
+        .expect("write runtime manifest");
+
+        let error = backend_launch_spec(&context(resource_dir, true))
+            .expect_err("packaged launch should reject mismatched manifest paths");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("manifest Python path"));
+    }
+
+    #[test]
+    fn backend_log_redaction_removes_local_api_token() {
+        assert_eq!(
+            redact_backend_log_line(
+                "GET /api/jobs/job-1/events?token=secret-token HTTP/1.1",
+                "secret-token",
+            ),
+            "GET /api/jobs/job-1/events?token=[redacted] HTTP/1.1"
+        );
     }
 
     #[test]

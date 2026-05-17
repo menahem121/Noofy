@@ -64,16 +64,23 @@ def test_tauri_main_rs_uses_backend_dir():
 
 
 def test_tauri_conf_maps_backend_app():
-    """tauri.conf.json bundle resources must map backend/app into noofy-runtime/backend/app."""
+    """tauri.conf.json bundle resources must map backend and runtime assets into noofy-runtime."""
     tauri_conf = REPO_ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
     if not tauri_conf.exists():
         return
-    content = tauri_conf.read_text()
-    assert "backend/app" in content, (
+    config = json.loads(tauri_conf.read_text())
+    resources = config.get("bundle", {}).get("resources", {})
+    assert resources.get("resources/noofy-runtime") == "noofy-runtime", (
+        "frontend/src-tauri/tauri.conf.json must bundle the prepared Noofy runtime resources"
+    )
+    assert resources.get("../../backend/app") == "noofy-runtime/backend/app", (
         "frontend/src-tauri/tauri.conf.json must contain a bundle.resources entry for backend/app"
     )
-    assert "noofy-runtime" in content, (
-        "frontend/src-tauri/tauri.conf.json must reference noofy-runtime"
+    assert resources.get("../../backend/pyproject.toml") == "noofy-runtime/backend/pyproject.toml", (
+        "frontend/src-tauri/tauri.conf.json must bundle backend/pyproject.toml"
+    )
+    assert resources.get("../../third_party/comfyui") == "noofy-runtime/comfyui", (
+        "frontend/src-tauri/tauri.conf.json must bundle the managed ComfyUI source tree"
     )
 
 
