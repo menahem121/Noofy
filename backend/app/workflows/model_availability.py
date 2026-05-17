@@ -28,6 +28,10 @@ from app.settings.api_keys import (
     CredentialStoreUnavailable,
     KeyringCredentialStore,
 )
+from app.workflows.model_identity_store import (
+    LocalModelIdentityContext,
+    LocalModelIdentityStore,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
 
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
@@ -504,6 +508,7 @@ class ModelAvailabilityService:
         noofy_models_dir: Path,
         log_store: DiagnosticsSink,
         provider_resolver: ProviderModelResolver | None = None,
+        local_model_identity_store: LocalModelIdentityStore | None = None,
     ) -> None:
         self.model_roots = model_roots
         self.noofy_models_dir = noofy_models_dir
@@ -511,6 +516,7 @@ class ModelAvailabilityService:
         self.provider_resolver = provider_resolver or ProviderModelResolver(
             log_store=log_store
         )
+        self.local_model_identity_store = local_model_identity_store
 
     def configure_model_roots(
         self,
@@ -832,9 +838,16 @@ class ModelAvailabilityService:
             status = self._candidate_status(
                 model,
                 candidate,
+                root=root,
                 verify_hashes=verify_hashes,
             )
             if status == "available":
+                matched_sha256 = (
+                    self._cached_sha256_file(candidate, root=root)
+                    if verify_hashes
+                    and model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
+                    else None
+                )
                 return RequiredModelAvailability(
                     **base,
                     status="available",
@@ -842,10 +855,7 @@ class ModelAvailabilityService:
                     asset_ownership=self._ownership_for_root(root),
                     source_path=str(candidate),
                     matched_root=str(root),
-                    matched_sha256=_sha256_file(candidate)
-                    if verify_hashes
-                    and model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
-                    else None,
+                    matched_sha256=matched_sha256,
                     matched_size_bytes=candidate.stat().st_size,
                 )
 
@@ -883,6 +893,7 @@ class ModelAvailabilityService:
         model: RequiredModel,
         path: Path,
         *,
+        root: Path,
         verify_hashes: bool = True,
     ) -> str:
         if not path.is_file():
@@ -895,7 +906,7 @@ class ModelAvailabilityService:
                 return "possible_match"
             if not verify_hashes:
                 return "possible_match"
-            return "available" if _sha256_file(path) == _normalize_sha256(model.checksum) else "possible_match"
+            return "available" if self._cached_sha256_file(path, root=root) == _normalize_sha256(model.checksum) else "possible_match"
         if model.verification_level is ModelVerificationLevel.FILENAME_SIZE:
             return "available" if model.size_bytes is not None and size == model.size_bytes else "possible_match"
         return "possible_match"
@@ -983,7 +994,7 @@ class ModelAvailabilityService:
         self._ensure_disk_space(model.size_bytes)
         final_path = _safe_join_model_path(self.noofy_models_dir, model.folder, model.filename)
         if final_path.exists():
-            current = self._availability_for(model)
+            current = self._availability_for(model, deep_search=False, verify_hashes=True)
             if current.status == "available":
                 return False
             raise ModelAvailabilityError(
@@ -992,7 +1003,7 @@ class ModelAvailabilityService:
         final_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_path_inside_noofy_models(final_path)
 
-        await self._download_verified_with_fallback(
+        downloaded_sha256 = await self._download_verified_with_fallback(
             urls,
             model,
             final_path,
@@ -1009,7 +1020,9 @@ class ModelAvailabilityService:
                 "folder": model.folder,
                 "filename": model.filename,
                 "size_bytes": final_path.stat().st_size,
-                "sha256": f"sha256:{_sha256_file(final_path)}",
+                "sha256": f"sha256:{downloaded_sha256}"
+                if downloaded_sha256
+                else None,
             },
         )
         return True
@@ -1042,7 +1055,7 @@ class ModelAvailabilityService:
         cancel_event: asyncio.Event | None = None,
         model_index: int | None = None,
         total_models: int | None = None,
-    ) -> None:
+    ) -> str | None:
         last_error: Exception | None = None
         for index, url in enumerate(urls):
             transaction = self._begin_download_transaction(model)
@@ -1113,7 +1126,7 @@ class ModelAvailabilityService:
                 )
                 if cancel_event is not None and cancel_event.is_set():
                     raise ModelDownloadCanceled("Download canceled.")
-                self._verify_download(model, transaction.part_path)
+                part_sha256 = self._verify_download(model, transaction.part_path)
                 transaction.write_state(
                     status="placing",
                     bytes_downloaded=transaction.part_path.stat().st_size,
@@ -1122,12 +1135,22 @@ class ModelAvailabilityService:
                 os.replace(transaction.part_path, final_path)
                 self._ensure_path_inside_noofy_models(final_path)
                 try:
-                    self._verify_download(model, final_path)
+                    final_sha256 = self._verify_download(
+                        model,
+                        final_path,
+                        known_sha256=part_sha256,
+                    )
+                    if final_sha256:
+                        self._remember_cached_sha256(
+                            final_path,
+                            root=self.noofy_models_dir,
+                            sha256=final_sha256,
+                        )
                 except Exception:
                     if final_path.exists():
                         final_path.unlink()
                     raise
-                return
+                return final_sha256
             except ModelDownloadCanceled:
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
@@ -1180,19 +1203,104 @@ class ModelAvailabilityService:
             return
         shutil.rmtree(transaction_dir, ignore_errors=True)
 
-    def _verify_download(self, model: RequiredModel, path: Path) -> None:
+    def _verify_download(
+        self,
+        model: RequiredModel,
+        path: Path,
+        *,
+        known_sha256: str | None = None,
+    ) -> str | None:
         size = path.stat().st_size
         if model.size_bytes is not None and size != model.size_bytes:
             raise ModelAvailabilityError(
                 f"Downloaded model size mismatch: expected {model.size_bytes}, got {size}."
             )
         if model.checksum is not None:
-            actual = _sha256_file(path)
+            actual = known_sha256 or _sha256_file(path)
             expected = _normalize_sha256(model.checksum)
             if actual != expected:
                 raise ModelAvailabilityError(
                     f"Downloaded model hash mismatch: expected {expected}, got {actual}."
                 )
+            return actual
+        return known_sha256
+
+    def _cached_sha256_file(self, path: Path, *, root: Path) -> str:
+        context = self._local_identity_context(path, root=root)
+        if self.local_model_identity_store is not None:
+            try:
+                cached = self.local_model_identity_store.get_valid_hash(path, context)
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Local model hash cache lookup failed",
+                    "workflow.models.cache",
+                    details={
+                        "path": str(path),
+                        "root_type": context.root_type,
+                        "relative_path": context.relative_path,
+                        "error": str(exc),
+                    },
+                )
+                cached = None
+            if cached:
+                return cached
+        self.log_store.add(
+            "info",
+            "Computing local model SHA-256",
+            "workflow.models.cache",
+            details={
+                "path": str(path),
+                "root_type": context.root_type,
+                "relative_path": context.relative_path,
+            },
+        )
+        sha256 = _sha256_file(path)
+        self._remember_cached_sha256(path, root=root, sha256=sha256)
+        return sha256
+
+    def _remember_cached_sha256(self, path: Path, *, root: Path, sha256: str) -> None:
+        if self.local_model_identity_store is None:
+            return
+        context = self._local_identity_context(path, root=root)
+        try:
+            self.local_model_identity_store.remember_hash(path, context, sha256)
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Local model hash cache store failed",
+                "workflow.models.cache",
+                details={
+                    "path": str(path),
+                    "root_type": context.root_type,
+                    "relative_path": context.relative_path,
+                    "error": str(exc),
+                },
+            )
+
+    def _local_identity_context(
+        self,
+        path: Path,
+        *,
+        root: Path,
+    ) -> LocalModelIdentityContext:
+        root_resolved = root.expanduser().resolve(strict=False)
+        path_resolved = path.expanduser().resolve(strict=False)
+        try:
+            relative_path = path_resolved.relative_to(root_resolved).as_posix()
+        except ValueError:
+            relative_path = Path(path.name).as_posix()
+        noofy_root = self.noofy_models_dir.expanduser().resolve(strict=False)
+        root_type = (
+            "noofy_models"
+            if root_resolved == noofy_root
+            else "external_comfyui_models"
+        )
+        return LocalModelIdentityContext(
+            root_type=root_type,
+            root_identifier=str(root_resolved),
+            relative_path=relative_path,
+        )
 
     def _ensure_disk_space(self, required_bytes: int) -> None:
         root = self.noofy_models_dir

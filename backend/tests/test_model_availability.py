@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -16,6 +17,7 @@ from app.workflows.model_availability import (
     ProviderModelResolver,
     ProviderRateLimited,
 )
+from app.workflows.model_identity_store import LocalModelIdentityStore
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
 
 
@@ -45,6 +47,7 @@ def _service(
     external_root: Path | None = None,
     provider_resolver: ProviderModelResolver | None = None,
     log_store: LogStore | None = None,
+    local_model_identity_store: LocalModelIdentityStore | None = None,
 ) -> ModelAvailabilityService:
     roots = [noofy_root]
     if external_root is not None:
@@ -54,6 +57,7 @@ def _service(
         noofy_models_dir=noofy_root,
         log_store=log_store or LogStore(),
         provider_resolver=provider_resolver,
+        local_model_identity_store=local_model_identity_store,
     )
 
 
@@ -176,6 +180,290 @@ def test_fast_model_summary_skips_sha256_file_hashing(tmp_path: Path) -> None:
     assert full_summary.models[0].matched_sha256 == sha
 
 
+def test_model_summary_persists_and_reuses_cached_sha256(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+    original_sha256_file = availability_module._sha256_file
+    calls = 0
+
+    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+        nonlocal calls
+        calls += 1
+        return original_sha256_file(path, chunk_size)
+
+    monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
+
+    first = service.summarize(package)
+
+    assert first.models[0].status == "available"
+    assert first.models[0].matched_sha256 == sha
+    assert calls == 1
+
+    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+        raise AssertionError("unchanged cached model should not be re-hashed")
+
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+
+    second = service.summarize(package)
+
+    assert second.models[0].status == "available"
+    assert second.models[0].matched_sha256 == sha
+
+
+def test_model_summary_invalidates_cache_when_size_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_payload = b"old"
+    updated_payload = b"new-model-bytes"
+    initial_sha = hashlib.sha256(initial_payload).hexdigest()
+    updated_sha = hashlib.sha256(updated_payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(initial_payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    original_sha256_file = availability_module._sha256_file
+    calls = 0
+
+    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+        nonlocal calls
+        calls += 1
+        return original_sha256_file(path, chunk_size)
+
+    monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
+
+    service.summarize(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="demo.safetensors",
+                    checksum=f"sha256:{initial_sha}",
+                    size_bytes=len(initial_payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+    model_path.write_bytes(updated_payload)
+
+    summary = service.summarize(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="demo.safetensors",
+                    checksum=f"sha256:{updated_sha}",
+                    size_bytes=len(updated_payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert summary.models[0].status == "available"
+    assert summary.models[0].matched_sha256 == updated_sha
+    assert calls == 2
+
+
+def test_model_summary_invalidates_cache_when_mtime_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"same-model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    original_sha256_file = availability_module._sha256_file
+    calls = 0
+
+    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+        nonlocal calls
+        calls += 1
+        return original_sha256_file(path, chunk_size)
+
+    monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    service.summarize(package)
+    stat = model_path.stat()
+    os.utime(model_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    summary = service.summarize(package)
+
+    assert summary.models[0].status == "available"
+    assert calls == 2
+
+
+def test_model_summary_invalidates_cache_when_inode_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"same-model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    original_sha256_file = availability_module._sha256_file
+    calls = 0
+
+    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+        nonlocal calls
+        calls += 1
+        return original_sha256_file(path, chunk_size)
+
+    monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    service.summarize(package)
+    previous_stat = model_path.stat()
+    model_path.unlink()
+    model_path.write_bytes(payload)
+    os.utime(model_path, ns=(previous_stat.st_atime_ns, previous_stat.st_mtime_ns))
+    if model_path.stat().st_ino == previous_stat.st_ino:
+        pytest.skip("filesystem reused the inode")
+
+    summary = service.summarize(package)
+
+    assert summary.models[0].status == "available"
+    assert calls == 2
+
+
+def test_model_summary_reuses_cache_after_noofy_models_folder_moves(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    old_root = tmp_path / "Old Noofy Models"
+    old_path = old_root / "checkpoints" / "demo.safetensors"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_bytes(payload)
+    old_stat = old_path.stat()
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    old_service = _service(noofy_root=old_root, local_model_identity_store=store)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+    old_service.summarize(package)
+    new_root = tmp_path / "New Noofy Models"
+    new_path = new_root / "checkpoints" / "demo.safetensors"
+    new_path.parent.mkdir(parents=True)
+    new_path.write_bytes(payload)
+    os.utime(new_path, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
+    new_service = _service(noofy_root=new_root, local_model_identity_store=store)
+
+    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+        raise AssertionError("moved model should reuse cached hash")
+
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+
+    summary = new_service.summarize(package)
+
+    assert summary.models[0].status == "available"
+    assert summary.models[0].matched_sha256 == sha
+
+
+def test_external_comfyui_models_are_cached_but_remain_user_local(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"external-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    external_root = tmp_path / "ComfyUI" / "models"
+    model_path = external_root / "loras" / "style.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(
+        noofy_root=noofy_root,
+        external_root=external_root,
+        local_model_identity_store=store,
+    )
+    package = _package(
+        [
+            RequiredModel(
+                folder="loras",
+                filename="style.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    first = service.summarize(package)
+    assert first.models[0].status == "available"
+    assert first.models[0].asset_ownership is AssetOwnership.USER_LOCAL
+
+    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+        raise AssertionError("external cached model should not be re-hashed")
+
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+    second = service.summarize(package)
+
+    assert second.models[0].status == "available"
+    assert second.models[0].asset_ownership is AssetOwnership.USER_LOCAL
+
+
 @pytest.mark.anyio
 async def test_download_uses_part_file_then_atomic_final_path(
     tmp_path: Path,
@@ -230,6 +518,58 @@ async def test_download_uses_part_file_then_atomic_final_path(
     assert not seen_part_paths[0].parent.exists()
     assert not list((noofy_root / ".downloads").glob("**/*"))
     assert result.model_summary.models[0].status == "available"
+
+
+@pytest.mark.anyio
+async def test_downloaded_model_final_hash_is_cached_for_future_summaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"downloaded-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    original_sha256_file = availability_module._sha256_file
+    calls = 0
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+        nonlocal calls
+        calls += 1
+        return original_sha256_file(path, chunk_size)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
+    package = _package(
+        [
+            RequiredModel(
+                folder="upscale_models",
+                filename="upscale.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+                source_urls=["https://huggingface.co/example/upscale.safetensors"],
+            )
+        ]
+    )
+
+    result = await service.download_missing(package)
+
+    assert result.downloaded_count == 1
+    assert calls == 1
+
+    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+        raise AssertionError("downloaded cached model should not be re-hashed")
+
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+    summary = service.summarize(package)
+
+    assert summary.models[0].status == "available"
+    assert summary.models[0].matched_sha256 == sha
 
 
 @pytest.mark.anyio

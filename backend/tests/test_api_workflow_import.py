@@ -377,6 +377,8 @@ def test_preview_workflow_import_verifies_exact_local_model_before_prompting(tmp
         engine="comfyui",
         required_models=[
             RequiredModel(
+                node_id="loader-1",
+                input_name="ckpt_name",
                 folder="checkpoints",
                 filename="model.safetensors",
                 checksum=f"sha256:{sha}",
@@ -406,13 +408,16 @@ def test_preview_workflow_import_verifies_exact_local_model_before_prompting(tmp
     assert preview.model_summary is not None
     assert preview.model_summary.ready_to_run is False
     assert preview.model_summary.models[0].status == "checking"
+    assert preview.model_summary.models[0].requirement_id == "loader-1:ckpt_name:checkpoints/model.safetensors"
     verification = service.workflow_import_orchestrator.import_model_verification_status(
         preview.import_session_id
     )
     assert verification.status == "completed"
     assert verification.model_summary is not None
     assert verification.model_summary.ready_to_run is True
+    assert len(verification.model_summary.models) == 1
     assert verification.model_summary.models[0].status == "available"
+    assert verification.model_summary.models[0].requirement_id == "loader-1:ckpt_name:checkpoints/model.safetensors"
     assert verification.model_summary.models[0].matched_sha256 == sha
 
 

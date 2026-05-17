@@ -1077,6 +1077,10 @@ describe("HomePage", () => {
       }),
     );
     const readyButton = await screen.findByRole("button", { name: "Open Workflow" });
+    expect(screen.queryByRole("progressbar", { name: "Model verification progress" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download Missing Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel Import" })).not.toBeInTheDocument();
     fireEvent.click(readyButton);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-ready/commit", {

@@ -22,6 +22,9 @@ export default defineConfig({
     host: tauriDevHost || "127.0.0.1",
     port: 5173,
     strictPort: true,
+    headers: {
+      "Cache-Control": "no-store",
+    },
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${devBackendPort}`,

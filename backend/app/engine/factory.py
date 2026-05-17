@@ -73,6 +73,8 @@ from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.model_identity_store import LocalModelIdentityStore
 from app.workflows.user_state import UserStateService
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -418,6 +420,25 @@ def create_default_engine_service() -> EngineService:
         workflow_loader=loader,
         log_store=log_store,
     )
+    try:
+        model_identity_store = LocalModelIdentityStore(
+            paths.model_store_dir / "identity" / "local-model-identities.db",
+            log_store=log_store,
+        )
+    except Exception as exc:
+        model_identity_store = None
+        log_store.add(
+            "warning",
+            "Local model hash cache could not be opened; model verification will continue without cache",
+            "workflow.models.cache",
+            details={"error": str(exc)},
+        )
+    model_availability_service = ModelAvailabilityService(
+        model_roots=model_roots,
+        noofy_models_dir=noofy_models_dir,
+        log_store=log_store,
+        local_model_identity_store=model_identity_store,
+    )
     service = EngineService(
         loader,
         validator,
@@ -448,6 +469,7 @@ def create_default_engine_service() -> EngineService:
             workflow_library_store=workflow_library_store,
         ),
         model_roots_ref=model_roots,
+        model_availability_service=model_availability_service,
         workflow_library_store=workflow_library_store,
         history_service=history_service,
     )

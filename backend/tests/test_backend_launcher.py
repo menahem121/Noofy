@@ -21,13 +21,29 @@ def test_backend_log_config_filters_resource_monitor_access_logs() -> None:
     assert log_config["handlers"]["access"]["filters"] == ["noofy_resource_monitor"]
 
 
-def test_resource_monitor_access_log_filter_only_suppresses_resource_polling() -> None:
+def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() -> None:
     access_filter = SuppressResourceMonitorAccessLogFilter()
     resources_record = logging_record(("127.0.0.1:1234", "GET", "/api/resources", "1.1", 200))
+    verification_record = logging_record((
+        "127.0.0.1:1234",
+        "GET",
+        "/api/workflows/import/import-abc/model-verification",
+        "1.1",
+        200,
+    ))
     runtime_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime", "1.1", 200))
+    import_preview_record = logging_record((
+        "127.0.0.1:1234",
+        "POST",
+        "/api/workflows/import/preview",
+        "1.1",
+        200,
+    ))
 
     assert access_filter.filter(resources_record) is False
+    assert access_filter.filter(verification_record) is False
     assert access_filter.filter(runtime_record) is True
+    assert access_filter.filter(import_preview_record) is True
 
 
 def test_backend_module_starts_on_free_port_and_serves_paths() -> None:

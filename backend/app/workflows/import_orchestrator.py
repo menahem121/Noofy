@@ -91,6 +91,12 @@ def _download_progress_status_label(status: str) -> str:
     }.get(status, status.replace("_", " ").title())
 
 
+def _requirement_id(model: RequiredModel) -> str:
+    if model.node_id and model.input_name:
+        return f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}"
+    return f"{model.folder}/{model.filename}"
+
+
 class WorkflowImportOrchestrator:
     """Stateful orchestrator for staged workflow import and per-import model downloads."""
 
@@ -686,7 +692,7 @@ class WorkflowImportOrchestrator:
         if not source_urls and getattr(model, "source_url", None):
             source_urls = [str(model.source_url)]
         return RequiredModelAvailability(
-            requirement_id=f"{model.folder}/{model.filename}",
+            requirement_id=_requirement_id(model),
             node_id=model.node_id,
             node_type=model.node_type,
             input_name=model.input_name,

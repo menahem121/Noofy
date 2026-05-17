@@ -1041,7 +1041,7 @@ function RequiredModelsModal({
   onReadyAction: () => void;
   onCancel: () => void;
 }) {
-  const summary = importResult.model_summary;
+  const summary = verificationJob?.model_summary ?? importResult.model_summary;
   if (!summary) return null;
   const retryableStatuses = new Set([
     "missing",
@@ -1053,10 +1053,11 @@ function RequiredModelsModal({
   ]);
   const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
   const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
+  const terminalVerification = verificationJob?.status === "completed" || verificationJob?.status === "failed";
   const activeVerification =
     verificationJob?.status === "queued" ||
     verificationJob?.status === "running" ||
-    summary.models.some((model) => model.status === "checking");
+    (!terminalVerification && summary.models.some((model) => model.status === "checking"));
   const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
   const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
   const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
