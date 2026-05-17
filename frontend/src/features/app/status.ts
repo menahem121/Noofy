@@ -9,7 +9,7 @@ interface RuntimeState {
 export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
   if (state.loading) {
     return {
-      label: "Checking backend",
+      label: "Checking Noofy",
       description: "Looking for the local app service",
       tone: "info",
       loading: true,
@@ -19,7 +19,7 @@ export function runtimeStatusCopy(state: RuntimeState): AppStatusView {
   if (!state.runtime) {
     return {
       label: "Offline",
-      description: "Start the Noofy backend to load live workflows",
+      description: "Restart Noofy to reconnect to the local app service",
       tone: "error",
     };
   }

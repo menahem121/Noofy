@@ -472,9 +472,9 @@ describe("HomePage", () => {
     renderHomePage();
 
     expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
-    expect(screen.getAllByText("Backend offline")).toHaveLength(2);
+    expect(screen.getAllByText("Service offline")).toHaveLength(2);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("Connect backend")).toBeInTheDocument();
+    expect(screen.getByText("Reconnect")).toBeInTheDocument();
   });
 
   it("keeps cached workflows and Ready status visible during a silent refresh", async () => {
@@ -496,7 +496,7 @@ describe("HomePage", () => {
     });
 
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Checking backend")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking Noofy")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Cached Workflow" })).toBeInTheDocument();
     expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
   });

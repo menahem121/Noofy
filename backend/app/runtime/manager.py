@@ -683,9 +683,9 @@ class RuntimeManager:
 
     def _repo_error(self) -> str | None:
         if not self.repo_dir.exists():
-            return f"ComfyUI repo not found: {self.repo_dir}"
+            return f"Noofy could not find the bundled ComfyUI engine files: {self.repo_dir}"
         if not (self.repo_dir / "main.py").exists():
-            return f"ComfyUI main.py not found in: {self.repo_dir}"
+            return f"Noofy could not find the bundled ComfyUI engine entrypoint: {self.repo_dir}"
         return None
 
     def _record_process_exit_if_needed(self) -> None:

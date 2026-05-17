@@ -370,7 +370,7 @@ async def test_missing_managed_env_triggers_staged_repair_on_start_failure(
         status="environment_not_ready", comfyui=await manager.status()
     )
     result = await service.repair_after_start_failure(
-        failed, repair_reason="Runtime Python executable not found"
+        failed, repair_reason="Noofy could not find its prepared engine runtime"
     )
     current = (await service.versions()).current
 
@@ -439,7 +439,7 @@ async def test_missing_required_import_triggers_staged_env_rebuild(
         status="environment_not_ready", comfyui=await manager.status()
     )
     result = await service.repair_after_start_failure(
-        failed, repair_reason="Runtime Python is missing required imports: torch"
+        failed, repair_reason="Noofy's engine runtime is missing required components: torch"
     )
 
     assert result.status == "repair_completed_started"
@@ -1188,7 +1188,7 @@ async def test_passive_runtime_status_does_not_trigger_repair(tmp_path: Path) ->
                 base_url="http://127.0.0.1:9999",
                 repo_dir=str(tmp_path),
                 managed_process_running=False,
-                error="Runtime Python executable not found",
+                error="Noofy could not find its prepared engine runtime",
             )
 
     class RepairShouldNotRun:

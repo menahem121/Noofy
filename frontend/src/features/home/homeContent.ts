@@ -61,7 +61,7 @@ export const fallbackWorkflow: WorkflowCard = {
   description: "Generate a new image from a simple text prompt.",
   category: "Image Generation",
   status: "offline",
-  statusLabel: "Connect backend",
+  statusLabel: "Reconnect",
   Icon: ImagePlus,
   source: "starter",
 };

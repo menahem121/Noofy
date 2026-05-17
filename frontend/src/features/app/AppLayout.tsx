@@ -82,7 +82,7 @@ export function AppLayout({
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const runtimeStatus = useOptionalRuntimeStatus();
   const effectiveStatus = status ?? runtimeStatus?.statusView ?? {
-    label: "Checking backend",
+    label: "Checking Noofy",
     description: "Looking for the local app service",
     tone: "info",
     loading: true,
@@ -304,7 +304,7 @@ function formatGb(mb: number) {
 
 function resourceTooltip(label: string, metric: ResourceMetric | null) {
   if (!metric?.available) return `${label} usage unavailable`;
-  const source = metric.source ? `Source: ${metric.source}` : "Source: Noofy backend";
+  const source = metric.source ? `Source: ${metric.source}` : "Source: Noofy service";
   if (metric.used_mb !== null && metric.total_mb !== null && metric.free_mb !== null) {
     return `${label}: ${formatGb(metric.used_mb)} GB used, ${formatGb(metric.free_mb)} GB free of ${formatGb(metric.total_mb)} GB. ${source}`;
   }

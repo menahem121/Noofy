@@ -87,7 +87,7 @@ describe("RuntimeStatusProvider", () => {
     fetchMock.mockReset();
   });
 
-  it("maps an initial unknown state to Checking backend", () => {
+  it("maps an initial unknown state to Checking Noofy", () => {
     expect(runtimeStatusView({
       backendStatus: "unknown",
       engineStatus: "unknown",
@@ -97,7 +97,7 @@ describe("RuntimeStatusProvider", () => {
       lastCheckedAt: null,
       consecutiveSilentFailures: 0,
       hasKnownState: false,
-    }).label).toBe("Checking backend");
+    }).label).toBe("Checking Noofy");
   });
 
   it("keeps Ready visible while a silent refresh is pending", async () => {
@@ -142,7 +142,7 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Backend offline");
+    expect(result.current.statusView.label).toBe("Service offline");
   });
 
   it("marks the backend unreachable immediately after an action failure", () => {
@@ -155,7 +155,7 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Backend offline");
+    expect(result.current.statusView.label).toBe("Service offline");
   });
 
   it("marks the backend unreachable when runtime status hangs", async () => {
@@ -180,8 +180,8 @@ describe("RuntimeStatusProvider", () => {
     vi.useRealTimers();
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Backend offline");
-    expect(result.current.refreshError).toBe("Noofy backend did not answer runtime status in time.");
+    expect(result.current.statusView.label).toBe("Service offline");
+    expect(result.current.refreshError).toBe("Noofy's local app service did not answer runtime status in time.");
   });
 
   it("does not let an older failing refresh overwrite a newer successful one", async () => {

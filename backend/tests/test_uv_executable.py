@@ -97,7 +97,7 @@ def test_resolve_raises_file_not_found_when_uv_missing(tmp_path: Path) -> None:
 
     msg = str(exc_info.value)
     assert "uv" in msg.lower()
-    assert "make install" in msg
+    assert "Restart Noofy" in msg
 
 
 def test_resolve_error_message_names_expected_path(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def test_resolve_does_not_fall_back_to_global_path(tmp_path: Path) -> None:
 
 
 def test_resolve_finds_uv_in_running_venv() -> None:
-    """Confirm uv is present in the running backend venv (i.e. make install works)."""
+    """Confirm uv is present in the running backend venv."""
     path = resolve_noofy_uv_executable()
     assert Path(path).is_file(), f"uv not found at resolved path: {path}"
     # It must be the same venv that's running this test.

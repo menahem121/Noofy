@@ -373,8 +373,8 @@ export function HomePage({
         }
       : runtimeStatus.backendStatus === "unreachable"
         ? {
-            title: "Backend is not reachable",
-            message: "The page is keeping the last loaded workflows visible until the local backend returns.",
+            title: "Noofy is reconnecting",
+            message: "The page is keeping the last loaded workflows visible while the local app service returns.",
           }
         : null;
 

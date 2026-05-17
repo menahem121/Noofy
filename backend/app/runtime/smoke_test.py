@@ -569,7 +569,7 @@ async def _check_dependency_imports_with_runner(
     if not python_path.exists():
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
-            message="Dependency environment Python executable is missing.",
+            message="Noofy could not find the workflow dependency runtime.",
             details={
                 "python_path": str(python_path),
                 "import_targets": import_targets,

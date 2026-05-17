@@ -1202,7 +1202,7 @@ describe("WorkflowRunPage", () => {
     renderRunPage({}, staleReadyRuntimeState);
 
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
-    expect(screen.queryByText("Checking backend")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking Noofy")).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
@@ -1256,7 +1256,7 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText("The workflow is not ready")).toBeInTheDocument();
     expect(screen.getAllByText("run request failed").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Backend offline").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Service offline").length).toBeGreaterThan(0);
     expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();

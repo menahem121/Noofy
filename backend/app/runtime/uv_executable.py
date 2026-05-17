@@ -37,8 +37,8 @@ def resolve_noofy_uv_executable() -> str:
         return str(candidate)
 
     raise FileNotFoundError(
-        f"uv executable not found in the Noofy backend venv at {candidate}.\n"
-        "Run 'make install' to reinstall backend dependencies, which includes uv."
+        f"Noofy could not find its bundled dependency manager at {candidate}.\n"
+        "Restart Noofy, then try repair. Open technical details if the problem continues."
     )
 
 

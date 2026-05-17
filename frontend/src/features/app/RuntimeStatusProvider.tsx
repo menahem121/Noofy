@@ -167,7 +167,7 @@ export function useOptionalRuntimeStatus() {
 export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   if (state.backendStatus === "unknown") {
     return {
-      label: "Checking backend",
+      label: "Checking Noofy",
       description: "Looking for the local app service",
       tone: "info",
       loading: true,
@@ -176,8 +176,8 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
 
   if (state.backendStatus === "unreachable") {
     return {
-      label: "Backend offline",
-      description: state.refreshError ?? "Start the Noofy backend to load live workflows",
+      label: "Service offline",
+      description: state.refreshError ?? "Restart Noofy to reconnect to the local app service",
       tone: "error",
     };
   }
@@ -208,8 +208,8 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   }
 
   return {
-    label: "Backend reachable",
-    description: "Noofy is connected to the local backend",
+    label: "Connected",
+    description: "Noofy is connected to the local app service",
     tone: "info",
   };
 }
@@ -255,7 +255,7 @@ function errorMessage(error: unknown) {
 
 function runtimeRefreshError(error: unknown) {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return new Error("Noofy backend did not answer runtime status in time.");
+    return new Error("Noofy's local app service did not answer runtime status in time.");
   }
   return error;
 }

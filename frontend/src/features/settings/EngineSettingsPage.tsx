@@ -83,11 +83,11 @@ const ACTION_OK_STATUSES = new Set(["prepared", "already_prepared", "started", "
 const ACTION_RESULT_LABELS: Record<string, string> = {
   prepared: "Engine environment prepared successfully.",
   already_prepared: "Environment is already prepared.",
-  bootstrap_failed: "Preparation failed. Check the backend logs for details.",
-  requirements_missing: "ComfyUI requirements.txt is missing.",
-  python_missing: "Bootstrap Python executable not found.",
-  python_not_prepared: "Runtime Python is not prepared.",
-  dependency_check_failed: "Dependencies could not be verified after install.",
+  bootstrap_failed: "Preparation failed. Open technical details for the diagnostic log.",
+  requirements_missing: "The bundled engine requirements are missing. Try repair.",
+  python_missing: "Noofy could not find its bundled runtime. Restart Noofy, then try repair.",
+  python_not_prepared: "Noofy's engine runtime is not prepared yet. Try Set Up or Repair.",
+  dependency_check_failed: "Noofy could not verify the engine runtime after setup.",
   not_configured: "No managed runtime environment is configured.",
   started: "Engine started.",
   already_running: "Engine is already running.",
@@ -95,7 +95,7 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   repair_failed_fallback_active: "Repair failed, so Noofy started a previous working engine.",
   repair_failed_no_fallback: "Repair failed and no fallback engine could be started.",
   repair_blocked: "Automatic repair is temporarily blocked for this ComfyUI version.",
-  external_unreachable: "Engine is in external mode and not reachable. Start ComfyUI manually.",
+  external_unreachable: "The local AI engine is not reachable. Reconnect or try repair.",
   stopped: "Engine stopped.",
   completed: "ComfyUI was updated and validated successfully.",
   blocked: "ComfyUI updates are not available in this runtime mode.",
@@ -541,8 +541,8 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
         <div className="notice notice--error" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>The app could not reach the backend</strong>
-            <span>Start the Noofy backend and try again.</span>
+            <strong>Noofy could not reach its local app service</strong>
+            <span>{state.error} Restart Noofy, then try again.</span>
           </div>
         </div>
       ) : null}

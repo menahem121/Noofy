@@ -1111,9 +1111,9 @@ class RuntimeWorkspacePreparer:
             return
         source_dir = self.comfyui_source_dir
         if not source_dir.exists():
-            raise FileNotFoundError(f"ComfyUI source directory not found: {source_dir}")
+            raise FileNotFoundError(f"Noofy could not find the bundled ComfyUI engine files: {source_dir}")
         if not (source_dir / "main.py").exists():
-            raise FileNotFoundError(f"ComfyUI main.py not found in: {source_dir}")
+            raise FileNotFoundError(f"Noofy could not find the bundled ComfyUI engine entrypoint: {source_dir}")
 
         workspace_path.mkdir(parents=True, exist_ok=True)
         for entry in sorted(source_dir.iterdir(), key=lambda path: path.name):

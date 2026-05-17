@@ -328,9 +328,9 @@ def build_comfyui_source_manifest(
     dirty_tree: bool = False,
 ) -> RuntimeSourceManifest:
     if not source_dir.exists() or not source_dir.is_dir():
-        raise FileNotFoundError(f"ComfyUI source directory not found: {source_dir}")
+        raise FileNotFoundError(f"Noofy could not find the bundled ComfyUI engine files: {source_dir}")
     if not (source_dir / "main.py").is_file():
-        raise ValueError(f"ComfyUI source directory is missing main.py: {source_dir}")
+        raise ValueError(f"Noofy could not find the bundled ComfyUI engine entrypoint: {source_dir}")
 
     excluded_top_level_entries = _excluded_top_level_entries(source_dir)
     if product_profile:

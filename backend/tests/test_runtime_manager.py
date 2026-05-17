@@ -81,7 +81,7 @@ async def test_managed_start_reports_missing_comfyui_repo(tmp_path: Path) -> Non
     result = await manager.start()
 
     assert result.status == "repo_missing"
-    assert "ComfyUI repo not found" in (result.comfyui.error or "")
+    assert "bundled ComfyUI engine files" in (result.comfyui.error or "")
     assert log_store.latest_error() is not None
     assert log_store.latest_error().message == "ComfyUI runtime cannot start"
 

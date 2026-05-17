@@ -68,7 +68,7 @@ async def test_environment_reports_missing_python_executable(tmp_path: Path) -> 
 
     assert not status.prepared
     assert not status.python_exists
-    assert "Runtime Python executable not found" in (status.error or "")
+    assert "prepared engine runtime" in (status.error or "")
 
 
 @pytest.mark.anyio

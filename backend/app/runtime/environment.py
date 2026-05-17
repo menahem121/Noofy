@@ -186,7 +186,7 @@ class RuntimeEnvironment:
         if self.python_executable_override:
             self.log_store.add(
                 "error",
-                "Runtime Python override is not prepared",
+                "Noofy engine runtime override is not prepared",
                 "runtime.environment",
                 details={
                     "python_executable": self.python_executable_override,
@@ -200,7 +200,7 @@ class RuntimeEnvironment:
         if not self._executable_exists(self.bootstrap_python_executable):
             self.log_store.add(
                 "error",
-                "Bootstrap Python executable missing",
+                "Noofy bundled runtime executable is missing",
                 "runtime.environment",
                 details={"python_executable": self.bootstrap_python_executable},
             )
@@ -283,24 +283,24 @@ class RuntimeEnvironment:
         torch_install_plan: TorchInstallPlan,
     ) -> str | None:
         if not self.repo_dir.exists():
-            return f"ComfyUI repo not found: {self.repo_dir}"
+            return f"Noofy could not find the bundled ComfyUI engine files: {self.repo_dir}"
         if not self.main_py.exists():
-            return f"ComfyUI main.py not found in: {self.repo_dir}"
+            return f"Noofy could not find the bundled ComfyUI engine entrypoint: {self.repo_dir}"
         if not self.requirements_file.exists():
-            return f"ComfyUI requirements.txt not found in: {self.repo_dir}"
+            return f"Noofy could not find the bundled engine requirements: {self.repo_dir}"
         if not runtime_dir_writable:
-            return f"Runtime directory is not writable: {self.runtime_dir}"
+            return f"Noofy cannot write to its engine runtime folder: {self.runtime_dir}"
         if _torch_install_plan_is_unsupported(torch_install_plan):
             return torch_install_plan.reason
         if not python_exists:
-            return f"Runtime Python executable not found: {self.python_executable}"
+            return f"Noofy could not find its prepared engine runtime: {self.python_executable}"
 
         missing = [
             dependency for dependency in dependencies if not dependency.available
         ]
         if missing:
             names = ", ".join(dependency.name for dependency in missing)
-            return f"Runtime Python is missing required imports: {names}"
+            return f"Noofy's engine runtime is missing required components: {names}"
         return None
 
     async def _check_dependencies(self) -> list[RuntimeDependencyStatus]:

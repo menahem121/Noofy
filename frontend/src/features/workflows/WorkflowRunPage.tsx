@@ -715,7 +715,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           <AlertCircle size={18} aria-hidden="true" />
           <div>
             <strong>The workflow is not ready</strong>
-            <span>{state.error ?? "Start the backend and engine, then try again."}</span>
+            <span>{state.error ?? "Restart Noofy, then try again."}</span>
           </div>
         </div>
       ) : null}
@@ -723,8 +723,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>The Noofy backend is offline</strong>
-            <span>{runtimeStatus.refreshError ?? "Start the Noofy backend before running this workflow."}</span>
+            <strong>The local app service is offline</strong>
+            <span>{runtimeStatus.refreshError ?? "Restart Noofy before running this workflow."}</span>
           </div>
         </div>
       ) : null}
