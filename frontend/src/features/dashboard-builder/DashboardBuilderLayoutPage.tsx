@@ -20,7 +20,7 @@ import {
 
 import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
 import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
@@ -42,9 +42,12 @@ import {
   buildInitialDashboard,
   clearDashboardDraft,
   loadDashboardDraft,
+  normalizeDashboardSchema,
   saveDashboardDraft,
+  topLevelDashboardItems,
   toBackendPayload,
   type DashboardSchema,
+  type DashboardTopLevelItem,
   type DashboardWidget,
   type DashboardWidgetLayout,
   type MockWorkflow,
@@ -124,27 +127,27 @@ export function DashboardBuilderLayoutPage({
   }, [activeWorkflowId, activeWorkflowName, workflowId]);
 
   const [schema, setSchema] = useState<DashboardSchema>(
-    () => scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
+    () => normalizeDashboardSchema(scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow)),
   );
   const schemaRef = useRef(schema);
-  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
-  const [activeDragWidgetId, setActiveDragWidgetId] = useState<string | null>(null);
-  const [dragPreview, setDragPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
-  const [movePreview, setMovePreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
-  const [dropPreview, setDropPreview] = useState<{ widgetId: string; layout: DashboardWidgetLayout } | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [activeDragItemId, setActiveDragItemId] = useState<string | null>(null);
+  const [dragPreview, setDragPreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
+  const [movePreview, setMovePreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
+  const [dropPreview, setDropPreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
   const [savedFlash, setSavedFlash] = useState<"draft" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
-    widgetId: string;
+    itemId: string;
     handle: DashboardResizeHandle;
     startLayout: DashboardWidgetLayout;
     startClientX: number;
     startClientY: number;
   } | null>(null);
   const moveStateRef = useRef<{
-    widgetId: string;
+    itemId: string;
     startLayout: DashboardWidgetLayout;
     startClientX: number;
     startClientY: number;
@@ -155,10 +158,10 @@ export function DashboardBuilderLayoutPage({
   useLayoutEffect(() => {
     activeWorkflowIdRef.current = activeWorkflowId;
     saveSequenceRef.current += 1;
-    const nextSchema = scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow);
+    const nextSchema = normalizeDashboardSchema(scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow));
     setSchema(nextSchema);
-    setSelectedWidgetId(null);
-    setActiveDragWidgetId(null);
+    setSelectedItemId(null);
+    setActiveDragItemId(null);
     setDragPreview(null);
     setMovePreview(null);
     setDropPreview(null);
@@ -176,30 +179,31 @@ export function DashboardBuilderLayoutPage({
 
   const appStatus = runtimeStatusCopy(runtimeState);
   const schemaReady = schema.workflowId === activeWorkflowId;
-  const unplacedWidgets = schemaReady ? schema.widgets.filter((widget) => !widget.layout) : [];
-  const placedWidgets = schemaReady ? schema.widgets.filter((widget) => widget.layout) : [];
-  const allWidgetsPlaced = schemaReady && schema.widgets.length > 0 && unplacedWidgets.length === 0;
+  const topLevelItems = schemaReady ? topLevelDashboardItems(schema) : [];
+  const unplacedItems = topLevelItems.filter((item) => !dashboardItemLayout(item));
+  const placedItems = topLevelItems.filter((item) => dashboardItemLayout(item));
+  const allWidgetsPlaced = schemaReady && topLevelItems.length > 0 && unplacedItems.length === 0;
   const helperCopy = allWidgetsPlaced ? "Dashboard ready to save." : "Place all widgets on the canvas before saving.";
-  const canvasRows = schemaReady ? canvasRowsForItems(schema.widgets) : 0;
+  const canvasRows = schemaReady ? canvasRowsForItems(topLevelItems.map((item) => ({ layout: dashboardItemLayout(item) }))) : 0;
 
-  function handleTrayPointerStart(event: PointerEvent<HTMLElement>, widgetId: string) {
+  function handleTrayPointerStart(event: PointerEvent<HTMLElement>, itemId: string) {
     event.preventDefault();
     event.stopPropagation();
     capturePointer(event.currentTarget, event.pointerId);
-    setActiveDragWidgetId(widgetId);
+    setActiveDragItemId(itemId);
     setDragPreview(null);
     event.currentTarget.ownerDocument.getSelection()?.removeAllRanges();
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       pointerEvent.preventDefault();
-      updateTrayDragPreview(widgetId, pointerEvent);
+      updateTrayDragPreview(itemId, pointerEvent);
     }
 
     function finishTrayDrag(shouldPlace: boolean, pointerEvent: globalThis.PointerEvent) {
-      const widget = schemaRef.current.widgets.find((candidate) => candidate.id === widgetId);
-      const desiredLayout = widget && isPointerInsideCanvas(pointerEvent) ? layoutFromPointer(pointerEvent, widget) : null;
-      if (shouldPlace && widget && desiredLayout) {
-        placeWidget(widget.id, desiredLayout);
+      const item = topLevelDashboardItems(schemaRef.current).find((candidate) => candidate.id === itemId);
+      const desiredLayout = item && isPointerInsideCanvas(pointerEvent) ? layoutFromPointer(pointerEvent, item) : null;
+      if (shouldPlace && item && desiredLayout) {
+        placeItem(item.id, desiredLayout);
       }
       clearDragState();
       window.removeEventListener("pointermove", handlePointerMove);
@@ -220,26 +224,26 @@ export function DashboardBuilderLayoutPage({
     window.addEventListener("pointercancel", handlePointerCancel);
   }
 
-  function updateTrayDragPreview(widgetId: string, event: PointerEventLocation) {
+  function updateTrayDragPreview(itemId: string, event: PointerEventLocation) {
     const currentSchema = schemaRef.current;
-    const widget = currentSchema.widgets.find((candidate) => candidate.id === widgetId);
-    if (!widget || !isPointerInsideCanvas(event)) {
+    const item = topLevelDashboardItems(currentSchema).find((candidate) => candidate.id === itemId);
+    if (!item || !isPointerInsideCanvas(event)) {
       setDragPreview(null);
       return;
     }
 
-    const desiredLayout = layoutFromPointer(event, widget);
+    const desiredLayout = layoutFromPointer(event, item);
     if (!desiredLayout) return;
     const previewLayout = findAvailableLayout(
-      widget.id,
+      item.id,
       desiredLayout,
-      currentSchema.widgets,
+      topLevelDashboardItems(currentSchema).map((candidate) => ({ id: candidate.id, layout: dashboardItemLayout(candidate) })),
       currentSchema.layout.gridColumns,
     );
 
     setDragPreview((current) => {
       if (
-        current?.widgetId === widget.id &&
+        current?.itemId === item.id &&
         current.layout.x === previewLayout.x &&
         current.layout.y === previewLayout.y &&
         current.layout.w === previewLayout.w &&
@@ -247,7 +251,7 @@ export function DashboardBuilderLayoutPage({
       ) {
         return current;
       }
-      return { widgetId: widget.id, layout: previewLayout };
+      return { itemId: item.id, layout: previewLayout };
     });
   }
 
@@ -258,35 +262,35 @@ export function DashboardBuilderLayoutPage({
   }
 
   function clearDragState() {
-    setActiveDragWidgetId(null);
+    setActiveDragItemId(null);
     setDragPreview(null);
   }
 
-  function placeWidget(widgetId: string, desiredLayout: DashboardWidgetLayout) {
+  function placeItem(itemId: string, desiredLayout: DashboardWidgetLayout) {
     setSchema((current) => {
-      const widget = current.widgets.find((candidate) => candidate.id === widgetId);
-      if (!widget) return current;
+      const item = topLevelDashboardItems(current).find((candidate) => candidate.id === itemId);
+      if (!item) return current;
 
       const fitted = fitLayout(desiredLayout, current.layout.gridColumns);
-      const layout = findAvailableLayout(widgetId, fitted, current.widgets, current.layout.gridColumns);
+      const layout = findAvailableLayout(
+        itemId,
+        fitted,
+        topLevelDashboardItems(current).map((candidate) => ({ id: candidate.id, layout: dashboardItemLayout(candidate) })),
+        current.layout.gridColumns,
+      );
 
-      const nextSchema = {
-        ...current,
-        widgets: current.widgets.map((candidate) =>
-          candidate.id === widgetId ? { ...candidate, layout } : candidate,
-        ),
-      };
+      const nextSchema = setDashboardItemLayout(current, itemId, layout);
       schemaRef.current = nextSchema;
       return nextSchema;
     });
-    setSelectedWidgetId(widgetId);
+    setSelectedItemId(itemId);
   }
 
-  function layoutFromPointer(event: PointerEventLocation, widget: DashboardWidget): DashboardWidgetLayout | null {
+  function layoutFromPointer(event: PointerEventLocation, item: DashboardTopLevelItem): DashboardWidgetLayout | null {
     const canvas = canvasRef.current;
     if (!canvas) return null;
 
-    const baseLayout = widget.layout ?? defaultLayoutForWidgetType(widget.widgetType);
+    const baseLayout = dashboardItemLayout(item) ?? defaultLayoutForTopLevelItem(item);
     const currentSchema = schemaRef.current;
     const fitted = fitLayout(baseLayout, currentSchema.layout.gridColumns);
     return layoutFromCanvasPointer(event, fitted, canvas, {
@@ -295,39 +299,32 @@ export function DashboardBuilderLayoutPage({
     });
   }
 
-  function removeWidget(widgetId: string) {
-    setSchema((current) => ({
-      ...current,
-      widgets: current.widgets.map((widget) => {
-        if (widget.id !== widgetId) return widget;
-        const { layout: _layout, ...withoutLayout } = widget;
-        return withoutLayout;
-      }),
-    }));
-    setSelectedWidgetId((current) => (current === widgetId ? null : current));
+  function removeItem(itemId: string) {
+    setSchema((current) => removeDashboardItemLayout(current, itemId));
+    setSelectedItemId((current) => (current === itemId ? null : current));
   }
 
   function handleMoveStart(
     event: PointerEvent<HTMLElement>,
-    widgetId: string,
+    itemId: string,
     layout: DashboardWidgetLayout,
   ) {
     if (shouldIgnoreWidgetMove(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
     capturePointer(event.currentTarget, event.pointerId);
-    setSelectedWidgetId(widgetId);
-    setActiveDragWidgetId(widgetId);
+    setSelectedItemId(itemId);
+    setActiveDragItemId(itemId);
     moveStateRef.current = {
-      widgetId,
+      itemId,
       startLayout: layout,
       startClientX: event.clientX,
       startClientY: event.clientY,
       currentLayout: layout,
       dropLayout: layout,
     };
-    setMovePreview({ widgetId, layout });
-    setDropPreview({ widgetId, layout });
+    setMovePreview({ itemId, layout });
+    setDropPreview({ itemId, layout });
 
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const moveState = moveStateRef.current;
@@ -347,27 +344,22 @@ export function DashboardBuilderLayoutPage({
         currentSchema.layout.gridColumns,
       );
       const dropLayout = findNearestAvailableLayout(
-        moveState.widgetId,
+        moveState.itemId,
         candidate,
-        currentSchema.widgets,
+        topLevelDashboardItems(currentSchema).map((item) => ({ id: item.id, layout: dashboardItemLayout(item) })),
         currentSchema.layout.gridColumns,
       );
       if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
       moveState.currentLayout = candidate;
       moveState.dropLayout = dropLayout;
-      setMovePreview({ widgetId: moveState.widgetId, layout: candidate });
-      setDropPreview({ widgetId: moveState.widgetId, layout: dropLayout });
+      setMovePreview({ itemId: moveState.itemId, layout: candidate });
+      setDropPreview({ itemId: moveState.itemId, layout: dropLayout });
     }
 
     function commitMove(finalLayout: DashboardWidgetLayout | undefined) {
       if (!finalLayout) return;
       setSchema((current) => {
-        const nextSchema = {
-          ...current,
-          widgets: current.widgets.map((widget) =>
-            widget.id === widgetId ? { ...widget, layout: finalLayout } : widget,
-          ),
-        };
+        const nextSchema = setDashboardItemLayout(current, itemId, finalLayout);
         schemaRef.current = nextSchema;
         return nextSchema;
       });
@@ -377,7 +369,7 @@ export function DashboardBuilderLayoutPage({
       const finalLayout = moveStateRef.current?.dropLayout;
       if (shouldCommit) commitMove(finalLayout);
       moveStateRef.current = null;
-      setActiveDragWidgetId(null);
+      setActiveDragItemId(null);
       setMovePreview(null);
       setDropPreview(null);
       window.removeEventListener("pointermove", handlePointerMove);
@@ -400,7 +392,7 @@ export function DashboardBuilderLayoutPage({
 
   function handleResizeStart(
     event: PointerEvent<HTMLButtonElement>,
-    widgetId: string,
+    itemId: string,
     layout: DashboardWidgetLayout,
     handle: DashboardResizeHandle,
   ) {
@@ -408,7 +400,7 @@ export function DashboardBuilderLayoutPage({
     event.stopPropagation();
     capturePointer(event.currentTarget, event.pointerId);
     resizeStateRef.current = {
-      widgetId,
+      itemId,
       handle,
       startLayout: layout,
       startClientX: event.clientX,
@@ -433,17 +425,13 @@ export function DashboardBuilderLayoutPage({
           }),
           current.layout.gridColumns,
         );
-        const collides = current.widgets.some((widget) => {
-          if (widget.id === resizeState.widgetId || !widget.layout) return false;
-          return layoutsOverlap(candidate, widget.layout);
+        const topLevelCollides = topLevelDashboardItems(current).some((item) => {
+          const layout = dashboardItemLayout(item);
+          if (item.id === resizeState.itemId || !layout) return false;
+          return layoutsOverlap(candidate, layout);
         });
-        if (collides) return current;
-        return {
-          ...current,
-          widgets: current.widgets.map((widget) =>
-            widget.id === resizeState.widgetId ? { ...widget, layout: candidate } : widget,
-          ),
-        };
+        if (topLevelCollides) return current;
+        return setDashboardItemLayout(current, resizeState.itemId, candidate);
       });
     }
 
@@ -586,21 +574,21 @@ export function DashboardBuilderLayoutPage({
                 <h2>Widgets to place</h2>
                 <p>Drag to canvas</p>
               </div>
-              <span>{unplacedWidgets.length}</span>
+              <span>{unplacedItems.length}</span>
             </header>
 
             <div className="layout-widget-tray__list">
-              {unplacedWidgets.length === 0 ? (
+              {unplacedItems.length === 0 ? (
                 <div className="layout-widget-tray__empty">
                   <CheckCircle2 size={24} aria-hidden="true" />
                   <h3>All widgets placed</h3>
                   <p>Remove a Widget from the canvas to make it available again.</p>
                 </div>
               ) : (
-                unplacedWidgets.map((widget) => (
-                  <TrayWidgetItem
-                    key={widget.id}
-                    widget={widget}
+                unplacedItems.map((item) => (
+                  <TrayDashboardItem
+                    key={item.id}
+                    item={item}
                     onPointerStart={handleTrayPointerStart}
                   />
                 ))
@@ -611,13 +599,13 @@ export function DashboardBuilderLayoutPage({
           <DashboardCanvasFrame aria-label="Dashboard layout canvas">
             <DashboardCanvasSurface
               ref={canvasRef}
-              empty={placedWidgets.length === 0}
+              empty={placedItems.length === 0}
               rows={canvasRows}
               columns={schema.layout.gridColumns}
               rowHeight={schema.layout.rowHeight}
               gridGap={schema.layout.gridGap}
             >
-              {placedWidgets.length === 0 ? (
+              {placedItems.length === 0 ? (
                 <div className="layout-canvas__empty">
                   <div className="layout-canvas__empty-icon">
                     <Wand2 size={30} aria-hidden="true" />
@@ -628,8 +616,8 @@ export function DashboardBuilderLayoutPage({
               ) : null}
 
               {dropPreview ? (
-                <DragPreviewWidget
-                  widget={schema.widgets.find((widget) => widget.id === dropPreview.widgetId) ?? null}
+                <DragPreviewItem
+                  item={topLevelItems.find((item) => item.id === dropPreview.itemId) ?? null}
                   layout={dropPreview.layout}
                   columns={schema.layout.gridColumns}
                   gridGap={schema.layout.gridGap}
@@ -638,32 +626,33 @@ export function DashboardBuilderLayoutPage({
                 />
               ) : null}
 
-              {placedWidgets.map((widget) => {
-                if (!widget.layout) return null;
-                const previewLayout = movePreview?.widgetId === widget.id ? movePreview.layout : null;
-                const displayLayout = previewLayout ?? widget.layout;
+              {placedItems.map((item) => {
+                const layout = dashboardItemLayout(item);
+                if (!layout) return null;
+                const previewLayout = movePreview?.itemId === item.id ? movePreview.layout : null;
+                const displayLayout = previewLayout ?? layout;
 
                 return (
-                  <PlacedDashboardWidget
-                    key={widget.id}
-                    widget={widget}
+                  <PlacedDashboardItem
+                    key={item.id}
+                    item={item}
                     layout={displayLayout}
                     columns={schema.layout.gridColumns}
                     gridGap={schema.layout.gridGap}
                     rowHeight={schema.layout.rowHeight}
-                    selected={selectedWidgetId === widget.id}
-                    dragging={activeDragWidgetId === widget.id}
-                    onSelect={() => setSelectedWidgetId(widget.id)}
-                    onRemove={() => removeWidget(widget.id)}
-                    onMoveStart={(event) => handleMoveStart(event, widget.id, displayLayout)}
-                    onResizeStart={(event, handle) => handleResizeStart(event, widget.id, displayLayout, handle)}
+                    selected={selectedItemId === item.id}
+                    dragging={activeDragItemId === item.id}
+                    onSelect={() => setSelectedItemId(item.id)}
+                    onRemove={() => removeItem(item.id)}
+                    onMoveStart={(event) => handleMoveStart(event, item.id, displayLayout)}
+                    onResizeStart={(event, handle) => handleResizeStart(event, item.id, displayLayout, handle)}
                   />
                 );
               })}
 
               {dragPreview ? (
-                <DragPreviewWidget
-                  widget={schema.widgets.find((widget) => widget.id === dragPreview.widgetId) ?? null}
+                <DragPreviewItem
+                  item={topLevelItems.find((item) => item.id === dragPreview.itemId) ?? null}
                   layout={dragPreview.layout}
                   columns={schema.layout.gridColumns}
                   gridGap={schema.layout.gridGap}
@@ -679,35 +668,37 @@ export function DashboardBuilderLayoutPage({
   );
 }
 
-function TrayWidgetItem({
-  widget,
+function TrayDashboardItem({
+  item,
   onPointerStart,
 }: {
-  widget: DashboardWidget;
-  onPointerStart: (event: PointerEvent<HTMLElement>, widgetId: string) => void;
+  item: DashboardTopLevelItem;
+  onPointerStart: (event: PointerEvent<HTMLElement>, itemId: string) => void;
 }) {
-  const Icon = WIDGET_ICONS[widget.widgetType];
+  const Icon = item.kind === "group" ? LayoutGrid : WIDGET_ICONS[item.widget.widgetType];
+  const title = item.kind === "group" ? item.group.title : item.widget.title;
+  const description = item.kind === "group" ? item.group.description : item.widget.description;
 
   return (
     <article
       className="layout-tray-widget"
-      onPointerDown={(event) => onPointerStart(event, widget.id)}
+      onPointerDown={(event) => onPointerStart(event, item.id)}
     >
       <div className="layout-tray-widget__icon" aria-hidden="true">
         <Icon size={17} />
       </div>
       <div className="layout-tray-widget__body">
-        <h3>{widget.title}</h3>
-        <span>{WIDGET_TYPE_LABELS[widget.widgetType]}</span>
-        {widget.description ? <p>{widget.description}</p> : null}
+        <h3>{title}</h3>
+        <span>{item.kind === "group" ? `${item.widgets.length} grouped widgets` : WIDGET_TYPE_LABELS[item.widget.widgetType]}</span>
+        {description ? <p>{description}</p> : null}
       </div>
       <GripVertical size={16} aria-hidden="true" />
     </article>
   );
 }
 
-function PlacedDashboardWidget({
-  widget,
+function PlacedDashboardItem({
+  item,
   layout,
   columns,
   gridGap,
@@ -721,7 +712,7 @@ function PlacedDashboardWidget({
   preview = false,
   dropPreview = false,
 }: {
-  widget: DashboardWidget;
+  item: DashboardTopLevelItem;
   layout: DashboardWidgetLayout;
   columns: number;
   gridGap: number;
@@ -735,7 +726,10 @@ function PlacedDashboardWidget({
   preview?: boolean;
   dropPreview?: boolean;
 }) {
-  const Icon = WIDGET_ICONS[widget.widgetType];
+  const Icon = item.kind === "group" ? LayoutGrid : WIDGET_ICONS[item.widget.widgetType];
+  const title = item.kind === "group" ? item.group.title : item.widget.title;
+  const subtitle = item.kind === "group" ? `${item.widgets.length} grouped widgets` : WIDGET_TYPE_LABELS[item.widget.widgetType];
+  const description = item.kind === "group" ? item.group.description : undefined;
 
   return (
     <DashboardCanvasWidgetShell
@@ -758,13 +752,13 @@ function PlacedDashboardWidget({
             <Icon size={16} />
           </span>
           <div>
-            <h3>{widget.title}</h3>
-            <p>{WIDGET_TYPE_LABELS[widget.widgetType]}</p>
+            <h3>{title}</h3>
+            <p>{description || subtitle}</p>
           </div>
         </div>
         {!preview ? (
           <div className="layout-canvas-widget__actions" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${widget.title}`} title="Remove from canvas" onClick={onRemove}>
+            <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${title}`} title="Remove from canvas" onClick={onRemove}>
               <Trash2 size={14} aria-hidden="true" />
             </button>
           </div>
@@ -772,33 +766,33 @@ function PlacedDashboardWidget({
       </header>
 
       <div className="layout-canvas-widget__preview-surface">
-        <WidgetSurfacePreview widget={widget} />
+        {item.kind === "group" ? <GroupSurfacePreview item={item} /> : <WidgetSurfacePreview widget={item.widget} />}
       </div>
-      {!preview ? <DashboardCanvasResizeHandles label={widget.title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
+      {!preview ? <DashboardCanvasResizeHandles label={title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
   );
 }
 
-function DragPreviewWidget({
-  widget,
+function DragPreviewItem({
+  item,
   layout,
   columns,
   gridGap,
   rowHeight,
   dropPreview = false,
 }: {
-  widget: DashboardWidget | null;
+  item: DashboardTopLevelItem | null;
   layout: DashboardWidgetLayout;
   columns: number;
   gridGap: number;
   rowHeight: number;
   dropPreview?: boolean;
 }) {
-  if (!widget) return null;
+  if (!item) return null;
 
   return (
-    <PlacedDashboardWidget
-      widget={widget}
+    <PlacedDashboardItem
+      item={item}
       layout={layout}
       columns={columns}
       gridGap={gridGap}
@@ -845,6 +839,67 @@ function capturePointer(target: Element, pointerId: number) {
     // The window-level listeners below still keep dragging active when a browser
     // refuses capture during an edge transition from native drag/drop.
   }
+}
+
+function dashboardItemLayout(item: DashboardTopLevelItem): DashboardWidgetLayout | undefined {
+  return item.kind === "group" ? item.group.layout : item.widget.layout;
+}
+
+function defaultLayoutForTopLevelItem(item: DashboardTopLevelItem): DashboardWidgetLayout {
+  if (item.kind === "group") {
+    return defaultLayoutForWidgetGroup(item.widgets.map((widget) => widget.widgetType));
+  }
+  return defaultLayoutForWidgetType(item.widget.widgetType);
+}
+
+function setDashboardItemLayout(schema: DashboardSchema, itemId: string, layout: DashboardWidgetLayout): DashboardSchema {
+  if (schema.groups.some((group) => group.id === itemId)) {
+    return {
+      ...schema,
+      groups: schema.groups.map((group) => (group.id === itemId ? { ...group, layout } : group)),
+    };
+  }
+  return {
+    ...schema,
+    widgets: schema.widgets.map((widget) => (widget.id === itemId ? { ...widget, layout } : widget)),
+  };
+}
+
+function removeDashboardItemLayout(schema: DashboardSchema, itemId: string): DashboardSchema {
+  if (schema.groups.some((group) => group.id === itemId)) {
+    return {
+      ...schema,
+      groups: schema.groups.map((group) => {
+        if (group.id !== itemId) return group;
+        const { layout: _layout, ...withoutLayout } = group;
+        return withoutLayout;
+      }),
+    };
+  }
+  return {
+    ...schema,
+    widgets: schema.widgets.map((widget) => {
+      if (widget.id !== itemId) return widget;
+      const { layout: _layout, ...withoutLayout } = widget;
+      return withoutLayout;
+    }),
+  };
+}
+
+function GroupSurfacePreview({ item }: { item: Extract<DashboardTopLevelItem, { kind: "group" }> }) {
+  return (
+    <div className="layout-group-preview">
+      {item.widgets.map((widget) => (
+        <div className="layout-group-preview__item" key={widget.id}>
+          <div className="layout-group-preview__label">
+            <span>{widget.title}</span>
+            <small>{WIDGET_TYPE_LABELS[widget.widgetType]}</small>
+          </div>
+          <WidgetSurfacePreview widget={widget} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {

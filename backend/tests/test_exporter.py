@@ -288,6 +288,47 @@ def test_exported_archive_bakes_current_user_dashboard_preferences(tmp_path: Pat
     assert second_control["show_download"] is True
 
 
+def test_exported_archive_applies_group_layout_overrides(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+    )
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    dashboard_file = package_dir / "dashboard.json"
+    dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
+    dashboard_data["sections"][0]["groups"] = [
+        {
+            "id": "main-group",
+            "title": "Main group",
+            "description": "Grouped controls.",
+            "control_ids": ["c1", "c2"],
+            "layout": {"x": 0, "y": 0, "w": 16, "h": 10},
+        }
+    ]
+    dashboard_file.write_text(json.dumps(dashboard_data), encoding="utf-8")
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            dashboard_version="0.1.0",
+            layout_overrides={
+                "main-group": UserStateLayoutOverride(x=4, y=5, w=18, h=12),
+                "c1": UserStateLayoutOverride(x=20, y=20, w=4, h=4),
+            },
+        )
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        exported_dashboard = json.loads(zf.read("dashboard.json"))
+
+    group = exported_dashboard["sections"][0]["groups"][0]
+    assert group["layout"] == {"x": 4, "y": 5, "w": 18, "h": 12}
+    assert "layout" not in exported_dashboard["sections"][0]["controls"][0]
+
+
 def test_exported_archive_applies_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
     exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
     package_dir = exporter._find_package_dir(workflow_id)

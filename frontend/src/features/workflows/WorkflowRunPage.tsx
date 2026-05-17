@@ -36,6 +36,7 @@ import {
   uploadDashboardAsset,
   validateWorkflow,
   type DashboardControlDef,
+  type DashboardControlGroupDef,
   type DiagnosticEvent,
   type EngineJob,
   type ApiKeySettingsResponse,
@@ -52,11 +53,10 @@ import {
 import type {
   DashboardSchema,
   DashboardWidget,
-  WidgetGroup,
   WidgetType,
 } from "../dashboard-builder/dashboardBuilderContent";
 import type { GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -66,6 +66,7 @@ import { CanvasDashboardView } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
+import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 
 interface WorkflowRunPageProps {
@@ -174,11 +175,23 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     () => state.packageData?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
     [state.packageData],
   );
+  const allGroups = useMemo(
+    () => state.packageData?.dashboard?.sections.flatMap((section) => section.groups ?? []) ?? [],
+    [state.packageData],
+  );
+  const topLevelItems = useMemo(
+    () =>
+      state.packageData?.dashboard?.sections.flatMap((section) =>
+        topLevelDashboardControlItems(section.controls, section.groups ?? []),
+      ) ?? [],
+    [state.packageData],
+  );
   const dashboardVersion = useMemo(
     () => dashboardUserStateVersion(state.packageData),
     [state.packageData],
   );
   const dashboardControlIds = useMemo(() => allControls.map((control) => control.id), [allControls]);
+  const dashboardLayoutIds = useMemo(() => topLevelItems.map((item) => item.id), [topLevelItems]);
 
   const {
     values: inputValues,
@@ -189,7 +202,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     outputPreferences,
     setOutputPreference,
     getOutputPreferencesSnapshot,
-  } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardControlIds);
+  } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardLayoutIds, dashboardControlIds);
 
   // Build output-images-by-node-id map for canvas output widgets.
   const outputImagesByNodeId = useMemo<Map<string, string[]>>(() => {
@@ -591,6 +604,18 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const inputControls = allControls.filter(
     (c) => c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.input_id),
   );
+  const inputControlIds = useMemo(() => new Set(inputControls.map((control) => control.id)), [inputControls]);
+  const inputTopLevelItems = useMemo(
+    () =>
+      topLevelItems
+        .map((item) => {
+          if (item.kind === "control") return inputControlIds.has(item.control.id) ? item : null;
+          const controls = item.controls.filter((control) => inputControlIds.has(control.id));
+          return controls.length > 0 ? { ...item, controls } : null;
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+    [topLevelItems, inputControlIds],
+  );
 
   const hasDashboard = Boolean(
     state.packageData?.dashboard?.status === "configured" && allControls.length > 0,
@@ -603,6 +628,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       workflowId,
       workflowSummary?.name ?? state.packageData?.metadata?.name ?? workflowId,
       allControls,
+      allGroups,
       inputIndex,
       outputIndex,
       layoutOverrides,
@@ -793,6 +819,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       >
         <CanvasDashboardView
           controls={allControls}
+          groups={allGroups}
           inputIndex={inputIndex}
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
@@ -851,7 +878,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
 
           {hasDashboard ? (
             <DashboardInputControls
-              controls={inputControls}
+              items={inputTopLevelItems}
               inputIndex={inputIndex}
               inputValues={inputValues}
               onChange={(id, value) => setInputValue(id, value)}
@@ -1015,14 +1042,14 @@ function DiagnosticLogSection({
 // ─── Schema-driven input controls ───────────────────────────────────────────
 
 function DashboardInputControls({
-  controls,
+  items,
   inputIndex,
   inputValues,
   onChange,
   onImageUpload,
   loraBrowserFor,
 }: {
-  controls: DashboardControlDef[];
+  items: DashboardTopLevelControlItem[];
   inputIndex: Map<string, WorkflowInputDef>;
   inputValues: Record<string, unknown>;
   onChange: (id: string, value: unknown) => void;
@@ -1031,7 +1058,62 @@ function DashboardInputControls({
 }) {
   return (
     <>
-      {controls.map((control) => {
+      {items.map((item) => {
+        if (item.kind === "group") {
+          return (
+            <section className="field-group dashboard-control-group" key={item.id}>
+              <span>{item.group.title}</span>
+              {item.group.description ? <small>{item.group.description}</small> : null}
+              <div className="dashboard-control-group__controls">
+                {item.controls.map((control) => (
+                  <ClassicDashboardInputControl
+                    key={control.id}
+                    control={control}
+                    inputIndex={inputIndex}
+                    inputValues={inputValues}
+                    grouped
+                    onChange={onChange}
+                    onImageUpload={onImageUpload}
+                    loraBrowserFor={loraBrowserFor}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        }
+        return (
+          <ClassicDashboardInputControl
+            key={item.id}
+            control={item.control}
+            inputIndex={inputIndex}
+            inputValues={inputValues}
+            onChange={onChange}
+            onImageUpload={onImageUpload}
+            loraBrowserFor={loraBrowserFor}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function ClassicDashboardInputControl({
+  control,
+  inputIndex,
+  inputValues,
+  grouped = false,
+  onChange,
+  onImageUpload,
+  loraBrowserFor,
+}: {
+  control: DashboardControlDef;
+  inputIndex: Map<string, WorkflowInputDef>;
+  inputValues: Record<string, unknown>;
+  grouped?: boolean;
+  onChange: (id: string, value: unknown) => void;
+  onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
+}) {
         const inputId = control.input_id ?? control.id;
         const input = control.type === "api_credential"
           ? credentialInputForControl(control)
@@ -1041,18 +1123,15 @@ function DashboardInputControls({
 
         return (
           <DashboardInputControl
-            key={control.id}
             control={control}
             input={input}
             value={value}
+            hideLabel={grouped}
             loraBrowser={loraBrowserFor?.(control, input)}
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
           />
         );
-      })}
-    </>
-  );
 }
 
 function credentialInputForControl(control: DashboardControlDef): WorkflowInputDef {
@@ -1337,7 +1416,13 @@ function dashboardUserStateVersion(packageData: WorkflowPackageResponse | null):
         type: control.type,
         input_id: control.input_id,
         output_id: control.output_id,
-        group: control.group,
+      })),
+    ),
+    groups: packageData.dashboard.sections.flatMap((section) =>
+      (section.groups ?? []).map((group) => ({
+        id: group.id,
+        control_ids: group.control_ids,
+        layout: group.layout,
       })),
     ),
   };
@@ -1372,15 +1457,19 @@ function buildDashboardSchemaForEditing(
   workflowId: string,
   workflowName: string,
   controls: DashboardControlDef[],
+  groups: DashboardControlGroupDef[],
   inputIndex: Map<string, WorkflowInputDef>,
   outputIndex: Map<string, WorkflowOutputDef>,
   layoutOverrides: Record<string, GridItemLayout>,
 ): DashboardSchema | null {
   const widgets: DashboardWidget[] = [];
+  const groupedControlIds = groupedControlIdSet(groups);
+  const controlTypeById = new Map(controls.map((control) => [control.id, control.type]));
 
   for (const control of controls) {
-    const override = layoutOverrides[control.id];
-    const layout = layoutForBuilderControl(control, override);
+    const layout = groupedControlIds.has(control.id)
+      ? undefined
+      : layoutForBuilderControl(control, layoutOverrides[control.id]);
 
     if (control.input_id) {
       const input = inputIndex.get(control.input_id);
@@ -1392,8 +1481,6 @@ function buildDashboardSchemaForEditing(
         widgetType: toBuilderWidgetType(control.type),
         title: control.label,
         description: control.description ?? "",
-        orientation: "vertical",
-        group: toBuilderWidgetGroup(control.group),
         defaultValue: input.default,
         min: numberValidation(input.validation.min),
         max: numberValidation(input.validation.max),
@@ -1414,8 +1501,6 @@ function buildDashboardSchemaForEditing(
         widgetType: "display_image",
         title: control.label,
         description: control.description ?? "",
-        orientation: "vertical",
-        group: toBuilderWidgetGroup(control.group),
         defaultValue: null,
         showDownload: Boolean(control.show_download),
         layout,
@@ -1430,12 +1515,58 @@ function buildDashboardSchemaForEditing(
     workflowId,
     workflowName,
     widgets,
+    groups: groups.map((group) => {
+      const override = layoutOverrides[group.id];
+      const childTypes = group.control_ids
+        .map((controlId) => controlTypeById.get(controlId))
+        .filter((type): type is string => Boolean(type));
+      const layout = layoutForBuilderGroup(group, childTypes, override);
+      return {
+        id: group.id,
+        title: group.title,
+        description: group.description ?? "",
+        widgetIds: group.control_ids,
+        layout,
+      };
+    }),
     layout: {
       gridColumns: 32,
       rowHeight: 32,
       gridGap: 14,
       responsive: true,
     },
+  };
+}
+
+function layoutForBuilderGroup(
+  group: DashboardControlGroupDef,
+  childTypes: string[],
+  override?: GridItemLayout,
+): DashboardWidget["layout"] {
+  const fallback = defaultLayoutForWidgetGroup(childTypes);
+  if (override) {
+    const minW = override.minW ?? group.layout?.min_w ?? fallback.minW;
+    const minH = override.minH ?? group.layout?.min_h ?? fallback.minH;
+    return {
+      x: override.x,
+      y: override.y,
+      w: Math.max(override.w, minW ?? 2),
+      h: Math.max(override.h, minH ?? 2),
+      minW,
+      minH,
+    };
+  }
+
+  if (!group.layout) return undefined;
+  const minW = group.layout.min_w ?? fallback.minW;
+  const minH = group.layout.min_h ?? fallback.minH;
+  return {
+    x: group.layout.x,
+    y: group.layout.y,
+    w: Math.max(group.layout.w, minW ?? 2),
+    h: Math.max(group.layout.h, minH ?? 2),
+    minW,
+    minH,
   };
 }
 
@@ -1483,10 +1614,6 @@ function toBuilderWidgetType(type: string): WidgetType {
     "select",
   ]);
   return knownTypes.has(type as WidgetType) ? (type as WidgetType) : "string_field";
-}
-
-function toBuilderWidgetGroup(group: string | undefined): WidgetGroup {
-  return group === "advanced" ? "advanced" : "simple";
 }
 
 function numberValidation(value: unknown): number | undefined {

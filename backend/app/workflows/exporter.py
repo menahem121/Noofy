@@ -167,6 +167,26 @@ class WorkflowExporter:
         for section in exported.get("sections") or []:
             if not isinstance(section, dict):
                 continue
+            grouped_control_ids: set[str] = set()
+            for group in section.get("groups") or []:
+                if not isinstance(group, dict):
+                    continue
+                for control_id in group.get("control_ids") or []:
+                    if isinstance(control_id, str):
+                        grouped_control_ids.add(control_id)
+                group_id = group.get("id")
+                if not isinstance(group_id, str):
+                    continue
+                layout = layout_overrides.get(group_id)
+                if layout is not None:
+                    existing = group.get("layout") if isinstance(group.get("layout"), dict) else {}
+                    group["layout"] = {
+                        **existing,
+                        "x": layout.x,
+                        "y": layout.y,
+                        "w": layout.w,
+                        "h": layout.h,
+                    }
             for control in section.get("controls") or []:
                 if not isinstance(control, dict):
                     continue
@@ -174,7 +194,7 @@ class WorkflowExporter:
                 if not isinstance(control_id, str):
                     continue
                 layout = layout_overrides.get(control_id)
-                if layout is not None:
+                if layout is not None and control_id not in grouped_control_ids:
                     existing = control.get("layout") if isinstance(control.get("layout"), dict) else {}
                     control["layout"] = {
                         **existing,

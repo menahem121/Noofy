@@ -32,10 +32,14 @@ class WorkflowPackageValidator:
 
         # Validate dashboard controls.
         seen_control_ids: set[str] = set()
+        seen_group_ids: set[str] = set()
+        seen_grouped_control_ids: set[str] = set()
         layouts_with_id: list[tuple[str, dict]] = []
         input_ids_referenced: set[str] = set()
 
         for section in package.dashboard.sections:
+            section_control_ids = {control.id for control in section.controls}
+            section_grouped_control_ids: set[str] = set()
             for control in section.controls:
                 # Duplicate control id check.
                 if control.id in seen_control_ids:
@@ -78,6 +82,55 @@ class WorkflowPackageValidator:
                             f"Dashboard control '{control.id}' references missing output '{control.output_id}'."
                         )
 
+            for group in section.groups:
+                if group.id in seen_group_ids:
+                    errors.append(f"Duplicate dashboard group id '{group.id}'.")
+                seen_group_ids.add(group.id)
+
+                if len(group.control_ids) < 2:
+                    errors.append(f"Dashboard group '{group.id}' must contain at least two controls.")
+
+                seen_group_control_ids: set[str] = set()
+                for control_id in group.control_ids:
+                    if control_id in seen_group_control_ids:
+                        errors.append(
+                            f"Dashboard group '{group.id}' references control '{control_id}' more than once."
+                        )
+                    seen_group_control_ids.add(control_id)
+                    if control_id not in section_control_ids:
+                        errors.append(
+                            f"Dashboard group '{group.id}' references missing control '{control_id}'."
+                        )
+                    if control_id in seen_grouped_control_ids:
+                        errors.append(
+                            f"Dashboard control '{control_id}' is assigned to more than one group."
+                        )
+                    seen_grouped_control_ids.add(control_id)
+                    if control_id in section_control_ids:
+                        section_grouped_control_ids.add(control_id)
+
+                if group.layout is not None:
+                    layout_dict = {
+                        "x": group.layout.x,
+                        "y": group.layout.y,
+                        "w": group.layout.w,
+                        "h": group.layout.h,
+                    }
+                    for other_id, other_layout in layouts_with_id:
+                        if _layouts_overlap(layout_dict, other_layout):
+                            errors.append(
+                                f"Dashboard layout item '{group.id}' overlaps '{other_id}'."
+                            )
+                    layouts_with_id.append((group.id, layout_dict))
+
+                    if group.layout.x + group.layout.w > _GRID_COLUMNS:
+                        errors.append(
+                            f"Dashboard group '{group.id}' extends beyond the {_GRID_COLUMNS}-column grid."
+                        )
+
+            for control in section.controls:
+                if control.id in section_grouped_control_ids:
+                    continue
                 # Layout overlap detection (responsive 32-column dashboard grid).
                 if control.layout is not None:
                     layout_dict = {
@@ -89,7 +142,7 @@ class WorkflowPackageValidator:
                     for other_id, other_layout in layouts_with_id:
                         if _layouts_overlap(layout_dict, other_layout):
                             errors.append(
-                                f"Dashboard controls '{control.id}' and '{other_id}' have overlapping layouts."
+                                f"Dashboard layout item '{control.id}' overlaps '{other_id}'."
                             )
                     layouts_with_id.append((control.id, layout_dict))
 

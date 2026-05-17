@@ -10,6 +10,7 @@ import {
   Download,
   Image as ImageIcon,
   ImagePlus,
+  LayoutGrid,
   Loader2,
   Play,
   Shuffle,
@@ -23,12 +24,13 @@ import {
 
 import {
   type DashboardControlDef,
+  type DashboardControlGroupDef,
   type OutputPreferences,
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
 import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
   DASHBOARD_CANVAS_ROW_HEIGHT,
@@ -46,6 +48,7 @@ import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
+import { topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 
 export interface CanvasRunState {
   isRunning: boolean;
@@ -55,6 +58,7 @@ export interface CanvasRunState {
 
 interface CanvasDashboardViewProps {
   controls: DashboardControlDef[];
+  groups: DashboardControlGroupDef[];
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
@@ -83,6 +87,7 @@ interface CanvasDashboardViewProps {
 
 export function CanvasDashboardView({
   controls,
+  groups,
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
@@ -131,9 +136,13 @@ export function CanvasDashboardView({
     currentLayout: GridItemLayout;
     dropLayout: GridItemLayout;
   } | null>(null);
+  const topLevelItems = useMemo(
+    () => topLevelDashboardControlItems(controls, groups),
+    [controls, groups],
+  );
   const canvasItems = useMemo(
-    () => controls.map((control) => ({ id: control.id, layout: effectiveLayout(control) })),
-    [controls, layoutOverrides],
+    () => topLevelItems.map((item) => ({ id: item.id, layout: effectiveLayout(item) })),
+    [topLevelItems, layoutOverrides],
   );
 
   useEffect(() => {
@@ -157,10 +166,15 @@ export function CanvasDashboardView({
     };
   }, [optionsOpen]);
 
-  function effectiveLayout(control: DashboardControlDef): GridItemLayout {
-    if (layoutOverrides[control.id]) return withLayoutMinimums(layoutOverrides[control.id], control);
-    if (control.layout) return fromBackendLayout(control);
-    return defaultLayoutForWidgetType(control.type);
+  function effectiveLayout(item: DashboardTopLevelControlItem): GridItemLayout {
+    if (layoutOverrides[item.id]) return withLayoutMinimums(layoutOverrides[item.id], item);
+    if (item.kind === "group") {
+      const fallback = defaultLayoutForWidgetGroup(item.controls.map((control) => control.type));
+      if (item.group.layout) return fromBackendLayout(item.group, fallback);
+      return fallback;
+    }
+    if (item.control.layout) return fromBackendLayout(item.control);
+    return defaultLayoutForWidgetType(item.control.type);
   }
 
   function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
@@ -171,7 +185,7 @@ export function CanvasDashboardView({
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS);
     return layoutCollides(controlId, fitted)
-      ? effectiveLayout(controls.find((control) => control.id === controlId)!)
+      ? effectiveLayout(topLevelItems.find((item) => item.id === controlId)!)
       : fitted;
   }
 
@@ -423,21 +437,21 @@ export function CanvasDashboardView({
         >
           {dropPreview ? (
             <CanvasWidgetDropPreview
-              control={controls.find((control) => control.id === dropPreview.controlId) ?? null}
+              item={topLevelItems.find((item) => item.id === dropPreview.controlId) ?? null}
               layout={dropPreview.layout}
             />
           ) : null}
 
-          {controls.map((control) => {
-            const layout = effectiveLayout(control);
-            const previewLayout = movePreview?.controlId === control.id ? movePreview.layout : null;
+          {topLevelItems.map((item) => {
+            const layout = effectiveLayout(item);
+            const previewLayout = movePreview?.controlId === item.id ? movePreview.layout : null;
             const displayLayout = previewLayout ?? layout;
-            const isMoving = movingControlId === control.id;
+            const isMoving = movingControlId === item.id;
 
             return (
               <CanvasWidgetCell
-                key={control.id}
-                control={control}
+                key={item.id}
+                item={item}
                 layout={displayLayout}
                 isMoving={isMoving}
                 isEditingLayout={isEditingLayout}
@@ -450,8 +464,8 @@ export function CanvasDashboardView({
                 onImageUpload={onImageUpload}
                 loraBrowserFor={loraBrowserFor}
                 onOutputPreferenceChange={onOutputPreferenceChange}
-                onMoveStart={(event) => handleMoveStart(event, control.id, displayLayout)}
-                onResizeStart={(event, handle) => handleResizeStart(event, control.id, displayLayout, handle)}
+                onMoveStart={(event) => handleMoveStart(event, item.id, displayLayout)}
+                onResizeStart={(event, handle) => handleResizeStart(event, item.id, displayLayout, handle)}
               />
             );
           })}
@@ -474,14 +488,16 @@ export function CanvasDashboardView({
 // ─── Single widget cell ───────────────────────────────────────────────────────
 
 function CanvasWidgetDropPreview({
-  control,
+  item,
   layout,
 }: {
-  control: DashboardControlDef | null;
+  item: DashboardTopLevelControlItem | null;
   layout: GridItemLayout;
 }) {
-  if (!control) return null;
-  const Icon = iconForControlType(control.type);
+  if (!item) return null;
+  const Icon = item.kind === "group" ? LayoutGrid : iconForControlType(item.control.type);
+  const title = item.kind === "group" ? item.group.title : item.control.label;
+  const description = item.kind === "group" ? item.group.description : item.control.description;
 
   return (
     <DashboardCanvasWidgetShell
@@ -496,8 +512,8 @@ function CanvasWidgetDropPreview({
             <Icon size={16} />
           </span>
           <div>
-            <h3>{control.label}</h3>
-            {control.description ? <p>{control.description}</p> : null}
+            <h3>{title}</h3>
+            {description ? <p>{description}</p> : null}
           </div>
         </div>
       </header>
@@ -506,7 +522,7 @@ function CanvasWidgetDropPreview({
 }
 
 function CanvasWidgetCell({
-  control,
+  item,
   layout,
   isMoving,
   isEditingLayout,
@@ -522,7 +538,7 @@ function CanvasWidgetCell({
   onMoveStart,
   onResizeStart,
 }: {
-  control: DashboardControlDef;
+  item: DashboardTopLevelControlItem;
   layout: GridItemLayout;
   isMoving: boolean;
   isEditingLayout: boolean;
@@ -538,8 +554,12 @@ function CanvasWidgetCell({
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
-  const isOutput = control.type === "display_image" || control.type === "result_image";
-  const Icon = iconForControlType(control.type);
+  const isGroup = item.kind === "group";
+  const control = item.kind === "control" ? item.control : null;
+  const isOutput = control ? control.type === "display_image" || control.type === "result_image" : false;
+  const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
+  const title = isGroup ? item.group.title : control!.label;
+  const description = isGroup ? item.group.description : control!.description;
 
   return (
     <DashboardCanvasWidgetShell
@@ -556,11 +576,11 @@ function CanvasWidgetCell({
             <Icon size={16} />
           </span>
           <div>
-            <h3>{control.label}</h3>
-            {control.description ? <p>{control.description}</p> : null}
+            <h3>{title}</h3>
+            {description ? <p>{description}</p> : null}
           </div>
         </div>
-        {isOutput ? (
+        {control && isOutput ? (
           <button
             className={`auto-save-toggle${outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""}`}
             type="button"
@@ -580,15 +600,29 @@ function CanvasWidgetCell({
       </header>
 
       <div className="widget-canvas-cell__content">
-        {isOutput ? (
+        {item.kind === "group" ? (
+          <GroupedCanvasControls
+            item={item}
+            inputIndex={inputIndex}
+            outputIndex={outputIndex}
+            outputImagesByNodeId={outputImagesByNodeId}
+            inputValues={inputValues}
+            outputPreferences={outputPreferences}
+            disabled={isEditingLayout}
+            onChange={onChange}
+            onImageUpload={onImageUpload}
+            loraBrowserFor={loraBrowserFor}
+            onOutputPreferenceChange={onOutputPreferenceChange}
+          />
+        ) : isOutput ? (
           <OutputWidgetContent
-            control={control}
+            control={control!}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
           />
         ) : (
           <InputWidgetContent
-            control={control}
+            control={control!}
             inputIndex={inputIndex}
             inputValues={inputValues}
             disabled={isEditingLayout}
@@ -598,8 +632,83 @@ function CanvasWidgetCell({
           />
         )}
       </div>
-      {isEditingLayout ? <DashboardCanvasResizeHandles label={control.label} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
+      {isEditingLayout ? <DashboardCanvasResizeHandles label={title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
+  );
+}
+
+function GroupedCanvasControls({
+  item,
+  inputIndex,
+  outputIndex,
+  outputImagesByNodeId,
+  inputValues,
+  outputPreferences,
+  disabled,
+  onChange,
+  onImageUpload,
+  loraBrowserFor,
+  onOutputPreferenceChange,
+}: {
+  item: Extract<DashboardTopLevelControlItem, { kind: "group" }>;
+  inputIndex: Map<string, WorkflowInputDef>;
+  outputIndex: Map<string, WorkflowOutputDef>;
+  outputImagesByNodeId: Map<string, string[]>;
+  inputValues: Record<string, unknown>;
+  outputPreferences: OutputPreferences;
+  disabled: boolean;
+  onChange: (inputId: string, value: unknown) => void;
+  onImageUpload: (inputId: string, file: File) => Promise<void>;
+  loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
+  onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
+}) {
+  return (
+    <div className="canvas-widget-group">
+      {item.controls.map((control) => {
+        const isOutput = control.type === "display_image" || control.type === "result_image";
+        return (
+          <div className="canvas-widget-group__control" key={control.id}>
+            {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
+            {isOutput ? (
+              <>
+                <OutputWidgetContent
+                  control={control}
+                  outputIndex={outputIndex}
+                  outputImagesByNodeId={outputImagesByNodeId}
+                />
+                <button
+                  className={`auto-save-toggle canvas-widget-group__auto-save${
+                    outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""
+                  }`}
+                  type="button"
+                  aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
+                  aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
+                  }}
+                >
+                  <span className="auto-save-toggle__track" aria-hidden="true">
+                    <span className="auto-save-toggle__knob" />
+                  </span>
+                  <span>Auto Save</span>
+                </button>
+              </>
+            ) : (
+              <InputWidgetContent
+                control={control}
+                inputIndex={inputIndex}
+                inputValues={inputValues}
+                disabled={disabled}
+                onChange={onChange}
+                onImageUpload={onImageUpload}
+                loraBrowserFor={loraBrowserFor}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -754,9 +863,11 @@ function filenameFromImageUrl(imageUrl: string) {
   }
 }
 
-function fromBackendLayout(control: DashboardControlDef): GridItemLayout {
-  const fallback = defaultLayoutForWidgetType(control.type);
-  const layout = control.layout;
+function fromBackendLayout(item: DashboardControlDef | DashboardControlGroupDef, fallbackOverride?: GridItemLayout): GridItemLayout {
+  const fallback = fallbackOverride ?? ("type" in item
+    ? defaultLayoutForWidgetType(item.type)
+    : defaultLayoutForWidgetGroup([]));
+  const layout = item.layout;
   return withLayoutMinimums({
     x: layout?.x ?? 0,
     y: layout?.y ?? 0,
@@ -764,14 +875,30 @@ function fromBackendLayout(control: DashboardControlDef): GridItemLayout {
     h: layout?.h ?? 2,
     minW: layout?.min_w ?? fallback.minW,
     minH: layout?.min_h ?? fallback.minH,
-  }, control);
+  }, item, fallback);
 }
 
-function withLayoutMinimums(layout: GridItemLayout, control: DashboardControlDef): GridItemLayout {
-  const fallback = defaultLayoutForWidgetType(control.type);
+function withLayoutMinimums(
+  layout: GridItemLayout,
+  item: DashboardControlDef | DashboardControlGroupDef | DashboardTopLevelControlItem,
+  fallbackOverride?: GridItemLayout,
+): GridItemLayout {
+  const source = "kind" in item ? (item.kind === "group" ? item.group : item.control) : item;
+  const fallback = fallbackOverride ?? (
+    "kind" in item && item.kind === "group"
+      ? defaultLayoutForWidgetGroup(item.controls.map((control) => control.type))
+      : "type" in source
+        ? defaultLayoutForWidgetType(source.type)
+        : defaultLayoutForWidgetGroup([])
+  );
+  const minW = layout.minW ?? source.layout?.min_w ?? fallback.minW;
+  const minH = layout.minH ?? source.layout?.min_h ?? fallback.minH;
+  const isGroup = "kind" in item ? item.kind === "group" : !("type" in item);
   return {
     ...layout,
-    minW: layout.minW ?? control.layout?.min_w ?? fallback.minW,
-    minH: layout.minH ?? control.layout?.min_h ?? fallback.minH,
+    w: isGroup ? Math.max(layout.w, minW ?? 2) : layout.w,
+    h: isGroup ? Math.max(layout.h, minH ?? 2) : layout.h,
+    minW,
+    minH,
   };
 }

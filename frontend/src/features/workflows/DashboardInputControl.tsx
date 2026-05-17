@@ -25,6 +25,7 @@ interface DashboardInputControlProps {
   value: unknown;
   disabled?: boolean;
   variant?: DashboardInputControlVariant;
+  hideLabel?: boolean;
   loraBrowser?: LoraBrowserControlProps;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
@@ -36,6 +37,7 @@ export function DashboardInputControl({
   value,
   disabled = false,
   variant = "classic",
+  hideLabel = false,
   loraBrowser,
   onChange,
   onImageUpload,
@@ -45,6 +47,15 @@ export function DashboardInputControl({
   const validation = input.validation ?? {};
 
   if (variant === "classic") {
+    if (hideLabel) {
+      return (
+        <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
+          {description ? <small>{description}</small> : null}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+        </label>
+      );
+    }
+
     return (
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (

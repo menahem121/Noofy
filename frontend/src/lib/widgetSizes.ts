@@ -53,6 +53,15 @@ export function defaultLayoutForWidgetType(widgetType: string): GridItemLayout {
   return { x: 0, y: 0, w: def.w, h: def.h, minW: def.w, minH: def.h };
 }
 
+export function defaultLayoutForWidgetGroup(widgetTypes: string[]): GridItemLayout {
+  const childLayouts = widgetTypes.length > 0
+    ? widgetTypes.map((widgetType) => defaultLayoutForWidgetType(widgetType))
+    : [defaultLayoutForWidgetType("slider")];
+  const minW = Math.max(10, ...childLayouts.map((layout) => layout.minW ?? layout.w));
+  const minH = Math.max(6, childLayouts.reduce((sum, layout) => sum + Math.max(3, layout.minH ?? layout.h), 0));
+  return { x: 0, y: 0, w: Math.min(32, Math.max(minW, 12)), h: minH, minW, minH };
+}
+
 export function presetForWidgetType(widgetType: string): WidgetSizePreset {
   return DEFAULT_PRESETS[widgetType as WidgetTypeKey] ?? "standard";
 }

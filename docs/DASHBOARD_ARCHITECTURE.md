@@ -35,7 +35,8 @@ Exporting creates a new portable archive. Re-exported user packages strip origin
 - `status`: typically `configured` or `not_configured`.
 - `inputs[]`: workflow inputs that widgets may bind to.
 - `outputs[]`: output records that result widgets bind to.
-- `sections[].controls[]`: renderable controls with type, title, binding, default value, validation/display metadata, layout, and optional output metadata.
+- `sections[].controls[]`: renderable controls with type, title, binding, default value, validation/display metadata, standalone layout, and optional output metadata.
+- `sections[].groups[]`: visual containers with group title, helper description, ordered control IDs, and group layout. Groups do not merge control values or bindings; each child control remains independently bound.
 
 Common control types include `slider`, `int_field`, `string_field`, `textarea`, `toggle`, `load_image`, `display_image`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
 

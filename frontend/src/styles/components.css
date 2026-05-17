@@ -703,6 +703,23 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.dashboard-control-group {
+  padding: 14px;
+  border: 1px solid rgba(139, 92, 246, 0.22);
+  border-radius: 14px;
+  background: rgba(53, 42, 74, 0.24);
+}
+
+.dashboard-control-group__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field-group--grouped-child {
+  padding: 0;
+}
+
 .panel-heading {
   display: flex;
   align-items: flex-start;

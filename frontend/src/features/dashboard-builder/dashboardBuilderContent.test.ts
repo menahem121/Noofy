@@ -17,6 +17,7 @@ describe("toBackendPayload", () => {
       workflowId: "wf-1",
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [
         {
           id: "ctrl-strength",
@@ -25,8 +26,6 @@ describe("toBackendPayload", () => {
           widgetType: "slider",
           title: "Transformation level",
           description: "",
-          orientation: "vertical",
-          group: "advanced",
           defaultValue: 0.5,
           min: 0,
           max: 1,
@@ -51,6 +50,7 @@ describe("toBackendPayload", () => {
       workflowId: "wf-1",
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [
         {
           id: "ctrl-sampler",
@@ -59,8 +59,6 @@ describe("toBackendPayload", () => {
           widgetType: "select",
           title: "Sampler",
           description: "",
-          orientation: "vertical",
-          group: "advanced",
           defaultValue: "euler",
           options: ["euler", "euler_ancestral"],
         },
@@ -84,6 +82,7 @@ describe("toBackendPayload", () => {
       workflowId: "wf-1",
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [
         {
           id: "ctrl-prompt",
@@ -92,8 +91,6 @@ describe("toBackendPayload", () => {
           widgetType: "textarea",
           title: "Prompt",
           description: "",
-          orientation: "vertical",
-          group: "simple",
           defaultValue: "a lake",
           layout: { x: 0, y: 0, w: 16, h: 6, minW: 16, minH: 6 },
         },
@@ -104,8 +101,6 @@ describe("toBackendPayload", () => {
           widgetType: "display_image",
           title: "Result",
           description: "",
-          orientation: "vertical",
-          group: "simple",
           defaultValue: null,
           showDownload: true,
           layout: { x: 16, y: 0, w: 16, h: 12, minW: 13, minH: 10 },
@@ -129,6 +124,72 @@ describe("toBackendPayload", () => {
       min_h: 6,
     });
   });
+
+  it("writes visual groups without merging child controls or layouts", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [
+        {
+          id: "size-group",
+          title: "Image size",
+          description: "Output dimensions.",
+          widgetIds: ["ctrl-width", "ctrl-height"],
+          layout: { x: 0, y: 0, w: 12, h: 8 },
+        },
+      ],
+      widgets: [
+        {
+          id: "ctrl-width",
+          valueId: "node-5-width",
+          binding: { nodeId: "5", inputName: "width" },
+          widgetType: "slider",
+          title: "Width",
+          description: "Output width.",
+          defaultValue: 512,
+          min: 256,
+          max: 1024,
+          step: 64,
+          layout: { x: 0, y: 0, w: 10, h: 4 },
+        },
+        {
+          id: "ctrl-height",
+          valueId: "node-5-height",
+          binding: { nodeId: "5", inputName: "height" },
+          widgetType: "slider",
+          title: "Height",
+          description: "Output height.",
+          defaultValue: 512,
+          min: 256,
+          max: 1024,
+          step: 64,
+          layout: { x: 12, y: 0, w: 10, h: 4 },
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+    const section = payload.dashboard.sections[0];
+
+    expect(payload.inputs).toHaveLength(2);
+    expect(payload.inputs.map((input) => input.binding)).toEqual([
+      { node_id: "5", input_name: "width" },
+      { node_id: "5", input_name: "height" },
+    ]);
+    expect(section.groups).toEqual([
+      {
+        id: "size-group",
+        title: "Image size",
+        description: "Output dimensions.",
+        control_ids: ["ctrl-width", "ctrl-height"],
+        layout: { x: 0, y: 0, w: 12, h: 8, min_w: undefined, min_h: undefined },
+      },
+    ]);
+    expect(section.controls[0].layout).toBeUndefined();
+    expect(section.controls[1].layout).toBeUndefined();
+  });
 });
 
 describe("saveDashboardDraft", () => {
@@ -138,6 +199,7 @@ describe("saveDashboardDraft", () => {
       workflowId: "wf-1",
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [],
     };
 
@@ -153,6 +215,7 @@ describe("saveDashboardDraft", () => {
       workflowId: "wf-1",
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [],
     };
 

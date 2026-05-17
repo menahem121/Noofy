@@ -78,7 +78,6 @@
           "label": "Prompt",
           "input_id": "prompt",
           "description": "Describe what you want to generate.",
-          "group": "simple",
           "layout": { "x": 0, "y": 0, "w": 32, "h": 6 }
         },
         {
@@ -87,7 +86,6 @@
           "label": "Seed",
           "input_id": "seed",
           "description": "Random seed for reproducibility.",
-          "group": "simple",
           "layout": { "x": 0, "y": 6, "w": 16, "h": 4 }
         },
         {
@@ -95,7 +93,6 @@
           "type": "slider",
           "label": "Width",
           "input_id": "width",
-          "group": "advanced",
           "layout": { "x": 0, "y": 10, "w": 16, "h": 4 }
         },
         {
@@ -103,7 +100,6 @@
           "type": "slider",
           "label": "Height",
           "input_id": "height",
-          "group": "advanced",
           "layout": { "x": 16, "y": 10, "w": 16, "h": 4 }
         },
         {
@@ -111,7 +107,6 @@
           "type": "result_image",
           "label": "Result",
           "output_id": "image",
-          "group": "simple",
           "layout": { "x": 0, "y": 14, "w": 32, "h": 12 }
         }
       ]

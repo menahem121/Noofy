@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -32,12 +32,17 @@ import {
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
   loadDashboardDraft,
+  normalizeDashboardSchema,
   saveDashboardDraft,
+  topLevelDashboardItems,
+  widgetGroupIdMap,
   widgetTypesForKind,
   workflowFromBindableInputs,
   type WidgetType,
+  type DashboardWidgetGroup,
   type DashboardWidget,
   type DashboardSchema,
+  type DashboardTopLevelItem,
   type MockWorkflow,
   type WorkflowNode,
   type WorkflowNodeValue,
@@ -123,10 +128,21 @@ export function DashboardBuilderPage({
     };
   });
   const [schema, setSchema] = useState<DashboardSchema>(
-    () => scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+    () =>
+      normalizeDashboardSchema(
+        scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+      ),
   );
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [createdDrag, setCreatedDrag] = useState<{ widgetId: string; sourceGroupId: string | null } | null>(null);
+  const [createdDropPreview, setCreatedDropPreview] = useState<
+    | { kind: "group"; targetWidgetId: string }
+    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
+    | { kind: "ungroup"; sourceGroupId: string }
+    | null
+  >(null);
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
@@ -179,12 +195,17 @@ export function DashboardBuilderPage({
 
   useLayoutEffect(() => {
     setSchema(
-      scopedInitialSchema ??
-        loadDashboardDraft(activeWorkflowId) ??
-        buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+      normalizeDashboardSchema(
+        scopedInitialSchema ??
+          loadDashboardDraft(activeWorkflowId) ??
+          buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+      ),
     );
     setSelectedValueId(null);
     setSelectedWidgetId(null);
+    setSelectedGroupId(null);
+    setCreatedDrag(null);
+    setCreatedDropPreview(null);
     setSearch("");
     setExpandedNodes(new Set());
     setSavedFlash(null);
@@ -193,18 +214,22 @@ export function DashboardBuilderPage({
   useEffect(() => {
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
-    const nextSchema = reconcileDashboardSchemaForWorkflow(
-      scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
-      workflow,
+    const nextSchema = normalizeDashboardSchema(
+      reconcileDashboardSchemaForWorkflow(
+        scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
+        workflow,
+      ),
     );
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
     if (firstWidget) {
       setSelectedWidgetId(firstWidget.id);
       setSelectedValueId(firstWidget.valueId);
+      setSelectedGroupId(null);
     } else {
       setSelectedWidgetId(null);
       setSelectedValueId(null);
+      setSelectedGroupId(null);
     }
     setExpandedNodes(new Set([workflow.nodes[0]?.id ?? ""]));
   }, [workflowState, activeWorkflowId, scopedInitialSchema]);
@@ -256,6 +281,12 @@ export function DashboardBuilderPage({
     () => (builderReady && selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
     [builderReady, schema.widgets, selectedWidgetId],
   );
+  const selectedGroup = useMemo(
+    () => (builderReady && selectedGroupId ? schema.groups.find((group) => group.id === selectedGroupId) ?? null : null),
+    [builderReady, schema.groups, selectedGroupId],
+  );
+  const groupIdByWidgetId = useMemo(() => widgetGroupIdMap(schema), [schema]);
+  const createdItems = useMemo(() => (builderReady ? topLevelDashboardItems(schema) : []), [builderReady, schema]);
 
   const selectedValueRecord = selectedValueId ? valueIndex.get(selectedValueId) ?? null : null;
   const hasValidationErrors = builderReady && schema.widgets.some((widget) => validateWidgetForSave(widget).length > 0);
@@ -268,6 +299,7 @@ export function DashboardBuilderPage({
     if (existing) {
       setSelectedValueId(valueId);
       setSelectedWidgetId(existing.id);
+      setSelectedGroupId(null);
       return;
     }
 
@@ -275,6 +307,7 @@ export function DashboardBuilderPage({
     setSchema((current) => ({ ...current, widgets: [...current.widgets, newWidget] }));
     setSelectedValueId(valueId);
     setSelectedWidgetId(newWidget.id);
+    setSelectedGroupId(null);
   }
 
   function handleSelectWidget(widgetId: string) {
@@ -282,6 +315,15 @@ export function DashboardBuilderPage({
     if (!widget) return;
     setSelectedWidgetId(widgetId);
     setSelectedValueId(widget.valueId);
+    setSelectedGroupId(null);
+  }
+
+  function handleSelectGroup(groupId: string) {
+    const group = schema.groups.find((candidate) => candidate.id === groupId);
+    if (!group) return;
+    setSelectedGroupId(groupId);
+    setSelectedWidgetId(null);
+    setSelectedValueId(null);
   }
 
   function patchWidget(widgetId: string, patch: Partial<DashboardWidget>) {
@@ -291,15 +333,89 @@ export function DashboardBuilderPage({
     }));
   }
 
-  function removeWidget(widgetId: string) {
+  function patchGroup(groupId: string, patch: Partial<DashboardWidgetGroup>) {
     setSchema((current) => ({
       ...current,
-      widgets: current.widgets.filter((c) => c.id !== widgetId),
+      groups: current.groups.map((group) => (group.id === groupId ? { ...group, ...patch } : group)),
     }));
+  }
+
+  function removeWidget(widgetId: string) {
+    setSchema((current) => removeWidgetFromSchema(current, widgetId));
     if (selectedWidgetId === widgetId) {
       setSelectedWidgetId(null);
       setSelectedValueId(null);
     }
+  }
+
+  function handleCreatedDragStart(widgetId: string) {
+    const sourceGroupId = groupIdByWidgetId.get(widgetId) ?? null;
+    setCreatedDrag({ widgetId, sourceGroupId });
+    setCreatedDropPreview(null);
+  }
+
+  function handleCreatedDragEnd() {
+    setCreatedDrag(null);
+    setCreatedDropPreview(null);
+  }
+
+  function handleWidgetDragOver(event: DragEvent<HTMLElement>, targetWidgetId: string) {
+    if (!createdDrag) return;
+    if (createdDrag.widgetId === targetWidgetId) {
+      event.stopPropagation();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const targetGroupId = groupIdByWidgetId.get(targetWidgetId) ?? null;
+    setCreatedDropPreview(
+      targetGroupId
+        ? { kind: "group-add", targetGroupId, targetWidgetId }
+        : { kind: "group", targetWidgetId },
+    );
+  }
+
+  function handleWidgetDrop(event: DragEvent<HTMLElement>, targetWidgetId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!createdDrag || createdDrag.widgetId === targetWidgetId) return;
+    setSchema((current) => groupWidgetOnTarget(current, createdDrag.widgetId, targetWidgetId));
+    handleSelectWidget(createdDrag.widgetId);
+    handleCreatedDragEnd();
+  }
+
+  function handleGroupDragOver(event: DragEvent<HTMLElement>, targetGroupId: string) {
+    if (!createdDrag) return;
+    if (createdDrag.sourceGroupId === targetGroupId) {
+      event.stopPropagation();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setCreatedDropPreview({ kind: "group-add", targetGroupId });
+  }
+
+  function handleGroupDrop(event: DragEvent<HTMLElement>, targetGroupId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!createdDrag) return;
+    setSchema((current) => moveWidgetToGroup(current, createdDrag.widgetId, targetGroupId));
+    handleSelectWidget(createdDrag.widgetId);
+    handleCreatedDragEnd();
+  }
+
+  function handleUngroupDragOver(event: DragEvent<HTMLElement>) {
+    if (!createdDrag?.sourceGroupId) return;
+    event.preventDefault();
+    setCreatedDropPreview({ kind: "ungroup", sourceGroupId: createdDrag.sourceGroupId });
+  }
+
+  function handleUngroupDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    if (!createdDrag?.sourceGroupId) return;
+    setSchema((current) => ungroupWidget(current, createdDrag.widgetId));
+    handleSelectWidget(createdDrag.widgetId);
+    handleCreatedDragEnd();
   }
 
   function toggleNode(nodeId: string) {
@@ -322,9 +438,6 @@ export function DashboardBuilderPage({
     if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
     onContinue(schema);
   }
-
-  const simpleWidgets = builderReady ? schema.widgets.filter((c) => c.group === "simple") : [];
-  const advancedWidgets = builderReady ? schema.widgets.filter((c) => c.group === "advanced") : [];
 
   return (
     <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
@@ -432,7 +545,18 @@ export function DashboardBuilderPage({
           </aside>
 
           <main className="builder-pane builder-config" aria-label="Widget configuration">
-            {selectedWidget && selectedValueRecord ? (
+            {selectedGroup ? (
+              <GroupEditor
+                group={selectedGroup}
+                widgets={selectedGroup.widgetIds
+                  .map((widgetId) => schema.widgets.find((widget) => widget.id === widgetId))
+                  .filter((widget): widget is DashboardWidget => Boolean(widget))}
+                valueIndex={valueIndex}
+                onPatchGroup={(patch) => patchGroup(selectedGroup.id, patch)}
+                onPatchWidget={patchWidget}
+                onSelectWidget={handleSelectWidget}
+              />
+            ) : selectedWidget && selectedValueRecord ? (
               <WidgetEditor
                 widget={selectedWidget}
                 value={selectedValueRecord.value}
@@ -467,24 +591,24 @@ export function DashboardBuilderPage({
                   <p>Select a workflow value and turn it into a dashboard widget.</p>
                 </div>
               ) : (
-                <>
-                  {simpleWidgets.length > 0 && (
-                    <PreviewSection title="Simple widgets" widgets={simpleWidgets}
-                      selectedWidgetId={selectedWidgetId}
-                      onSelect={handleSelectWidget}
-                      onRemove={removeWidget}
-                    />
-                  )}
-
-                  {advancedWidgets.length > 0 && (
-                    <PreviewSection title="Advanced widgets" widgets={advancedWidgets}
-                      selectedWidgetId={selectedWidgetId}
-                      onSelect={handleSelectWidget}
-                      onRemove={removeWidget}
-                      muted
-                    />
-                  )}
-                </>
+                <CreatedWidgetsList
+                  items={createdItems}
+                  selectedWidgetId={selectedWidgetId}
+                  selectedGroupId={selectedGroupId}
+                  draggingWidgetId={createdDrag?.widgetId ?? null}
+                  dropPreview={createdDropPreview}
+                  onSelectWidget={handleSelectWidget}
+                  onSelectGroup={handleSelectGroup}
+                  onRemoveWidget={removeWidget}
+                  onDragStart={handleCreatedDragStart}
+                  onDragEnd={handleCreatedDragEnd}
+                  onWidgetDragOver={handleWidgetDragOver}
+                  onWidgetDrop={handleWidgetDrop}
+                  onGroupDragOver={handleGroupDragOver}
+                  onGroupDrop={handleGroupDrop}
+                  onUngroupDragOver={handleUngroupDragOver}
+                  onUngroupDrop={handleUngroupDrop}
+                />
               )}
             </div>
 
@@ -501,6 +625,146 @@ export function DashboardBuilderPage({
       </div>
     </AppLayout>
   );
+}
+
+function groupWidgetOnTarget(schema: DashboardSchema, widgetId: string, targetWidgetId: string): DashboardSchema {
+  const groupMap = widgetGroupIdMap(schema);
+  const targetGroupId = groupMap.get(targetWidgetId);
+  const sourceGroupId = groupMap.get(widgetId);
+  if (targetGroupId && sourceGroupId === targetGroupId) {
+    return reorderWidgetInGroup(schema, widgetId, targetWidgetId);
+  }
+  if (targetGroupId) {
+    return moveWidgetToGroup(schema, widgetId, targetGroupId, targetWidgetId);
+  }
+
+  const current = ungroupWidget(schema, widgetId);
+  const widgetOrder = new Map(current.widgets.map((widget, index) => [widget.id, index]));
+  const widgetIds = [widgetId, targetWidgetId].sort((a, b) => (widgetOrder.get(a) ?? 0) - (widgetOrder.get(b) ?? 0));
+  const targetWidget = current.widgets.find((widget) => widget.id === targetWidgetId);
+  const draggedWidget = current.widgets.find((widget) => widget.id === widgetId);
+  if (!targetWidget || !draggedWidget) return current;
+  const layout = targetWidget.layout ?? draggedWidget.layout;
+  const groupWidgets = widgetIds
+    .map((id) => current.widgets.find((widget) => widget.id === id))
+    .filter((widget): widget is DashboardWidget => Boolean(widget));
+  const groups = [
+    ...current.groups,
+    {
+      id: nextGroupId(current),
+      title: groupTitleForWidgets(groupWidgets),
+      description: "",
+      widgetIds,
+      layout,
+    },
+  ];
+  return normalizeDashboardSchema({
+    ...current,
+    widgets: current.widgets.map((widget) =>
+      widgetIds.includes(widget.id) ? withoutWidgetLayout(widget) : widget,
+    ),
+    groups,
+  });
+}
+
+function reorderWidgetInGroup(schema: DashboardSchema, widgetId: string, beforeWidgetId: string): DashboardSchema {
+  const groupId = widgetGroupIdMap(schema).get(widgetId);
+  if (!groupId) return schema;
+  return normalizeDashboardSchema({
+    ...schema,
+    groups: schema.groups.map((group) => {
+      if (group.id !== groupId) return group;
+      const nextWidgetIds = group.widgetIds.filter((id) => id !== widgetId);
+      const insertIndex = nextWidgetIds.includes(beforeWidgetId) ? nextWidgetIds.indexOf(beforeWidgetId) : nextWidgetIds.length;
+      nextWidgetIds.splice(insertIndex, 0, widgetId);
+      return { ...group, widgetIds: nextWidgetIds };
+    }),
+  });
+}
+
+function moveWidgetToGroup(
+  schema: DashboardSchema,
+  widgetId: string,
+  targetGroupId: string,
+  beforeWidgetId?: string,
+): DashboardSchema {
+  const current = ungroupWidget(schema, widgetId);
+  const targetGroup = current.groups.find((group) => group.id === targetGroupId);
+  if (!targetGroup) return current;
+  const nextWidgetIds = targetGroup.widgetIds.filter((id) => id !== widgetId);
+  const insertIndex = beforeWidgetId && nextWidgetIds.includes(beforeWidgetId)
+    ? nextWidgetIds.indexOf(beforeWidgetId)
+    : nextWidgetIds.length;
+  nextWidgetIds.splice(insertIndex, 0, widgetId);
+  return normalizeDashboardSchema({
+    ...current,
+    widgets: current.widgets.map((widget) => (widget.id === widgetId ? withoutWidgetLayout(widget) : widget)),
+    groups: current.groups.map((group) =>
+      group.id === targetGroupId ? { ...group, widgetIds: nextWidgetIds } : group,
+    ),
+  });
+}
+
+function ungroupWidget(schema: DashboardSchema, widgetId: string): DashboardSchema {
+  const groupId = widgetGroupIdMap(schema).get(widgetId);
+  if (!groupId) return schema;
+  const sourceGroup = schema.groups.find((group) => group.id === groupId);
+  if (!sourceGroup) return schema;
+  const remainingWidgetIds = sourceGroup.widgetIds.filter((id) => id !== widgetId);
+  let widgets = schema.widgets.map((widget) => (widget.id === widgetId ? withoutWidgetLayout(widget) : widget));
+  let groups = schema.groups.filter((group) => group.id !== groupId);
+
+  if (remainingWidgetIds.length >= 2) {
+    groups = [...groups, { ...sourceGroup, widgetIds: remainingWidgetIds }];
+  } else if (remainingWidgetIds.length === 1 && sourceGroup.layout) {
+    widgets = widgets.map((widget) =>
+      widget.id === remainingWidgetIds[0] ? { ...widget, layout: sourceGroup.layout } : widget,
+    );
+  }
+
+  return normalizeDashboardSchema({ ...schema, widgets, groups });
+}
+
+function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): DashboardSchema {
+  let widgets = schema.widgets.filter((widget) => widget.id !== widgetId);
+  const groups: DashboardWidgetGroup[] = [];
+
+  for (const group of schema.groups) {
+    const nextWidgetIds = group.widgetIds.filter((id) => id !== widgetId);
+    if (nextWidgetIds.length >= 2) {
+      groups.push({ ...group, widgetIds: nextWidgetIds });
+      continue;
+    }
+    if (nextWidgetIds.length === 1 && group.layout) {
+      widgets = widgets.map((widget) =>
+        widget.id === nextWidgetIds[0] ? { ...widget, layout: widget.layout ?? group.layout } : widget,
+      );
+    }
+  }
+
+  return normalizeDashboardSchema({ ...schema, widgets, groups });
+}
+
+function withoutWidgetLayout(widget: DashboardWidget): DashboardWidget {
+  const { layout: _layout, ...withoutLayout } = widget;
+  return withoutLayout;
+}
+
+function groupTitleForWidgets(widgets: DashboardWidget[]): string {
+  const titles = widgets.map((widget) => widget.title.trim()).filter(Boolean);
+  if (titles.length >= 2) return `${titles[0]} + ${titles[1]}`;
+  return "Widget group";
+}
+
+function nextGroupId(schema: DashboardSchema): string {
+  const existing = new Set(schema.groups.map((group) => group.id));
+  let index = schema.groups.length + 1;
+  let id = `group-${index}`;
+  while (existing.has(id)) {
+    index += 1;
+    id = `group-${index}`;
+  }
+  return id;
 }
 
 function DashboardBuilderLoadingState() {
@@ -701,15 +965,6 @@ function WidgetEditor({
   onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
 }) {
-  const allowedTypes = widgetTypesForKind(value.valueKind);
-  const showSliderSettings = widget.widgetType === "slider";
-  const showNumberRange = widget.widgetType === "int_field";
-  const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
-  const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
-  const sliderErrors = validateSliderWidget(widget);
-  const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
-  const defaultRange = defaultNumericRangeForValue(value);
-
   return (
     <div className="builder-config__inner">
       <div className="builder-config__top">
@@ -729,190 +984,303 @@ function WidgetEditor({
         </button>
       </div>
 
-      <FormCard title="Widget details">
-        <FieldRow label="Widget title">
-          <input
-            type="text"
-            className="builder-input"
-            value={widget.title}
-            onChange={(event) => onPatch({ title: event.target.value })}
-          />
-        </FieldRow>
-        <FieldRow label="Helper description" hint="Shown under the widget. Keep it short and friendly.">
-          <textarea
-            className="builder-input builder-input--textarea"
-            rows={2}
-            value={widget.description}
-            onChange={(event) => onPatch({ description: event.target.value })}
-          />
-        </FieldRow>
-      </FormCard>
+      <WidgetDetailsCard widget={widget} onPatch={onPatch} />
+      <WidgetBehaviorCard widget={widget} value={value} onPatch={onPatch} />
+      <WidgetBinding widget={widget} />
+    </div>
+  );
+}
 
-      <FormCard title="Widget behavior">
+function WidgetDetailsCard({
+  widget,
+  onPatch,
+}: {
+  widget: DashboardWidget;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+}) {
+  return (
+    <FormCard title="Widget details">
+      <WidgetDetailsFields widget={widget} onPatch={onPatch} />
+    </FormCard>
+  );
+}
+
+function WidgetDetailsFields({
+  widget,
+  onPatch,
+}: {
+  widget: DashboardWidget;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+}) {
+  return (
+    <>
+      <FieldRow label="Widget title">
+        <input
+          type="text"
+          className="builder-input"
+          value={widget.title}
+          onChange={(event) => onPatch({ title: event.target.value })}
+        />
+      </FieldRow>
+      <FieldRow label="Helper description" hint="Shown under the widget. Keep it short and friendly.">
+        <textarea
+          className="builder-input builder-input--textarea"
+          rows={2}
+          value={widget.description}
+          onChange={(event) => onPatch({ description: event.target.value })}
+        />
+      </FieldRow>
+    </>
+  );
+}
+
+function WidgetBehaviorCard({
+  widget,
+  value,
+  onPatch,
+}: {
+  widget: DashboardWidget;
+  value: WorkflowNodeValue;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+}) {
+  return (
+    <FormCard title="Widget behavior">
+      <WidgetBehaviorFields widget={widget} value={value} onPatch={onPatch} />
+    </FormCard>
+  );
+}
+
+function WidgetBehaviorFields({
+  widget,
+  value,
+  onPatch,
+}: {
+  widget: DashboardWidget;
+  value: WorkflowNodeValue;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+}) {
+  const allowedTypes = widgetTypesForKind(value.valueKind);
+  const showSliderSettings = widget.widgetType === "slider";
+  const showNumberRange = widget.widgetType === "int_field";
+  const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
+  const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
+  const sliderErrors = validateSliderWidget(widget);
+  const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
+  const defaultRange = defaultNumericRangeForValue(value);
+
+  return (
+    <>
+      <FieldRow label="Widget type">
+        <select
+          className="builder-input"
+          value={widget.widgetType}
+          onChange={(event) => {
+            const widgetType = event.target.value as WidgetType;
+            onPatch(widgetType === "slider" ? { widgetType, ...sliderDefaultsForValue(value, widget) } : { widgetType });
+          }}
+        >
+          {allowedTypes.map((type) => (
+            <option key={type} value={type}>
+              {WIDGET_TYPE_LABELS[type]}
+            </option>
+          ))}
+        </select>
+      </FieldRow>
+
+      {showSliderSettings ? (
         <div className="builder-config__grid">
-          <FieldRow label="Widget type">
-            <select
+          <FieldRow label="Default value" error={sliderErrorFor("defaultValue")}>
+            <input
+              type="number"
               className="builder-input"
-              value={widget.widgetType}
-              onChange={(event) => {
-                const widgetType = event.target.value as WidgetType;
-                onPatch(widgetType === "slider" ? { widgetType, ...sliderDefaultsForValue(value, widget) } : { widgetType });
-              }}
-            >
-              {allowedTypes.map((type) => (
-                <option key={type} value={type}>
-                  {WIDGET_TYPE_LABELS[type]}
-                </option>
-              ))}
-            </select>
+              value={numericInputValue(widget.defaultValue)}
+              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+              aria-invalid={Boolean(sliderErrorFor("defaultValue"))}
+              onChange={(event) => onPatch({ defaultValue: parseNumberInput(event.target.value) })}
+            />
           </FieldRow>
-          <FieldRow label="Group">
-            <SegmentedControl
-              ariaLabel="Group"
-              options={[
-                { id: "simple", label: "Simple" },
-                { id: "advanced", label: "Advanced" },
-              ]}
-              value={widget.group}
-              onChange={(group) => onPatch({ group })}
+          <FieldRow label="Minimum value" error={sliderErrorFor("min")}>
+            <input
+              type="number"
+              className="builder-input"
+              value={numericInputValue(widget.min)}
+              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+              aria-invalid={Boolean(sliderErrorFor("min"))}
+              onChange={(event) => onPatch({ min: parseNumberInput(event.target.value) })}
+            />
+          </FieldRow>
+          <FieldRow label="Maximum value" error={sliderErrorFor("max")}>
+            <input
+              type="number"
+              className="builder-input"
+              value={numericInputValue(widget.max)}
+              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
+              aria-invalid={Boolean(sliderErrorFor("max"))}
+              onChange={(event) => onPatch({ max: parseNumberInput(event.target.value) })}
+            />
+          </FieldRow>
+          <FieldRow
+            label="Step size"
+            hint="Controls how much the value changes each time the slider moves."
+            error={sliderErrorFor("step")}
+          >
+            <input
+              type="number"
+              className="builder-input"
+              value={numericInputValue(widget.step)}
+              min={0}
+              step="any"
+              aria-invalid={Boolean(sliderErrorFor("step"))}
+              onChange={(event) => onPatch({ step: parseNumberInput(event.target.value) })}
             />
           </FieldRow>
         </div>
+      ) : null}
 
-        <FieldRow label="Orientation">
-          <SegmentedControl
-            ariaLabel="Orientation"
-            options={[
-              { id: "vertical", label: "Stacked" },
-              { id: "horizontal", label: "Inline" },
-            ]}
-            value={widget.orientation}
-            onChange={(orientation) => onPatch({ orientation })}
+      {showNumberRange && value.numberRange ? (
+        <div className="builder-config__grid builder-config__grid--three">
+          <FieldRow label="Minimum">
+            <input
+              type="number"
+              className="builder-input"
+              value={widget.min ?? value.numberRange.min}
+              step={value.numberRange.step ?? 1}
+              onChange={(event) => onPatch({ min: Number(event.target.value) })}
+            />
+          </FieldRow>
+          <FieldRow label="Maximum">
+            <input
+              type="number"
+              className="builder-input"
+              value={widget.max ?? value.numberRange.max}
+              step={value.numberRange.step ?? 1}
+              onChange={(event) => onPatch({ max: Number(event.target.value) })}
+            />
+          </FieldRow>
+          <FieldRow label="Step">
+            <input
+              type="number"
+              className="builder-input"
+              value={widget.step ?? value.numberRange.step ?? 1}
+              step={value.numberRange.step ?? 1}
+              onChange={(event) => onPatch({ step: Number(event.target.value) })}
+            />
+          </FieldRow>
+        </div>
+      ) : null}
+
+      {showOptions ? (
+        <DropdownOptionsEditor
+          options={widget.options ?? value.options ?? []}
+          onChange={(options) => onPatch({ options })}
+        />
+      ) : null}
+
+      {showImageOptions ? (
+        <ToggleRow
+          checked={Boolean(widget.drawMask)}
+          onChange={(drawMask) =>
+            onPatch({ drawMask, widgetType: drawMask ? "load_image_mask" : "load_image" })
+          }
+          label="Allow drawing a mask"
+          hint="Adds a mask brush over the uploaded image."
+        />
+      ) : null}
+
+      {widget.widgetType !== "display_image" && widget.widgetType !== "slider" ? (
+        <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
+      ) : null}
+    </>
+  );
+}
+
+function WidgetBinding({ widget }: { widget: DashboardWidget }) {
+  return (
+    <div className="builder-config__binding">
+      <span>Connected to</span>
+      <code>node {widget.binding.nodeId}</code>
+      <span className="builder-config__binding-arrow">→</span>
+      <code>{widget.binding.inputName}</code>
+    </div>
+  );
+}
+
+function GroupEditor({
+  group,
+  widgets,
+  valueIndex,
+  onPatchGroup,
+  onPatchWidget,
+  onSelectWidget,
+}: {
+  group: DashboardWidgetGroup;
+  widgets: DashboardWidget[];
+  valueIndex: Map<string, { node: WorkflowNode; value: WorkflowNodeValue }>;
+  onPatchGroup: (patch: Partial<DashboardWidgetGroup>) => void;
+  onPatchWidget: (widgetId: string, patch: Partial<DashboardWidget>) => void;
+  onSelectWidget: (widgetId: string) => void;
+}) {
+  return (
+    <div className="builder-config__inner">
+      <div className="builder-config__top">
+        <div>
+          <p className="builder-config__breadcrumb">
+            <span>Created widgets</span>
+            <ChevronRight size={12} aria-hidden="true" />
+            <span>{group.title}</span>
+          </p>
+          <h2>Configure group</h2>
+          <p className="builder-config__summary">
+            You are editing the whole group. Each widget inside keeps its own binding, value, validation, and default.
+          </p>
+        </div>
+      </div>
+
+      <FormCard title="Group details">
+        <FieldRow label="Group title">
+          <input
+            type="text"
+            className="builder-input"
+            value={group.title}
+            onChange={(event) => onPatchGroup({ title: event.target.value })}
+          />
+        </FieldRow>
+        <FieldRow label="Group helper description" hint="Shown under the group title on the dashboard.">
+          <textarea
+            className="builder-input builder-input--textarea"
+            rows={2}
+            value={group.description}
+            onChange={(event) => onPatchGroup({ description: event.target.value })}
           />
         </FieldRow>
       </FormCard>
 
-      {showSliderSettings ? (
-        <FormCard title="Slider settings">
-          <div className="builder-config__grid">
-            <FieldRow label="Default value" error={sliderErrorFor("defaultValue")}>
-              <input
-                type="number"
-                className="builder-input"
-                value={numericInputValue(widget.defaultValue)}
-                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-                aria-invalid={Boolean(sliderErrorFor("defaultValue"))}
-                onChange={(event) => onPatch({ defaultValue: parseNumberInput(event.target.value) })}
-              />
-            </FieldRow>
-            <FieldRow label="Minimum value" error={sliderErrorFor("min")}>
-              <input
-                type="number"
-                className="builder-input"
-                value={numericInputValue(widget.min)}
-                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-                aria-invalid={Boolean(sliderErrorFor("min"))}
-                onChange={(event) => onPatch({ min: parseNumberInput(event.target.value) })}
-              />
-            </FieldRow>
-            <FieldRow label="Maximum value" error={sliderErrorFor("max")}>
-              <input
-                type="number"
-                className="builder-input"
-                value={numericInputValue(widget.max)}
-                step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-                aria-invalid={Boolean(sliderErrorFor("max"))}
-                onChange={(event) => onPatch({ max: parseNumberInput(event.target.value) })}
-              />
-            </FieldRow>
-            <FieldRow
-              label="Step size"
-              hint="Controls how much the value changes each time the slider moves."
-              error={sliderErrorFor("step")}
-            >
-              <input
-                type="number"
-                className="builder-input"
-                value={numericInputValue(widget.step)}
-                min={0}
-                step="any"
-                aria-invalid={Boolean(sliderErrorFor("step"))}
-                onChange={(event) => onPatch({ step: parseNumberInput(event.target.value) })}
-              />
-            </FieldRow>
-          </div>
-        </FormCard>
-      ) : null}
-
-      {showNumberRange && value.numberRange ? (
-        <FormCard title="Numeric range">
-          <div className="builder-config__grid builder-config__grid--three">
-            <FieldRow label="Minimum">
-              <input
-                type="number"
-                className="builder-input"
-                value={widget.min ?? value.numberRange.min}
-                step={value.numberRange.step ?? 1}
-                onChange={(event) => onPatch({ min: Number(event.target.value) })}
-              />
-            </FieldRow>
-            <FieldRow label="Maximum">
-              <input
-                type="number"
-                className="builder-input"
-                value={widget.max ?? value.numberRange.max}
-                step={value.numberRange.step ?? 1}
-                onChange={(event) => onPatch({ max: Number(event.target.value) })}
-              />
-            </FieldRow>
-            <FieldRow label="Step">
-              <input
-                type="number"
-                className="builder-input"
-                value={widget.step ?? value.numberRange.step ?? 1}
-                step={value.numberRange.step ?? 1}
-                onChange={(event) => onPatch({ step: Number(event.target.value) })}
-              />
-            </FieldRow>
-          </div>
-        </FormCard>
-      ) : null}
-
-      {showOptions ? (
-        <FormCard title="Options">
-          <DropdownOptionsEditor
-            options={widget.options ?? value.options ?? []}
-            onChange={(options) => onPatch({ options })}
-          />
-        </FormCard>
-      ) : null}
-
-      {showImageOptions ? (
-        <FormCard title="Image input">
-          <ToggleRow
-            checked={Boolean(widget.drawMask)}
-            onChange={(drawMask) =>
-              onPatch({ drawMask, widgetType: drawMask ? "load_image_mask" : "load_image" })
-            }
-            label="Allow drawing a mask"
-            hint="Adds a mask brush over the uploaded image."
-          />
-        </FormCard>
-      ) : null}
-
-      {widget.widgetType !== "display_image" ? (
-        widget.widgetType === "slider" ? null : (
-          <FormCard title="Default value">
-            <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
-          </FormCard>
-        )
-      ) : null}
-
-      <div className="builder-config__binding">
-        <span>Connected to</span>
-        <code>node {widget.binding.nodeId}</code>
-        <span className="builder-config__binding-arrow">→</span>
-        <code>{widget.binding.inputName}</code>
+      <div className="builder-group-editor__children">
+        {widgets.map((widget, index) => {
+          const record = valueIndex.get(widget.valueId);
+          if (!record) return null;
+          return (
+            <section className="builder-card builder-card--child-widget" key={widget.id}>
+              <header className="builder-card__child-header">
+                <div>
+                  <h3>{widget.title || `Widget ${index + 1}`}</h3>
+                  <p>
+                    {WIDGET_TYPE_LABELS[widget.widgetType]} · node {widget.binding.nodeId} → {widget.binding.inputName}
+                  </p>
+                </div>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => onSelectWidget(widget.id)}>
+                  Edit only this widget
+                </button>
+              </header>
+              <div className="builder-card__body">
+                <WidgetDetailsFields widget={widget} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
+                <div className="builder-card__divider" />
+                <WidgetBehaviorFields widget={widget} value={record.value} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
+                <WidgetBinding widget={widget} />
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
@@ -1167,56 +1535,223 @@ function ToggleRow({
   );
 }
 
-function PreviewSection({
-  title,
-  widgets,
+function CreatedWidgetsList({
+  items,
   selectedWidgetId,
-  onSelect,
-  onRemove,
-  muted,
+  selectedGroupId,
+  draggingWidgetId,
+  dropPreview,
+  onSelectWidget,
+  onSelectGroup,
+  onRemoveWidget,
+  onDragStart,
+  onDragEnd,
+  onWidgetDragOver,
+  onWidgetDrop,
+  onGroupDragOver,
+  onGroupDrop,
+  onUngroupDragOver,
+  onUngroupDrop,
 }: {
-  title: string;
-  widgets: DashboardWidget[];
+  items: DashboardTopLevelItem[];
   selectedWidgetId: string | null;
-  onSelect: (id: string) => void;
-  onRemove: (id: string) => void;
-  muted?: boolean;
+  selectedGroupId: string | null;
+  draggingWidgetId: string | null;
+  dropPreview:
+    | { kind: "group"; targetWidgetId: string }
+    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
+    | { kind: "ungroup"; sourceGroupId: string }
+    | null;
+  onSelectWidget: (id: string) => void;
+  onSelectGroup: (id: string) => void;
+  onRemoveWidget: (id: string) => void;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  onWidgetDragOver: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
+  onWidgetDrop: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
+  onGroupDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
+  onGroupDrop: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
+  onUngroupDragOver: (event: DragEvent<HTMLElement>) => void;
+  onUngroupDrop: (event: DragEvent<HTMLElement>) => void;
 }) {
   return (
-    <section className={`preview-section ${muted ? "preview-section--muted" : ""}`}>
+    <section className="preview-section">
       <header>
-        <h4>{title}</h4>
+        <h4>Created widgets</h4>
       </header>
-      <div className="preview-stack">
-        {widgets.map((widget) => (
+      <div
+        className={`preview-stack ${dropPreview?.kind === "ungroup" ? "preview-stack--ungroup-target" : ""}`}
+        onDragOver={onUngroupDragOver}
+        onDrop={onUngroupDrop}
+      >
+        {items.map((item) => (
+          item.kind === "group" ? (
+            <PreviewGroup
+              key={item.id}
+              item={item}
+              selectedGroupId={selectedGroupId}
+              selectedWidgetId={selectedWidgetId}
+              draggingWidgetId={draggingWidgetId}
+              dropPreview={dropPreview}
+              onSelectGroup={() => onSelectGroup(item.id)}
+              onSelectWidget={onSelectWidget}
+              onRemoveWidget={onRemoveWidget}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onWidgetDragOver={onWidgetDragOver}
+              onWidgetDrop={onWidgetDrop}
+              onGroupDragOver={onGroupDragOver}
+              onGroupDrop={onGroupDrop}
+            />
+          ) : (
+            <PreviewWidget
+              key={item.id}
+              widget={item.widget}
+              isSelected={selectedWidgetId === item.id}
+              dragging={draggingWidgetId === item.id}
+              groupPreview={dropPreview?.kind === "group" && dropPreview.targetWidgetId === item.id}
+              onSelect={() => onSelectWidget(item.id)}
+              onRemove={() => onRemoveWidget(item.id)}
+              onDragStart={() => onDragStart(item.id)}
+              onDragEnd={onDragEnd}
+              onDragOver={(event) => onWidgetDragOver(event, item.id)}
+              onDrop={(event) => onWidgetDrop(event, item.id)}
+            />
+          )
+        ))}
+        {dropPreview?.kind === "ungroup" ? (
+          <div className="preview-ungroup-target">Drop here to remove this widget from its group</div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function PreviewGroup({
+  item,
+  selectedGroupId,
+  selectedWidgetId,
+  draggingWidgetId,
+  dropPreview,
+  onSelectGroup,
+  onSelectWidget,
+  onRemoveWidget,
+  onDragStart,
+  onDragEnd,
+  onWidgetDragOver,
+  onWidgetDrop,
+  onGroupDragOver,
+  onGroupDrop,
+}: {
+  item: Extract<DashboardTopLevelItem, { kind: "group" }>;
+  selectedGroupId: string | null;
+  selectedWidgetId: string | null;
+  draggingWidgetId: string | null;
+  dropPreview:
+    | { kind: "group"; targetWidgetId: string }
+    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
+    | { kind: "ungroup"; sourceGroupId: string }
+    | null;
+  onSelectGroup: () => void;
+  onSelectWidget: (id: string) => void;
+  onRemoveWidget: (id: string) => void;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  onWidgetDragOver: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
+  onWidgetDrop: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
+  onGroupDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
+  onGroupDrop: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
+}) {
+  const isSelected = selectedGroupId === item.id;
+  const isGroupTarget = dropPreview?.kind === "group-add" && dropPreview.targetGroupId === item.id && !dropPreview.targetWidgetId;
+  return (
+    <article
+      className={`preview-group ${isSelected ? "preview-group--selected" : ""} ${isGroupTarget ? "preview-group--drop-target" : ""}`}
+      onClick={onSelectGroup}
+      onDragOver={(event) => onGroupDragOver(event, item.id)}
+      onDrop={(event) => onGroupDrop(event, item.id)}
+    >
+      <div className="preview-group__header">
+        <div className="preview-group__title">
+          <span aria-hidden="true">
+            <LayoutGrid size={15} />
+          </span>
+          <div>
+            <h5>{item.group.title}</h5>
+            {item.group.description ? <p>{item.group.description}</p> : <p>{item.widgets.length} widgets grouped together</p>}
+          </div>
+        </div>
+      </div>
+      <div className="preview-group__children">
+        {item.widgets.map((widget) => (
           <PreviewWidget
             key={widget.id}
             widget={widget}
+            compact
             isSelected={selectedWidgetId === widget.id}
-            onSelect={() => onSelect(widget.id)}
-            onRemove={() => onRemove(widget.id)}
+            dragging={draggingWidgetId === widget.id}
+            groupPreview={
+              dropPreview?.kind === "group-add" &&
+              dropPreview.targetGroupId === item.id &&
+              dropPreview.targetWidgetId === widget.id
+            }
+            onSelect={() => onSelectWidget(widget.id)}
+            onRemove={() => onRemoveWidget(widget.id)}
+            onDragStart={() => onDragStart(widget.id)}
+            onDragEnd={onDragEnd}
+            onDragOver={(event) => onWidgetDragOver(event, widget.id)}
+            onDrop={(event) => onWidgetDrop(event, widget.id)}
           />
         ))}
       </div>
-    </section>
+    </article>
   );
 }
 
 function PreviewWidget({
   widget,
   isSelected,
+  dragging = false,
+  compact = false,
+  groupPreview = false,
   onSelect,
   onRemove,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: {
   widget: DashboardWidget;
   isSelected: boolean;
+  dragging?: boolean;
+  compact?: boolean;
+  groupPreview?: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOver: (event: DragEvent<HTMLElement>) => void;
+  onDrop: (event: DragEvent<HTMLElement>) => void;
 }) {
   return (
     <article
-      className={`preview-widget ${isSelected ? "preview-widget--selected" : ""}`}
-      onClick={onSelect}
+      className={`preview-widget ${isSelected ? "preview-widget--selected" : ""} ${compact ? "preview-widget--compact" : ""} ${
+        dragging ? "preview-widget--dragging" : ""
+      } ${groupPreview ? "preview-widget--group-preview" : ""}`}
+      draggable
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect();
+      }}
+      onDragStart={(event) => {
+        event.stopPropagation();
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", widget.id);
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <div className="preview-widget__handle" aria-hidden="true">
         <GripVertical size={14} />

@@ -37,6 +37,7 @@ const placedSchema: DashboardSchema = {
   workflowId: "wf-1",
   workflowName: "Workflow",
   layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [],
   widgets: [
     {
       id: "ctrl-prompt",
@@ -45,10 +46,44 @@ const placedSchema: DashboardSchema = {
       widgetType: "textarea",
       title: "Prompt",
       description: "",
-      orientation: "vertical",
-      group: "simple",
       defaultValue: "a lake",
       layout: { x: 0, y: 0, w: 16, h: 6 },
+    },
+  ],
+};
+
+const groupedPlacedSchema: DashboardSchema = {
+  version: 1,
+  workflowId: "wf-1",
+  workflowName: "Workflow",
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [
+    {
+      id: "main-group",
+      title: "Main group",
+      description: "Grouped controls",
+      widgetIds: ["ctrl-prompt", "ctrl-steps"],
+      layout: { x: 0, y: 0, w: 16, h: 10 },
+    },
+  ],
+  widgets: [
+    {
+      id: "ctrl-prompt",
+      valueId: "node-6-text",
+      binding: { nodeId: "6", inputName: "text" },
+      widgetType: "textarea",
+      title: "Prompt",
+      description: "",
+      defaultValue: "a lake",
+    },
+    {
+      id: "ctrl-steps",
+      valueId: "node-3-steps",
+      binding: { nodeId: "3", inputName: "steps" },
+      widgetType: "int_field",
+      title: "Steps",
+      description: "",
+      defaultValue: 20,
     },
   ],
 };
@@ -193,6 +228,29 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
+  });
+
+  it("treats a group as one canvas item instead of child widget blocks", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={groupedPlacedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /resize main group from top-left/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize prompt from top-left/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resize steps from top-left/i })).not.toBeInTheDocument();
   });
 
   it("renders the layout builder canvas in the full workspace shell", async () => {

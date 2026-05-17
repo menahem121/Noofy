@@ -6,6 +6,8 @@ Dashboard widgets are the app-owned controls shown on the Noofy workflow dashboa
 
 Widget layout uses the shared 32-column dashboard grid. The minimum sizes below are stored as grid cells and are also the default size for newly placed widgets. In code, these map to `w`, `h`, `minW`, and `minH` from `frontend/src/lib/widgetSizes.ts`.
 
+Widget groups are visual containers around existing controls. A group owns one dashboard block layout and an ordered list of child control IDs; child controls keep their own bindings, defaults, validation, values, and widget configuration.
+
 ## Existing Widgets
 
 | Widget type | Minimum grid columns (`w`) | Minimum grid rows (`h`) | Use case |

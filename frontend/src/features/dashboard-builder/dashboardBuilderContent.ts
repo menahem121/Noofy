@@ -64,8 +64,6 @@ export interface MockWorkflow {
   nodes: WorkflowNode[];
 }
 
-export type WidgetGroup = "simple" | "advanced";
-
 export interface DashboardWidgetLayout {
   x: number;
   y: number;
@@ -89,8 +87,6 @@ export interface DashboardWidget {
   widgetType: WidgetType;
   title: string;
   description: string;
-  orientation: "vertical" | "horizontal";
-  group: WidgetGroup;
   defaultValue: unknown;
   min?: number;
   max?: number;
@@ -101,13 +97,26 @@ export interface DashboardWidget {
   layout?: DashboardWidgetLayout;
 }
 
+export interface DashboardWidgetGroup {
+  id: string;
+  title: string;
+  description: string;
+  widgetIds: string[];
+  layout?: DashboardWidgetLayout;
+}
+
 export interface DashboardSchema {
   version: number;
   workflowId: string;
   workflowName: string;
   widgets: DashboardWidget[];
+  groups: DashboardWidgetGroup[];
   layout: DashboardCanvasLayout;
 }
+
+export type DashboardTopLevelItem =
+  | { kind: "widget"; id: string; widget: DashboardWidget; layout?: DashboardWidgetLayout }
+  | { kind: "group"; id: string; group: DashboardWidgetGroup; widgets: DashboardWidget[]; layout?: DashboardWidgetLayout };
 
 export type DashboardDraftStatus = "draft" | "configured";
 
@@ -133,7 +142,7 @@ export function loadDashboardDraft(workflowId: string): DashboardSchema | null {
     ) {
       return null;
     }
-    return parsed as DashboardSchema;
+    return normalizeDashboardSchema(parsed as DashboardSchema);
   } catch {
     return null;
   }
@@ -332,15 +341,6 @@ export function suggestDescription(value: WorkflowNodeValue): string {
   return hints[key] ?? value.hint ?? "";
 }
 
-export function defaultGroupFor(value: WorkflowNodeValue): WidgetGroup {
-  if (value.technical) return "advanced";
-  if (value.valueKind === "seed") return "advanced";
-  if (["denoise", "cfg", "steps", "sampler", "scheduler"].includes(value.inputName)) {
-    return "advanced";
-  }
-  return "simple";
-}
-
 export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
   const widgetType = suggestWidgetType(value);
   const numericRange = widgetType === "slider" ? defaultNumericRangeForValue(value) : value.numberRange;
@@ -351,8 +351,6 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
     widgetType,
     title: suggestTitle(value, node.title),
     description: suggestDescription(value),
-    orientation: "vertical",
-    group: defaultGroupFor(value),
     defaultValue: value.rawValue,
     options: value.options,
     min: numericRange?.min,
@@ -591,8 +589,15 @@ export interface BackendDashboardControl {
   input_id?: string;
   output_id?: string;
   description?: string;
-  group?: string;
   show_download?: boolean;
+  layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
+}
+
+export interface BackendDashboardGroup {
+  id: string;
+  title: string;
+  description?: string;
+  control_ids: string[];
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
@@ -600,6 +605,7 @@ export interface BackendDashboardSection {
   id: string;
   title: string;
   controls: BackendDashboardControl[];
+  groups?: BackendDashboardGroup[];
 }
 
 export interface BackendDashboardPayload {
@@ -687,8 +693,10 @@ export function workflowFromBindableInputs(
 
 /** Convert frontend DashboardSchema into a backend save payload. */
 export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
+  const normalized = normalizeDashboardSchema(schema);
   const isOutputWidget = (widgetType: string) => widgetType === "display_image" || widgetType === "result_image";
-  const inputs: BackendWorkflowInput[] = schema.widgets
+  const groupedWidgetIds = groupedWidgetIdSet(normalized);
+  const inputs: BackendWorkflowInput[] = normalized.widgets
     .filter((w) => !isOutputWidget(w.widgetType))
     .map((w) => ({
       id: w.id,
@@ -704,7 +712,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       },
     }));
 
-  const outputWidgets = schema.widgets.filter((w) => isOutputWidget(w.widgetType));
+  const outputWidgets = normalized.widgets.filter((w) => isOutputWidget(w.widgetType));
   const outputIdForWidget = (widgetId: string) => {
     const index = outputWidgets.findIndex((widget) => widget.id === widgetId);
     return index <= 0 ? "image" : `image_${index + 1}`;
@@ -716,25 +724,42 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     type: "image",
   }));
 
-  const controls: BackendDashboardControl[] = schema.widgets.map((w, i) => ({
+  const controls: BackendDashboardControl[] = normalized.widgets.map((w, i) => ({
     id: w.id,
     type: w.widgetType,
     label: w.title,
     input_id: !isOutputWidget(w.widgetType) ? w.id : undefined,
     output_id: isOutputWidget(w.widgetType) ? outputIdForWidget(w.id) : undefined,
     description: w.description,
-    group: w.group,
     show_download: Boolean(w.showDownload),
-    layout: w.layout
+    layout: !groupedWidgetIds.has(w.id) && w.layout
       ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
-      : { x: 0, y: i * 4, w: 32, h: 4 },
+      : !groupedWidgetIds.has(w.id)
+        ? { x: 0, y: i * 4, w: 32, h: 4 }
+        : undefined,
+  }));
+  const groups: BackendDashboardGroup[] = normalized.groups.map((group) => ({
+    id: group.id,
+    title: group.title,
+    description: group.description,
+    control_ids: group.widgetIds,
+    layout: group.layout
+      ? {
+          x: group.layout.x,
+          y: group.layout.y,
+          w: group.layout.w,
+          h: group.layout.h,
+          min_w: group.layout.minW,
+          min_h: group.layout.minH,
+        }
+      : undefined,
   }));
 
   const dashboard: BackendDashboardPayload = {
     version: "0.1.0",
     status: "configured",
     outputs,
-    sections: [{ id: "main", title: "Main", controls }],
+    sections: [{ id: "main", title: "Main", controls, groups }],
   };
 
   return { inputs, dashboard };
@@ -756,8 +781,6 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
       widgetType: "textarea",
       title: suggestTitle(promptValue, node.title),
       description: suggestDescription(promptValue),
-      orientation: "vertical",
-      group: "simple",
       defaultValue: promptValue.rawValue,
     });
   }
@@ -767,6 +790,7 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     workflowId: workflow.id,
     workflowName: workflow.name,
     widgets,
+    groups: [],
     layout: {
       gridColumns: 32,
       rowHeight: 32,
@@ -774,4 +798,85 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
       responsive: true,
     },
   };
+}
+
+export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
+  const widgets = Array.isArray(schema.widgets) ? schema.widgets : [];
+  const widgetIds = new Set(widgets.map((widget) => widget.id));
+  const usedWidgetIds = new Set<string>();
+  const usedGroupIds = new Set<string>();
+  const groups: DashboardWidgetGroup[] = [];
+
+  for (const rawGroup of Array.isArray(schema.groups) ? schema.groups : []) {
+    if (!rawGroup || typeof rawGroup.id !== "string" || usedGroupIds.has(rawGroup.id)) continue;
+    const widgetIdsForGroup: string[] = [];
+    for (const widgetId of Array.isArray(rawGroup.widgetIds) ? rawGroup.widgetIds : []) {
+      if (typeof widgetId !== "string") continue;
+      if (!widgetIds.has(widgetId) || usedWidgetIds.has(widgetId) || widgetIdsForGroup.includes(widgetId)) continue;
+      widgetIdsForGroup.push(widgetId);
+    }
+    if (widgetIdsForGroup.length < 2) continue;
+    widgetIdsForGroup.forEach((widgetId) => usedWidgetIds.add(widgetId));
+    usedGroupIds.add(rawGroup.id);
+    groups.push({
+      id: rawGroup.id,
+      title: typeof rawGroup.title === "string" && rawGroup.title.trim() ? rawGroup.title : "Widget group",
+      description: typeof rawGroup.description === "string" ? rawGroup.description : "",
+      widgetIds: widgetIdsForGroup,
+      layout: rawGroup.layout,
+    });
+  }
+
+  return {
+    ...schema,
+    widgets,
+    groups,
+  };
+}
+
+export function groupedWidgetIdSet(schema: DashboardSchema): Set<string> {
+  const grouped = new Set<string>();
+  for (const group of schema.groups ?? []) {
+    for (const widgetId of group.widgetIds) {
+      grouped.add(widgetId);
+    }
+  }
+  return grouped;
+}
+
+export function widgetGroupIdMap(schema: DashboardSchema): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const group of schema.groups ?? []) {
+    for (const widgetId of group.widgetIds) {
+      map.set(widgetId, group.id);
+    }
+  }
+  return map;
+}
+
+export function topLevelDashboardItems(schema: DashboardSchema): DashboardTopLevelItem[] {
+  const normalized = normalizeDashboardSchema(schema);
+  const widgetById = new Map(normalized.widgets.map((widget) => [widget.id, widget]));
+  const groupByWidgetId = widgetGroupIdMap(normalized);
+  const groupById = new Map(normalized.groups.map((group) => [group.id, group]));
+  const emittedGroups = new Set<string>();
+  const items: DashboardTopLevelItem[] = [];
+
+  for (const widget of normalized.widgets) {
+    const groupId = groupByWidgetId.get(widget.id);
+    if (!groupId) {
+      items.push({ kind: "widget", id: widget.id, widget, layout: widget.layout });
+      continue;
+    }
+
+    if (emittedGroups.has(groupId)) continue;
+    const group = groupById.get(groupId);
+    if (!group) continue;
+    const widgets = group.widgetIds.map((widgetId) => widgetById.get(widgetId)).filter((item): item is DashboardWidget => Boolean(item));
+    if (widgets.length < 2) continue;
+    items.push({ kind: "group", id: group.id, group, widgets, layout: group.layout });
+    emittedGroups.add(groupId);
+  }
+
+  return items;
 }

@@ -30,14 +30,15 @@ function pruneState(
   state: WorkflowUserState,
   packageDefaults: Record<string, unknown>,
   inputIndex: Map<string, WorkflowInputDef>,
-  validControlIds: string[],
+  validLayoutIds: string[],
+  validOutputControlIds: string[],
   currentDashboardVersion: string,
 ): WorkflowUserState {
   if (state.dashboard_version === currentDashboardVersion) return state;
 
   const validInputIds = new Set(inputIndex.keys());
-  const validLayoutIds = new Set(validControlIds);
-  const validOutputControlIds = new Set(validControlIds);
+  const validLayoutIdSet = new Set(validLayoutIds);
+  const validOutputControlIdSet = new Set(validOutputControlIds);
   const prunedValues: Record<string, unknown> = {};
   for (const id of validInputIds) {
     prunedValues[id] = packageDefaults[id];
@@ -45,11 +46,11 @@ function pruneState(
 
   const prunedOverrides: Record<string, { x: number; y: number; w: number; h: number }> = {};
   for (const [id, override] of Object.entries(state.layout_overrides)) {
-    if (validLayoutIds.has(id)) prunedOverrides[id] = override;
+    if (validLayoutIdSet.has(id)) prunedOverrides[id] = override;
   }
   const prunedOutputPreferences: OutputPreferences = {};
   for (const [id, preference] of Object.entries(state.output_preferences ?? {})) {
-    if (validOutputControlIds.has(id)) prunedOutputPreferences[id] = preference;
+    if (validOutputControlIdSet.has(id)) prunedOutputPreferences[id] = preference;
   }
 
   return {
@@ -66,7 +67,8 @@ export function useWorkflowUserState(
   packageDefaults: Record<string, unknown>,
   dashboardVersion: string,
   inputIndex: Map<string, WorkflowInputDef>,
-  validControlIds: string[] = EMPTY_CONTROL_IDS,
+  validLayoutIds: string[] = EMPTY_CONTROL_IDS,
+  validOutputControlIds: string[] = validLayoutIds,
 ) {
   const [userState, setUserState] = useState<WorkflowUserState>(() =>
     emptyState(workflowId, dashboardVersion),
@@ -81,7 +83,8 @@ export function useWorkflowUserState(
 
   const packageDefaultsKey = useMemo(() => stableRecordKey(packageDefaults), [packageDefaults]);
   const inputIdsKey = useMemo(() => stableListKey(Array.from(inputIndex.keys())), [inputIndex]);
-  const controlIdsKey = useMemo(() => stableListKey(validControlIds), [validControlIds]);
+  const layoutIdsKey = useMemo(() => stableListKey(validLayoutIds), [validLayoutIds]);
+  const outputControlIdsKey = useMemo(() => stableListKey(validOutputControlIds), [validOutputControlIds]);
   const hasPackageContext = dashboardVersion !== "" || inputIndex.size > 0 || Object.keys(packageDefaults).length > 0;
 
   function cancelPendingSave() {
@@ -107,7 +110,7 @@ export function useWorkflowUserState(
     fetchUserState(workflowId)
       .then((remote) => {
         if (!active) return;
-        const pruned = pruneState(remote, packageDefaults, inputIndex, validControlIds, dashboardVersion);
+        const pruned = pruneState(remote, packageDefaults, inputIndex, validLayoutIds, validOutputControlIds, dashboardVersion);
         const merged: WorkflowUserState = {
           ...pruned,
           values: {
@@ -138,7 +141,7 @@ export function useWorkflowUserState(
       active = false;
       cancelPendingSave();
     };
-  }, [workflowId, dashboardVersion, packageDefaultsKey, inputIdsKey, controlIdsKey, hasPackageContext]);
+  }, [workflowId, dashboardVersion, packageDefaultsKey, inputIdsKey, layoutIdsKey, outputControlIdsKey, hasPackageContext]);
 
   function scheduleSave(next: WorkflowUserState) {
     cancelPendingSave();

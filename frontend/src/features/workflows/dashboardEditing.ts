@@ -1,14 +1,16 @@
 import type {
   DashboardSchema,
   DashboardWidget,
-  WidgetGroup,
   WidgetType,
 } from "../dashboard-builder/dashboardBuilderContent";
 import type {
+  DashboardControlDef,
+  DashboardControlGroupDef,
   WorkflowInputDef,
   WorkflowOutputDef,
   WorkflowPackageResponse,
 } from "../../lib/api/noofyApi";
+import { defaultLayoutForWidgetGroup } from "../../lib/widgetSizes";
 
 export function buildDashboardSchemaForEditing(packageData: WorkflowPackageResponse): DashboardSchema {
   const inputIndex = new Map<string, WorkflowInputDef>();
@@ -17,9 +19,13 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
   for (const output of packageData.outputs) outputIndex.set(output.id, output);
 
   const widgets: DashboardWidget[] = [];
+  const groups = packageData.dashboard.sections.flatMap((section) =>
+    dashboardGroupsForBuilder(section.groups ?? [], section.controls),
+  );
+  const groupedControlIds = new Set(groups.flatMap((group) => group.widgetIds));
   for (const section of packageData.dashboard.sections) {
     for (const control of section.controls) {
-      const layout = control.layout
+      const layout = !groupedControlIds.has(control.id) && control.layout
         ? {
             x: control.layout.x,
             y: control.layout.y,
@@ -40,8 +46,6 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           widgetType: toBuilderWidgetType(control.type),
           title: control.label,
           description: control.description ?? "",
-          orientation: "vertical",
-          group: toBuilderWidgetGroup(control.group),
           defaultValue: input.default,
           min: numberValidation(input.validation.min),
           max: numberValidation(input.validation.max),
@@ -59,8 +63,6 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           widgetType: "display_image",
           title: control.label,
           description: control.description ?? "",
-          orientation: "vertical",
-          group: toBuilderWidgetGroup(control.group),
           defaultValue: null,
           showDownload: Boolean(control.show_download),
           layout,
@@ -74,12 +76,45 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
     workflowId: packageData.metadata.id,
     workflowName: packageData.metadata.name,
     widgets,
+    groups,
     layout: {
       gridColumns: 32,
       rowHeight: 32,
       gridGap: 14,
       responsive: true,
     },
+  };
+}
+
+function dashboardGroupsForBuilder(groups: DashboardControlGroupDef[], controls: DashboardControlDef[]) {
+  const controlTypeById = new Map(controls.map((control) => [control.id, control.type]));
+  return groups.map((group) => {
+    const childTypes = group.control_ids
+      .map((controlId) => controlTypeById.get(controlId))
+      .filter((type): type is string => Boolean(type));
+    return groupForBuilder(group, childTypes);
+  });
+}
+
+function groupForBuilder(group: DashboardControlGroupDef, childTypes: string[]) {
+  const fallback = defaultLayoutForWidgetGroup(childTypes);
+  const minW = group.layout?.min_w ?? fallback.minW;
+  const minH = group.layout?.min_h ?? fallback.minH;
+  return {
+    id: group.id,
+    title: group.title,
+    description: group.description ?? "",
+    widgetIds: group.control_ids,
+    layout: group.layout
+      ? {
+          x: group.layout.x,
+          y: group.layout.y,
+          w: Math.max(group.layout.w, minW ?? 2),
+          h: Math.max(group.layout.h, minH ?? 2),
+          minW,
+          minH,
+        }
+      : undefined,
   };
 }
 
@@ -99,10 +134,6 @@ function toBuilderWidgetType(type: string): WidgetType {
     "select",
   ]);
   return knownTypes.has(type as WidgetType) ? (type as WidgetType) : "string_field";
-}
-
-function toBuilderWidgetGroup(group: string | undefined): WidgetGroup {
-  return group === "advanced" ? "advanced" : "simple";
 }
 
 function numberValidation(value: unknown): number | undefined {

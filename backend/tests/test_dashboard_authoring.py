@@ -293,6 +293,79 @@ def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
     ), "validate_dashboard must not write any files"
 
 
+def test_save_dashboard_persists_visual_control_groups(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [
+        {
+            "id": "width",
+            "label": "Width",
+            "control": "slider",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": 512,
+            "validation": {"min": 256, "max": 1024, "step": 64},
+        },
+        {
+            "id": "height",
+            "label": "Height",
+            "control": "slider",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": 512,
+            "validation": {"min": 256, "max": 1024, "step": 64},
+        },
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "width", "type": "slider", "label": "Width", "input_id": "width"},
+                    {"id": "height", "type": "slider", "label": "Height", "input_id": "height"},
+                ],
+                "groups": [
+                    {
+                        "id": "size-group",
+                        "title": "Image size",
+                        "description": "Output dimensions.",
+                        "control_ids": ["width", "height"],
+                        "layout": {"x": 0, "y": 0, "w": 12, "h": 8},
+                    }
+                ],
+            }
+        ],
+    }
+
+    service.save_dashboard(workflow_id, inputs, dashboard)
+
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    pkg = loader.get_package(workflow_id)
+    group = pkg.dashboard.sections[0].groups[0]
+    assert group.id == "size-group"
+    assert group.control_ids == ["width", "height"]
+    assert group.layout is not None
+    assert group.layout.w == 12
+
+
+def test_save_dashboard_rejects_invalid_control_groups(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["sections"][0]["groups"] = [
+        {"id": "broken", "title": "Broken", "control_ids": ["ctrl_prompt", "missing_control"]}
+    ]
+
+    with pytest.raises(DashboardAuthoringError, match="missing control"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
 def test_dashboard_schema_accepts_api_credential_without_raw_secret(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)

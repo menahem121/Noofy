@@ -27,6 +27,7 @@ const selectSchema: DashboardSchema = {
   workflowId: "imported_text_to_image_demo",
   workflowName: "Text to Image Demo",
   layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [],
   widgets: [
     {
       id: "ctrl-node-3-sampler_name",
@@ -35,8 +36,6 @@ const selectSchema: DashboardSchema = {
       widgetType: "select",
       title: "Sampler",
       description: "",
-      orientation: "vertical",
-      group: "advanced",
       defaultValue: "euler",
       options: ["euler", "heun", "dpm_2"],
       layout: { x: 0, y: 0, w: 10, h: 3 },
@@ -49,6 +48,7 @@ const invalidSliderSchema: DashboardSchema = {
   workflowId: "imported_text_to_image_demo",
   workflowName: "Text to Image Demo",
   layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [],
   widgets: [
     {
       id: "ctrl-node-3-denoise",
@@ -57,8 +57,6 @@ const invalidSliderSchema: DashboardSchema = {
       widgetType: "slider",
       title: "Transformation level",
       description: "",
-      orientation: "vertical",
-      group: "advanced",
       defaultValue: 0.3,
       min: 0,
       max: 1,
@@ -213,6 +211,8 @@ describe("DashboardBuilderPage", () => {
 
     expect(await screen.findByText("Default value must match the step size from the minimum value.")).toBeInTheDocument();
     expect(screen.getByText("Controls how much the value changes each time the slider moves.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Group$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Orientation$/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^continue$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /save as draft/i })).toBeDisabled();
 
@@ -236,6 +236,7 @@ describe("DashboardBuilderPage", () => {
       workflowId: "wf-saved",
       workflowName: "Saved workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
       widgets: [
         {
           id: "prompt",
@@ -244,8 +245,6 @@ describe("DashboardBuilderPage", () => {
           widgetType: "textarea",
           title: "Prompt",
           description: "",
-          orientation: "vertical",
-          group: "simple",
           defaultValue: "a lake",
         },
         {
@@ -255,8 +254,6 @@ describe("DashboardBuilderPage", () => {
           widgetType: "int_field",
           title: "Steps",
           description: "",
-          orientation: "vertical",
-          group: "advanced",
           defaultValue: 20,
         },
       ],

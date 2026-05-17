@@ -127,7 +127,6 @@ class DashboardControl(BaseModel):
     input_id: str | None = None
     output_id: str | None = None
     description: str = ""
-    group: Literal["simple", "advanced"] = "simple"
     show_download: bool = False
     layout: ControlLayout | None = None
     visible_if: dict[str, Any] | None = None
@@ -138,10 +137,19 @@ class DashboardControl(BaseModel):
     injection_strategy: CredentialInjectionStrategy | None = None
 
 
+class DashboardControlGroup(BaseModel):
+    id: str
+    title: str
+    description: str = ""
+    control_ids: list[str] = Field(default_factory=list)
+    layout: ControlLayout | None = None
+
+
 class DashboardSection(BaseModel):
     id: str
     title: str
     controls: list[DashboardControl] = Field(default_factory=list)
+    groups: list[DashboardControlGroup] = Field(default_factory=list)
 
 
 class DashboardSchema(BaseModel):

@@ -352,7 +352,6 @@ export interface DashboardControlDef {
   input_id?: string;
   output_id?: string;
   description?: string;
-  group?: string;
   show_download?: boolean;
   provider?: string;
   required?: boolean;
@@ -361,10 +360,19 @@ export interface DashboardControlDef {
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
+export interface DashboardControlGroupDef {
+  id: string;
+  title: string;
+  description?: string;
+  control_ids: string[];
+  layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
+}
+
 export interface DashboardSectionDef {
   id: string;
   title: string;
   controls: DashboardControlDef[];
+  groups?: DashboardControlGroupDef[];
 }
 
 export interface DashboardSchemaDef {
