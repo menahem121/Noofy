@@ -56,4 +56,25 @@ describe("useAppPreferences", () => {
     act(() => { result.current.setViewMode("canvas"); });
     expect(result.current.viewMode).toBe("canvas");
   });
+
+  it("keeps multiple hook consumers in sync", () => {
+    const first = renderHook(() => useAppPreferences());
+    const second = renderHook(() => useAppPreferences());
+
+    act(() => { first.result.current.setViewMode("classic"); });
+
+    expect(first.result.current.viewMode).toBe("classic");
+    expect(second.result.current.viewMode).toBe("classic");
+  });
+
+  it("updates when the stored preference changes outside the hook", () => {
+    const { result } = renderHook(() => useAppPreferences());
+
+    act(() => {
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ viewMode: "classic" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: PREFS_KEY }));
+    });
+
+    expect(result.current.viewMode).toBe("classic");
+  });
 });

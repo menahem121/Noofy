@@ -1,32 +1,48 @@
-import { useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export type ViewMode = "canvas" | "classic";
 
 const PREFS_KEY = "noofy.prefs";
+const PREFS_CHANGED_EVENT = "noofy:prefs-changed";
 
-function readPrefs(): { viewMode: ViewMode } {
+function storedPrefs(): Record<string, unknown> {
   try {
     const raw = window.localStorage.getItem(PREFS_KEY);
-    if (!raw) return { viewMode: "canvas" };
-    const parsed = JSON.parse(raw) as Partial<{ viewMode: ViewMode }>;
-    return { viewMode: parsed.viewMode === "classic" ? "classic" : "canvas" };
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
   } catch {
-    return { viewMode: "canvas" };
+    return {};
   }
 }
 
-function writePrefs(prefs: { viewMode: ViewMode }) {
+function readViewMode(): ViewMode {
+  return storedPrefs().viewMode === "classic" ? "classic" : "canvas";
+}
+
+function writePrefs(prefs: Record<string, unknown> & { viewMode: ViewMode }) {
   window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  window.dispatchEvent(new Event(PREFS_CHANGED_EVENT));
+}
+
+function subscribe(callback: () => void) {
+  function handleStorage(event: StorageEvent) {
+    if (event.key === PREFS_KEY || event.key === null) callback();
+  }
+  window.addEventListener(PREFS_CHANGED_EVENT, callback);
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    window.removeEventListener(PREFS_CHANGED_EVENT, callback);
+    window.removeEventListener("storage", handleStorage);
+  };
 }
 
 export function useAppPreferences() {
-  const [prefs, setPrefs] = useState<{ viewMode: ViewMode }>(readPrefs);
+  const viewMode = useSyncExternalStore(subscribe, readViewMode, () => "canvas");
 
-  function setViewMode(mode: ViewMode) {
-    const next = { ...prefs, viewMode: mode };
-    writePrefs(next);
-    setPrefs(next);
-  }
+  const setViewMode = useCallback((mode: ViewMode) => {
+    writePrefs({ ...storedPrefs(), viewMode: mode });
+  }, []);
 
-  return { viewMode: prefs.viewMode, setViewMode };
+  return { viewMode, setViewMode };
 }
