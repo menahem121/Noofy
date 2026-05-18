@@ -1,10 +1,13 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   ChevronDown,
@@ -21,6 +24,7 @@ import {
   ToggleLeft,
   Type,
   UploadCloud,
+  X,
 } from "lucide-react";
 
 import {
@@ -642,6 +646,7 @@ function CanvasWidgetCell({
             control={control!}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
+            imagePreviewEnabled={!isEditingLayout}
           />
         ) : (
           <InputWidgetContent
@@ -698,6 +703,7 @@ function GroupedCanvasControls({
                   control={control}
                   outputIndex={outputIndex}
                   outputImagesByNodeId={outputImagesByNodeId}
+                  imagePreviewEnabled={!disabled}
                 />
                 <button
                   className={`auto-save-toggle canvas-widget-group__auto-save${
@@ -762,26 +768,52 @@ function OutputWidgetContent({
   control,
   outputIndex,
   outputImagesByNodeId,
+  imagePreviewEnabled = true,
 }: {
   control: DashboardControlDef;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  imagePreviewEnabled?: boolean;
 }) {
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
   const imageUrls = output ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
   const firstImageUrl = imageUrls[0];
+  const [previewImage, setPreviewImage] = useState<{ url: string; alt: string } | null>(null);
+
+  useEffect(() => {
+    if (previewImage && !imageUrls.includes(previewImage.url)) {
+      setPreviewImage(null);
+    }
+  }, [imageUrls, previewImage]);
 
   if (imageUrls.length > 0) {
     return (
       <div className="widget-output-image">
         <div className={`widget-output-image__grid${imageUrls.length > 1 ? " widget-output-image__grid--multi" : ""}`}>
-          {imageUrls.map((imageUrl, index) => (
-            <img
-              key={`${imageUrl}-${index}`}
-              src={imageUrl}
-              alt={imageUrls.length > 1 ? `Generated workflow output ${index + 1}` : "Generated workflow output"}
-            />
-          ))}
+          {imageUrls.map((imageUrl, index) => {
+            const alt = imageUrls.length > 1 ? `Generated workflow output ${index + 1}` : "Generated workflow output";
+            if (!imagePreviewEnabled) {
+              return (
+                <div className="widget-output-image__preview widget-output-image__preview--static" key={`${imageUrl}-${index}`}>
+                  <img src={imageUrl} alt={alt} />
+                </div>
+              );
+            }
+            return (
+              <button
+                key={`${imageUrl}-${index}`}
+                className="widget-output-image__preview"
+                type="button"
+                aria-label={`Open ${alt} full-screen`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPreviewImage({ url: imageUrl, alt });
+                }}
+              >
+                <img src={imageUrl} alt={alt} />
+              </button>
+            );
+          })}
         </div>
         {firstImageUrl ? (
           <button
@@ -800,6 +832,14 @@ function OutputWidgetContent({
             Download
           </button>
         ) : null}
+        {previewImage ? (
+          <ImagePreviewViewer
+            imageUrl={previewImage.url}
+            alt={previewImage.alt}
+            label={control.label}
+            onClose={() => setPreviewImage(null)}
+          />
+        ) : null}
       </div>
     );
   }
@@ -810,6 +850,223 @@ function OutputWidgetContent({
       <span>Your generated image will appear here.</span>
     </div>
   );
+}
+
+function ImagePreviewViewer({
+  imageUrl,
+  alt,
+  label,
+  onClose,
+}: {
+  imageUrl: string;
+  alt: string;
+  label: string;
+  onClose: () => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const viewerRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const lastTapRef = useRef<{ time: number; clientX: number; clientY: number } | null>(null);
+  const gestureScaleRef = useRef(1);
+  const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
+  const isZoomed = transform.scale > 1.001;
+
+  const zoomAtPoint = useCallback((factor: number, point: { x: number; y: number }) => {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    setTransform((current) => {
+      const nextScale = clampImageScale(current.scale * factor);
+      if (Math.abs(nextScale - current.scale) < 0.001) return current;
+      if (nextScale === 1) return { scale: 1, x: 0, y: 0 };
+      const ratio = nextScale / current.scale;
+      return {
+        scale: nextScale,
+        x: point.x - ratio * (point.x - current.x),
+        y: point.y - ratio * (point.y - current.y),
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const stage = stageRef.current;
+    if (!viewer || !stage) return;
+    const viewerElement = viewer;
+    const stageElement = stage;
+
+    function handleWheel(event: globalThis.WheelEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      const point = viewerPointFromClient(stageElement, event.clientX, event.clientY);
+      zoomAtPoint(Math.exp(-event.deltaY * IMAGE_VIEWER_WHEEL_ZOOM_SENSITIVITY), point);
+    }
+
+    viewerElement.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewerElement.removeEventListener("wheel", handleWheel);
+  }, [zoomAtPoint]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const stage = stageRef.current;
+    if (!viewer || !stage) return;
+    const viewerElement = viewer;
+    const stageElement = stage;
+
+    function handleGestureStart(event: Event) {
+      event.preventDefault();
+      gestureScaleRef.current = 1;
+    }
+
+    function handleGestureChange(event: Event) {
+      event.preventDefault();
+      const gestureEvent = event as Event & { scale?: number; clientX?: number; clientY?: number };
+      const gestureScale = gestureEvent.scale ?? 1;
+      const stageRect = stageElement.getBoundingClientRect();
+      const point = viewerPointFromClient(
+        stageElement,
+        gestureEvent.clientX ?? stageRect.left + stageRect.width / 2,
+        gestureEvent.clientY ?? stageRect.top + stageRect.height / 2,
+      );
+      zoomAtPoint(Math.pow(gestureScale / gestureScaleRef.current, IMAGE_VIEWER_GESTURE_ZOOM_POWER), point);
+      gestureScaleRef.current = gestureScale;
+    }
+
+    viewerElement.addEventListener("gesturestart", handleGestureStart, { passive: false });
+    viewerElement.addEventListener("gesturechange", handleGestureChange, { passive: false });
+    return () => {
+      viewerElement.removeEventListener("gesturestart", handleGestureStart);
+      viewerElement.removeEventListener("gesturechange", handleGestureChange);
+    };
+  }, [zoomAtPoint]);
+
+  function resetImageView() {
+    setTransform({ scale: 1, x: 0, y: 0 });
+  }
+
+  function handleImageDoubleClick(event: MouseEvent<HTMLImageElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const stage = stageRef.current;
+    const point = stage ? viewerPointFromClient(stage, event.clientX, event.clientY) : { x: 0, y: 0 };
+    zoomAtPoint(isZoomed ? 1.6 : 2.5, point);
+  }
+
+  function handleImagePointerDown(event: PointerEvent<HTMLImageElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const lastTap = lastTapRef.current;
+    const now = window.performance.now();
+    if (
+      event.pointerType === "touch" &&
+      lastTap &&
+      now - lastTap.time < 320 &&
+      Math.hypot(event.clientX - lastTap.clientX, event.clientY - lastTap.clientY) < 28
+    ) {
+      lastTapRef.current = null;
+      const stage = stageRef.current;
+      zoomAtPoint(isZoomed ? 1.6 : 2.5, stage ? viewerPointFromClient(stage, event.clientX, event.clientY) : { x: 0, y: 0 });
+      return;
+    }
+    lastTapRef.current = { time: now, clientX: event.clientX, clientY: event.clientY };
+
+    if (!isZoomed) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: transform.x,
+      startY: transform.y,
+    };
+  }
+
+  function handleImagePointerMove(event: PointerEvent<HTMLImageElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setTransform((current) => ({
+      ...current,
+      x: drag.startX + event.clientX - drag.startClientX,
+      y: drag.startY + event.clientY - drag.startClientY,
+    }));
+  }
+
+  function finishImageDrag(event: PointerEvent<HTMLImageElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragRef.current = null;
+  }
+
+  return createPortal(
+    <div ref={viewerRef} className="widget-image-viewer" role="dialog" aria-modal="true" aria-label={`${label} full-screen preview`}>
+      <div className="widget-image-viewer__bar">
+        <button className="widget-image-viewer__reset" type="button" disabled={!isZoomed} onClick={resetImageView}>
+          Reset View
+        </button>
+        <button
+          ref={closeButtonRef}
+          className="widget-image-viewer__close"
+          type="button"
+          aria-label="Close full-screen image preview"
+          onClick={onClose}
+        >
+          <X size={18} aria-hidden="true" />
+          Close
+        </button>
+      </div>
+      <div ref={stageRef} className="widget-image-viewer__stage" role="presentation" onClick={onClose}>
+        <img
+          src={imageUrl}
+          alt={`${alt} full-screen preview`}
+          className={`widget-image-viewer__image${isZoomed ? " widget-image-viewer__image--zoomed" : ""}`}
+          draggable={false}
+          style={{ transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})` }}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={handleImageDoubleClick}
+          onPointerDown={handleImagePointerDown}
+          onPointerMove={handleImagePointerMove}
+          onPointerUp={finishImageDrag}
+          onPointerCancel={finishImageDrag}
+        />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function clampImageScale(scale: number) {
+  return Math.min(Math.max(scale, 1), 8);
+}
+
+const IMAGE_VIEWER_WHEEL_ZOOM_SENSITIVITY = 0.005;
+const IMAGE_VIEWER_GESTURE_ZOOM_POWER = 1.75;
+
+function viewerPointFromClient(stage: HTMLElement, clientX: number, clientY: number) {
+  const rect = stage.getBoundingClientRect();
+  return {
+    x: clientX - (rect.left + rect.width / 2),
+    y: clientY - (rect.top + rect.height / 2),
+  };
 }
 
 // ─── Input widget ─────────────────────────────────────────────────────────────

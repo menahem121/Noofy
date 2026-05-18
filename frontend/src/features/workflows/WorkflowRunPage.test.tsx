@@ -2261,6 +2261,73 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: /download result a image/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /download result b image/i })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: /open generated workflow output 2 full-screen/i }));
+
+    expect(screen.getByRole("dialog", { name: /result a full-screen preview/i })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /generated workflow output 2 full-screen preview/i })).toHaveAttribute(
+      "src",
+      "/api/jobs/job-canvas/outputs/view?filename=node-9-b.png&subfolder=&type=output",
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("a lake");
+
+    const viewerImage = screen.getByRole("img", { name: /generated workflow output 2 full-screen preview/i });
+    const viewerStage = viewerImage.parentElement as HTMLElement;
+    vi.spyOn(viewerStage, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 800,
+      width: 1000,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.doubleClick(viewerImage, { clientX: 750, clientY: 600 });
+
+    await waitFor(() => {
+      expect(viewerImage).toHaveStyle({ transform: "translate(-375px, -300px) scale(2.5)" });
+    });
+
+    const wheelEvent = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 750,
+      clientY: 600,
+      ctrlKey: true,
+      deltaY: -100,
+    });
+
+    expect(fireEvent(viewerStage, wheelEvent)).toBe(false);
+    await waitFor(() => {
+      expect(viewerImage.getAttribute("style")).toMatch(/scale\(4\.121803176750/);
+    });
+    const styleAfterWheel = viewerImage.getAttribute("style");
+
+    fireEvent.pointerDown(viewerImage, { pointerId: 1, clientX: 400, clientY: 400 });
+    fireEvent.pointerMove(viewerImage, { pointerId: 1, clientX: 460, clientY: 430 });
+    fireEvent.pointerUp(viewerImage, { pointerId: 1, clientX: 460, clientY: 430 });
+
+    await waitFor(() => {
+      expect(viewerImage.getAttribute("style")).not.toBe(styleAfterWheel);
+      expect(viewerImage.getAttribute("style")).toMatch(/scale\(4\.121803176750/);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /reset view/i }));
+
+    await waitFor(() => {
+      expect(viewerImage).toHaveStyle({ transform: "translate(0px, 0px) scale(1)" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /close full-screen image preview/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /result a full-screen preview/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Result A")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("a lake");
+
     fireEvent.click(screen.getByRole("button", { name: /download result a image/i }));
 
     await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
