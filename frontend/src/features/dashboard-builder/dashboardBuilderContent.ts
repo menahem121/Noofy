@@ -92,7 +92,6 @@ export interface DashboardWidget {
   max?: number;
   step?: number;
   options?: string[];
-  showDownload?: boolean;
   drawMask?: boolean;
   layout?: DashboardWidgetLayout;
 }
@@ -356,7 +355,6 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
     min: numericRange?.min,
     max: numericRange?.max,
     step: numericRange?.step,
-    showDownload: widgetType === "display_image" ? true : undefined,
     drawMask: widgetType === "load_image_mask" ? true : undefined,
   };
 }
@@ -589,7 +587,6 @@ export interface BackendDashboardControl {
   input_id?: string;
   output_id?: string;
   description?: string;
-  show_download?: boolean;
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
@@ -731,7 +728,6 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     input_id: !isOutputWidget(w.widgetType) ? w.id : undefined,
     output_id: isOutputWidget(w.widgetType) ? outputIdForWidget(w.id) : undefined,
     description: w.description,
-    show_download: Boolean(w.showDownload),
     layout: !groupedWidgetIds.has(w.id) && w.layout
       ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
       : !groupedWidgetIds.has(w.id)

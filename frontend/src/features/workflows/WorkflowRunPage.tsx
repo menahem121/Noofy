@@ -1994,7 +1994,6 @@ function buildDashboardSchemaForEditing(
         title: control.label,
         description: control.description ?? "",
         defaultValue: null,
-        showDownload: Boolean(control.show_download),
         layout,
       });
     }

@@ -208,7 +208,6 @@ const configuredPackageData = {
             type: "display_image",
             label: "Result A",
             output_id: "image_a",
-            show_download: true,
             layout: { x: 16, y: 0, w: 16, h: 8 },
           },
           {
@@ -2135,7 +2134,6 @@ describe("WorkflowRunPage", () => {
                 type: "display_image",
                 label: "Result A",
                 output_id: "image_a",
-                show_download: true,
                 layout: { x: 16, y: 0, w: 16, h: 8 },
               },
               {
@@ -2243,6 +2241,9 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     expect(await screen.findByText("Result A")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download result a image/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download result b image/i })).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByAltText("Generated workflow output 1")).toHaveAttribute(
@@ -2257,8 +2258,10 @@ describe("WorkflowRunPage", () => {
       "src",
       "/api/jobs/job-canvas/outputs/view?filename=node-10.png&subfolder=&type=output",
     );
+    expect(screen.getByRole("button", { name: /download result a image/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /download result b image/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /download image/i }));
+    fireEvent.click(screen.getByRole("button", { name: /download result a image/i }));
 
     await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
     expect(clickedDownload).toBe("node-9-a.png");

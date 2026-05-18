@@ -102,7 +102,6 @@ describe("toBackendPayload", () => {
           title: "Result",
           description: "",
           defaultValue: null,
-          showDownload: true,
           layout: { x: 16, y: 0, w: 16, h: 12, minW: 13, minH: 10 },
         },
       ],
@@ -117,8 +116,8 @@ describe("toBackendPayload", () => {
     expect(payload.dashboard.sections[0].controls[1]).toMatchObject({
       id: "ctrl-output",
       output_id: "image",
-      show_download: true,
     });
+    expect(payload.dashboard.sections[0].controls[1]).not.toHaveProperty("show_download");
     expect(payload.dashboard.sections[0].controls[0].layout).toMatchObject({
       min_w: 16,
       min_h: 6,

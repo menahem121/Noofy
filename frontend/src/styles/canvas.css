@@ -341,6 +341,17 @@
   cursor: pointer;
 }
 
+.widget-output-image__download:hover,
+.widget-output-image__download:focus-visible {
+  background: rgba(55, 54, 59, 0.94);
+  color: var(--text-primary);
+}
+
+.widget-output-image__download:focus-visible {
+  outline: 2px solid rgba(159, 122, 234, 0.8);
+  outline-offset: 2px;
+}
+
 .widget-output-placeholder {
   flex: 1;
   display: flex;

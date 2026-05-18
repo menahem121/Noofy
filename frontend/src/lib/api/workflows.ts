@@ -377,7 +377,6 @@ export interface DashboardControlDef {
   input_id?: string;
   output_id?: string;
   description?: string;
-  show_download?: boolean;
   provider?: string;
   required?: boolean;
   secret_ref?: string;

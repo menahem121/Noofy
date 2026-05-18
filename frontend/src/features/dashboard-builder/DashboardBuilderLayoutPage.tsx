@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   ChevronDown,
-  Download,
   GripVertical,
   ImagePlus,
   LayoutGrid,
@@ -987,12 +986,6 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
       <div className="layout-preview-output">
         <Sparkles size={24} aria-hidden="true" />
         <span>Generated image will appear here</span>
-        {widget.showDownload ? (
-          <span className="layout-preview-button">
-            <Download size={13} aria-hidden="true" />
-            Download
-          </span>
-        ) : null}
       </div>
     );
   }

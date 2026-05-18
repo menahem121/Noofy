@@ -302,7 +302,7 @@ def test_exported_archive_does_not_leak_user_state(tmp_path: Path) -> None:
     first_control = dashboard_data["sections"][0]["controls"][0]
     assert "layout" not in first_control
     second_control = dashboard_data["sections"][0]["controls"][1]
-    assert second_control.get("show_download") is not True
+    assert "show_download" not in second_control
 
 
 def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_path: Path) -> None:

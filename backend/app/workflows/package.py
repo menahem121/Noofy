@@ -127,7 +127,6 @@ class DashboardControl(BaseModel):
     input_id: str | None = None
     output_id: str | None = None
     description: str = ""
-    show_download: bool = False
     layout: ControlLayout | None = None
     visible_if: dict[str, Any] | None = None
     enabled_if: dict[str, Any] | None = None

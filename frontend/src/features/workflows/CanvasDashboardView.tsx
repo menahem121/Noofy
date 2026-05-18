@@ -783,12 +783,18 @@ function OutputWidgetContent({
             />
           ))}
         </div>
-        {control.show_download && firstImageUrl ? (
+        {firstImageUrl ? (
           <button
             className="widget-output-image__download"
             type="button"
-            aria-label="Download image"
-            onClick={() => void downloadImage(firstImageUrl)}
+            aria-label={`Download ${control.label} image`}
+            title="Download image"
+            onClick={(event) => {
+              event.stopPropagation();
+              void downloadImage(firstImageUrl).catch((error: unknown) => {
+                console.error("Image download failed", error);
+              });
+            }}
           >
             <Download size={14} aria-hidden="true" />
             Download
