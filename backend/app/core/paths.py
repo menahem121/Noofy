@@ -178,6 +178,10 @@ class NoofyPaths:
         return self.workflow_store_dir / "packages"
 
     @property
+    def workflow_dashboard_overrides_dir(self) -> Path:
+        return self.workflow_store_dir / "dashboard-overrides"
+
+    @property
     def custom_node_cache_dir(self) -> Path:
         return self.data_dir / "custom-node-cache"
 
@@ -228,6 +232,7 @@ class NoofyPaths:
             self.install_transactions_dir,
             self.workflow_store_dir,
             self.workflow_packages_store_dir,
+            self.workflow_dashboard_overrides_dir,
             self.custom_node_cache_dir,
             self.wheel_cache_dir,
             self.model_store_dir,
@@ -281,6 +286,7 @@ class NoofyPaths:
             ("install_transactions_dir", self.install_transactions_dir),
             ("workflow_store_dir", self.workflow_store_dir),
             ("workflow_packages_store_dir", self.workflow_packages_store_dir),
+            ("workflow_dashboard_overrides_dir", self.workflow_dashboard_overrides_dir),
             ("custom_node_cache_dir", self.custom_node_cache_dir),
             ("wheel_cache_dir", self.wheel_cache_dir),
             ("model_store_dir", self.model_store_dir),

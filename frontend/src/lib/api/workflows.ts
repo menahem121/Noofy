@@ -408,6 +408,7 @@ export interface DashboardSchemaDef {
 
 export interface WorkflowPackageResponse {
   metadata: { id: string; name: string; version: string; description: string };
+  identity?: Record<string, unknown> | null;
   required_models?: RequiredModelDef[];
   comfyui_graph?: Record<string, unknown>;
   inputs: WorkflowInputDef[];
@@ -668,6 +669,12 @@ export function saveDashboard(
   return putJson<DashboardSaveResponse>(
     `/workflows/${encodeURIComponent(workflowId)}/dashboard`,
     payload,
+  );
+}
+
+export function resetDashboardCustomization(workflowId: string): Promise<{ workflow_id: string; removed: boolean }> {
+  return deleteJson<{ workflow_id: string; removed: boolean }>(
+    `/workflows/${encodeURIComponent(workflowId)}/dashboard`,
   );
 }
 

@@ -65,6 +65,55 @@ def test_user_workflow_does_not_silently_override_bundled_by_id(tmp_path: Path) 
     assert package.metadata.name == "Bundled A"
 
 
+def test_dashboard_override_customizes_bundled_package_without_shadowing_metadata(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    overrides = tmp_path / "overrides"
+    _write_package(bundled, "wf_a", name="Bundled A")
+    override_dir = overrides / "wf_a"
+    override_dir.mkdir(parents=True)
+    (override_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "2",
+                "status": "configured",
+                "inputs": [
+                    {
+                        "id": "prompt",
+                        "label": "Prompt",
+                        "control": "textarea",
+                        "binding": {"node_id": "1", "input_name": "text"},
+                        "default": "",
+                        "validation": {},
+                    }
+                ],
+                "outputs": [],
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Custom",
+                        "controls": [
+                            {
+                                "id": "prompt",
+                                "type": "textarea",
+                                "label": "Custom Prompt",
+                                "input_id": "prompt",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loader = WorkflowPackageLoader(bundled, dashboard_overrides_dir=overrides)
+
+    package = loader.get_package("wf_a")
+    assert package.metadata.name == "Bundled A"
+    assert package.dashboard.status == "configured"
+    assert package.dashboard.sections[0].controls[0].label == "Custom Prompt"
+
+
 def test_development_loader_can_allow_user_overrides(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled"
     user = tmp_path / "user"

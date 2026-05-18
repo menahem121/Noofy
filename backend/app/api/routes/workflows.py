@@ -425,6 +425,21 @@ async def save_dashboard(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/workflows/{workflow_id}/dashboard")
+async def reset_dashboard_override(
+    workflow_id: str,
+    authoring: DashboardAuthoringServiceDep,
+):
+    try:
+        return authoring.reset_dashboard_override(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DashboardAuthoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ─── Export ──────────────────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/export")

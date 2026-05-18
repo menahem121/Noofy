@@ -534,13 +534,16 @@ def test_get_bindable_inputs_keeps_comfyui_lora_nodes_as_lora_loader_when_option
     }
 
 
-def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
-    """Bundled workflows are read-only — save must raise DashboardAuthoringError."""
-    loader = WorkflowPackageLoader(Path("app/workflows/packages"))
+def test_save_dashboard_for_bundled_workflow_writes_user_override(tmp_path: Path) -> None:
+    """Bundled source files stay read-only, but users can customize dashboards."""
+    bundled_root = Path("app/workflows/packages")
+    overrides_dir = tmp_path / "dashboard-overrides"
+    loader = WorkflowPackageLoader(bundled_root, dashboard_overrides_dir=overrides_dir)
     service = DashboardAuthoringService(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=loader,
         log_store=LogStore(),
+        dashboard_overrides_dir=overrides_dir,
     )
 
     # Build a valid payload against text_to_image_v0's actual graph nodes.
@@ -586,5 +589,51 @@ def test_save_dashboard_rejects_bundled_workflow(tmp_path: Path) -> None:
         ],
     }
 
-    with pytest.raises(DashboardAuthoringError, match="read-only"):
-        service.save_dashboard("text_to_image_v0", inputs, dashboard)
+    bundled_package_dir = bundled_root / "text_to_image_v0"
+    bundled_package_json_before = (bundled_package_dir / "package.json").read_bytes()
+    bundled_dashboard_json_before = (bundled_package_dir / "dashboard.json").read_bytes()
+
+    result = service.save_dashboard("text_to_image_v0", inputs, dashboard)
+
+    assert result["status"] == "configured"
+    assert (bundled_package_dir / "package.json").read_bytes() == bundled_package_json_before
+    assert (bundled_package_dir / "dashboard.json").read_bytes() == bundled_dashboard_json_before
+
+    override_file = overrides_dir / "text_to_image_v0" / "dashboard.json"
+    assert override_file.exists()
+    saved = json.loads(override_file.read_text(encoding="utf-8"))
+    assert saved["status"] == "configured"
+    assert saved["sections"][0]["controls"][0]["label"] == "P"
+
+    reloaded = WorkflowPackageLoader(
+        bundled_root,
+        dashboard_overrides_dir=overrides_dir,
+    ).get_package("text_to_image_v0")
+    assert reloaded.dashboard.sections[0].controls[0].label == "P"
+
+    reset = service.reset_dashboard_override("text_to_image_v0")
+    assert reset["removed"] is True
+    assert not override_file.exists()
+
+
+def test_reset_dashboard_override_recovers_from_unreadable_override(tmp_path: Path) -> None:
+    bundled_root = Path("app/workflows/packages")
+    overrides_dir = tmp_path / "dashboard-overrides"
+    override_dir = overrides_dir / "text_to_image_v0"
+    override_dir.mkdir(parents=True)
+    override_file = override_dir / "dashboard.json"
+    override_file.write_text("{", encoding="utf-8")
+    service = DashboardAuthoringService(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=WorkflowPackageLoader(
+            bundled_root,
+            dashboard_overrides_dir=overrides_dir,
+        ),
+        log_store=LogStore(),
+        dashboard_overrides_dir=overrides_dir,
+    )
+
+    result = service.reset_dashboard_override("text_to_image_v0")
+
+    assert result["removed"] is True
+    assert not override_file.exists()

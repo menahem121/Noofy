@@ -298,6 +298,31 @@ function mockConfiguredDashboardFetch(
     if (url.endsWith("/api/workflows/text_to_image_v0/export/comfyui-json") && init?.method === "POST") {
       return Promise.resolve(new Response(JSON.stringify({ workflow: true })));
     }
+    if (url.endsWith("/api/workflows/text_to_image_v0/dashboard") && init?.method === "DELETE") {
+      return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", removed: true }));
+    }
+    if (url.endsWith("/api/workflows/text_to_image_v0/user-state/values") && init?.method === "DELETE") {
+      return Promise.resolve(
+        jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }),
+      );
+    }
+    if (url.endsWith("/api/workflows/text_to_image_v0/user-state/layout") && init?.method === "DELETE") {
+      return Promise.resolve(
+        jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }),
+      );
+    }
     if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
       return Promise.resolve(
         jsonResponse({
@@ -1694,6 +1719,32 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
+  });
+
+  it("restores native dashboard customizations from the canvas options menu", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith("/api/workflows/text_to_image_v0/dashboard") &&
+            (init as RequestInit | undefined)?.method === "DELETE",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/user-state/layout") &&
+          (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(true);
   });
 
   it("posts the current dashboard values when exporting ComfyUI JSON from the canvas", async () => {

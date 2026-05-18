@@ -16,13 +16,13 @@ Noofy turns an engine workflow into a curated dashboard. The ComfyUI graph stays
 
 ## Package And Dashboard Files
 
-Imported packages are normalized into the app-owned workflow store. Bundled starter workflows are read-only; user-imported packages are editable internal copies.
+Imported packages are normalized into the app-owned workflow store. Bundled starter workflow source files are read-only, but users may still customize their dashboards through app-data overrides. User-imported packages are editable internal copies.
 
 Important package files:
 
 - `package.json`: package identity, source/trust metadata, required models, inputs, outputs, and engine metadata.
 - `comfyui_graph.json`: ComfyUI API graph used as opaque execution data.
-- `dashboard.json`: dashboard schema. Dashboard authoring writes this file only.
+- `dashboard.json`: dashboard schema. Dashboard authoring writes this file only for editable internal package copies.
 - `capsule.lock.json`: resolved immutable runtime facts for isolated workflow installs when present.
 - `install-state.json`: mutable local preparation state when present.
 
@@ -80,7 +80,7 @@ The builder has two responsibilities:
 - Choose widgets: inspect bindable workflow values and output-capable nodes, select the values to expose, choose widget types, set user-facing labels/defaults/validation, and create bindings.
 - Arrange widgets: place selected widgets on a responsive 32-column grid and save the final layout.
 
-Saving a dashboard goes through the backend, validates bindings, writes only `dashboard.json` in the internal package copy, and then routes the workflow according to its updated setup state. Failed saves keep the local builder draft and must not navigate to the run page.
+Saving a dashboard goes through the backend, validates bindings, then writes only dashboard schema data. Imported workflows write `dashboard.json` in the internal package copy. Bundled native workflows write a user-owned dashboard override under `{data_dir}/workflow-store/dashboard-overrides/{workflow_id}/dashboard.json`, leaving bundled source files immutable. Failed saves keep the local builder draft and must not navigate to the run page.
 
 ## Run Dashboard
 
@@ -107,7 +107,7 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 - Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs.
 - Generated result media is also served through the backend API. Job results contain app-owned output URLs such as `/api/jobs/{job_id}/outputs/view?...`, while the selected `EngineAdapter` performs any engine-specific file retrieval.
 
-`WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back.
+`WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back. Native workflow dashboard overrides are reset by deleting the override file, which restores the bundled dashboard schema on the next package load.
 
 ## Auto Save Gallery
 
@@ -129,6 +129,7 @@ Important dashboard APIs:
 - `GET /api/workflows/{id}/unresolved-inputs`: expose unresolved runtime inputs that need setup.
 - `GET /api/workflows/{id}/output-nodes`: expose output-capable nodes for result widgets.
 - `PUT /api/workflows/{id}/dashboard`: save a configured dashboard.
+- `DELETE /api/workflows/{id}/dashboard`: remove a user-owned native dashboard override and fall back to the bundled dashboard.
 - `POST /api/workflows/{id}/assets/image`: store a Noofy dashboard image asset.
 - `POST /api/workflows/{id}/uploads/image`: upload or stage a workflow image input through the workflow-selected engine adapter.
 - `GET /api/assets/{asset_id}`: serve a dashboard asset.

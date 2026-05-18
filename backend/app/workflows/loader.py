@@ -4,6 +4,7 @@ from typing import Any
 
 from app.artifacts import ModelVerificationLevel
 from app.workflows.package import DashboardSchema, WorkflowInput, WorkflowOutput, WorkflowPackage
+from app.workflows.store_paths import safe_store_segment
 
 _STUB_DASHBOARD_VERSION = "0.1.0"
 _CAPSULE_LOCK_FILENAME = "capsule.lock.json"
@@ -84,11 +85,13 @@ class WorkflowPackageLoader:
         packages_dir: Path,
         user_packages_dir: Path | None = None,
         imported_packages_dir: Path | None = None,
+        dashboard_overrides_dir: Path | None = None,
         allow_user_overrides: bool = False,
     ) -> None:
         self.packages_dir = packages_dir
         self.user_packages_dir = user_packages_dir
         self.imported_packages_dir = imported_packages_dir
+        self.dashboard_overrides_dir = dashboard_overrides_dir
         self.allow_user_overrides = allow_user_overrides
 
     def list_packages(self) -> list[WorkflowPackage]:
@@ -143,7 +146,8 @@ class WorkflowPackageLoader:
             data: dict[str, Any] = json.load(file)
 
         package_dir = package_file.parent
-        inputs, outputs, dashboard = _load_dashboard_from_dir(package_dir)
+        dashboard_dir = self._dashboard_dir_for_package(package_dir, data)
+        inputs, outputs, dashboard = _load_dashboard_from_dir(dashboard_dir)
 
         # Inline inputs/outputs in package.json take lower priority than dashboard.json.
         # If dashboard.json provided them, use those; otherwise fall back to inline.
@@ -186,6 +190,23 @@ class WorkflowPackageLoader:
         data_clean["dashboard"] = dashboard.model_dump()
 
         return WorkflowPackage.model_validate(data_clean)
+
+    def _dashboard_dir_for_package(self, package_dir: Path, data: dict[str, Any]) -> Path:
+        workflow_id = _package_id_from_data(data)
+        if workflow_id is None or self.dashboard_overrides_dir is None:
+            return package_dir
+        override_dir = self.dashboard_overrides_dir / safe_store_segment(workflow_id)
+        if (override_dir / "dashboard.json").exists():
+            return override_dir
+        return package_dir
+
+
+def _package_id_from_data(data: dict[str, Any]) -> str | None:
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    workflow_id = metadata.get("id")
+    return workflow_id if isinstance(workflow_id, str) and workflow_id else None
 
 
 def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], capsule_path: Path) -> None:

@@ -158,6 +158,7 @@ def create_default_engine_service() -> EngineService:
         settings.workflows_dir,
         user_packages_dir=paths.user_workflows_dir,
         imported_packages_dir=paths.workflow_packages_store_dir,
+        dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
     )
     validator = WorkflowPackageValidator()
     developer_runtime_override = (
@@ -468,6 +469,7 @@ def create_default_engine_service() -> EngineService:
             workflow_loader=loader,
             validator=validator,
             log_store=log_store,
+            dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
         ),
         workflow_exporter=WorkflowExporter(
             workflow_store_dir=paths.workflow_packages_store_dir,

@@ -156,7 +156,7 @@ The backend owns a canonical set of per-user directories so the app never relies
 
 ### Bundled vs user workflows
 
-Bundled starter workflows are read-only and ship inside the repo at `backend/app/workflows/packages`. User-imported or user-created workflow packages live in `user_workflows_dir`.
+Bundled starter workflow source files are read-only and ship inside the repo at `backend/app/workflows/packages`. Users can customize bundled dashboards through app-data overrides in `workflow-store/dashboard-overrides`; user-imported or user-created workflow packages live in `user_workflows_dir`.
 
 Development tooling may allow local overrides during iteration. Product workflow identity must include namespace/publisher and trust metadata. User-imported packages must not silently replace Noofy Verified built-ins by matching `metadata.id`; conflicts must install under a distinct namespace or require an explicit replacement action.
 

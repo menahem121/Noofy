@@ -21,7 +21,7 @@ from app.workflows.package import (
     WorkflowOutput,
     WorkflowPackage,
 )
-from app.workflows.store_paths import mutable_package_dir
+from app.workflows.store_paths import assert_path_within, mutable_package_dir, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -30,7 +30,7 @@ class DashboardAuthoringError(ValueError):
 
 
 class DashboardAuthoringService:
-    """Write dashboard.json for a workflow package — and only dashboard.json."""
+    """Write dashboard.json for mutable packages or user-owned dashboard overrides."""
 
     def __init__(
         self,
@@ -40,12 +40,14 @@ class DashboardAuthoringService:
         log_store: DiagnosticsSink,
         validator: WorkflowPackageValidator | None = None,
         object_info_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
+        dashboard_overrides_dir: Path | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
         self.validator = validator or WorkflowPackageValidator()
         self.log_store = log_store
         self.object_info_provider = object_info_provider
+        self.dashboard_overrides_dir = dashboard_overrides_dir
 
     # ------------------------------------------------------------------
     # Read
@@ -133,13 +135,10 @@ class DashboardAuthoringService:
                 f"Dashboard validation failed: {'; '.join(result.errors)}"
             )
 
-        # Determine where to write dashboard.json.
-        package_dir = self._find_package_dir(workflow_id)
-        if package_dir is None:
-            raise DashboardAuthoringError(
-                f"Workflow '{workflow_id}' is not in the mutable workflow store "
-                "and cannot be edited. Bundled starter workflows are read-only."
-            )
+        # Determine where to write dashboard.json. Bundled package files stay
+        # immutable; their editable dashboard schema lives in a user-owned
+        # override directory.
+        package_dir, persistence = self._dashboard_write_target(workflow_id, package)
 
         # Build the on-disk dashboard.json payload.
         schema_configured = parsed_schema.model_copy(update={"status": "configured"})
@@ -155,7 +154,11 @@ class DashboardAuthoringService:
             "info",
             "Dashboard saved",
             "workflow.authoring",
-            details={"workflow_id": workflow_id, "input_count": len(parsed_inputs)},
+            details={
+                "workflow_id": workflow_id,
+                "input_count": len(parsed_inputs),
+                "persistence": persistence,
+            },
         )
 
         return {
@@ -176,15 +179,57 @@ class DashboardAuthoringService:
         except KeyError as exc:
             raise DashboardAuthoringError(f"Unknown workflow: {workflow_id}") from exc
 
-    def _find_package_dir(self, workflow_id: str) -> Path | None:
-        """Return the mutable package directory for a workflow, or None if bundled-only."""
-        package = self._get_package(workflow_id)
+    def _dashboard_write_target(
+        self,
+        workflow_id: str,
+        package: WorkflowPackage,
+    ) -> tuple[Path, str]:
         candidate = mutable_package_dir(self.workflow_store_dir, package)
-        if candidate is None:
-            return None
-        if not candidate.exists():
-            return None
-        return candidate
+        if candidate is not None and candidate.exists():
+            return candidate, "package"
+        if self.dashboard_overrides_dir is None:
+            raise DashboardAuthoringError(
+                f"Workflow '{workflow_id}' is not in the mutable workflow store "
+                "and no dashboard override store is configured."
+            )
+        target = self.dashboard_overrides_dir / safe_store_segment(workflow_id)
+        assert_path_within(
+            self.dashboard_overrides_dir,
+            target,
+            purpose="write dashboard override",
+        )
+        target.mkdir(parents=True, exist_ok=True)
+        return target, "dashboard_override"
+
+    def reset_dashboard_override(self, workflow_id: str) -> dict[str, Any]:
+        removed = False
+        if self.dashboard_overrides_dir is not None:
+            target = self.dashboard_overrides_dir / safe_store_segment(workflow_id)
+            assert_path_within(
+                self.dashboard_overrides_dir,
+                target,
+                purpose="reset dashboard override",
+            )
+            dashboard_file = target / "dashboard.json"
+            if dashboard_file.exists():
+                dashboard_file.unlink()
+                removed = True
+            try:
+                target.rmdir()
+            except OSError:
+                pass
+        if not removed:
+            self._get_package(workflow_id)
+        self.log_store.add(
+            "info",
+            "Dashboard override reset",
+            "workflow.authoring",
+            details={"workflow_id": workflow_id, "removed": removed},
+        )
+        return {
+            "workflow_id": workflow_id,
+            "removed": removed,
+        }
 
 
 # ------------------------------------------------------------------

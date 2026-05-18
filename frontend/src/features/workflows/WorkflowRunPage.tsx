@@ -34,6 +34,7 @@ import {
   isEngineJob,
   closeWorkflowRunnerLease,
   openWorkflowRunnerLease,
+  resetDashboardCustomization,
   resolveBackendUrl,
   runWorkflow,
   startWorkflowModelVerification,
@@ -216,6 +217,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     restoreDefaults,
     layoutOverrides,
     setLayoutOverride,
+    resetLayout,
     outputPreferences,
     setOutputPreference,
     getOutputPreferencesSnapshot,
@@ -793,6 +795,20 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     setDraftLayoutOverrides(null);
   }
 
+  async function handleRestoreDefaults() {
+    try {
+      await restoreDefaults();
+      await resetLayout();
+      await resetDashboardCustomization(workflowId);
+      await loadRequirements();
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
   const pageHeader = (
     <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
       <div>
@@ -1006,7 +1022,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
           onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
-          onRestoreDefaults={() => void restoreDefaults()}
+          onRestoreDefaults={() => void handleRestoreDefaults()}
           onEnterEditLayout={handleEnterEditLayout}
           onSaveLayout={() => void handleSaveLayout()}
           onCancelLayoutEdit={handleCancelLayoutEdit}
