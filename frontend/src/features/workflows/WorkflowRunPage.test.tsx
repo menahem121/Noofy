@@ -278,6 +278,59 @@ const loraPackageData = {
   },
 };
 
+const loraMissingSummary = {
+  workflow_id: "text_to_image_v0",
+  total_count: 1,
+  available_count: 0,
+  possible_match_count: 0,
+  missing_count: 1,
+  needs_manual_download_count: 0,
+  ready_to_run: false,
+  models: [
+    {
+      requirement_id: "style_lora",
+      node_id: "12",
+      node_type: "LoraLoader",
+      input_name: "lora_name",
+      filename: "missing-style.safetensors",
+      model_type: "lora",
+      folder: "loras",
+      verification_level: "filename_only",
+      size_bytes: null,
+      source_urls: [],
+      source_availability: "unknown",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "community",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Model is missing.",
+    },
+  ],
+};
+
+const loraPackageWithMissingRequiredModel = {
+  ...loraPackageData,
+  inputs: loraPackageData.inputs.map((input) =>
+    input.id === "style_lora" ? { ...input, default: "" } : input,
+  ),
+  required_models: [
+    ...(loraPackageData.required_models ?? []),
+    {
+      folder: "loras",
+      filename: "missing-style.safetensors",
+      node_id: "12",
+      node_type: "LoraLoader",
+      input_name: "lora_name",
+      checksum: null,
+      model_type: "lora",
+      size_bytes: null,
+    },
+  ],
+};
+
 function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
   runtimeResponse = readyRuntime,
@@ -609,6 +662,66 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByDisplayValue("existing.safetensors")).toBeInTheDocument();
     }, { timeout: 2500 });
     expect(screen.queryByDisplayValue("cinematic.safetensors")).not.toBeInTheDocument();
+  });
+
+  it("does not prompt for a missing LoRA model while None is selected", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(loraPackageWithMissingRequiredModel));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(loraMissingSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse({
+          workflow_id: "text_to_image_v0",
+          valid: false,
+          missing_models: [
+            {
+              folder: "loras",
+              filename: "missing-style.safetensors",
+              source_url: null,
+              checksum: null,
+              model_type: "lora",
+            },
+          ],
+          errors: [],
+        }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.inputs.style_lora).toBe("None");
+        return Promise.resolve(jsonResponse({
+          job_id: "job-lora-none",
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "blocked_by_memory",
+        }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByDisplayValue("None")).toBeInTheDocument();
+    expect(screen.queryByText("This workflow needs required models")).not.toBeInTheDocument();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    expect(runButton).toBeEnabled();
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/run"))).toBe(true);
+    });
   });
 
   it("validates requirements, starts a run, polls progress, and shows the result", async () => {

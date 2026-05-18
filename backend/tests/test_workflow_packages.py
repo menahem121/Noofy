@@ -14,7 +14,9 @@ from app.runtime.runners.supervisor import (
     RunnerKind,
     RunnerSupervisor,
 )
+from app.workflows.bindings import apply_input_bindings, package_for_input_bindings
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.package import WorkflowPackage
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -226,6 +228,60 @@ def test_input_bindings_are_applied() -> None:
     assert graph["3"]["inputs"]["seed"] == 123
     assert graph["5"]["inputs"]["width"] == 768
     assert graph["5"]["inputs"]["height"] == 640
+
+
+def test_lora_none_bypasses_loader_node_and_required_model() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "lora_wf", "name": "LoRA workflow", "version": "0.1.0"},
+            "engine": "comfyui",
+            "required_models": [
+                {
+                    "folder": "checkpoints",
+                    "filename": "base.safetensors",
+                    "node_id": "4",
+                    "node_type": "CheckpointLoaderSimple",
+                    "input_name": "ckpt_name",
+                    "model_type": "checkpoint",
+                },
+                {
+                    "folder": "loras",
+                    "filename": "style.safetensors",
+                    "node_id": "12",
+                    "node_type": "LoraLoader",
+                    "input_name": "lora_name",
+                    "model_type": "lora",
+                },
+            ],
+            "comfyui_graph": {
+                "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+                "12": {
+                    "class_type": "LoraLoader",
+                    "inputs": {"model": ["4", 0], "clip": ["4", 1], "lora_name": "style.safetensors"},
+                },
+                "20": {"class_type": "KSampler", "inputs": {"model": ["12", 0]}},
+                "21": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["12", 1], "text": "prompt"}},
+            },
+            "inputs": [
+                {
+                    "id": "style_lora",
+                    "label": "Style LoRA",
+                    "control": "lora_loader",
+                    "binding": {"node_id": "12", "input_name": "lora_name"},
+                    "default": "None",
+                    "validation": {"options": ["style.safetensors"]},
+                }
+            ],
+        }
+    )
+
+    runtime_package = package_for_input_bindings(package, {"style_lora": "None"})
+    graph = apply_input_bindings(package, {"style_lora": "None"})
+
+    assert [model.filename for model in runtime_package.required_models] == ["base.safetensors"]
+    assert "12" not in graph
+    assert graph["20"]["inputs"]["model"] == ["4", 0]
+    assert graph["21"]["inputs"]["clip"] == ["4", 1]
 
 
 @pytest.mark.anyio

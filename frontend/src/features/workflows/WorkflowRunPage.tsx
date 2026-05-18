@@ -184,7 +184,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const packageDefaults = useMemo<Record<string, unknown>>(() => {
     const defaults: Record<string, unknown> = {};
     for (const input of state.packageData?.inputs ?? []) {
-      defaults[input.id] = input.default;
+      defaults[input.id] = defaultValueForWorkflowInput(input);
     }
     return defaults;
   }, [state.packageData]);
@@ -222,6 +222,19 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     setOutputPreference,
     getOutputPreferencesSnapshot,
   } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardLayoutIds, dashboardControlIds);
+
+  const submittedInputValues = useMemo(
+    () => normalizedLoraInputValues(state.packageData, inputValues),
+    [state.packageData, inputValues],
+  );
+  const activeModelSummary = useMemo(
+    () => activeRequiredModelSummary(state.modelSummary, state.packageData, submittedInputValues),
+    [state.modelSummary, state.packageData, submittedInputValues],
+  );
+  const activeValidation = useMemo(
+    () => activeWorkflowValidation(state.validation, state.packageData, submittedInputValues),
+    [state.validation, state.packageData, submittedInputValues],
+  );
 
   // Build output-images-by-node-id map for canvas output widgets.
   const outputImagesByNodeId = useMemo<Map<string, string[]>>(() => {
@@ -330,14 +343,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }, [modelDownloadJob?.job_id, modelDownloadJob?.status]);
 
   useEffect(() => {
-    if (!requiredModelsModalOpen || !hasVerifiableLocalModels(state.modelSummary)) return;
+    if (!requiredModelsModalOpen || !hasVerifiableLocalModels(activeModelSummary)) return;
     if (modelVerificationJob || modelVerificationError) return;
     let canceled = false;
     void startLocalModelVerification(() => canceled);
     return () => {
       canceled = true;
     };
-  }, [requiredModelsModalOpen, state.modelSummary, workflowId, modelVerificationJob?.status, modelVerificationError]);
+  }, [requiredModelsModalOpen, activeModelSummary, workflowId, modelVerificationJob?.status, modelVerificationError]);
 
   useEffect(() => {
     if (!modelVerificationJob || !["queued", "running"].includes(modelVerificationJob.status)) return;
@@ -378,7 +391,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
 
     try {
       const response = await runWorkflow(workflowId, {
-        inputs: inputValues as Record<string, unknown>,
+        inputs: submittedInputValues,
         options: {},
         output_preferences_snapshot: getOutputPreferencesSnapshot(),
       });
@@ -428,7 +441,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }
 
   async function handleDownloadRequiredModels() {
-    const selections = requiredModelDownloadSelections(state.modelSummary, workflowId);
+    const selections = requiredModelDownloadSelections(activeModelSummary, workflowId);
     if (selections.length === 0) return;
     setModelDownloadStarting(true);
     setModelDownloadError(null);
@@ -500,7 +513,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       [inputId]: Array.from(new Set([...(current[inputId] ?? []), targetFilename])),
     }));
     void loadRequirements();
-    const currentValue = inputValues[inputId];
+    const currentValue = submittedInputValues[inputId];
     const currentString = typeof currentValue === "string" ? currentValue : currentValue == null ? null : String(currentValue);
     if (currentString === observedValue) {
       setInputValue(inputId, targetFilename);
@@ -687,8 +700,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     });
   }
 
-  const unresolvedModelSummary = state.modelSummary?.models.filter((model) => model.status !== "available") ?? [];
-  const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : state.validation?.missing_models ?? [];
+  const unresolvedModelSummary = activeModelSummary?.models.filter((model) => model.status !== "available") ?? [];
+  const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : activeValidation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
   const trust = workflowSummary?.trust;
 
@@ -707,17 +720,17 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const canRun = Boolean(
     state.workflowStatus?.can_prepare !== false
-      && state.validation?.valid
-      && state.modelSummary?.ready_to_run !== false
+      && activeValidation?.valid
+      && activeModelSummary?.ready_to_run !== false
       && !backendKnownUnreachable
       && !engineKnownUnavailable
       && !isRunning
       && !isWaitingForMemory
       && !isBlockedByMemory,
   );
-  const hasDownloadableRequiredModels = requiredModelDownloadSelections(state.modelSummary, workflowId).length > 0;
+  const hasDownloadableRequiredModels = requiredModelDownloadSelections(activeModelSummary, workflowId).length > 0;
   const hasRequiredModelFixAction = Boolean(
-    state.modelSummary && (missingModels.length > 0 || state.modelSummary.ready_to_run === false),
+    activeModelSummary && (missingModels.length > 0 || activeModelSummary.ready_to_run === false),
   );
   const runDisabledReason = canRun
     ? null
@@ -730,8 +743,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         isWaitingForMemory,
         loading: state.loading,
         missingModels,
-        modelSummaryReady: state.modelSummary?.ready_to_run,
-        validation: state.validation,
+        modelSummaryReady: activeModelSummary?.ready_to_run,
+        validation: activeValidation,
         workflowStatus: state.workflowStatus,
       });
   const canCancel = Boolean(isRunning && state.job && !isBlockedByMemory);
@@ -937,8 +950,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       workflowId={workflowId}
       control={loraBrowserDialog.control}
       input={loraBrowserDialog.input}
-      inputValues={inputValues as Record<string, unknown>}
-      currentValue={inputValues[loraBrowserDialog.input.id]}
+      inputValues={submittedInputValues}
+      currentValue={submittedInputValues[loraBrowserDialog.input.id]}
       onClose={() => setLoraBrowserDialog(null)}
       onDownloadCompleted={(targetFilename, observedValue) =>
         handleLoraDownloadCompleted(loraBrowserDialog.input.id, targetFilename, observedValue)
@@ -950,7 +963,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     name: workflowDisplayName,
     description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
     source: workflowSummary?.source_label ?? workflowSummary?.trust?.label ?? "Noofy workflow",
-    requiredModels: state.modelSummary?.models?.map((model) => ({
+    requiredModels: activeModelSummary?.models?.map((model) => ({
       name: model.filename,
       type: model.model_type,
       status_label: model.status_label,
@@ -963,15 +976,15 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       workflowName={workflowDisplayName}
       exportUrl={exportDialog.url}
       extension={exportDialog.extension}
-      inputValues={exportDialog.extension === ".json" ? inputValues as Record<string, unknown> : undefined}
+      inputValues={exportDialog.extension === ".json" ? submittedInputValues : undefined}
       review={exportDialog.extension === ".noofy" ? exportReview : undefined}
       onClose={() => setExportDialog(null)}
     />
   ) : null;
-  const requiredModelsModalElement = requiredModelsModalOpen && state.modelSummary ? (
+  const requiredModelsModalElement = requiredModelsModalOpen && activeModelSummary ? (
     <WorkflowRequiredModelsModal
       workflowName={workflowDisplayName}
-      summary={state.modelSummary}
+      summary={activeModelSummary}
       downloadJob={modelDownloadJob}
       downloadError={modelDownloadError}
       downloadBusy={modelDownloadStarting}
@@ -1610,6 +1623,96 @@ function workflowRunDisabledReason({
   }
   if (loading || !workflowStatus || !validation) return "Checking workflow readiness...";
   return "This workflow is not ready to run.";
+}
+
+function activeRequiredModelSummary(
+  summary: RequiredModelSummary | null,
+  packageData: WorkflowPackageResponse | null,
+  inputValues: Record<string, unknown>,
+): RequiredModelSummary | null {
+  if (!summary) return null;
+  const bypassedModelKeys = bypassedLoraModelKeys(packageData, inputValues);
+  if (bypassedModelKeys.size === 0) return summary;
+  const models = summary.models.filter((model) => !bypassedModelKeys.has(requiredModelKey(model)));
+  const availableCount = models.filter((model) => model.status === "available").length;
+  return {
+    ...summary,
+    models,
+    total_count: models.length,
+    available_count: availableCount,
+    possible_match_count: models.filter((model) => model.status === "possible_match").length,
+    missing_count: models.filter((model) => model.status === "missing").length,
+    needs_manual_download_count: models.filter((model) => model.status === "needs_manual_download").length,
+    ready_to_run: models.length === availableCount,
+  };
+}
+
+function defaultValueForWorkflowInput(input: WorkflowInputDef): unknown {
+  if (input.control === "lora_loader" && isEmptyWorkflowValue(input.default)) return "None";
+  return input.default;
+}
+
+function normalizedLoraInputValues(
+  packageData: WorkflowPackageResponse | null,
+  inputValues: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!packageData) return inputValues as Record<string, unknown>;
+  let normalized: Record<string, unknown> | null = null;
+  for (const input of packageData.inputs) {
+    if (input.control !== "lora_loader") continue;
+    if (!isEmptyWorkflowValue(inputValues[input.id])) continue;
+    normalized ??= { ...inputValues };
+    normalized[input.id] = "None";
+  }
+  return normalized ?? (inputValues as Record<string, unknown>);
+}
+
+function activeWorkflowValidation(
+  validation: WorkflowValidationResult | null,
+  packageData: WorkflowPackageResponse | null,
+  inputValues: Record<string, unknown>,
+): WorkflowValidationResult | null {
+  if (!validation) return null;
+  const bypassedModelKeys = bypassedLoraModelKeys(packageData, inputValues);
+  if (bypassedModelKeys.size === 0) return validation;
+  const missingModels = validation.missing_models.filter((model) => !bypassedModelKeys.has(requiredModelKey(model)));
+  return {
+    ...validation,
+    missing_models: missingModels,
+    valid: validation.errors.length === 0 && missingModels.length === 0,
+  };
+}
+
+function bypassedLoraModelKeys(
+  packageData: WorkflowPackageResponse | null,
+  inputValues: Record<string, unknown>,
+): Set<string> {
+  const nodeIds = new Set(
+    (packageData?.inputs ?? [])
+      .filter((input) => input.control === "lora_loader" && input.binding.input_name === "lora_name")
+      .filter((input) => isLoraNoneValue(inputValues[input.id]))
+      .map((input) => input.binding.node_id),
+  );
+  if (nodeIds.size === 0) return new Set();
+  return new Set(
+    (packageData?.required_models ?? [])
+      .filter((model) => model.node_id && nodeIds.has(model.node_id))
+      .filter((model) => model.input_name == null || model.input_name === "lora_name")
+      .filter((model) => model.folder === "loras" || model.model_type === "lora")
+      .map(requiredModelKey),
+  );
+}
+
+function isLoraNoneValue(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "none";
+}
+
+function isEmptyWorkflowValue(value: unknown): boolean {
+  return value == null || (typeof value === "string" && value.trim() === "");
+}
+
+function requiredModelKey(model: { folder: string; filename: string }): string {
+  return `${model.folder}/${model.filename}`.toLowerCase();
 }
 
 const retryableRequiredModelStatuses = new Set([

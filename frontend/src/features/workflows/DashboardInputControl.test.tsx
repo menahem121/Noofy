@@ -203,4 +203,27 @@ describe("DashboardInputControl", () => {
       "Requires a CivitAI API key. Add one in Settings to search and download LoRAs.",
     );
   });
+
+  it("always shows None as the first LoRA option", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "style_lora", type: "lora_loader", label: "Style LoRA", input_id: "style_lora" }}
+        input={{
+          id: "style_lora",
+          label: "Style LoRA",
+          control: "lora_loader",
+          binding: { node_id: "12", input_name: "lora_name" },
+          default: "existing.safetensors",
+          validation: { options: ["existing.safetensors", "None"] },
+        }}
+        value="existing.safetensors"
+        loraBrowser={{ enabled: true, onOpen: vi.fn() }}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const select = screen.getByDisplayValue("existing.safetensors") as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(["None", "existing.safetensors"]);
+  });
 });

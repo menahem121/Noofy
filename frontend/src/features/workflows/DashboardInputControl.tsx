@@ -334,6 +334,7 @@ function ModelSelect({
   value,
   validation,
   disabled,
+  leadingOptions = [],
   extraOptions = [],
   onChange,
 }: {
@@ -341,11 +342,18 @@ function ModelSelect({
   value: unknown;
   validation: Record<string, unknown>;
   disabled: boolean;
+  leadingOptions?: string[];
   extraOptions?: string[];
   onChange: (value: unknown) => void;
 }) {
-  const selectedValue = typeof value === "string" || typeof value === "number" ? String(value) : "";
-  const options = mergeOptions(Array.isArray(validation.options) ? (validation.options as string[]) : [], extraOptions, selectedValue);
+  const rawSelectedValue = typeof value === "string" || typeof value === "number" ? String(value) : "";
+  const selectedValue = rawSelectedValue || leadingOptions[0] || "";
+  const options = mergeOptions(
+    leadingOptions,
+    Array.isArray(validation.options) ? (validation.options as string[]) : [],
+    extraOptions,
+    selectedValue,
+  );
   return (
     <select
       className={className}
@@ -388,6 +396,7 @@ function LoraLoaderInput({
         value={value}
         validation={validation}
         disabled={disabled}
+        leadingOptions={["None"]}
         extraOptions={browser?.extraOptions}
         onChange={onChange}
       />
@@ -405,10 +414,15 @@ function LoraLoaderInput({
   );
 }
 
-function mergeOptions(options: string[], extraOptions: string[], selectedValue: string): string[] {
+function mergeOptions(
+  leadingOptions: string[] = [],
+  options: string[],
+  extraOptions: string[] = [],
+  selectedValue: string,
+): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
-  for (const option of [...options, ...extraOptions, selectedValue]) {
+  for (const option of [...leadingOptions, ...options, ...extraOptions, selectedValue]) {
     if (!option || seen.has(option)) continue;
     seen.add(option);
     merged.push(option);

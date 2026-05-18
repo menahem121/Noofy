@@ -28,6 +28,7 @@ from app.runs.credentials import (
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
+from app.workflows.bindings import package_for_input_bindings
 
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
@@ -220,11 +221,12 @@ class RunOrchestrator:
             output_preferences_snapshot=output_preferences_snapshot,
             run_submission_snapshot=run_submission_snapshot,
         )
+        runtime_package = package_for_input_bindings(package, runtime_inputs)
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
 
         if not validated_before_queue:
-            validation = await self.validate_package(package, adapter)
+            validation = await self.validate_package(runtime_package, adapter)
             if not validation.valid:
                 self._record_run_blocked(package, "; ".join(validation.errors) or "Workflow validation failed")
                 self.log_store.add(
