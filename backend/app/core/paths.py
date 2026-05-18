@@ -51,7 +51,19 @@ def _configured_noofy_models_dir(base_data_dir: Path) -> Path | None:
     configured = Path(path).expanduser()
     if _looks_inside_repo_comfyui(configured.resolve(strict=False)):
         return None
+    default_dir = _documents_models_dir(base_data_dir)
+    if _is_accidental_default_models_folder_typo(configured, default_dir):
+        return default_dir
     return configured
+
+
+def _is_accidental_default_models_folder_typo(configured: Path, default_dir: Path) -> bool:
+    """Detect the accidental ``Noofy Modelss`` sibling of the default folder."""
+    try:
+        same_parent = configured.parent.resolve(strict=False) == default_dir.parent.resolve(strict=False)
+    except OSError:
+        same_parent = configured.parent == default_dir.parent
+    return same_parent and configured.name == f"{default_dir.name}s"
 
 
 def _looks_inside_repo_comfyui(path: Path) -> bool:

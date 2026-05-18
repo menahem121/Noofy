@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -115,14 +116,14 @@ class ModelFolderSettingsService:
         self.on_change = on_change
 
     def settings(self, *, ensure_folders: bool = True) -> ModelFolderSettingsResponse:
-        settings = self.store.read(default_noofy_models_dir=self.default_noofy_models_dir)
+        settings = self._repaired_settings()
         noofy_dir = Path(settings.noofy_models_dir).expanduser()
         if ensure_folders:
             ensure_model_subfolders(noofy_dir)
         return _response(settings)
 
     def update(self, request: ModelFolderUpdateRequest) -> ModelFolderUpdateResult:
-        current = self.store.read(default_noofy_models_dir=self.default_noofy_models_dir)
+        current = self._repaired_settings()
         noofy_dir = (
             Path(request.noofy_models_dir).expanduser()
             if request.noofy_models_dir
@@ -163,6 +164,15 @@ class ModelFolderSettingsService:
             restart_required=restart_required,
         )
 
+    def _repaired_settings(self) -> ModelFolderSettings:
+        settings = self.store.read(default_noofy_models_dir=self.default_noofy_models_dir)
+        return repair_accidental_default_models_folder(
+            settings,
+            default_noofy_models_dir=self.default_noofy_models_dir,
+            store=self.store,
+            log_store=self.log_store,
+        )
+
     def _record(self, level: str, message: str, settings: ModelFolderSettings) -> None:
         if self.log_store is None:
             return
@@ -191,6 +201,74 @@ def ensure_model_subfolders(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for category in COMFYUI_MODEL_CATEGORIES:
         (root / category).mkdir(parents=True, exist_ok=True)
+
+
+def repair_accidental_default_models_folder(
+    settings: ModelFolderSettings,
+    *,
+    default_noofy_models_dir: Path,
+    store: ModelFolderSettingsStore | None = None,
+    log_store: DiagnosticsSink | None = None,
+) -> ModelFolderSettings:
+    configured_dir = Path(settings.noofy_models_dir).expanduser()
+    canonical_dir = default_noofy_models_dir.expanduser()
+    if not _is_accidental_default_models_folder_typo(configured_dir, canonical_dir):
+        return settings
+
+    ensure_model_subfolders(canonical_dir)
+    moved_count = _move_folder_contents_without_overwrite(configured_dir, canonical_dir)
+    repaired = ModelFolderSettings(
+        noofy_models_dir=str(canonical_dir),
+        external_comfyui_models_dir=settings.external_comfyui_models_dir,
+    )
+    if store is not None:
+        store.write(repaired)
+    if log_store is not None:
+        log_store.add(
+            "warning",
+            "Repaired accidental Noofy Models folder path",
+            "models.folders",
+            details={
+                "from": str(configured_dir),
+                "to": str(canonical_dir),
+                "moved_files": moved_count,
+            },
+        )
+    return repaired
+
+
+def _move_folder_contents_without_overwrite(source: Path, target: Path) -> int:
+    if not source.exists() or not source.is_dir():
+        return 0
+    if source.resolve(strict=False) == target.resolve(strict=False):
+        return 0
+
+    moved_count = 0
+    for path in sorted(source.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source)
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            continue
+        shutil.move(str(path), str(destination))
+        moved_count += 1
+
+    for directory in sorted(
+        (path for path in source.rglob("*") if path.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        source.rmdir()
+    except OSError:
+        pass
+    return moved_count
 
 
 def write_extra_model_paths_config(
@@ -241,6 +319,14 @@ def _path_value(value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return Path(value).expanduser()
+
+
+def _is_accidental_default_models_folder_typo(configured: Path, default_dir: Path) -> bool:
+    try:
+        same_parent = configured.parent.resolve(strict=False) == default_dir.parent.resolve(strict=False)
+    except OSError:
+        same_parent = configured.parent == default_dir.parent
+    return same_parent and configured.name == f"{default_dir.name}s"
 
 
 def _validate_noofy_models_dir(path: Path) -> None:

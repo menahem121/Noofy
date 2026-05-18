@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.artifacts import ModelVerificationLevel
 from app.workflows.package import DashboardSchema, WorkflowInput, WorkflowOutput, WorkflowPackage
 
 _STUB_DASHBOARD_VERSION = "0.1.0"
+_CAPSULE_LOCK_FILENAME = "capsule.lock.json"
 
 
 def _load_dashboard_from_dir(package_dir: Path) -> tuple[list[WorkflowInput], list[WorkflowOutput], DashboardSchema]:
@@ -178,8 +180,72 @@ class WorkflowPackageLoader:
 
         # Strip inputs/outputs from data before model_validate to avoid conflicts
         data_clean = {k: v for k, v in data.items() if k not in ("inputs", "outputs", "dashboard")}
+        _enrich_required_models_from_capsule_lock(data_clean, package_dir / _CAPSULE_LOCK_FILENAME)
         data_clean["inputs"] = [i.model_dump() for i in inputs]
         data_clean["outputs"] = [o.model_dump() for o in outputs]
         data_clean["dashboard"] = dashboard.model_dump()
 
         return WorkflowPackage.model_validate(data_clean)
+
+
+def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], capsule_path: Path) -> None:
+    """Fill weak package model identities from an adjacent capsule lock.
+
+    The package is the app contract used by model availability and exports,
+    while the capsule lock is the immutable runtime lock. When both are
+    present, package metadata must not be weaker than lock metadata.
+    """
+    raw_models = package_data.get("required_models")
+    if not isinstance(raw_models, list) or not capsule_path.exists():
+        return
+    try:
+        capsule_data = json.loads(capsule_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    raw_locked_models = capsule_data.get("models") if isinstance(capsule_data, dict) else None
+    if not isinstance(raw_locked_models, list):
+        return
+
+    locked_by_path: dict[tuple[str, str], dict[str, Any]] = {}
+    for locked in raw_locked_models:
+        if not isinstance(locked, dict):
+            continue
+        folder = locked.get("comfyui_folder")
+        filename = locked.get("filename")
+        if isinstance(folder, str) and isinstance(filename, str):
+            locked_by_path[(folder, filename)] = locked
+
+    for model in raw_models:
+        if not isinstance(model, dict):
+            continue
+        folder = model.get("folder")
+        filename = model.get("filename")
+        if not isinstance(folder, str) or not isinstance(filename, str):
+            continue
+        locked = locked_by_path.get((folder, filename))
+        if locked is None:
+            continue
+        _fill_required_model_identity_from_lock(model, locked)
+
+
+def _fill_required_model_identity_from_lock(model: dict[str, Any], locked: dict[str, Any]) -> None:
+    sha256 = locked.get("sha256")
+    size_bytes = locked.get("size_bytes")
+    source_urls = locked.get("source_urls")
+
+    if isinstance(sha256, str) and not model.get("checksum"):
+        model["checksum"] = sha256 if sha256.startswith("sha256:") else f"sha256:{sha256}"
+    if isinstance(size_bytes, int) and size_bytes > 0 and not isinstance(model.get("size_bytes"), int):
+        model["size_bytes"] = size_bytes
+    if isinstance(source_urls, list) and not model.get("source_urls"):
+        urls = [url for url in source_urls if isinstance(url, str)]
+        if urls:
+            model["source_urls"] = urls
+            model.setdefault("source_url", urls[0])
+
+    has_checksum = isinstance(model.get("checksum"), str) and bool(str(model.get("checksum")).strip())
+    has_size = isinstance(model.get("size_bytes"), int) and model.get("size_bytes") > 0
+    if has_checksum and has_size:
+        model["verification_level"] = ModelVerificationLevel.SHA256_SIZE.value
+    elif has_size and model.get("verification_level") not in {item.value for item in ModelVerificationLevel}:
+        model["verification_level"] = ModelVerificationLevel.FILENAME_SIZE.value

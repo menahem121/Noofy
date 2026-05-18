@@ -118,6 +118,19 @@ class TestTargetedOverrides:
 
         assert paths.models_dir == tmp_path / "User Models"
 
+    def test_model_folder_settings_repair_accidental_default_folder_typo(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / "settings"
+        settings_dir.mkdir()
+        default_dir = Path.home() / "Documents" / "Noofy Models"
+        (settings_dir / "model-folders.json").write_text(
+            json.dumps({"noofy_models_dir": str(default_dir.with_name("Noofy Modelss"))}),
+            encoding="utf-8",
+        )
+
+        paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path)})
+
+        assert paths.models_dir == default_dir
+
     def test_rejects_configured_bundled_comfyui_models_dir(self, tmp_path: Path) -> None:
         settings_dir = tmp_path / "settings"
         settings_dir.mkdir()

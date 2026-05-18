@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 
+from app.artifacts import ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.engine.models import ModelInfo
 from app.engine.service import EngineService
@@ -59,6 +61,74 @@ def test_text_to_image_package_loads() -> None:
     assert package.smoke_tests.workflow_execution is not None
     assert package.smoke_tests.workflow_execution.name == "default-core-empty-image"
     assert package.smoke_tests.workflow_execution.required_node_types == ["EmptyImage", "SaveImage"]
+    assert package.required_models[0].size_bytes == 2132696762
+    assert package.required_models[0].verification_level is ModelVerificationLevel.SHA256_SIZE
+
+
+def test_loader_enriches_weak_package_model_identity_from_capsule_lock(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "weak_identity"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": "weak_identity", "name": "Weak Identity", "version": "0.1.0"},
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "checkpoints",
+                        "filename": "demo.safetensors",
+                        "source_url": "https://example.test/demo.safetensors",
+                    }
+                ],
+                "comfyui_graph": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "capsule.lock.json").write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "comfyui_folder": "checkpoints",
+                        "filename": "demo.safetensors",
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "source_urls": ["https://example.test/demo.safetensors"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package("weak_identity")
+
+    model = package.required_models[0]
+    assert model.checksum == f"sha256:{'a' * 64}"
+    assert model.size_bytes == 123
+    assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
+
+
+def test_bundled_package_model_identity_is_not_weaker_than_capsule_lock() -> None:
+    packages_dir = Path("app/workflows/packages")
+    for capsule_file in packages_dir.glob("*/capsule.lock.json"):
+        package_file = capsule_file.parent / "package.json"
+        package_data = json.loads(package_file.read_text(encoding="utf-8"))
+        capsule_data = json.loads(capsule_file.read_text(encoding="utf-8"))
+        package_models = {
+            (model.get("folder"), model.get("filename")): model
+            for model in package_data.get("required_models", [])
+            if isinstance(model, dict)
+        }
+        for locked in capsule_data.get("models", []):
+            key = (locked.get("comfyui_folder"), locked.get("filename"))
+            package_model = package_models.get(key)
+            assert package_model is not None, f"{package_file} is missing locked model {key}"
+            expected_checksum = f"sha256:{locked['sha256']}"
+            assert package_model.get("checksum") == expected_checksum
+            assert package_model.get("size_bytes") == locked.get("size_bytes")
+            assert package_model.get("verification_level") == ModelVerificationLevel.SHA256_SIZE.value
 
 
 def test_engine_service_workflow_summary_includes_phase6_trust_metadata() -> None:

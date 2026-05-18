@@ -694,6 +694,8 @@ def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Pat
     assert package_data["publisher_id"] == "noofy"
     assert package_data["package_id"] == "text_to_image_v0"
     assert "dashboard" not in package_data
+    assert package_data["required_models"][0]["size_bytes"] == 2132696762
+    assert package_data["required_models"][0]["verification_level"] == "sha256_size"
     assert dashboard_data["inputs"][0]["default"] == "a cinematic photo of a mountain lake"
     assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 0, "y": 0, "w": 32, "h": 6}
     assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"

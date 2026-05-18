@@ -64,6 +64,7 @@ from app.models.folders import (
     ModelFolderSettingsStore,
     default_noofy_models_dir,
     ensure_model_subfolders,
+    repair_accidental_default_models_folder,
     write_extra_model_paths_config,
 )
 from app.trust import load_trust_verifier
@@ -110,6 +111,12 @@ def create_default_engine_service() -> EngineService:
     )
     model_folder_settings = model_folder_store.read(
         default_noofy_models_dir=default_noofy_models_dir(paths.data_dir)
+    )
+    model_folder_settings = repair_accidental_default_models_folder(
+        model_folder_settings,
+        default_noofy_models_dir=default_noofy_models_dir(paths.data_dir),
+        store=model_folder_store,
+        log_store=log_store,
     )
     noofy_models_dir = Path(model_folder_settings.noofy_models_dir)
     external_comfyui_models_dir = (

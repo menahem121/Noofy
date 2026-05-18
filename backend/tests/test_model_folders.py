@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.models.folders import (
     COMFYUI_MODEL_CATEGORIES,
+    ModelFolderSettings,
     ModelFolderSettingsService,
     ModelFolderSettingsStore,
     ModelFolderUpdateRequest,
@@ -70,6 +71,27 @@ def test_model_folder_service_updates_noofy_and_external_paths(tmp_path: Path) -
         for category in COMFYUI_MODEL_CATEGORIES
     )
     assert applied == [(Path(result.settings.noofy_models_dir), external_dir)]
+
+
+def test_model_folder_service_repairs_accidental_default_folder_typo(tmp_path: Path) -> None:
+    default_dir = tmp_path / "Documents" / "Noofy Models"
+    typo_dir = tmp_path / "Documents" / "Noofy Modelss"
+    model_file = typo_dir / "checkpoints" / "v1-5-pruned-emaonly-fp16.safetensors"
+    model_file.parent.mkdir(parents=True)
+    model_file.write_bytes(b"model")
+    store = ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json")
+    store.write(ModelFolderSettings(noofy_models_dir=str(typo_dir)))
+    service = ModelFolderSettingsService(
+        store=store,
+        default_noofy_models_dir=default_dir,
+    )
+
+    result = service.settings()
+
+    assert result.noofy_models_dir == str(default_dir)
+    assert (default_dir / "checkpoints" / "v1-5-pruned-emaonly-fp16.safetensors").read_bytes() == b"model"
+    assert not model_file.exists()
+    assert store.read(default_noofy_models_dir=default_dir).noofy_models_dir == str(default_dir)
 
 
 def test_extra_model_paths_config_includes_noofy_and_external_roots(tmp_path: Path) -> None:
