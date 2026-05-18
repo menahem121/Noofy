@@ -26,6 +26,7 @@ from app.models.ownership import ModelOwnershipStore
 from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeySettingsService
+from app.settings.onboarding import OnboardingSettingsService
 from app.models.folders import ModelFolderSettingsService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.user_state import UserStateService
@@ -80,6 +81,7 @@ def create_app(
     asset_service: DashboardAssetService | None = None,
     gallery_store: GalleryStore | None = None,
     api_key_service: ApiKeySettingsService | None = None,
+    onboarding_service: OnboardingSettingsService | None = None,
     model_folder_service: ModelFolderSettingsService | None = None,
     model_tag_store: ModelTagStore | None = None,
     model_ownership_store: ModelOwnershipStore | None = None,
@@ -95,6 +97,7 @@ def create_app(
             asset_service,
             gallery_store,
             api_key_service,
+            onboarding_service,
             model_folder_service,
             model_tag_store,
             model_ownership_store,
@@ -111,6 +114,7 @@ def create_app(
             asset_service,
             gallery_store,
             api_key_service,
+            onboarding_service,
             model_folder_service,
             model_tag_store,
             model_ownership_store,
@@ -126,6 +130,7 @@ def create_app(
             asset_service=asset_service,
             gallery_store=gallery_store,
             api_key_service=api_key_service,
+            onboarding_service=onboarding_service,
             model_folder_service=model_folder_service,
             model_tag_store=model_tag_store,
             model_ownership_store=model_ownership_store,

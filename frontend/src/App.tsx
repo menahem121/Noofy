@@ -13,6 +13,7 @@ import { HistoryPage } from "./features/history/HistoryPage";
 import { HomePage } from "./features/home/HomePage";
 import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
+import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 import {
@@ -342,6 +343,13 @@ function AppContent() {
           onConfirm={() => void confirmStopAndClose()}
         />
       ) : null}
+      <FirstLaunchOnboarding
+        workflows={workflowLibrary.workflows}
+        hasLoadedWorkflows={workflowLibrary.hasLoaded}
+        refreshWorkflows={workflowLibrary.refreshWorkflows}
+        onOpenWorkflow={openWorkflow}
+        onBrowseWorkflows={() => navigate("workflows")}
+      />
     </WorkflowTabsRouteProvider>
   );
 }

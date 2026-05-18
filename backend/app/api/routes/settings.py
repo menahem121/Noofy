@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import ApiKeyServiceDep, EngineServiceDep, ModelFolderServiceDep
+from app.api.deps import ApiKeyServiceDep, EngineServiceDep, ModelFolderServiceDep, OnboardingServiceDep
 from app.api.schemas import ApiKeyUpdateRequest, ModelFolderUpdateRequest
 from app.settings.api_keys import CredentialStoreUnavailable, provider_from_slug
 
@@ -15,6 +15,16 @@ async def api_key_settings(api_key_service: ApiKeyServiceDep):
 @router.get("/settings/model-folders")
 async def model_folder_settings(model_folder_service: ModelFolderServiceDep):
     return model_folder_service.settings()
+
+
+@router.get("/settings/onboarding")
+async def onboarding_settings(onboarding_service: OnboardingServiceDep):
+    return onboarding_service.state()
+
+
+@router.put("/settings/onboarding")
+async def complete_onboarding(onboarding_service: OnboardingServiceDep):
+    return onboarding_service.mark_complete()
 
 
 @router.put("/settings/model-folders")

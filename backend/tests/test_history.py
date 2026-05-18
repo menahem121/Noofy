@@ -164,6 +164,7 @@ def test_history_api_splits_summary_and_detail_payloads(tmp_path: Path) -> None:
         asset_service=None,
         gallery_store=None,
         api_key_service=None,
+        onboarding_service=None,
         model_folder_service=None,
         model_tag_store=None,
         model_ownership_store=None,

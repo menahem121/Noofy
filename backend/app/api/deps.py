@@ -14,6 +14,7 @@ from app.models.inventory import ModelInventoryService
 from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeySettingsService
+from app.settings.onboarding import OnboardingSettingsService
 from app.models.folders import ModelFolderSettingsService
 from app.runs.job_service import RunJobService
 from app.runs.orchestrator import RunOrchestrator
@@ -74,6 +75,12 @@ def get_api_key_service(
     return services.api_key_service
 
 
+def get_onboarding_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> OnboardingSettingsService:
+    return services.onboarding_service
+
+
 def get_model_folder_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> ModelFolderSettingsService:
@@ -112,6 +119,7 @@ UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service
 DashboardAssetServiceDep = Annotated[DashboardAssetService, Depends(get_asset_service)]
 GalleryStoreDep = Annotated[GalleryStore, Depends(get_gallery_store)]
 ApiKeyServiceDep = Annotated[ApiKeySettingsService, Depends(get_api_key_service)]
+OnboardingServiceDep = Annotated[OnboardingSettingsService, Depends(get_onboarding_service)]
 ModelFolderServiceDep = Annotated[ModelFolderSettingsService, Depends(get_model_folder_service)]
 ModelTagStoreDep = Annotated[ModelTagStore, Depends(get_model_tag_store)]
 ModelDownloadServiceDep = Annotated[ModelDownloadJobService, Depends(get_model_download_service)]

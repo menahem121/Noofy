@@ -58,6 +58,7 @@ def _services(
         asset_service=placeholder,
         gallery_store=placeholder,
         api_key_service=placeholder,
+        onboarding_service=placeholder,
         model_folder_service=placeholder,
         model_tag_store=placeholder,
         model_ownership_store=placeholder,

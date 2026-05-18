@@ -43,8 +43,27 @@ export interface ModelFolderUpdateResult {
   restart_required: boolean;
 }
 
+export interface OnboardingState {
+  schema_version: string;
+  completed: boolean;
+  completed_at: string | null;
+}
+
+export interface OnboardingUpdateResult {
+  status: "completed" | "already_completed" | string;
+  onboarding: OnboardingState;
+}
+
 export function fetchApiKeySettings() {
   return getJson<ApiKeySettingsResponse>("/settings/apis");
+}
+
+export function fetchOnboardingState() {
+  return getJson<OnboardingState>("/settings/onboarding");
+}
+
+export function completeOnboarding() {
+  return putJson<OnboardingUpdateResult>("/settings/onboarding", {});
 }
 
 export function fetchModelFolderSettings() {
