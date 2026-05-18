@@ -209,9 +209,11 @@ export type RequiredModelStatus =
   | "needs_manual_download"
   | "download_failed"
   | "authentication_required"
+  | "access_denied"
   | "rate_limited"
   | "hash_mismatch"
-  | "not_enough_disk_space";
+  | "not_enough_disk_space"
+  | "canceled";
 
 export interface RequiredModelAvailability {
   requirement_id: string;
@@ -293,6 +295,20 @@ export interface ImportModelDownloadJobStatus {
 export interface ImportModelVerificationJobStatus {
   job_id: string;
   import_session_id: string;
+  workflow_id: string;
+  status: "queued" | "running" | "completed" | "failed" | string;
+  user_facing_message: string;
+  current_model_filename: string | null;
+  current_model_index: number | null;
+  total_models: number;
+  verified_models: number;
+  percent: number | null;
+  models: RequiredModelAvailability[];
+  model_summary: RequiredModelSummary | null;
+}
+
+export interface WorkflowModelVerificationJobStatus {
+  job_id: string;
   workflow_id: string;
   status: "queued" | "running" | "completed" | "failed" | string;
   user_facing_message: string;
@@ -525,6 +541,16 @@ export function fetchWorkflowStatus(workflowId: string) {
 
 export function fetchWorkflowModelSummary(workflowId: string) {
   return getJson<RequiredModelSummary>(`/workflows/${encodeURIComponent(workflowId)}/model-summary`);
+}
+
+export function startWorkflowModelVerification(workflowId: string) {
+  return postJson<WorkflowModelVerificationJobStatus>(`/workflows/${encodeURIComponent(workflowId)}/model-verification`);
+}
+
+export function fetchWorkflowModelVerificationStatus(workflowId: string, jobId: string) {
+  return getJson<WorkflowModelVerificationJobStatus>(
+    `/workflows/${encodeURIComponent(workflowId)}/model-verification/${encodeURIComponent(jobId)}`,
+  );
 }
 
 export function fetchTrustPolicy() {

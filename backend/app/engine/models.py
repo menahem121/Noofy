@@ -168,6 +168,20 @@ class ImportModelVerificationJobStatus(BaseModel):
     model_summary: RequiredModelSummary | None = None
 
 
+class WorkflowModelVerificationJobStatus(BaseModel):
+    job_id: str
+    workflow_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    user_facing_message: str
+    current_model_filename: str | None = None
+    current_model_index: int | None = None
+    total_models: int
+    verified_models: int
+    percent: float | None = None
+    models: list[RequiredModelAvailability] = Field(default_factory=list)
+    model_summary: RequiredModelSummary | None = None
+
+
 class WorkflowValidationResult(BaseModel):
     workflow_id: str
     valid: bool

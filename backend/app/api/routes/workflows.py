@@ -94,6 +94,26 @@ async def get_workflow_model_summary(workflow_id: str, library: WorkflowLibraryS
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/workflows/{workflow_id}/model-verification")
+async def start_workflow_model_verification(workflow_id: str, library: WorkflowLibraryServiceDep):
+    try:
+        return library.start_model_verification(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/model-verification/{job_id}")
+async def get_workflow_model_verification_status(
+    workflow_id: str,
+    job_id: str,
+    library: WorkflowLibraryServiceDep,
+):
+    try:
+        return library.model_verification_status(workflow_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/workflows/{workflow_id}/install-state")
 async def get_workflow_install_state(
     workflow_id: str,

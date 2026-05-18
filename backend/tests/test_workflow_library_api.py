@@ -59,6 +59,42 @@ class FakeAvailabilityService:
         )
 
 
+class VerifyingAvailabilityService:
+    def cleanup_interrupted_downloads(self) -> int:
+        return 0
+
+    def summarize(self, package, *, deep_search=True, verify_hashes=True) -> RequiredModelSummary:
+        status = "available" if verify_hashes else "possible_match"
+        models = [
+            RequiredModelAvailability(
+                requirement_id=f"{model.folder}/{model.filename}",
+                filename=model.filename,
+                model_type=model.model_type,
+                folder=model.folder,
+                verification_level=ModelVerificationLevel.SHA256_SIZE,
+                size_bytes=model.size_bytes,
+                status=status,
+                status_label="Available" if status == "available" else "Possible match",
+                asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+                source_path=f"/models/{model.folder}/{model.filename}",
+                message=None if status == "available" else "A local file with this name was found.",
+            )
+            for model in package.required_models
+        ]
+        available_count = sum(model.status == "available" for model in models)
+        possible_count = sum(model.status == "possible_match" for model in models)
+        return RequiredModelSummary(
+            workflow_id=package.metadata.id,
+            total_count=len(models),
+            available_count=available_count,
+            possible_match_count=possible_count,
+            missing_count=0,
+            needs_manual_download_count=0,
+            ready_to_run=available_count == len(models),
+            models=models,
+        )
+
+
 class RecordingAdapter:
     async def list_available_models(self) -> list[ModelInfo]:
         return []
@@ -300,6 +336,55 @@ def test_workflow_list_includes_missing_model_count_without_details_payload(tmp_
     assert row["missing_model_count"] == 1
     assert row["needs_setup"] is False
     assert "models_used" not in row
+
+
+def test_workflow_model_verification_job_accepts_possible_local_match(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "native-packages"
+    package_dir = packages_dir / "possible_model_wf"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": "possible_model_wf", "name": "Possible Model", "version": "1.0.0"},
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "checkpoints",
+                        "filename": "v1-5-pruned-emaonly-fp16.safetensors",
+                        "model_type": "checkpoint",
+                        "checksum": "sha256:abc",
+                        "size_bytes": 1,
+                    }
+                ],
+                "comfyui_graph": {"1": {"class_type": "SaveImage", "inputs": {}}},
+                "inputs": [],
+                "outputs": [],
+                "custom_nodes": [],
+                "unresolved_runtime_inputs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = EngineService(
+        WorkflowPackageLoader(packages_dir),
+        WorkflowPackageValidator(),
+        RunnerSupervisor(),
+        StubRuntimeManager(),
+        LogStore(),
+        model_availability_service=VerifyingAvailabilityService(),
+        workflow_library_store=WorkflowLibraryStore(tmp_path / "library"),
+    )
+
+    started = service.workflow_library_service.start_model_verification("possible_model_wf")
+    finished = service.workflow_library_service.model_verification_status(
+        "possible_model_wf",
+        started.job_id,
+    )
+
+    assert finished.status == "completed"
+    assert finished.model_summary is not None
+    assert finished.model_summary.ready_to_run is True
+    assert finished.models[0].status == "available"
 
 
 def test_workflow_details_loads_drawer_data_separately(tmp_path: Path) -> None:

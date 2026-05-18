@@ -1141,6 +1141,346 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("The local AI engine is offline")).not.toBeInTheDocument();
   });
 
+  it("explains why the canvas run button is disabled when required models are missing", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(missingModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+      if (url.endsWith("/api/models/downloads") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ job_id: "model-download-1", status: "queued", user_facing_message: "Downloading required models..." }));
+      }
+      if (url.endsWith("/api/models/downloads/model-download-1")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-1",
+            status: "running",
+            user_facing_message: "Downloading required models...",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            bytes_downloaded: 256,
+            total_bytes: 1024,
+            percent: 25,
+            speed_bytes_per_second: 512,
+            models: [
+              {
+                requirement_id: "checkpoint",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                status: "running",
+                status_label: "Downloading",
+                message: "Downloading required model...",
+                bytes_downloaded: 256,
+                total_bytes: 1024,
+                percent: 25,
+              },
+            ],
+            model_summary: missingModelSummary,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    expect(runButton).toBeDisabled();
+    expect(runButton).toHaveAttribute(
+      "title",
+      "Add required model before running: v1-5-pruned-emaonly-fp16.safetensors.",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Add required model before running: v1-5-pruned-emaonly-fp16.safetensors.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(screen.getByRole("dialog", { name: "Missing Models" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/models/downloads", {
+        method: "POST",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ selections: [{ workflow_id: "text_to_image_v0", requirement_id: "checkpoint" }] }),
+      });
+    });
+    expect(await screen.findByRole("progressbar", { name: "Model download progress" })).toBeInTheDocument();
+    expect(screen.queryByText("This workflow needs required models")).not.toBeInTheDocument();
+  });
+
+  it("shows the canvas Download action for required model blockers even before an automatic source is available", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...missingModelSummary,
+            needs_manual_download_count: 1,
+            models: missingModelSummary.models.map((model) => ({
+              ...model,
+              status: "needs_manual_download",
+              status_label: "Needs manual download",
+              message: "Noofy does not have enough source information to download this model automatically.",
+            })),
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByRole("button", { name: "Download" })).toBeInTheDocument();
+  });
+
+  it("starts local model verification when the missing models popup sees a possible local match", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...missingModelSummary,
+            missing_count: 0,
+            possible_match_count: 1,
+            models: missingModelSummary.models.map((model) => ({
+              ...model,
+              status: "possible_match",
+              status_label: "Possible match",
+              source_path: "/models/checkpoints/v1-5-pruned-emaonly-fp16.safetensors",
+              message: "A local file with this name was found, but Noofy needs stronger verification before using it.",
+            })),
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-verification") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "verification-1",
+            workflow_id: "text_to_image_v0",
+            status: "running",
+            user_facing_message: "Verifying local model files...",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            verified_models: 0,
+            percent: 0,
+            models: [],
+            model_summary: null,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-verification/verification-1")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "verification-1",
+            workflow_id: "text_to_image_v0",
+            status: "running",
+            user_facing_message: "Verifying local model files...",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            verified_models: 0,
+            percent: 50,
+            models: [],
+            model_summary: null,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+
+    expect(await screen.findByRole("progressbar", { name: "Model verification progress" })).toBeInTheDocument();
+    expect(screen.getByText(/Verifying local model/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/workflows/text_to_image_v0/model-verification", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("does not automatically retry local model verification after a failure", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...missingModelSummary,
+            missing_count: 0,
+            possible_match_count: 1,
+            models: missingModelSummary.models.map((model) => ({
+              ...model,
+              status: "possible_match",
+              status_label: "Possible match",
+            })),
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", valid: false, missing_models: [], errors: ["Missing model"] }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-verification") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "verification-failed",
+            workflow_id: "text_to_image_v0",
+            status: "running",
+            user_facing_message: "Verifying local model files...",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            verified_models: 0,
+            percent: 0,
+            models: [],
+            model_summary: null,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-verification/verification-failed")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "verification-failed",
+            workflow_id: "text_to_image_v0",
+            status: "failed",
+            user_facing_message: "Model verification failed. Try again or use a different model file.",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            verified_models: 0,
+            percent: 0,
+            models: [],
+            model_summary: null,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+
+    expect(await screen.findByText("Model verification failed")).toBeInTheDocument();
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    const starts = fetchMock.mock.calls.filter(([url, init]) =>
+      String(url).endsWith("/api/workflows/text_to_image_v0/model-verification") &&
+      (init as RequestInit | undefined)?.method === "POST"
+    );
+    expect(starts).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Verify Again" })).toBeInTheDocument();
+  });
+
   it("uses the selected canvas shell while workflow data is loading", () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "canvas" }));
     fetchMock.mockImplementation((input: RequestInfo | URL) => {

@@ -17,14 +17,17 @@ import {
 
 import {
   cancelJob,
+  cancelModelDownload,
   createJobEventsUrl,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
+  fetchModelDownloadStatus,
   fetchApiKeySettings,
   fetchJobLogs,
   fetchJobProgress,
   fetchJobResult,
   fetchLogs,
+  fetchWorkflowModelVerificationStatus,
   fetchWorkflowModelSummary,
   fetchWorkflowPackage,
   fetchWorkflowStatus,
@@ -33,6 +36,8 @@ import {
   openWorkflowRunnerLease,
   resolveBackendUrl,
   runWorkflow,
+  startWorkflowModelVerification,
+  startModelDownload,
   uploadDashboardAsset,
   validateWorkflow,
   type DashboardControlDef,
@@ -43,8 +48,12 @@ import {
   type JobProgress,
   type JobResult,
   type MemoryStatus,
+  type ModelDownloadJobStatus,
+  type ModelDownloadSelection,
+  type RequiredModelAvailability,
   type RequiredModelSummary,
   type WorkflowInputDef,
+  type WorkflowModelVerificationJobStatus,
   type WorkflowOutputDef,
   type WorkflowPackageResponse,
   type WorkflowStatusResponse,
@@ -64,6 +73,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
 import { CanvasDashboardView } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
+import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
 import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
@@ -129,10 +139,17 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
+  const [requiredModelsModalOpen, setRequiredModelsModalOpen] = useState(false);
+  const [modelDownloadJob, setModelDownloadJob] = useState<ModelDownloadJobStatus | null>(null);
+  const [modelDownloadError, setModelDownloadError] = useState<string | null>(null);
+  const [modelDownloadStarting, setModelDownloadStarting] = useState(false);
+  const [modelVerificationJob, setModelVerificationJob] = useState<WorkflowModelVerificationJobStatus | null>(null);
+  const [modelVerificationError, setModelVerificationError] = useState<string | null>(null);
   const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
+  const modelVerificationStartInFlightRef = useRef(false);
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
@@ -258,6 +275,12 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   useEffect(() => {
     void runtimeStatus.refreshRuntime({ silent: true });
     void loadRequirements();
+    setRequiredModelsModalOpen(false);
+    setModelDownloadJob(null);
+    setModelDownloadError(null);
+    setModelDownloadStarting(false);
+    setModelVerificationJob(null);
+    setModelVerificationError(null);
     return () => {
       cleanupJobWatchers();
     };
@@ -285,6 +308,55 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       canceled = true;
     };
   }, [workflowId]);
+
+  useEffect(() => {
+    if (!modelDownloadJob || !["queued", "running"].includes(modelDownloadJob.status)) return;
+    const interval = window.setInterval(() => {
+      fetchModelDownloadStatus(modelDownloadJob.job_id)
+        .then((job) => {
+          setModelDownloadJob(job);
+          setModelDownloadError(null);
+          if (!["queued", "running"].includes(job.status)) {
+            void loadRequirements();
+          }
+        })
+        .catch((error) => {
+          setModelDownloadError(error instanceof Error ? error.message : "Could not check model download progress.");
+        });
+    }, 700);
+    return () => window.clearInterval(interval);
+  }, [modelDownloadJob?.job_id, modelDownloadJob?.status]);
+
+  useEffect(() => {
+    if (!requiredModelsModalOpen || !hasVerifiableLocalModels(state.modelSummary)) return;
+    if (modelVerificationJob || modelVerificationError) return;
+    let canceled = false;
+    void startLocalModelVerification(() => canceled);
+    return () => {
+      canceled = true;
+    };
+  }, [requiredModelsModalOpen, state.modelSummary, workflowId, modelVerificationJob?.status, modelVerificationError]);
+
+  useEffect(() => {
+    if (!modelVerificationJob || !["queued", "running"].includes(modelVerificationJob.status)) return;
+    const interval = window.setInterval(() => {
+      fetchWorkflowModelVerificationStatus(workflowId, modelVerificationJob.job_id)
+        .then((job) => {
+          setModelVerificationJob(job);
+          setModelVerificationError(null);
+          if (!["queued", "running"].includes(job.status)) {
+            if (job.model_summary) {
+              setState((current) => ({ ...current, modelSummary: job.model_summary }));
+            }
+            void loadRequirements();
+          }
+        })
+        .catch((error) => {
+          setModelVerificationError(error instanceof Error ? error.message : "Could not check model verification progress.");
+        });
+    }, 800);
+    return () => window.clearInterval(interval);
+  }, [modelVerificationJob?.job_id, modelVerificationJob?.status, workflowId]);
 
   async function handleRun() {
     if (!canRun) {
@@ -350,6 +422,48 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         ...current,
         error: error instanceof Error ? error.message : String(error),
       }));
+    }
+  }
+
+  async function handleDownloadRequiredModels() {
+    const selections = requiredModelDownloadSelections(state.modelSummary, workflowId);
+    if (selections.length === 0) return;
+    setModelDownloadStarting(true);
+    setModelDownloadError(null);
+    try {
+      const started = await startModelDownload(selections);
+      const status = await fetchModelDownloadStatus(started.job_id);
+      setModelDownloadJob(status);
+    } catch (error) {
+      setModelDownloadError(error instanceof Error ? error.message : "Could not start the model download.");
+    } finally {
+      setModelDownloadStarting(false);
+    }
+  }
+
+  async function handleCancelModelDownload() {
+    if (!modelDownloadJob) return;
+    try {
+      setModelDownloadJob(await cancelModelDownload(modelDownloadJob.job_id));
+    } catch (error) {
+      setModelDownloadError(error instanceof Error ? error.message : "Could not cancel the model download.");
+    }
+  }
+
+  async function startLocalModelVerification(isCanceled: () => boolean = () => false) {
+    if (modelVerificationStartInFlightRef.current) return;
+    modelVerificationStartInFlightRef.current = true;
+    setModelVerificationJob(null);
+    setModelVerificationError(null);
+    try {
+      const job = await startWorkflowModelVerification(workflowId);
+      if (!isCanceled()) setModelVerificationJob(job);
+    } catch (error) {
+      if (!isCanceled()) {
+        setModelVerificationError(error instanceof Error ? error.message : "Could not start local model verification.");
+      }
+    } finally {
+      modelVerificationStartInFlightRef.current = false;
     }
   }
 
@@ -599,6 +713,25 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       && !isWaitingForMemory
       && !isBlockedByMemory,
   );
+  const hasDownloadableRequiredModels = requiredModelDownloadSelections(state.modelSummary, workflowId).length > 0;
+  const hasRequiredModelFixAction = Boolean(
+    state.modelSummary && (missingModels.length > 0 || state.modelSummary.ready_to_run === false),
+  );
+  const runDisabledReason = canRun
+    ? null
+    : workflowRunDisabledReason({
+        backendKnownUnreachable,
+        engineKnownUnavailable,
+        installStatus,
+        isBlockedByMemory,
+        isRunning,
+        isWaitingForMemory,
+        loading: state.loading,
+        missingModels,
+        modelSummaryReady: state.modelSummary?.ready_to_run,
+        validation: state.validation,
+        workflowStatus: state.workflowStatus,
+      });
   const canCancel = Boolean(isRunning && state.job && !isBlockedByMemory);
   const progressPercent =
     state.progress?.value !== null && state.progress?.value !== undefined && state.progress.max
@@ -755,6 +888,12 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
               {missingModels.map((model) => model.filename).join(", ")} must be available before this workflow can run.
             </span>
           </div>
+          {hasRequiredModelFixAction ? (
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => setRequiredModelsModalOpen(true)}>
+              <Download size={13} aria-hidden="true" />
+              Download
+            </button>
+          ) : null}
         </div>
       ) : null}
       {memoryStatus ? (
@@ -813,6 +952,21 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       onClose={() => setExportDialog(null)}
     />
   ) : null;
+  const requiredModelsModalElement = requiredModelsModalOpen && state.modelSummary ? (
+    <WorkflowRequiredModelsModal
+      workflowName={workflowDisplayName}
+      summary={state.modelSummary}
+      downloadJob={modelDownloadJob}
+      downloadError={modelDownloadError}
+      downloadBusy={modelDownloadStarting}
+      verificationJob={modelVerificationJob}
+      verificationError={modelVerificationError}
+      onDownload={() => void handleDownloadRequiredModels()}
+      onCancelDownload={() => void handleCancelModelDownload()}
+      onRetryVerification={() => void startLocalModelVerification()}
+      onClose={() => setRequiredModelsModalOpen(false)}
+    />
+  ) : null;
 
   if (showCanvasView) {
     return (
@@ -838,6 +992,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
             isRunning,
             canRun,
             canCancel,
+            disabledReason: runDisabledReason,
+            disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
@@ -849,6 +1005,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
+          onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
           onRestoreDefaults={() => void restoreDefaults()}
           onEnterEditLayout={handleEnterEditLayout}
           onSaveLayout={() => void handleSaveLayout()}
@@ -861,6 +1018,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         {failureDialogElement}
         {loraBrowserElement}
         {exportDialogElement}
+        {requiredModelsModalElement}
       </AppLayout>
     );
   }
@@ -951,6 +1109,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       {failureDialogElement}
       {loraBrowserElement}
       {exportDialogElement}
+      {requiredModelsModalElement}
     </AppLayout>
   );
 }
@@ -1387,6 +1546,316 @@ function memoryStatusTitle(state: string) {
 function memoryNoticeClass(status: MemoryStatus) {
   if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed") return "notice--error";
   return "notice--warning";
+}
+
+interface RunDisabledReasonInput {
+  backendKnownUnreachable: boolean;
+  engineKnownUnavailable: boolean;
+  installStatus: string | null;
+  isBlockedByMemory: boolean;
+  isRunning: boolean;
+  isWaitingForMemory: boolean;
+  loading: boolean;
+  missingModels: Array<{ filename: string }>;
+  modelSummaryReady: boolean | undefined;
+  validation: WorkflowValidationResult | null;
+  workflowStatus: WorkflowStatusResponse | null;
+}
+
+function workflowRunDisabledReason({
+  backendKnownUnreachable,
+  engineKnownUnavailable,
+  installStatus,
+  isBlockedByMemory,
+  isRunning,
+  isWaitingForMemory,
+  loading,
+  missingModels,
+  modelSummaryReady,
+  validation,
+  workflowStatus,
+}: RunDisabledReasonInput): string {
+  if (isRunning) return "This workflow is already running.";
+  if (isBlockedByMemory) return "Not enough memory is available for this run.";
+  if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
+  if (backendKnownUnreachable) return "The local app service is offline.";
+  if (engineKnownUnavailable) return "The local AI engine is not ready yet.";
+  if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {
+    return "This workflow cannot run on this machine.";
+  }
+  if (missingModels.length > 0) {
+    const names = missingModels.slice(0, 2).map((model) => model.filename).join(", ");
+    const remaining = missingModels.length > 2 ? ` and ${missingModels.length - 2} more` : "";
+    return `Add required model before running: ${names}${remaining}.`;
+  }
+  if (modelSummaryReady === false) return "This workflow needs required models before it can run.";
+  if (validation && !validation.valid) {
+    return validation.errors[0] ?? "This workflow needs setup before it can run.";
+  }
+  if (loading || !workflowStatus || !validation) return "Checking workflow readiness...";
+  return "This workflow is not ready to run.";
+}
+
+const retryableRequiredModelStatuses = new Set([
+  "missing",
+  "download_failed",
+  "authentication_required",
+  "rate_limited",
+  "hash_mismatch",
+  "not_enough_disk_space",
+]);
+
+function requiredModelDownloadSelections(
+  summary: RequiredModelSummary | null,
+  workflowId: string,
+): ModelDownloadSelection[] {
+  if (!summary) return [];
+  return summary.models
+    .filter((model) => retryableRequiredModelStatuses.has(model.status))
+    .map((model) => ({ workflow_id: workflowId, requirement_id: model.requirement_id }));
+}
+
+function WorkflowRequiredModelsModal({
+  workflowName,
+  summary,
+  downloadJob,
+  downloadError,
+  downloadBusy,
+  verificationJob,
+  verificationError,
+  onDownload,
+  onCancelDownload,
+  onRetryVerification,
+  onClose,
+}: {
+  workflowName: string;
+  summary: RequiredModelSummary;
+  downloadJob: ModelDownloadJobStatus | null;
+  downloadError: string | null;
+  downloadBusy: boolean;
+  verificationJob: WorkflowModelVerificationJobStatus | null;
+  verificationError: string | null;
+  onDownload: () => void;
+  onCancelDownload: () => void;
+  onRetryVerification: () => void;
+  onClose: () => void;
+}) {
+  const effectiveSummary = verificationJob?.model_summary ?? summary;
+  const activeDownload = Boolean(downloadJob && ["queued", "running"].includes(downloadJob.status));
+  const activeVerification = Boolean(verificationJob && ["queued", "running"].includes(verificationJob.status));
+  const downloadable = effectiveSummary.models.some((model) => retryableRequiredModelStatuses.has(model.status));
+  const progressByRequirement = new Map(downloadJob?.models.map((model) => [model.requirement_id, model]) ?? []);
+  const readyToRun = effectiveSummary.ready_to_run;
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-required-models-title">
+      <section className="required-models-modal">
+        <header className="required-models-modal__header">
+          <div>
+            <p className="eyebrow">Workflow models</p>
+            <h2 id="workflow-required-models-title">Missing Models</h2>
+            <p>
+              {readyToRun
+                ? `${workflowName} has all required model files available.`
+                : `${workflowName} needs required model files before it can run.`}
+            </p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close missing models" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="required-models-list">
+          {effectiveSummary.models.map((model) => (
+            <WorkflowRequiredModelRow
+              key={model.requirement_id}
+              model={model}
+              progress={progressByRequirement.get(model.requirement_id)}
+            />
+          ))}
+        </div>
+
+        {activeVerification ? (
+          <ModelVerificationProgressPanel
+            job={verificationJob}
+            idleLabel="Verifying local model..."
+            idleMessage="Verifying local model..."
+          />
+        ) : null}
+        {verificationJob?.status === "completed" && readyToRun ? (
+          <div className="notice notice--success notice--compact" role="status">
+            <CheckCircle2 size={16} aria-hidden="true" />
+            <div>
+              <strong>Local model verified</strong>
+              <span>Noofy can use the matching local file for this workflow.</span>
+            </div>
+          </div>
+        ) : null}
+        {verificationJob?.status === "completed" && !readyToRun && hasVerifiableLocalModels(effectiveSummary) ? (
+          <div className="notice notice--warning notice--compact" role="status">
+            <AlertCircle size={16} aria-hidden="true" />
+            <div>
+              <strong>Local model could not be accepted</strong>
+              <span>Noofy checked the matching local file, but it did not pass the required verification.</span>
+            </div>
+          </div>
+        ) : null}
+        {(verificationError || verificationJob?.status === "failed") ? (
+          <div className="notice notice--error notice--compact" role="status">
+            <AlertCircle size={16} aria-hidden="true" />
+            <div>
+              <strong>Model verification failed</strong>
+              <span>{verificationError ?? verificationJob?.user_facing_message ?? "Noofy could not verify the local model file."}</span>
+            </div>
+            <button className="secondary-button secondary-button--small" type="button" onClick={onRetryVerification}>
+              Verify Again
+            </button>
+          </div>
+        ) : null}
+        {downloadJob && shouldShowModelDownloadProgress(downloadJob) ? <WorkflowModelDownloadProgress job={downloadJob} /> : null}
+        {downloadError ? (
+          <div className="notice notice--error notice--compact" role="status">
+            <AlertCircle size={16} aria-hidden="true" />
+            <div>
+              <strong>Model download failed</strong>
+              <span>{downloadError}</span>
+            </div>
+          </div>
+        ) : null}
+
+        <footer className="required-models-modal__footer">
+          <button className="secondary-button" type="button" disabled={downloadBusy || activeDownload || activeVerification || !downloadable} onClick={onDownload}>
+            {downloadBusy || activeDownload ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+            {downloadBusy || activeDownload ? "Downloading..." : "Download Missing Models"}
+          </button>
+          {activeDownload ? (
+            <button className="secondary-button" type="button" onClick={onCancelDownload}>
+              Cancel Download
+            </button>
+          ) : null}
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Close
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function WorkflowRequiredModelRow({
+  model,
+  progress,
+}: {
+  model: RequiredModelAvailability;
+  progress?: ModelDownloadJobStatus["models"][number];
+}) {
+  const status = progress?.status ?? model.status;
+  const statusLabel = progress?.status_label ?? model.status_label;
+  const message = progress?.message ?? model.message;
+  return (
+    <article className="required-model-row">
+      <div className="required-model-row__main">
+        <h3>{model.filename}</h3>
+        <p>{[friendlyRequiredModelType(model.model_type), formatRequiredModelSize(model.size_bytes)].filter(Boolean).join(" · ")}</p>
+        {message ? <span className="required-model-row__message">{message}</span> : null}
+      </div>
+      <div className="required-model-row__meta">
+        <span className="model-identity">{requiredModelVerificationLabel(model.verification_level)}</span>
+        <span className={`model-status-pill model-status-pill--${status}`}>{statusLabel}</span>
+        <span className="model-source">{requiredModelSourceLabel(model)}</span>
+      </div>
+    </article>
+  );
+}
+
+function WorkflowModelDownloadProgress({ job }: { job: ModelDownloadJobStatus }) {
+  const label = job.current_model_filename
+    ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
+    : job.user_facing_message;
+  const rawPercent = job.percent ?? (
+    job.bytes_downloaded !== null && job.total_bytes
+      ? Math.round((job.bytes_downloaded / job.total_bytes) * 100)
+      : null
+  );
+  const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
+    ? Math.max(0, Math.min(Number(rawPercent), 100))
+    : null;
+  const percentLabel = percent !== null
+    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+    : job.status;
+
+  return (
+    <div className="model-download-progress" role="status">
+      <div className="model-download-progress__header">
+        <strong>{label}</strong>
+        <span>{percentLabel}</span>
+      </div>
+      {percent !== null ? (
+        <div
+          className="model-download-progress__bar"
+          role="progressbar"
+          aria-label="Model download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <div className="model-download-progress__bar-fill" style={{ width: `${percent}%` }} />
+        </div>
+      ) : null}
+      <p>
+        {[formatRequiredModelSize(job.bytes_downloaded), job.total_bytes ? formatRequiredModelSize(job.total_bytes) : null]
+          .filter(Boolean)
+          .join(" / ")}
+        {job.speed_bytes_per_second ? ` · ${formatRequiredModelSpeed(job.speed_bytes_per_second)}` : ""}
+      </p>
+      <span>{job.user_facing_message}</span>
+    </div>
+  );
+}
+
+function shouldShowModelDownloadProgress(job: ModelDownloadJobStatus) {
+  if (["queued", "running", "completed", "failed", "canceled"].includes(job.status)) return true;
+  return job.percent !== null || job.bytes_downloaded !== null;
+}
+
+function hasVerifiableLocalModels(summary: RequiredModelSummary | null) {
+  return Boolean(summary?.models.some((model) => model.status === "possible_match"));
+}
+
+function formatRequiredModelSize(size: number | null) {
+  if (!size) return null;
+  if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GB`;
+  if (size >= 1024 ** 2) return `${Math.round(size / 1024 ** 2)} MB`;
+  return `${Math.round(size / 1024)} KB`;
+}
+
+function formatRequiredModelSpeed(bytesPerSecond: number) {
+  const size = formatRequiredModelSize(bytesPerSecond);
+  return size ? `${size}/s` : null;
+}
+
+function friendlyRequiredModelType(type?: string | null) {
+  const normalized = (type ?? "").toLowerCase();
+  if (!normalized) return "AI model";
+  if (normalized.includes("checkpoint")) return "AI model";
+  if (normalized.includes("lora")) return "Style add-on";
+  if (normalized.includes("controlnet")) return "Guidance model";
+  if (normalized.includes("vae")) return "Image helper";
+  if (normalized.includes("upscale")) return "Upscale model";
+  return "AI model";
+}
+
+function requiredModelVerificationLabel(level: string) {
+  if (level === "sha256_size") return "Verified file";
+  if (level === "filename_size") return "Name and size match";
+  if (level === "filename_only") return "Name match";
+  return "Model check";
+}
+
+function requiredModelSourceLabel(model: RequiredModelAvailability) {
+  if (model.source_urls.length > 0) return "Download source known";
+  if (model.source_availability === "resolvable") return "Can search known sources";
+  return "No download source";
 }
 
 function extractImageUrls(result: JobResult | null) {

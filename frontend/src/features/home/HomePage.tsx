@@ -44,6 +44,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
+import { ModelVerificationProgressPanel } from "../workflows/ModelVerificationProgressPanel";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
 import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
@@ -1439,41 +1440,6 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
         {job.speed_bytes_per_second ? ` · ${formatModelSpeed(job.speed_bytes_per_second)}` : ""}
       </p>
       <span>{job.user_facing_message}</span>
-    </div>
-  );
-}
-
-function ModelVerificationProgressPanel({ job }: { job: ImportModelVerificationJobStatus | null }) {
-  const percent = job?.percent !== null && job?.percent !== undefined
-    ? Math.max(0, Math.min(Number(job.percent), 100))
-    : null;
-  const label = job?.current_model_filename
-    ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
-    : "Checking local models";
-  const percentLabel = percent !== null
-    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
-    : "Checking";
-
-  return (
-    <div className="model-download-progress" role="status">
-      <div className="model-download-progress__header">
-        <strong>{label}</strong>
-        <span>{percentLabel}</span>
-      </div>
-      <div
-        className="model-download-progress__bar"
-        role="progressbar"
-        aria-label="Model verification progress"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent ?? 0}
-      >
-        <div
-          className="model-download-progress__bar-fill"
-          style={{ width: `${percent ?? 0}%` }}
-        />
-      </div>
-      <span>{job?.user_facing_message ?? "Verifying local model files..."}</span>
     </div>
   );
 }

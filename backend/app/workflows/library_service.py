@@ -1,12 +1,20 @@
+import asyncio
 import inspect
 import json
 import shutil
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
-from app.engine.models import RequiredModelSummary
+from app.engine.models import (
+    RequiredModelAvailability,
+    RequiredModelSummary,
+    WorkflowModelVerificationJobStatus,
+)
 from app.history import HistoryService
 from app.trust import workflow_source_policy, workflow_trust_payload
 from app.workflows.exporter import stored_comfyui_graph_file
@@ -14,12 +22,29 @@ from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.store_paths import (
     assert_path_within,
     mutable_package_dir,
     safe_store_segment,
 )
+
+
+@dataclass
+class _WorkflowModelVerificationJob:
+    job_id: str
+    workflow_id: str
+    task: asyncio.Task | None
+    status: str
+    user_facing_message: str
+    started_at: datetime
+    updated_at: datetime
+    total_models: int
+    verified_models: int = 0
+    current_model_filename: str | None = None
+    current_model_index: int | None = None
+    model_summary: RequiredModelSummary | None = None
+    models: dict[str, RequiredModelAvailability] | None = None
 
 
 class WorkflowLibraryService:
@@ -40,6 +65,8 @@ class WorkflowLibraryService:
         self.workflow_library_store = workflow_library_store
         self.imported_package_store = imported_package_store
         self.history_service = history_service
+        self._model_verification_jobs: dict[str, _WorkflowModelVerificationJob] = {}
+        self._active_model_verification_by_workflow: dict[str, str] = {}
 
     def list_workflows(self) -> list[dict[str, object]]:
         return [
@@ -194,6 +221,56 @@ class WorkflowLibraryService:
         return self.model_availability_service.summarize(
             self.workflow_loader.get_package(workflow_id)
         )
+
+    def start_model_verification(self, workflow_id: str) -> WorkflowModelVerificationJobStatus:
+        package = self.workflow_loader.get_package(workflow_id)
+        active_job_id = self._active_model_verification_by_workflow.get(workflow_id)
+        if active_job_id:
+            active_job = self._model_verification_jobs.get(active_job_id)
+            if active_job and active_job.status in {"queued", "running"}:
+                return self._model_verification_job_status(active_job)
+
+        job_id = f"workflow-model-verification-{uuid.uuid4().hex}"
+        now = datetime.now(UTC)
+        checking_summary = self._checking_model_summary(package)
+        job = _WorkflowModelVerificationJob(
+            job_id=job_id,
+            workflow_id=workflow_id,
+            task=None,
+            status="queued",
+            user_facing_message="Model verification is queued.",
+            started_at=now,
+            updated_at=now,
+            total_models=len(package.required_models),
+            model_summary=checking_summary,
+            models={item.requirement_id: item for item in checking_summary.models},
+        )
+        self._model_verification_jobs[job_id] = job
+        self._active_model_verification_by_workflow[workflow_id] = job_id
+        self.log_store.add(
+            "info",
+            "Workflow model verification queued",
+            "workflow.models",
+            workflow_id=workflow_id,
+            details={"job_id": job_id, "total_models": job.total_models},
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._run_model_verification_job_sync(job_id)
+        else:
+            job.task = loop.create_task(self._run_model_verification_job(job_id))
+        return self._model_verification_job_status(job)
+
+    def model_verification_status(
+        self,
+        workflow_id: str,
+        job_id: str,
+    ) -> WorkflowModelVerificationJobStatus:
+        job = self._model_verification_jobs.get(job_id)
+        if job is None or job.workflow_id != workflow_id:
+            raise KeyError(f"Unknown model verification job: {job_id}")
+        return self._model_verification_job_status(job)
 
     def model_availability_summary_for_package(
         self,
@@ -383,6 +460,183 @@ class WorkflowLibraryService:
         if "deep_search" not in parameters or "verify_hashes" not in parameters:
             return summarize(package)
         return summarize(package, deep_search=False, verify_hashes=verify_hashes)
+
+    async def _run_model_verification_job(self, job_id: str) -> None:
+        job = self._model_verification_jobs[job_id]
+        package = self.workflow_loader.get_package(job.workflow_id)
+        self._begin_model_verification_job(job)
+        try:
+            for index, model in enumerate(package.required_models, start=1):
+                self._record_model_verification_progress(job, index, model)
+                availability = await asyncio.to_thread(
+                    self._verify_workflow_model,
+                    package,
+                    model,
+                )
+                self._record_verified_model(job, package, availability)
+            self._finish_model_verification_job(job)
+        except Exception as exc:
+            self._fail_model_verification_job(job, exc)
+
+    def _run_model_verification_job_sync(self, job_id: str) -> None:
+        job = self._model_verification_jobs[job_id]
+        package = self.workflow_loader.get_package(job.workflow_id)
+        self._begin_model_verification_job(job)
+        try:
+            for index, model in enumerate(package.required_models, start=1):
+                self._record_model_verification_progress(job, index, model)
+                availability = self._verify_workflow_model(package, model)
+                self._record_verified_model(job, package, availability)
+            self._finish_model_verification_job(job)
+        except Exception as exc:
+            self._fail_model_verification_job(job, exc)
+
+    def _begin_model_verification_job(self, job: _WorkflowModelVerificationJob) -> None:
+        job.status = "running"
+        job.user_facing_message = "Verifying local model files..."
+        job.updated_at = datetime.now(UTC)
+        self.log_store.add(
+            "info",
+            "Workflow model verification started",
+            "workflow.models",
+            workflow_id=job.workflow_id,
+            details={"job_id": job.job_id, "total_models": job.total_models},
+        )
+
+    def _record_model_verification_progress(
+        self,
+        job: _WorkflowModelVerificationJob,
+        index: int,
+        model: RequiredModel,
+    ) -> None:
+        job.current_model_index = index
+        job.current_model_filename = model.filename
+        job.updated_at = datetime.now(UTC)
+
+    def _record_verified_model(
+        self,
+        job: _WorkflowModelVerificationJob,
+        package: WorkflowPackage,
+        availability: RequiredModelAvailability,
+    ) -> None:
+        if job.models is None:
+            job.models = {}
+        job.models[availability.requirement_id] = availability
+        job.verified_models = len([item for item in job.models.values() if item.status != "checking"])
+        job.model_summary = self._model_summary_from_availability(
+            package,
+            list(job.models.values()),
+        )
+        job.updated_at = datetime.now(UTC)
+
+    def _finish_model_verification_job(self, job: _WorkflowModelVerificationJob) -> None:
+        job.status = "completed"
+        job.user_facing_message = "Model verification finished."
+        job.current_model_filename = None
+        job.current_model_index = None
+        job.updated_at = datetime.now(UTC)
+        if self._active_model_verification_by_workflow.get(job.workflow_id) == job.job_id:
+            self._active_model_verification_by_workflow.pop(job.workflow_id, None)
+        self.log_store.add(
+            "info",
+            "Workflow model verification completed",
+            "workflow.models",
+            workflow_id=job.workflow_id,
+            details={
+                "job_id": job.job_id,
+                "verified_models": job.verified_models,
+                "ready_to_run": job.model_summary.ready_to_run if job.model_summary else None,
+            },
+        )
+
+    def _fail_model_verification_job(
+        self,
+        job: _WorkflowModelVerificationJob,
+        exc: Exception,
+    ) -> None:
+        job.status = "failed"
+        job.user_facing_message = "Model verification failed. Try again or use a different model file."
+        job.updated_at = datetime.now(UTC)
+        if self._active_model_verification_by_workflow.get(job.workflow_id) == job.job_id:
+            self._active_model_verification_by_workflow.pop(job.workflow_id, None)
+        self.log_store.add(
+            "warning",
+            "Workflow model verification failed",
+            "workflow.models",
+            workflow_id=job.workflow_id,
+            details={"job_id": job.job_id, "error": str(exc)},
+        )
+
+    def _verify_workflow_model(
+        self,
+        package: WorkflowPackage,
+        model: RequiredModel,
+    ) -> RequiredModelAvailability:
+        single_model_package = package.model_copy(update={"required_models": [model]})
+        return self.model_availability_service.summarize(
+            single_model_package,
+            deep_search=True,
+            verify_hashes=True,
+        ).models[0]
+
+    def _checking_model_summary(self, package: WorkflowPackage) -> RequiredModelSummary:
+        current = self._summarize_models(package, fast=True, verify_hashes=False)
+        return self._model_summary_from_availability(
+            package,
+            [
+                model.model_copy(
+                    update={
+                        "status": "checking",
+                        "status_label": "Checking",
+                        "message": "Verifying local model...",
+                    }
+                )
+                if model.status == "possible_match"
+                else model
+                for model in current.models
+            ],
+        )
+
+    def _model_summary_from_availability(
+        self,
+        package: WorkflowPackage,
+        models: list[RequiredModelAvailability],
+    ) -> RequiredModelSummary:
+        available_count = sum(model.status == "available" for model in models)
+        possible_count = sum(model.status == "possible_match" for model in models)
+        missing_count = sum(model.status == "missing" for model in models)
+        manual_count = sum(model.status == "needs_manual_download" for model in models)
+        return RequiredModelSummary(
+            workflow_id=package.metadata.id,
+            total_count=len(models),
+            available_count=available_count,
+            possible_match_count=possible_count,
+            missing_count=missing_count,
+            needs_manual_download_count=manual_count,
+            ready_to_run=len(models) == available_count,
+            models=models,
+        )
+
+    def _model_verification_job_status(
+        self,
+        job: _WorkflowModelVerificationJob,
+    ) -> WorkflowModelVerificationJobStatus:
+        percent = None
+        if job.total_models:
+            percent = min(100.0, (job.verified_models / job.total_models) * 100)
+        return WorkflowModelVerificationJobStatus(
+            job_id=job.job_id,
+            workflow_id=job.workflow_id,
+            status=job.status,  # type: ignore[arg-type]
+            user_facing_message=job.user_facing_message,
+            current_model_filename=job.current_model_filename,
+            current_model_index=job.current_model_index,
+            total_models=job.total_models,
+            verified_models=job.verified_models,
+            percent=percent,
+            models=list((job.models or {}).values()),
+            model_summary=job.model_summary,
+        )
 
     def _infer_workflow_category(self, package: WorkflowPackage) -> str:
         name = f"{package.metadata.name} {package.metadata.description}".casefold()

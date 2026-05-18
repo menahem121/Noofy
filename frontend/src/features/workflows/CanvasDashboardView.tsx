@@ -6,6 +6,7 @@ import {
   type PointerEvent,
 } from "react";
 import {
+  AlertCircle,
   ChevronDown,
   Download,
   Image as ImageIcon,
@@ -54,6 +55,8 @@ export interface CanvasRunState {
   isRunning: boolean;
   canRun: boolean;
   canCancel: boolean;
+  disabledReason?: string | null;
+  disabledActionLabel?: string | null;
 }
 
 interface CanvasDashboardViewProps {
@@ -77,6 +80,7 @@ interface CanvasDashboardViewProps {
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onRun: () => void;
   onCancel: () => void;
+  onDisabledRunAction?: () => void;
   onRestoreDefaults: () => void;
   onEnterEditLayout: () => void;
   onSaveLayout: () => void;
@@ -106,6 +110,7 @@ export function CanvasDashboardView({
   onOutputPreferenceChange,
   onRun,
   onCancel,
+  onDisabledRunAction,
   onRestoreDefaults,
   onEnterEditLayout,
   onSaveLayout,
@@ -416,6 +421,8 @@ export function CanvasDashboardView({
                 className="primary-button canvas-action-cluster__run"
                 type="button"
                 disabled={!runState.canRun}
+                title={!runState.canRun && runState.disabledReason ? runState.disabledReason : undefined}
+                aria-describedby={!runState.canRun && runState.disabledReason ? "canvas-run-disabled-reason" : undefined}
                 onClick={onRun}
               >
                 {runState.isRunning ? (
@@ -425,6 +432,22 @@ export function CanvasDashboardView({
                 )}
                 Run Workflow
               </button>
+              {!runState.canRun && runState.disabledReason ? (
+                <div className="canvas-action-cluster__reason" id="canvas-run-disabled-reason" role="status">
+                  <AlertCircle size={14} aria-hidden="true" />
+                  <span>{runState.disabledReason}</span>
+                </div>
+              ) : null}
+              {!runState.canRun && runState.disabledActionLabel && onDisabledRunAction ? (
+                <button
+                  className="secondary-button canvas-action-cluster__download"
+                  type="button"
+                  onClick={onDisabledRunAction}
+                >
+                  <Download size={14} aria-hidden="true" />
+                  {runState.disabledActionLabel}
+                </button>
+              ) : null}
             </>
           )}
         </div>

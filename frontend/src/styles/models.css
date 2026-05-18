@@ -482,6 +482,7 @@
 
 .model-status-pill--download_failed,
 .model-status-pill--authentication_required,
+.model-status-pill--access_denied,
 .model-status-pill--hash_mismatch {
   color: #fee2e2;
   background: rgba(248, 113, 113, 0.18);
@@ -495,6 +496,7 @@
 
 .model-status-pill--queued,
 .model-status-pill--downloading,
+.model-status-pill--checking,
 .model-status-pill--verifying {
   color: #dbeafe;
   background: rgba(96, 165, 250, 0.18);
