@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import platform
 import re
 import sys
+import threading
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,6 +28,9 @@ MODEL_VERIFICATION_HASH_AND_SIZE = "sha256_size"
 MODEL_VERIFICATION_FILENAME_AND_SIZE = "filename_size"
 MODEL_VERIFICATION_FILENAME_ONLY = "filename_only"
 MODEL_ASSET_OWNERSHIP_EXTERNAL = "external_reference"
+MODEL_HASH_CACHE_SCHEMA_VERSION = 1
+MODEL_HASH_CACHE_MAX_ENTRIES = 4096
+MODEL_HASH_CACHE_SAMPLE_BYTES = 1024 * 1024
 
 
 MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
@@ -228,6 +233,246 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024 * 8) -> str:
         for chunk in iter(lambda: file.read(chunk_size), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+class ModelHashCache:
+    def __init__(
+        self,
+        cache_path: Path,
+        *,
+        max_entries: int = MODEL_HASH_CACHE_MAX_ENTRIES,
+    ) -> None:
+        self.cache_path = cache_path
+        self.max_entries = max_entries
+        self._lock = threading.RLock()
+        self._entries = self._load_entries()
+
+    def get_valid_hash(self, path: Path, stat: os.stat_result) -> str | None:
+        key = model_hash_cache_key(path)
+        with self._lock:
+            entry = self._entries.get(key)
+            if not isinstance(entry, dict):
+                return None
+
+            cached_path = entry.get("resolved_path")
+            if not isinstance(cached_path, str) or os.path.normcase(cached_path) != key:
+                self._forget_entry(key)
+                return None
+
+            sha256 = normalize_sha256(entry.get("sha256"))
+            if sha256 is None:
+                self._forget_entry(key)
+                return None
+
+            if not model_hash_cache_entry_matches(entry, stat):
+                self._forget_entry(key)
+                return None
+
+            cached_fingerprint = normalize_sha256(entry.get("content_fingerprint"))
+            if cached_fingerprint is None:
+                self._forget_entry(key)
+                return None
+
+            try:
+                current_fingerprint = sampled_file_fingerprint(path, stat)
+            except OSError:
+                return None
+            if current_fingerprint != cached_fingerprint:
+                self._forget_entry(key)
+                return None
+
+            entry["last_used_at"] = utc_now_iso()
+            return sha256
+
+    def remember_hash(self, path: Path, stat: os.stat_result, sha256: str) -> None:
+        normalized_sha256 = normalize_sha256(sha256)
+        if normalized_sha256 is None:
+            return
+
+        try:
+            content_fingerprint = sampled_file_fingerprint(path, stat)
+        except OSError:
+            return
+
+        now = utc_now_iso()
+        key = model_hash_cache_key(path)
+        with self._lock:
+            self._entries[key] = {
+                "resolved_path": resolved_path_key(path),
+                "sha256": normalized_sha256,
+                "content_fingerprint": content_fingerprint,
+                "size_bytes": int(stat.st_size),
+                "mtime_ns": stat_mtime_ns(stat),
+                "device_id": stat_device_id(stat),
+                "inode": stat_inode(stat),
+                "scanned_at": now,
+                "last_used_at": now,
+                "schema_version": MODEL_HASH_CACHE_SCHEMA_VERSION,
+            }
+            self._prune_entries()
+            self._save_entries()
+
+    def _load_entries(self) -> dict[str, dict[str, Any]]:
+        if not self.cache_path.exists():
+            return {}
+
+        try:
+            data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.warning("[Noofy Export] model hash cache could not be loaded: %s", exc)
+            return {}
+
+        if not isinstance(data, dict):
+            return {}
+        if data.get("schema_version") != MODEL_HASH_CACHE_SCHEMA_VERSION:
+            return {}
+
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+
+        valid_entries: dict[str, dict[str, Any]] = {}
+        for key, entry in entries.items():
+            if isinstance(key, str) and isinstance(entry, dict):
+                valid_entries[key] = entry
+        return valid_entries
+
+    def _save_entries(self) -> None:
+        payload = {
+            "schema_version": MODEL_HASH_CACHE_SCHEMA_VERSION,
+            "entries": self._entries,
+        }
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = self.cache_path.with_name(f"{self.cache_path.name}.tmp")
+            temporary_path.write_bytes(pretty_json_bytes(payload))
+            temporary_path.replace(self.cache_path)
+        except OSError as exc:
+            logging.warning("[Noofy Export] model hash cache could not be saved: %s", exc)
+
+    def _forget_entry(self, key: str) -> None:
+        self._entries.pop(key, None)
+        self._save_entries()
+
+    def _prune_entries(self) -> None:
+        if len(self._entries) <= self.max_entries:
+            return
+
+        sorted_items = sorted(
+            self._entries.items(),
+            key=lambda item: (
+                str(item[1].get("last_used_at") or ""),
+                str(item[1].get("scanned_at") or ""),
+            ),
+        )
+        for key, _entry in sorted_items[: len(self._entries) - self.max_entries]:
+            self._entries.pop(key, None)
+
+
+def resolved_path_key(path: Path) -> str:
+    return str(path.expanduser().resolve(strict=False))
+
+
+def model_hash_cache_key(path: Path) -> str:
+    return os.path.normcase(resolved_path_key(path))
+
+
+def model_hash_cache_entry_matches(entry: dict[str, Any], stat: os.stat_result) -> bool:
+    cached_size = int_or_none(entry.get("size_bytes"))
+    if cached_size != int(stat.st_size):
+        return False
+
+    cached_mtime_ns = int_or_none(entry.get("mtime_ns"))
+    if cached_mtime_ns != stat_mtime_ns(stat):
+        return False
+
+    entry_device = entry.get("device_id")
+    current_device = stat_device_id(stat)
+    if entry_device is not None and current_device is not None:
+        try:
+            if int(entry_device) != current_device:
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    entry_inode = entry.get("inode")
+    current_inode = stat_inode(stat)
+    if entry_inode is not None and current_inode is not None:
+        try:
+            if int(entry_inode) != current_inode:
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    return True
+
+
+def sampled_file_fingerprint(
+    path: Path,
+    stat: os.stat_result,
+    chunk_size: int = MODEL_HASH_CACHE_SAMPLE_BYTES,
+) -> str:
+    size_bytes = int(stat.st_size)
+    hasher = hashlib.sha256()
+    hasher.update(f"size:{size_bytes}\0".encode("ascii"))
+
+    with path.open("rb") as file:
+        for offset, length in sampled_file_ranges(size_bytes, chunk_size):
+            file.seek(offset)
+            chunk = file.read(length)
+            hasher.update(f"{offset}:{len(chunk)}\0".encode("ascii"))
+            hasher.update(chunk)
+
+    return hasher.hexdigest()
+
+
+def sampled_file_ranges(size_bytes: int, chunk_size: int) -> list[tuple[int, int]]:
+    if size_bytes <= 0:
+        return []
+    if size_bytes <= chunk_size * 3:
+        return [(0, size_bytes)]
+
+    middle_offset = (size_bytes - chunk_size) // 2
+    return [
+        (0, chunk_size),
+        (middle_offset, chunk_size),
+        (size_bytes - chunk_size, chunk_size),
+    ]
+
+
+def int_or_none(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def stat_mtime_ns(stat: os.stat_result) -> int:
+    fallback = int(getattr(stat, "st_mtime", 0) * 1_000_000_000)
+    return int(getattr(stat, "st_mtime_ns", fallback))
+
+
+def stat_device_id(stat: os.stat_result) -> int | None:
+    value = getattr(stat, "st_dev", None)
+    return int(value) if isinstance(value, int) else None
+
+
+def stat_inode(stat: os.stat_result) -> int | None:
+    value = getattr(stat, "st_ino", None)
+    return int(value) if isinstance(value, int) else None
+
+
+def normalize_sha256(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.removeprefix("sha256:").casefold()
+    if re.fullmatch(r"[0-9a-f]{64}", normalized) is None:
+        return None
+    return normalized
 
 
 def bytes_to_mb(value: int | None) -> int | None:
@@ -449,6 +694,7 @@ def should_exclude_custom_node_file(path: Path) -> bool:
 def detect_model_references(
     prompt: dict[str, Any],
     resolve_model_path: Callable[[str, str], str | None],
+    hash_cache: ModelHashCache | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
@@ -501,7 +747,7 @@ def detect_model_references(
                 "source_urls": [],
             }
             if resolved_path:
-                annotate_model_identity(record, Path(resolved_path))
+                annotate_model_identity(record, Path(resolved_path), hash_cache=hash_cache)
             else:
                 record["identity_warnings"].append(
                     "ComfyUI did not resolve this model file at export time."
@@ -511,7 +757,12 @@ def detect_model_references(
     return records
 
 
-def annotate_model_identity(record: dict[str, Any], path: Path) -> None:
+def annotate_model_identity(
+    record: dict[str, Any],
+    path: Path,
+    *,
+    hash_cache: ModelHashCache | None = None,
+) -> None:
     if not path.is_file():
         record["identity_warnings"].append(
             "ComfyUI resolved the model reference, but it was not a readable file."
@@ -519,17 +770,26 @@ def annotate_model_identity(record: dict[str, Any], path: Path) -> None:
         return
 
     record["local_file_available_at_export"] = True
+    stat: os.stat_result | None = None
     try:
-        record["size_bytes"] = path.stat().st_size
+        stat = path.stat()
+        record["size_bytes"] = stat.st_size
     except OSError as exc:
         record["identity_warnings"].append(f"Could not read model file size: {exc}")
 
-    try:
-        record["sha256"] = sha256_file(path)
-    except OSError as exc:
-        record["identity_warnings"].append(
-            f"Could not hash model file at export time: {exc}"
-        )
+    cached_sha256 = hash_cache.get_valid_hash(path, stat) if hash_cache and stat else None
+    if cached_sha256 is not None:
+        record["sha256"] = cached_sha256
+    else:
+        try:
+            record["sha256"] = sha256_file(path)
+        except OSError as exc:
+            record["identity_warnings"].append(
+                f"Could not hash model file at export time: {exc}"
+            )
+        else:
+            if hash_cache is not None and stat is not None:
+                hash_cache.remember_hash(path, stat, record["sha256"])
 
     if record["sha256"] and isinstance(record["size_bytes"], int):
         record["verification_level"] = MODEL_VERIFICATION_HASH_AND_SIZE

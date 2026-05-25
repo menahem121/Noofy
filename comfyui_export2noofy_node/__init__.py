@@ -37,6 +37,7 @@ except ModuleNotFoundError as exc:
 
 if PromptServer is not None:
     from noofy_exporter import (  # noqa: E402
+        ModelHashCache,
         build_export_filename,
         build_package_documents,
         collect_history_output_paths,
@@ -74,6 +75,21 @@ if PromptServer is not None:
 
             return model_management
         except Exception:
+            return None
+
+    _MODEL_HASH_CACHE: ModelHashCache | None = None
+
+    def _model_hash_cache() -> ModelHashCache | None:
+        global _MODEL_HASH_CACHE
+        if _MODEL_HASH_CACHE is not None:
+            return _MODEL_HASH_CACHE
+
+        try:
+            cache_dir = Path(folder_paths.get_user_directory()) / "__noofy_export"
+            _MODEL_HASH_CACHE = ModelHashCache(cache_dir / "model_hash_cache.json")
+            return _MODEL_HASH_CACHE
+        except Exception:
+            logging.warning("[Noofy Export] model hash cache is unavailable", exc_info=True)
             return None
 
     async def _sample_memory_until_stopped(sampler: Any, stop_event: asyncio.Event) -> None:
@@ -194,6 +210,7 @@ if PromptServer is not None:
             models = detect_model_references(
                 test_graph,
                 lambda folder, filename: folder_paths.get_full_path(folder, filename),
+                hash_cache=_model_hash_cache(),
             )
             duration_seconds = time.monotonic() - started_at
 

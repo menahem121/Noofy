@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -114,6 +115,132 @@ def test_detect_model_references_hashes_existing_models(tmp_path: Path) -> None:
             "source_urls": [],
         }
     ]
+
+
+def test_detect_model_references_reuses_cached_hash_for_same_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = tmp_path / "checkpoints" / "model.safetensors"
+    model.parent.mkdir()
+    model.write_bytes(b"fake model")
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "model.safetensors"},
+        }
+    }
+
+    def resolve(folder: str, filename: str) -> str | None:
+        return str(tmp_path / folder / filename)
+
+    cache_path = tmp_path / "cache" / "model_hash_cache.json"
+    first_cache = exporter.ModelHashCache(cache_path)
+    expected_hash = hashlib.sha256(b"fake model").hexdigest()
+
+    first_records = exporter.detect_model_references(prompt, resolve, hash_cache=first_cache)
+    assert first_records[0]["sha256"] == expected_hash
+
+    def fail_hash(_path: Path) -> str:
+        raise AssertionError("cached model hash was not reused")
+
+    monkeypatch.setattr(exporter, "sha256_file", fail_hash)
+    second_cache = exporter.ModelHashCache(cache_path)
+    second_records = exporter.detect_model_references(prompt, resolve, hash_cache=second_cache)
+
+    assert second_records[0]["sha256"] == expected_hash
+    assert second_records[0]["verification_level"] == "sha256_size"
+    assert second_records[0]["identity_verified_by_exporter"] is True
+
+
+def test_detect_model_references_does_not_reuse_cache_for_same_filename_at_different_path(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_model = first_root / "checkpoints" / "model.safetensors"
+    second_model = second_root / "checkpoints" / "model.safetensors"
+    first_model.parent.mkdir(parents=True)
+    second_model.parent.mkdir(parents=True)
+    first_model.write_bytes(b"first model")
+    second_model.write_bytes(b"second model")
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "model.safetensors"},
+        }
+    }
+    cache = exporter.ModelHashCache(tmp_path / "cache" / "model_hash_cache.json")
+
+    def resolve_first(folder: str, filename: str) -> str | None:
+        return str(first_root / folder / filename)
+
+    def resolve_second(folder: str, filename: str) -> str | None:
+        return str(second_root / folder / filename)
+
+    first_records = exporter.detect_model_references(prompt, resolve_first, hash_cache=cache)
+    second_records = exporter.detect_model_references(prompt, resolve_second, hash_cache=cache)
+
+    assert first_records[0]["filename"] == second_records[0]["filename"]
+    assert first_records[0]["sha256"] == hashlib.sha256(b"first model").hexdigest()
+    assert second_records[0]["sha256"] == hashlib.sha256(b"second model").hexdigest()
+
+
+def test_detect_model_references_invalidates_stale_cache_when_file_changes(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "checkpoints" / "model.safetensors"
+    model.parent.mkdir()
+    model.write_bytes(b"first model")
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "model.safetensors"},
+        }
+    }
+    cache = exporter.ModelHashCache(tmp_path / "cache" / "model_hash_cache.json")
+
+    def resolve(folder: str, filename: str) -> str | None:
+        return str(tmp_path / folder / filename)
+
+    first_records = exporter.detect_model_references(prompt, resolve, hash_cache=cache)
+    model.write_bytes(b"second model with different size")
+    second_records = exporter.detect_model_references(prompt, resolve, hash_cache=cache)
+
+    assert first_records[0]["sha256"] == hashlib.sha256(b"first model").hexdigest()
+    assert second_records[0]["sha256"] == hashlib.sha256(
+        b"second model with different size"
+    ).hexdigest()
+
+
+def test_detect_model_references_invalidates_cache_for_same_path_same_size_and_mtime(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "checkpoints" / "model.safetensors"
+    model.parent.mkdir()
+    first_content = b"fake model v1"
+    second_content = b"fake model v2"
+    model.write_bytes(first_content)
+    original_stat = model.stat()
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "model.safetensors"},
+        }
+    }
+    cache = exporter.ModelHashCache(tmp_path / "cache" / "model_hash_cache.json")
+
+    def resolve(folder: str, filename: str) -> str | None:
+        return str(tmp_path / folder / filename)
+
+    first_records = exporter.detect_model_references(prompt, resolve, hash_cache=cache)
+    model.write_bytes(second_content)
+    os.utime(model, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    second_records = exporter.detect_model_references(prompt, resolve, hash_cache=cache)
+
+    assert len(first_content) == len(second_content)
+    assert first_records[0]["sha256"] == hashlib.sha256(first_content).hexdigest()
+    assert second_records[0]["sha256"] == hashlib.sha256(second_content).hexdigest()
 
 
 def test_detect_model_references_marks_unresolved_models_as_filename_only() -> None:

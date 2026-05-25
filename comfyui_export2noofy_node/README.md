@@ -19,6 +19,7 @@ The package is designed for Noofy’s runtime isolation model: Noofy treats the 
 - Samples RAM and VRAM usage while the test run is active.
 - Detects model references from common ComfyUI loader nodes.
 - Hashes model files and records file size when ComfyUI can resolve them locally.
+- Reuses cached model hashes on later exports when the resolved file identity still matches.
 - Tags each model reference with an explicit identity verification level.
 - Detects custom-node packages used by the workflow.
 - Bundles custom-node folders when their source folders can be located.
@@ -183,6 +184,8 @@ The verification levels are:
 Models are not bundled into `.noofy` packages. They are usually too large, and Noofy’s import flow validates or resolves models separately.
 
 Exported model records use `asset_ownership: "external_reference"` and `bundled: false`. During Noofy installation, files that already exist on the user’s machine may be reused when they match the exported identity rules, but they should not become Noofy-owned files. Future uninstall and cleanup logic should only auto-delete assets that Noofy downloaded or created itself and that are not referenced by any other installed workflow.
+
+To avoid repeatedly reading large model files, the exporter keeps a local model hash cache in the ComfyUI user directory. Cache hits are matched by the resolved absolute path plus file size, modified time, device ID, inode when available, and a sampled content fingerprint. The cache is not keyed by filename alone, so two different `model.safetensors` files in different model folders are hashed independently.
 
 ## Custom Node Bundling
 
