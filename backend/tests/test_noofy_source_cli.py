@@ -33,14 +33,120 @@ def test_frontend_install_command_uses_install_without_lockfile(tmp_path: Path) 
 def test_source_checkout_env_sets_managed_runtime_and_frontend_api(tmp_path: Path) -> None:
     cli = load_noofy_cli()
     data_dir = tmp_path / "data"
+    config_dir = tmp_path / "config"
 
-    env = cli.source_checkout_env(data_dir=data_dir, backend_host="127.0.0.1", backend_port=9876, include_frontend_api=True)
+    env = cli.source_checkout_env(
+        data_dir=data_dir,
+        backend_host="127.0.0.1",
+        backend_port=9876,
+        include_frontend_api=True,
+        base_env={"XDG_CONFIG_HOME": str(config_dir)},
+    )
 
     assert env["NOOFY_DATA_DIR"] == str(data_dir)
     assert env["COMFYUI_RUNTIME_MODE"] == "managed"
     assert env["NOOFY_BACKEND_PORT"] == "9876"
     assert env["VITE_NOOFY_API_BASE_URL"] == "http://127.0.0.1:9876/api"
     assert env["VITE_DEV_BACKEND_PORT"] == "9876"
+    assert env["NOOFY_API_KEY_STORE"] == "encrypted-vault"
+    assert "NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE" not in env
+    passphrase_file = Path(env["NOOFY_API_KEY_VAULT_PASSPHRASE_FILE"])
+    assert passphrase_file == config_dir / "noofy" / "api-key-vault.passphrase"
+    assert passphrase_file.is_file()
+    if cli.os.name == "posix":
+        assert passphrase_file.stat().st_mode & 0o077 == 0
+
+
+def test_source_checkout_env_respects_explicit_os_keyring_choice(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    config_dir = tmp_path / "config"
+
+    env = cli.source_checkout_env(
+        data_dir=tmp_path / "data",
+        base_env={
+            "XDG_CONFIG_HOME": str(config_dir),
+            "NOOFY_API_KEY_STORE": "os-keyring",
+        },
+    )
+
+    assert env["NOOFY_API_KEY_STORE"] == "os-keyring"
+    assert "NOOFY_API_KEY_VAULT_PASSPHRASE_FILE" not in env
+    assert not (config_dir / "noofy" / "api-key-vault.passphrase").exists()
+
+
+def test_source_checkout_env_initializes_explicit_encrypted_vault_passphrase(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    passphrase_file = tmp_path / "secrets" / "api-key-vault.passphrase"
+
+    env = cli.source_checkout_env(
+        data_dir=tmp_path / "data",
+        base_env={
+            "NOOFY_API_KEY_STORE": "encrypted-vault",
+            "NOOFY_API_KEY_VAULT_PASSPHRASE_FILE": str(passphrase_file),
+        },
+    )
+
+    assert env["NOOFY_API_KEY_STORE"] == "encrypted-vault"
+    assert env["NOOFY_API_KEY_VAULT_PASSPHRASE_FILE"] == str(passphrase_file)
+    assert passphrase_file.is_file()
+
+
+def test_source_checkout_env_allows_repo_local_encrypted_vault_for_default_data_dir(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+
+    env = cli.source_checkout_env(
+        data_dir=cli.DEFAULT_DATA_DIR,
+        base_env={"XDG_CONFIG_HOME": str(tmp_path / "config")},
+    )
+
+    assert env["NOOFY_API_KEY_STORE"] == "encrypted-vault"
+    assert env["NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE"] == "1"
+
+
+def test_source_checkout_env_does_not_allow_arbitrary_repo_local_secret_storage(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+
+    env = cli.source_checkout_env(
+        data_dir=cli.REPO_ROOT / "scratch-data",
+        base_env={"XDG_CONFIG_HOME": str(tmp_path / "config")},
+    )
+
+    assert env["NOOFY_API_KEY_STORE"] == "encrypted-vault"
+    assert "NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE" not in env
+
+
+def test_source_checkout_env_respects_explicit_repo_local_secret_storage_choice(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+
+    env = cli.source_checkout_env(
+        data_dir=cli.DEFAULT_DATA_DIR,
+        base_env={
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE": "0",
+        },
+    )
+
+    assert env["NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE"] == "0"
+
+
+def test_ensure_api_key_vault_passphrase_fills_empty_file(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    passphrase_file = tmp_path / "config" / "api-key-vault.passphrase"
+    passphrase_file.parent.mkdir()
+    passphrase_file.write_text("", encoding="utf-8")
+
+    cli.ensure_api_key_vault_passphrase(passphrase_file)
+
+    assert passphrase_file.read_text(encoding="utf-8").strip()
+
+
+def test_ensure_api_key_vault_passphrase_rejects_directory(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    passphrase_path = tmp_path / "config"
+    passphrase_path.mkdir()
+
+    with pytest.raises(SystemExit, match="passphrase path exists but is not a file"):
+        cli.ensure_api_key_vault_passphrase(passphrase_path)
 
 
 def test_backend_python_path_uses_windows_scripts_directory(tmp_path: Path) -> None:
@@ -159,11 +265,12 @@ def test_run_reports_missing_frontend_dependencies(tmp_path: Path) -> None:
     assert result == 1
 
 
-def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Path) -> None:
+def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Path, monkeypatch) -> None:
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
     data_dir = tmp_path / ".noofy-runtime" / "data"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     calls = []
     captured_envs = []
 
@@ -190,15 +297,19 @@ def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Pa
     assert not any("torch" in part for command in calls for part in command[:3])
     assert captured_envs[0]["COMFYUI_RUNTIME_MODE"] == "managed"
     assert captured_envs[0]["NOOFY_DATA_DIR"] == str(data_dir)
+    assert captured_envs[0]["NOOFY_API_KEY_STORE"] == "encrypted-vault"
+    assert Path(captured_envs[0]["NOOFY_API_KEY_VAULT_PASSPHRASE_FILE"]).is_file()
 
 
 def test_install_allows_unsupported_managed_runtime_platform(
     tmp_path: Path,
+    monkeypatch,
     capsys,
 ) -> None:
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     def runner(command, cwd, env, capture):
         if command[1:3] == ["-m", "venv"]:
@@ -225,10 +336,11 @@ def test_install_allows_unsupported_managed_runtime_platform(
     assert "Noofy source checkout is installed." in output
 
 
-def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path) -> None:
+def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, monkeypatch) -> None:
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     def runner(command, cwd, env, capture):
         if command[1:3] == ["-m", "venv"]:

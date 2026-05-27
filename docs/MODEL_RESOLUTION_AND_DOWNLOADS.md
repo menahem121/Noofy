@@ -100,11 +100,10 @@ External model-platform credentials are settings owned by the backend.
 - Default storage: OS credential store via `KeyringCredentialStore`
   ([backend/app/settings/api_keys.py](../backend/app/settings/api_keys.py)).
   Plaintext/file-backed keyring fallbacks are explicitly blocked.
-- Headless/source-server storage: opt in explicitly with
-  `NOOFY_API_KEY_STORE=encrypted-vault`. This stores encrypted ciphertext under
-  the real Noofy app data directory, for example
-  `~/.local/share/noofy/settings/api-key-vault.json` on Linux. It requires
-  `NOOFY_API_KEY_VAULT_PASSPHRASE_FILE` to point to an operator-owned
+- Headless/source-server storage: use `NOOFY_API_KEY_STORE=encrypted-vault`.
+  This stores encrypted ciphertext under the real Noofy app data directory, for
+  example `~/.local/share/noofy/settings/api-key-vault.json` on Linux. It
+  requires `NOOFY_API_KEY_VAULT_PASSPHRASE_FILE` to point to an operator-owned
   passphrase file outside the Noofy repo checkout.
 - App data: only non-sensitive metadata (`configured`, `last_four`,
   `label`) is persisted in Noofy app data. In encrypted-vault mode the full
@@ -121,8 +120,15 @@ keyring daemon, and Noofy must run in that same session. If Python `keyring`
 falls back to `keyring.backends.fail.Keyring`, the UI should keep saving
 disabled and explain that no OS-backed credential store is available.
 
-For EC2/source checkout use without Secret Service, configure encrypted-vault
-mode explicitly:
+For EC2/source checkout use without Secret Service, the source checkout helper
+automatically configures encrypted-vault storage when `NOOFY_API_KEY_STORE` is
+not explicitly set. It creates a passphrase file under the user config
+directory, for example `~/.config/noofy/api-key-vault.passphrase` on Linux, and
+keeps full API keys out of normal API responses and diagnostics.
+
+For direct backend launches without the source checkout helper, or when you want
+to override the helper's repo-local default data directory, configure
+encrypted-vault mode explicitly:
 
 ```bash
 mkdir -p "$HOME/.config/noofy" "$HOME/.local/share/noofy"
@@ -132,13 +138,14 @@ chmod 600 "$HOME/.config/noofy/api-key-vault.passphrase"
 export NOOFY_API_KEY_STORE=encrypted-vault
 export NOOFY_DATA_DIR="$HOME/.local/share/noofy"
 export NOOFY_API_KEY_VAULT_PASSPHRASE_FILE="$HOME/.config/noofy/api-key-vault.passphrase"
-make run
+backend/.venv/bin/python -m app
 ```
 
 Source-checkout helpers may default `NOOFY_DATA_DIR` to `.noofy-runtime/data`
-inside the repo. Encrypted-vault mode rejects repo-local Noofy data dirs, vault
-files, and passphrase files by default. `NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE=1`
-exists only as an explicit unsafe development override.
+inside the repo. That directory is gitignored, and the helper opts in to the
+repo-local encrypted-vault development override only for this source checkout
+case. Encrypted-vault mode still rejects repo-local Noofy data dirs, vault
+files, and passphrase files by default outside the helper.
 
 Endpoints:
 

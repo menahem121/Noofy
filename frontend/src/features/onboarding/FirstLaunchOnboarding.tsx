@@ -70,6 +70,7 @@ export function FirstLaunchOnboarding({
   const [completing, setCompleting] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const refreshRequestedRef = useRef(false);
+  const completionInFlightRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -133,6 +134,8 @@ export function FirstLaunchOnboarding({
 
   const markCompleteAndClose = useCallback(
     async (afterComplete?: () => void) => {
+      if (completionInFlightRef.current) return;
+      completionInFlightRef.current = true;
       setCompleting(true);
       setCompletionError(null);
       try {
@@ -142,6 +145,7 @@ export function FirstLaunchOnboarding({
       } catch (error) {
         setCompletionError(error instanceof Error ? error.message : String(error));
       } finally {
+        completionInFlightRef.current = false;
         setCompleting(false);
       }
     },
@@ -372,7 +376,12 @@ export function FirstLaunchOnboarding({
               </button>
             ) : null}
             {stepIndex < TOTAL_STEPS - 1 ? (
-              <button className="primary-button primary-button--compact" type="button" onClick={goNext}>
+              <button
+                className="primary-button primary-button--compact"
+                type="button"
+                disabled={completing}
+                onClick={goNext}
+              >
                 Next
               </button>
             ) : (

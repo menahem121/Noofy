@@ -8,6 +8,7 @@ cross-platform implementation behind thin Makefile and PowerShell wrappers.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import json
 import os
@@ -108,8 +109,9 @@ def source_checkout_env(
     backend_host: str = DEFAULT_BACKEND_HOST,
     backend_port: int = DEFAULT_BACKEND_PORT,
     include_frontend_api: bool = False,
+    base_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    env = dict(os.environ)
+    env = dict(os.environ if base_env is None else base_env)
     api_base = f"http://{backend_host}:{backend_port}/api"
     env.update(
         {
@@ -119,10 +121,86 @@ def source_checkout_env(
             "NOOFY_BACKEND_PORT": str(backend_port),
         }
     )
+    configure_source_checkout_api_key_store(env)
     if include_frontend_api:
         env["VITE_NOOFY_API_BASE_URL"] = api_base
         env["VITE_DEV_BACKEND_PORT"] = str(backend_port)
     return env
+
+
+def configure_source_checkout_api_key_store(env: dict[str, str]) -> None:
+    """Default source-checkout runs to encrypted vault storage.
+
+    Headless Linux servers commonly lack an unlocked OS keyring. The backend
+    still respects explicit `NOOFY_API_KEY_STORE` choices, but source-checkout
+    helpers should be usable out of the box.
+    """
+
+    raw_mode = env.get("NOOFY_API_KEY_STORE")
+    mode = (raw_mode or "").strip().lower()
+    explicit_mode = raw_mode is not None and bool(raw_mode.strip())
+    if explicit_mode and mode != "encrypted-vault":
+        return
+
+    env["NOOFY_API_KEY_STORE"] = "encrypted-vault"
+    passphrase_path = env.get("NOOFY_API_KEY_VAULT_PASSPHRASE_FILE")
+    if not passphrase_path:
+        passphrase_path = str(source_checkout_api_key_vault_passphrase_file(env).resolve(strict=False))
+        env["NOOFY_API_KEY_VAULT_PASSPHRASE_FILE"] = passphrase_path
+    else:
+        passphrase_path = str(Path(passphrase_path).expanduser().resolve(strict=False))
+        env["NOOFY_API_KEY_VAULT_PASSPHRASE_FILE"] = passphrase_path
+
+    data_dir = Path(env["NOOFY_DATA_DIR"]).expanduser().resolve(strict=False)
+    source_runtime_dir = DEFAULT_DATA_DIR.parent.resolve(strict=False)
+    if "NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE" not in env and _is_relative_to(data_dir, source_runtime_dir):
+        env["NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE"] = "1"
+
+    ensure_api_key_vault_passphrase(Path(passphrase_path))
+
+
+def source_checkout_api_key_vault_passphrase_file(env: Mapping[str, str] | None = None) -> Path:
+    _env = os.environ if env is None else env
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Noofy" / "api-key-vault.passphrase"
+    if sys.platform == "win32":
+        appdata = _env.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / "Noofy" / "api-key-vault.passphrase"
+    xdg_config_home = _env.get("XDG_CONFIG_HOME")
+    base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+    return base / "noofy" / "api-key-vault.passphrase"
+
+
+def ensure_api_key_vault_passphrase(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            path.parent.chmod(0o700)
+    if path.exists():
+        if not path.is_file():
+            raise SystemExit(f"API key vault passphrase path exists but is not a file: {path}")
+        if os.name == "posix":
+            with contextlib.suppress(OSError):
+                path.chmod(0o600)
+        if path.stat().st_size > 0:
+            return
+        flags = os.O_WRONLY | os.O_TRUNC
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+
+    passphrase = base64.urlsafe_b64encode(os.urandom(48)).decode("ascii")
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write(f"{passphrase}\n")
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def bootstrap_runtime_command(backend_python: Path) -> list[str]:
