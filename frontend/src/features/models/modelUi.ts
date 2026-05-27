@@ -27,6 +27,8 @@ export const MODEL_TYPE_LABELS: Record<Exclude<ModelTypeFilter, "all">, string> 
 
 export const CATEGORY_LABELS: Record<string, string> = {
   checkpoints: "Base models",
+  diffusion_models: "Base models",
+  unet: "Base models",
   loras: "LoRAs",
   controlnet: "ControlNet",
   upscale_models: "Upscalers",
@@ -62,6 +64,10 @@ export function categoryLabel(category: string): string {
   return CATEGORY_LABELS[category] ?? category.replace(/_/g, " ");
 }
 
+export function folderNameLabel(folder: string): string {
+  return folder.replace(/_/g, " ");
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return "Unknown";
   if (bytes < 1024) return `${bytes} B`;
@@ -79,13 +85,26 @@ export function hexAlpha(hex: string, opacity: number): string {
 
 export function normalizeType(model: ModelInventoryEntry): Exclude<ModelTypeFilter, "all"> {
   const value = (model.model_type || model.folder).toLowerCase();
-  if (value === "checkpoints" || value === "checkpoint") return "checkpoint";
+  if (value === "checkpoints" || value === "checkpoint" || value === "diffusion_models" || value === "unet") {
+    return "checkpoint";
+  }
   if (value === "loras" || value === "lora") return "lora";
   if (value === "controlnet") return "controlnet";
   if (value === "upscale_models" || value === "upscaler") return "upscaler";
   if (value === "vae") return "vae";
   if (value === "embeddings" || value === "embedding") return "embedding";
   return "other";
+}
+
+export function modelSourceLabel(model: ModelInventoryEntry): string {
+  if (model.source !== "required_by_workflow") return model.source_label;
+
+  const workflowNames = Array.from(
+    new Set(model.workflow_usage.map((workflow) => workflow.workflow_name.trim()).filter(Boolean)),
+  );
+  if (workflowNames.length === 0) return model.source_label;
+  if (workflowNames.length === 1) return `Required by ${workflowNames[0]}`;
+  return `Required by ${workflowNames[0]} + ${workflowNames.length - 1} more`;
 }
 
 export function modelFolderPath(model: ModelInventoryEntry): string | null {

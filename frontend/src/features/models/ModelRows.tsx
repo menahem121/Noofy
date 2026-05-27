@@ -3,9 +3,11 @@ import { ChevronDown, ChevronRight, Download, Folder, MoreHorizontal, Plus, Tras
 import type { ModelInventoryEntry, ModelTag } from "../../lib/api/noofyApi";
 import {
   categoryLabel,
+  folderNameLabel,
   formatBytes,
   hexAlpha,
   modelFolderPath,
+  modelSourceLabel,
   MODEL_TYPE_LABELS,
   normalizeType,
   STATUS_LABELS,
@@ -34,6 +36,7 @@ export function ModelRow({
   const type = normalizeType(model);
   const TypeIcon = TYPE_ICONS[type];
   const modelTags = tags.filter((tag) => model.tag_ids.includes(tag.id));
+  const sourceLabel = modelSourceLabel(model);
 
   return (
     <article
@@ -57,7 +60,7 @@ export function ModelRow({
         <div className="model-main-body">
           <div className="model-name-text">{model.filename}</div>
           <div className="model-type-text">
-            {MODEL_TYPE_LABELS[type]} · {categoryLabel(model.folder)}
+            {MODEL_TYPE_LABELS[type]} · {folderNameLabel(model.folder)}
           </div>
         </div>
       </div>
@@ -91,7 +94,7 @@ export function ModelRow({
       </div>
 
       <div className="model-col model-col-source">
-        <span>{model.source_label}</span>
+        <span>{sourceLabel}</span>
         <small>{model.ownership_label}</small>
       </div>
 
@@ -157,6 +160,8 @@ export function DetailPanel({
   const modelTags = tags.filter((tag) => model.tag_ids.includes(tag.id));
   const availableTags = tags.filter((tag) => !model.tag_ids.includes(tag.id));
   const folderPath = modelFolderPath(model);
+  const sourceLabel = modelSourceLabel(model);
+  const deleteLabel = model.source === "external_comfyui" ? "Delete from ComfyUI folder" : "Delete from Noofy Models";
 
   return (
     <>
@@ -244,7 +249,7 @@ export function DetailPanel({
           </div>
           <div>
             <dt>Source</dt>
-            <dd>{model.source_label}</dd>
+            <dd>{sourceLabel}</dd>
           </div>
           <div>
             <dt>Ownership</dt>
@@ -279,7 +284,7 @@ export function DetailPanel({
           {model.can_delete && (
             <button className="secondary-button secondary-button--full secondary-button--danger" type="button" onClick={onDelete} disabled={deleteBusy}>
               <Trash2 size={14} aria-hidden="true" />
-              Delete from Noofy Models
+              {deleteLabel}
             </button>
           )}
         </div>

@@ -13,7 +13,7 @@ function jsonResponse(data: unknown, status = 200) {
 
 const inventory = {
   summary: {
-    total_count: 3,
+    total_count: 4,
     noofy_count: 1,
     external_comfyui_count: 1,
     missing_count: 1,
@@ -22,7 +22,7 @@ const inventory = {
   folders: {
     noofy_models_dir: "/tmp/Noofy Models",
     external_comfyui_models_dir: "/tmp/ComfyUI/models",
-    categories: ["checkpoints", "loras", "controlnet"],
+    categories: ["checkpoints", "diffusion_models", "loras", "controlnet"],
   },
   tags: [{ id: "tag_sdxl", name: "SDXL", color: "#60a5fa" }],
   models: [
@@ -62,10 +62,34 @@ const inventory = {
       source_label: "ComfyUI models folder",
       ownership: "external_reference",
       ownership_label: "External reference",
-      can_delete: false,
-      delete_unavailable_reason: "Only files inside Noofy Models can be deleted.",
+      can_delete: true,
+      delete_unavailable_reason: null,
       path: "/tmp/ComfyUI/models/loras/style.safetensors",
       matched_root: "/tmp/ComfyUI/models",
+      verification_level: null,
+      matched_sha256: null,
+      source_availability: null,
+      message: null,
+      workflow_usage: [],
+      downloadable_references: [],
+      tag_ids: [],
+    },
+    {
+      model_key: "diffusion_models/flux.safetensors",
+      filename: "flux.safetensors",
+      folder: "diffusion_models",
+      model_type: "diffusion_models",
+      size_bytes: 1024,
+      status: "ready",
+      status_label: "Ready",
+      source: "noofy",
+      source_label: "Noofy Models",
+      ownership: "noofy_local",
+      ownership_label: "In Noofy Models",
+      can_delete: false,
+      delete_unavailable_reason: "Only models imported or downloaded by Noofy can be deleted.",
+      path: "/tmp/Noofy Models/diffusion_models/flux.safetensors",
+      matched_root: "/tmp/Noofy Models",
       verification_level: null,
       matched_sha256: null,
       source_availability: null,
@@ -178,6 +202,9 @@ describe("ModelsPage", () => {
       if (url.endsWith("/api/models/checkpoints%2Fbase.safetensors") && init?.method === "DELETE") {
         return Promise.resolve(jsonResponse({ model_key: "checkpoints/base.safetensors", deleted: true, message: "Deleted" }));
       }
+      if (url.endsWith("/api/models/loras%2Fstyle.safetensors") && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ model_key: "loras/style.safetensors", deleted: true, message: "Deleted" }));
+      }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   });
@@ -201,12 +228,32 @@ describe("ModelsPage", () => {
     expect(await screen.findByRole("heading", { name: "Models" })).toBeInTheDocument();
     expect(screen.getByText("base.safetensors")).toBeInTheDocument();
     expect(screen.getAllByText("ComfyUI models folder").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Required by workflow").length).toBeGreaterThan(0);
+    expect(screen.getByText("Required by Text workflow")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "style" } });
 
     expect(screen.queryByText("base.safetensors")).not.toBeInTheDocument();
     expect(screen.getByText("style.safetensors")).toBeInTheDocument();
+  });
+
+  it("uses workflow names for missing workflow requirement source labels", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByText("missing.safetensors"));
+
+    expect(screen.getAllByText("Required by Text workflow").length).toBeGreaterThan(0);
+  });
+
+  it("groups diffusion models with base models", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Base models" }));
+
+    expect(screen.getByText("base.safetensors")).toBeInTheDocument();
+    expect(screen.getByText("flux.safetensors")).toBeInTheDocument();
+    expect(screen.queryByText("style.safetensors")).not.toBeInTheDocument();
+    expect(screen.getByText("Base model · checkpoints")).toBeInTheDocument();
+    expect(screen.getByText("Base model · diffusion models")).toBeInTheDocument();
   });
 
   it("starts a backend-owned download for missing models", async () => {
@@ -228,7 +275,47 @@ describe("ModelsPage", () => {
     });
   });
 
-  it("shows delete only for Noofy-owned files", async () => {
+  it("deletes selected Noofy-managed model files", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText("Select base.safetensors"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/models/checkpoints%2Fbase.safetensors",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    expect(screen.getByText("Deleted 1 model from Noofy Models.")).toBeInTheDocument();
+  });
+
+  it("skips selected models that are not deletable", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText("Select all models"));
+    expect(screen.getByText("4 selected, 2 can be deleted")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/models/checkpoints%2Fbase.safetensors",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models/loras%2Fstyle.safetensors",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/models/controlnet%2Fmissing.safetensors",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("shows delete for Noofy-owned files and external ComfyUI model files", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     renderPage();
 
@@ -244,7 +331,6 @@ describe("ModelsPage", () => {
     });
 
     fireEvent.click(screen.getByText("style.safetensors"));
-    expect(screen.queryByRole("button", { name: "Delete from Noofy Models" })).not.toBeInTheDocument();
-    expect(screen.getByText("Only files inside Noofy Models can be deleted.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete from ComfyUI folder" })).toBeInTheDocument();
   });
 });

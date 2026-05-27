@@ -91,6 +91,9 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
     external_model.parent.mkdir(parents=True)
     external_model.write_bytes(b"style")
+    diffusion_model = tmp_path / "ComfyUI" / "models" / "diffusion_models" / "flux.safetensors"
+    diffusion_model.parent.mkdir(parents=True)
+    diffusion_model.write_bytes(b"flux")
     noofy_config = tmp_path / "Noofy Models" / "configs" / "v1-inference.yaml"
     noofy_config.parent.mkdir(parents=True)
     noofy_config.write_text("model:\n  target: ignored\n", encoding="utf-8")
@@ -113,9 +116,9 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert response.status_code == 200
     data = response.json()
     by_key = {model["model_key"]: model for model in data["models"]}
-    assert data["summary"]["total_count"] == 4
+    assert data["summary"]["total_count"] == 5
     assert data["summary"]["noofy_count"] == 1
-    assert data["summary"]["external_comfyui_count"] == 1
+    assert data["summary"]["external_comfyui_count"] == 2
     assert data["summary"]["missing_count"] == 1
     assert by_key["checkpoints/base.safetensors"]["source_label"] == "Noofy Models"
     assert by_key["checkpoints/base.safetensors"]["ownership"] == "noofy_local"
@@ -123,7 +126,9 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert by_key["checkpoints/base.safetensors"]["delete_unavailable_reason"] == "Only models imported or downloaded by Noofy can be deleted."
     assert by_key["checkpoints/base.safetensors"]["tag_ids"] == [tag_id]
     assert by_key["loras/style.safetensors"]["source_label"] == "ComfyUI models folder"
-    assert by_key["loras/style.safetensors"]["can_delete"] is False
+    assert by_key["loras/style.safetensors"]["can_delete"] is True
+    assert by_key["loras/style.safetensors"]["delete_unavailable_reason"] is None
+    assert by_key["diffusion_models/flux.safetensors"]["model_type"] == "checkpoint"
     assert by_key["vae/engine-only.safetensors"]["source_label"] == "Visible to engine"
     assert by_key["controlnet/missing.safetensors"]["source_label"] == "Required by workflow"
     assert by_key["controlnet/missing.safetensors"]["downloadable_references"][0]["workflow_id"] == "wf_text"
@@ -184,7 +189,7 @@ def test_model_inventory_ignores_partial_import_transactions(tmp_path: Path) -> 
     assert "checkpoints/partial.safetensors" not in keys
 
 
-def test_model_delete_only_removes_noofy_owned_model_files(tmp_path: Path) -> None:
+def test_model_delete_removes_noofy_owned_and_external_comfyui_model_files(tmp_path: Path) -> None:
     noofy_model = tmp_path / "Noofy Models" / "checkpoints" / "base.safetensors"
     noofy_model.parent.mkdir(parents=True)
     noofy_model.write_bytes(b"base")
@@ -198,7 +203,7 @@ def test_model_delete_only_removes_noofy_owned_model_files(tmp_path: Path) -> No
     with _client(tmp_path, []) as client:
         blocked_local = client.delete("/api/models/checkpoints/base.safetensors")
         deleted = client.delete("/api/models/checkpoints/owned.safetensors")
-        missing_external = client.delete("/api/models/loras/style.safetensors")
+        deleted_external = client.delete("/api/models/loras/style.safetensors")
 
     assert blocked_local.status_code == 400
     assert blocked_local.json()["detail"]["message"] == "Noofy can delete only models it imported or downloaded."
@@ -206,8 +211,9 @@ def test_model_delete_only_removes_noofy_owned_model_files(tmp_path: Path) -> No
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     assert not owned_model.exists()
-    assert missing_external.status_code == 404
-    assert external_model.exists()
+    assert deleted_external.status_code == 200
+    assert deleted_external.json()["message"] == "Model file deleted from ComfyUI models folder."
+    assert not external_model.exists()
 
 
 class FakeDownloadAvailabilityService:

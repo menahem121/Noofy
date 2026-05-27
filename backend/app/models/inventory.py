@@ -130,26 +130,41 @@ class ModelInventoryService:
         if folder not in folder_settings.categories:
             raise ValueError("Only supported Noofy model folders can be managed.")
         noofy_root = Path(folder_settings.noofy_models_dir).expanduser()
+        external_root = (
+            Path(folder_settings.external_comfyui_models_dir).expanduser()
+            if folder_settings.external_comfyui_models_dir
+            else None
+        )
         target_path = noofy_root / folder / filename
+        target_source = "noofy"
         ensure_inside(target_path, noofy_root)
-        if not target_path.exists():
-            raise FileNotFoundError("This model is not in the Noofy Models folder.")
+        if target_path.exists():
+            origin = self.ownership_store.origin_for_model(model_key_value)
+            if origin not in {"downloaded", "imported"}:
+                raise ValueError("Noofy can delete only models it imported or downloaded.")
+        elif external_root is not None:
+            target_path = external_root / folder / filename
+            target_source = "external_comfyui"
+            ensure_inside(target_path, external_root)
+            if not target_path.exists():
+                raise FileNotFoundError("This model is not in a configured model folder.")
+        else:
+            raise FileNotFoundError("This model is not in a configured model folder.")
         if not target_path.is_file():
             raise ValueError("Only model files can be deleted.")
-        origin = self.ownership_store.origin_for_model(model_key_value)
-        if origin not in {"downloaded", "imported"}:
-            raise ValueError("Noofy can delete only models it imported or downloaded.")
         target_path.unlink()
         self.tag_store.clear_model_tags(model_key_value)
-        self.ownership_store.forget_model(model_key_value)
+        if target_source == "noofy":
+            self.ownership_store.forget_model(model_key_value)
         if self.log_store is not None:
             self.log_store.add(
                 "info",
                 "Noofy model file deleted",
                 "models.inventory",
-                details={"model_key": model_key_value, "folder": folder},
+                details={"model_key": model_key_value, "folder": folder, "source": target_source},
             )
-        return ModelDeleteResponse(model_key=model_key_value, deleted=True, message="Model file deleted from Noofy Models.")
+        label = "Noofy Models" if target_source == "noofy" else "ComfyUI models folder"
+        return ModelDeleteResponse(model_key=model_key_value, deleted=True, message=f"Model file deleted from {label}.")
 
     def _add_filesystem_root(
         self,
@@ -182,10 +197,9 @@ class ModelInventoryService:
                     size_bytes = None
                 ownership, ownership_label = self._ownership_for_file(key, source)
                 can_delete = (
-                    source == "noofy"
-                    and ownership in {"noofy_downloaded", "noofy_imported"}
-                    and self._path_is_inside_noofy(file_path)
-                )
+                    (source == "noofy" and ownership in {"noofy_downloaded", "noofy_imported"})
+                    or source == "external_comfyui"
+                ) and self._path_is_inside_root(file_path, root)
                 entries[key] = ModelInventoryEntry(
                     model_key=key,
                     filename=relative_filename,
@@ -328,11 +342,9 @@ class ModelInventoryService:
             return "noofy_local", "In Noofy Models"
         return "external_reference", "External reference"
 
-    def _path_is_inside_noofy(self, path: Path) -> bool:
-        folder_settings = self.model_folder_service.settings(ensure_folders=False)
-        noofy_root = Path(folder_settings.noofy_models_dir).expanduser()
+    def _path_is_inside_root(self, path: Path, root: Path) -> bool:
         try:
-            ensure_inside(path, noofy_root)
+            ensure_inside(path, root)
         except ValueError:
             return False
         return True
@@ -355,7 +367,7 @@ def _is_model_asset_filename(filename: str) -> bool:
 def _model_type_for(folder: str, model_type: str | None) -> str:
     if model_type:
         return model_type
-    if folder == "checkpoints":
+    if folder in {"checkpoints", "diffusion_models", "unet"}:
         return "checkpoint"
     if folder == "loras":
         return "lora"
@@ -377,7 +389,7 @@ def _inventory_status_for_required_status(status: str) -> ModelInventoryStatus:
 def _delete_unavailable_reason(source: ModelInventorySource, ownership: ModelOwnership) -> str:
     if source == "noofy" and ownership == "noofy_local":
         return "Only models imported or downloaded by Noofy can be deleted."
-    return "Only files inside Noofy Models can be deleted."
+    return "Only files inside Noofy Models or the configured ComfyUI models folder can be deleted."
 
 
 __all__ = [

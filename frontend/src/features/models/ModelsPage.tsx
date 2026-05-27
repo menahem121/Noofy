@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
+  CheckCircle2,
   Download,
   Folder,
   Loader2,
@@ -10,6 +11,7 @@ import {
   RefreshCw,
   Search,
   Tag,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -139,6 +141,17 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   }, [models, activeType, search, statusFilter, sourceFilter, tagFilter]);
 
   const selectedModel = selectedModelId ? (models.find((model) => model.model_key === selectedModelId) ?? null) : null;
+  const selectedModels = useMemo(
+    () => models.filter((model) => checkedIds.has(model.model_key)),
+    [checkedIds, models],
+  );
+  const selectedDeletableModels = useMemo(
+    () => selectedModels.filter((model) => model.can_delete),
+    [selectedModels],
+  );
+  const selectedBlockedCount = selectedModels.length - selectedDeletableModels.length;
+  const allFilteredModelsSelected =
+    filteredModels.length > 0 && filteredModels.every((model) => checkedIds.has(model.model_key));
   const missingDownloadRefs = useMemo(
     () => uniqueDownloadSelections(models.flatMap((model) => model.downloadable_references)),
     [models],
@@ -160,11 +173,15 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   }
 
   function handleSelectAll() {
-    if (checkedIds.size === filteredModels.length && filteredModels.length > 0) {
-      setCheckedIds(new Set());
-    } else {
-      setCheckedIds(new Set(filteredModels.map((m) => m.model_key)));
-    }
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (allFilteredModelsSelected) {
+        filteredModels.forEach((model) => next.delete(model.model_key));
+      } else {
+        filteredModels.forEach((model) => next.add(model.model_key));
+      }
+      return next;
+    });
   }
 
   async function handleCreateTag() {
@@ -233,14 +250,15 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   }
 
   async function handleDownload(selections: ModelDownloadSelection[]) {
-    setPageMessage("Starting download...");
     await startDownload(selections);
-    setPageMessage(null);
   }
 
   async function handleDeleteModel(model: ModelInventoryEntry) {
     if (!model.can_delete) return;
-    const confirmed = window.confirm(`Delete ${model.filename} from Noofy Models? This does not affect external model folders.`);
+    const locationLabel = model.source === "external_comfyui" ? "the ComfyUI models folder" : "Noofy Models";
+    const confirmed = window.confirm(
+      `Delete ${model.filename} from ${locationLabel}? This removes the file from computer storage and cannot be undone.`,
+    );
     if (!confirmed) return;
     setDeleteBusy(true);
     setPageError(null);
@@ -251,6 +269,77 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       await refreshInventory({ silent: true });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Could not delete this model.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  async function handleDeleteSelectedModels() {
+    if (selectedDeletableModels.length === 0) {
+      setPageError("None of the selected models can be deleted from a configured model folder.");
+      return;
+    }
+
+    const deleteLabel =
+      selectedDeletableModels.length === 1
+        ? selectedDeletableModels[0].filename
+        : `${selectedDeletableModels.length} model files`;
+    const selectedSources = new Set(selectedDeletableModels.map((model) => model.source));
+    const locationLabel =
+      selectedSources.size === 1 && selectedSources.has("external_comfyui")
+        ? "the ComfyUI models folder"
+        : selectedSources.size === 1
+          ? "Noofy Models"
+          : "the selected model folders";
+    const skippedLabel =
+      selectedBlockedCount > 0
+        ? [
+            `${selectedBlockedCount} selected item${selectedBlockedCount === 1 ? "" : "s"} will be skipped`,
+            `because ${selectedBlockedCount === 1 ? "it is" : "they are"} not deletable by Noofy.`,
+          ].join(" ")
+        : "";
+    const confirmed = window.confirm(
+      [
+        `Delete ${deleteLabel} from ${locationLabel}?`,
+        `This removes the file${selectedDeletableModels.length === 1 ? "" : "s"} from computer storage and cannot be undone.`,
+        skippedLabel,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    if (!confirmed) return;
+
+    setDeleteBusy(true);
+    setPageError(null);
+    setPageMessage(null);
+    const failedKeys = new Set<string>();
+    const deletedKeys = new Set<string>();
+    try {
+      for (const model of selectedDeletableModels) {
+        try {
+          await deleteModelFile(model.model_key);
+          deletedKeys.add(model.model_key);
+        } catch {
+          failedKeys.add(model.model_key);
+        }
+      }
+
+      if (deletedKeys.has(selectedModelId ?? "")) {
+        setSelectedModelId(null);
+      }
+      setCheckedIds(new Set(failedKeys));
+      await refreshInventory({ silent: true });
+
+      if (failedKeys.size > 0) {
+        setPageError(
+          [
+            `Deleted ${deletedKeys.size} model${deletedKeys.size === 1 ? "" : "s"}.`,
+            `${failedKeys.size} selected model${failedKeys.size === 1 ? "" : "s"} could not be deleted.`,
+          ].join(" "),
+        );
+      } else {
+        setPageMessage(`Deleted ${deletedKeys.size} model${deletedKeys.size === 1 ? "" : "s"} from ${locationLabel}.`);
+      }
     } finally {
       setDeleteBusy(false);
     }
@@ -306,10 +395,10 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
 
       {pageMessage && (
         <div className="notice notice--row" role="status">
-          <Loader2 className="spin" size={18} aria-hidden="true" />
+          <CheckCircle2 size={18} aria-hidden="true" />
           <div>
             <strong>{pageMessage}</strong>
-            <span>Noofy will update the list when the action finishes.</span>
+            <span>The model list has been refreshed.</span>
           </div>
         </div>
       )}
@@ -544,7 +633,10 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
 
       {checkedIds.size > 0 && (
         <div className="models-bulk-bar" role="region" aria-label="Bulk actions">
-          <span className="models-bulk-bar__count">{checkedIds.size} selected</span>
+          <span className="models-bulk-bar__count">
+            {checkedIds.size} selected
+            {selectedBlockedCount > 0 ? `, ${selectedDeletableModels.length} can be deleted` : ""}
+          </span>
           <div className="button-row">
             {tags.map((tag) => (
               <button
@@ -558,6 +650,20 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
                 Add "{tag.name}"
               </button>
             ))}
+            <button
+              className="secondary-button secondary-button--small secondary-button--danger"
+              type="button"
+              onClick={() => void handleDeleteSelectedModels()}
+              disabled={deleteBusy || selectedDeletableModels.length === 0}
+              title={
+                selectedDeletableModels.length === 0
+                  ? "Selected models cannot be deleted from a configured model folder"
+                  : "Delete selected model files"
+              }
+            >
+              <Trash2 size={12} aria-hidden="true" />
+              Delete selected
+            </button>
           </div>
           <button className="ghost-button" type="button" onClick={() => setCheckedIds(new Set())}>
             <X size={14} aria-hidden="true" />
@@ -569,11 +675,11 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       <div className={`models-layout${panelOpen ? " models-layout--panel-open" : ""}`}>
         <div className="models-list-area">
           {filteredModels.length > 0 && (
-            <div className="models-table-head" aria-hidden="true">
+            <div className="models-table-head">
               <div className="model-col model-col-check">
                 <input
                   type="checkbox"
-                  checked={checkedIds.size === filteredModels.length && filteredModels.length > 0}
+                  checked={allFilteredModelsSelected}
                   onChange={handleSelectAll}
                   aria-label="Select all models"
                 />
