@@ -392,6 +392,15 @@ export interface DashboardControlGroupDef {
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
+export interface DashboardActionBarPositionDef {
+  x: number;
+  y: number;
+}
+
+export interface DashboardPresentationDef {
+  action_bar?: DashboardActionBarPositionDef | null;
+}
+
 export interface DashboardSectionDef {
   id: string;
   title: string;
@@ -402,6 +411,7 @@ export interface DashboardSectionDef {
 export interface DashboardSchemaDef {
   version: string;
   status: string;
+  presentation?: DashboardPresentationDef | null;
   sections: DashboardSectionDef[];
 }
 
@@ -484,12 +494,22 @@ export interface UserStateLayoutOverride {
   h: number;
 }
 
+export interface UserStateActionBarPosition {
+  x: number;
+  y: number;
+}
+
+export interface UserStatePresentationOverrides {
+  action_bar?: UserStateActionBarPosition | null;
+}
+
 export interface WorkflowUserState {
   schema_version: string;
   workflow_id: string;
   dashboard_version: string;
   values: Record<string, unknown>;
   layout_overrides: Record<string, UserStateLayoutOverride>;
+  presentation_overrides?: UserStatePresentationOverrides;
   output_preferences: OutputPreferences;
 }
 

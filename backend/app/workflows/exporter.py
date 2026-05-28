@@ -86,7 +86,9 @@ class WorkflowExporter:
                 dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
             else:
                 # Fall back to generating from in-memory model.
-                dashboard_data: dict[str, Any] = package.dashboard.model_dump(mode="json")
+                dashboard_data: dict[str, Any] = package.dashboard.model_dump(
+                    mode="json", exclude_none=True
+                )
             if not dashboard_data.get("inputs") and package.inputs:
                 dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
             if not dashboard_data.get("outputs") and package.outputs:

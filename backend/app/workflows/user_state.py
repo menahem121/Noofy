@@ -16,6 +16,15 @@ class UserStateLayoutOverride(BaseModel):
     h: int
 
 
+class UserStateActionBarPosition(BaseModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+
+
+class UserStatePresentationOverrides(BaseModel):
+    action_bar: UserStateActionBarPosition | None = None
+
+
 class OutputPreference(BaseModel):
     auto_save: bool = False
 
@@ -26,6 +35,9 @@ class WorkflowUserState(BaseModel):
     dashboard_version: str = ""
     values: dict[str, Any] = Field(default_factory=dict)
     layout_overrides: dict[str, UserStateLayoutOverride] = Field(default_factory=dict)
+    presentation_overrides: UserStatePresentationOverrides = Field(
+        default_factory=UserStatePresentationOverrides
+    )
     output_preferences: dict[str, OutputPreference] = Field(default_factory=dict)
 
 
@@ -69,7 +81,12 @@ class UserStateService:
 
     def clear_layout(self, workflow_id: str) -> WorkflowUserState:
         state = self.get(workflow_id)
-        cleared = state.model_copy(update={"layout_overrides": {}})
+        cleared = state.model_copy(
+            update={
+                "layout_overrides": {},
+                "presentation_overrides": UserStatePresentationOverrides(),
+            }
+        )
         return self.save(cleared)
 
     def delete(self, workflow_id: str) -> None:

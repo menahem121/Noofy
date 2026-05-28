@@ -115,6 +115,15 @@ class ControlLayout(BaseModel):
     min_h: int | None = None
 
 
+class DashboardActionBarPosition(BaseModel):
+    x: int = Field(default=0, ge=0)
+    y: int = Field(default=0, ge=0)
+
+
+class DashboardPresentation(BaseModel):
+    action_bar: DashboardActionBarPosition | None = None
+
+
 class CredentialInjectionStrategy(BaseModel):
     kind: Literal["comfyui_extra_data", "runner_env", "config_file", "node_input"]
     field: str | None = None
@@ -154,6 +163,7 @@ class DashboardSection(BaseModel):
 class DashboardSchema(BaseModel):
     version: str
     status: Literal["configured", "not_configured", "invalid"] = "not_configured"
+    presentation: DashboardPresentation | None = None
     inputs: list[WorkflowInput] = Field(default_factory=list)
     outputs: list[WorkflowOutput] = Field(default_factory=list)
     sections: list[DashboardSection] = Field(default_factory=list)

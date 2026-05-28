@@ -353,6 +353,9 @@ function mockConfiguredDashboardFetch(
     if (url.endsWith("/api/workflows/text_to_image_v0/dashboard") && init?.method === "DELETE") {
       return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", removed: true }));
     }
+    if (url.endsWith("/api/workflows/text_to_image_v0/dashboard") && init?.method === "PUT") {
+      return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", status: "configured", valid: true }));
+    }
     if (url.endsWith("/api/workflows/text_to_image_v0/user-state/values") && init?.method === "DELETE") {
       return Promise.resolve(
         jsonResponse({
@@ -418,6 +421,43 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
     clientY: { value: init.clientY },
   });
   fireEvent(target, event);
+}
+
+function mockCanvasActionBarBounds({
+  left,
+  top,
+  width = 340,
+  height = 40,
+}: {
+  left: number;
+  top: number;
+  width?: number;
+  height?: number;
+}) {
+  const frame = screen.getByRole("main", { name: /workflow dashboard canvas/i });
+  vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 1200,
+    bottom: 768,
+    width: 1200,
+    height: 768,
+    toJSON: () => ({}),
+  } as DOMRect);
+  const actionBar = document.querySelector(".canvas-action-cluster") as HTMLElement;
+  vi.spyOn(actionBar, "getBoundingClientRect").mockReturnValue({
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    toJSON: () => ({}),
+  } as DOMRect);
 }
 
 function civitaiSearchResponse() {
@@ -1833,6 +1873,82 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
   });
 
+  it("saves normal action bar drags only to user state", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    const dragHandle = await screen.findByRole("button", { name: /move workflow action bar/i });
+    mockCanvasActionBarBounds({ left: 820, top: 12 });
+
+    dispatchPointer(dragHandle, "pointerdown", { clientX: 830, clientY: 20 });
+    dispatchPointer(window, "pointermove", { clientX: 780, clientY: 70 });
+    dispatchPointer(window, "pointerup", { clientX: 780, clientY: 70 });
+
+    await waitFor(() => {
+      const userStatePut = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/user-state") &&
+          (init as RequestInit | undefined)?.method === "PUT" &&
+          Boolean(
+            JSON.parse(((init as RequestInit | undefined)?.body as string | undefined) ?? "{}")
+              .presentation_overrides?.action_bar,
+          ),
+      );
+      expect(userStatePut).toBeDefined();
+      const body = JSON.parse((userStatePut![1] as RequestInit).body as string);
+      expect(body.presentation_overrides.action_bar).toEqual({
+        x: 770,
+        y: 62,
+      });
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/dashboard") &&
+          (init as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("uses a local action bar position before the creator-defined package position", async () => {
+    const packageData = {
+      ...configuredPackageData,
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        presentation: { action_bar: { x: 24, y: 32 } },
+      },
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+            presentation_overrides: { action_bar: { x: 140, y: 90 } },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await screen.findByRole("button", { name: /move workflow action bar/i });
+    const actionBar = document.querySelector(".canvas-action-cluster") as HTMLElement;
+    await waitFor(() => {
+      expect(actionBar).toHaveStyle({ left: "140px", top: "90px" });
+    });
+  });
+
   it("restores native dashboard customizations from the canvas options menu", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
@@ -1915,6 +2031,33 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("button", { name: /resize prompt height/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^move prompt$/i })).not.toBeInTheDocument();
     expect(promptInput).toBeDisabled();
+  });
+
+  it("saves action bar moves in layout edit mode to dashboard presentation", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const dragHandle = screen.getByRole("button", { name: /move workflow action bar/i });
+    mockCanvasActionBarBounds({ left: 24, top: 18 });
+    dispatchPointer(dragHandle, "pointerdown", { clientX: 30, clientY: 22 });
+    dispatchPointer(window, "pointermove", { clientX: 90, clientY: 82 });
+    dispatchPointer(window, "pointerup", { clientX: 90, clientY: 82 });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const dashboardPut = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/dashboard") &&
+          (init as RequestInit | undefined)?.method === "PUT",
+      );
+      expect(dashboardPut).toBeDefined();
+      const body = JSON.parse((dashboardPut![1] as RequestInit).body as string);
+      expect(body.dashboard.presentation.action_bar).toEqual({ x: 84, y: 78 });
+    });
   });
 
   it("cancels an edit layout session without applying the draft resize", async () => {

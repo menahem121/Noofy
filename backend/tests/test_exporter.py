@@ -23,7 +23,9 @@ from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.user_state import (
     OutputPreference,
+    UserStateActionBarPosition,
     UserStateLayoutOverride,
+    UserStatePresentationOverrides,
     UserStateService,
     WorkflowUserState,
 )
@@ -344,6 +346,36 @@ def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_pat
     group = exported_dashboard["sections"][0]["groups"][0]
     assert group["layout"] == {"x": 0, "y": 0, "w": 16, "h": 10}
     assert "layout" not in exported_dashboard["sections"][0]["controls"][0]
+
+
+def test_exported_archive_keeps_creator_action_bar_position_not_user_override(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+    )
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    dashboard_file = package_dir / "dashboard.json"
+    dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
+    dashboard_data["presentation"] = {"action_bar": {"x": 32, "y": 24}}
+    dashboard_file.write_text(json.dumps(dashboard_data), encoding="utf-8")
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            dashboard_version="0.1.0",
+            presentation_overrides=UserStatePresentationOverrides(
+                action_bar=UserStateActionBarPosition(x=300, y=90),
+            ),
+        )
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        exported_dashboard = json.loads(zf.read("dashboard.json"))
+
+    assert exported_dashboard["presentation"]["action_bar"] == {"x": 32, "y": 24}
 
 
 def test_exported_archive_ignores_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:

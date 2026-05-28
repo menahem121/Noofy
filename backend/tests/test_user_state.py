@@ -10,6 +10,7 @@ def test_get_returns_default_when_missing(tmp_path: Path) -> None:
     assert result.workflow_id == "wf-1"
     assert result.values == {}
     assert result.layout_overrides == {}
+    assert result.presentation_overrides.action_bar is None
     assert result.output_preferences == {}
 
 
@@ -54,16 +55,25 @@ def test_clear_values_empties_values_but_keeps_layout(tmp_path: Path) -> None:
 
 def test_clear_layout_empties_overrides_but_keeps_values(tmp_path: Path) -> None:
     svc = UserStateService(tmp_path / "state")
-    from app.workflows.user_state import OutputPreference, UserStateLayoutOverride
+    from app.workflows.user_state import (
+        OutputPreference,
+        UserStateActionBarPosition,
+        UserStateLayoutOverride,
+        UserStatePresentationOverrides,
+    )
     state = WorkflowUserState(
         workflow_id="wf-1",
         values={"seed": 42},
         layout_overrides={"ctrl-1": UserStateLayoutOverride(x=0, y=0, w=4, h=2)},
+        presentation_overrides=UserStatePresentationOverrides(
+            action_bar=UserStateActionBarPosition(x=12, y=18),
+        ),
         output_preferences={"result": OutputPreference(auto_save=True)},
     )
     svc.save(state)
     cleared = svc.clear_layout("wf-1")
     assert cleared.layout_overrides == {}
+    assert cleared.presentation_overrides.action_bar is None
     assert cleared.values == {"seed": 42}
     assert cleared.output_preferences["result"].auto_save is True
 

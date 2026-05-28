@@ -19,20 +19,59 @@
 
 .canvas-action-cluster {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 12px;
+  right: 12px;
   z-index: 30;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 6px;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+  padding: 4px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(28, 27, 29, 0.86);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(12px);
+}
+
+.canvas-action-cluster--positioned {
+  justify-content: flex-start;
+}
+
+.canvas-action-cluster--dragging {
+  cursor: grabbing;
+}
+
+.canvas-action-cluster__drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.canvas-action-cluster__drag-handle:hover,
+.canvas-action-cluster__drag-handle:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.canvas-action-cluster__drag-handle:active {
+  cursor: grabbing;
 }
 
 .canvas-options-menu {
@@ -40,8 +79,8 @@
 }
 
 .canvas-options-menu__trigger {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
 }
 
 .canvas-options-menu__content {
@@ -89,22 +128,24 @@
 .canvas-action-cluster__cancel,
 .canvas-action-cluster__run,
 .canvas-action-cluster__download {
-  min-height: 36px;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  gap: 6px;
+  border-radius: 9px;
+  font-size: 12px;
 }
 
 .canvas-action-cluster__reason {
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 360px;
-  min-height: 32px;
-  padding: 6px 9px;
+  gap: 5px;
+  max-width: 320px;
+  min-height: 30px;
+  padding: 5px 8px;
   border-radius: 8px;
   background: rgba(251, 191, 36, 0.12);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.35;
 }
 
@@ -603,7 +644,7 @@
     min-width: 0;
   }
 
-  .canvas-action-cluster {
+  .canvas-action-cluster:not(.canvas-action-cluster--positioned) {
     left: 10px;
     right: 10px;
     justify-content: flex-end;

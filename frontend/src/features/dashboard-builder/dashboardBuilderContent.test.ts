@@ -13,6 +13,33 @@ import {
 } from "./dashboardBuilderContent";
 
 describe("toBackendPayload", () => {
+  it("persists the creator-defined canvas action bar presentation", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      presentation: { actionBar: { x: 120, y: 18 } },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-prompt",
+          valueId: "node-6-text",
+          binding: { nodeId: "6", inputName: "text" },
+          widgetType: "textarea",
+          title: "Prompt",
+          description: "",
+          defaultValue: "a lake",
+          layout: { x: 0, y: 0, w: 16, h: 6 },
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.dashboard.presentation).toEqual({ action_bar: { x: 120, y: 18 } });
+  });
+
   it("preserves slider range and decimal step validation", () => {
     const schema: DashboardSchema = {
       version: 1,

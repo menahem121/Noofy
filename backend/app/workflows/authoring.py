@@ -142,7 +142,9 @@ class DashboardAuthoringService:
 
         # Build the on-disk dashboard.json payload.
         schema_configured = parsed_schema.model_copy(update={"status": "configured"})
-        on_disk: dict[str, Any] = schema_configured.model_dump(mode="json")
+        on_disk: dict[str, Any] = schema_configured.model_dump(
+            mode="json", exclude_none=True
+        )
         on_disk["inputs"] = [i.model_dump(mode="json") for i in parsed_inputs]
         on_disk["outputs"] = [o.model_dump(mode="json") for o in parsed_outputs]
 

@@ -18,6 +18,7 @@ function emptyRemoteState(workflowId: string): WorkflowUserState {
     dashboard_version: "",
     values: {},
     layout_overrides: {},
+    presentation_overrides: {},
     output_preferences: {},
   };
 }
@@ -157,13 +158,41 @@ describe("useWorkflowUserState", () => {
     expect(putCall).toBeDefined();
   });
 
+  it("setActionBarPositionOverride saves a personal canvas bar position", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(remote));
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(remote)));
+
+    const { result } = renderHook(() =>
+      useWorkflowUserState("wf-1", {}, "1.0", new Map()),
+    );
+    await waitFor(() => expect(result.current.actionBarPositionOverride).toBeNull());
+
+    await act(async () => {
+      await result.current.setActionBarPositionOverride({ x: 120.4, y: 30.6 });
+    });
+
+    expect(result.current.actionBarPositionOverride).toEqual({ x: 120, y: 31 });
+
+    await act(async () => { vi.advanceTimersByTime(700); });
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(putCall).toBeDefined();
+    const body = JSON.parse((putCall![1] as RequestInit).body as string);
+    expect(body.presentation_overrides.action_bar).toEqual({ x: 120, y: 31 });
+    expect(body.layout_overrides).toEqual({});
+  });
+
   it("resetLayout calls DELETE /user-state/layout and clears overrides", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),
       dashboard_version: "1.0",
       layout_overrides: { "ctrl-1": { x: 0, y: 0, w: 4, h: 2 } },
+      presentation_overrides: { action_bar: { x: 30, y: 40 } },
     };
-    const afterDelete: WorkflowUserState = { ...remote, layout_overrides: {} };
+    const afterDelete: WorkflowUserState = { ...remote, layout_overrides: {}, presentation_overrides: {} };
     fetchMock.mockResolvedValueOnce(jsonResponse(remote));
     fetchMock.mockResolvedValue(jsonResponse(afterDelete));
 
@@ -171,6 +200,7 @@ describe("useWorkflowUserState", () => {
       useWorkflowUserState("wf-1", {}, "1.0", new Map()),
     );
     await waitFor(() => expect(result.current.hasLayoutOverrides).toBe(true));
+    expect(result.current.actionBarPositionOverride).toEqual({ x: 30, y: 40 });
 
     await act(async () => { await result.current.resetLayout(); });
 
@@ -179,6 +209,7 @@ describe("useWorkflowUserState", () => {
     );
     expect(deleteCall).toBeDefined();
     expect(result.current.hasLayoutOverrides).toBe(false);
+    expect(result.current.actionBarPositionOverride).toBeNull();
   });
 
   it("resets values to creator defaults and prunes stale keys when dashboard_version changes", async () => {

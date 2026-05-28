@@ -80,6 +80,15 @@ export interface DashboardCanvasLayout {
   responsive: boolean;
 }
 
+export interface DashboardActionBarPosition {
+  x: number;
+  y: number;
+}
+
+export interface DashboardPresentation {
+  actionBar?: DashboardActionBarPosition;
+}
+
 export interface DashboardWidget {
   id: string;
   binding: { nodeId: string; inputName: string };
@@ -111,6 +120,7 @@ export interface DashboardSchema {
   widgets: DashboardWidget[];
   groups: DashboardWidgetGroup[];
   layout: DashboardCanvasLayout;
+  presentation?: DashboardPresentation;
 }
 
 export type DashboardTopLevelItem =
@@ -608,6 +618,7 @@ export interface BackendDashboardSection {
 export interface BackendDashboardPayload {
   version: string;
   status?: string;
+  presentation?: { action_bar?: { x: number; y: number } };
   outputs?: Array<{ id: string; label: string; node_id: string; type: string }>;
   sections: BackendDashboardSection[];
 }
@@ -754,6 +765,16 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const dashboard: BackendDashboardPayload = {
     version: "0.1.0",
     status: "configured",
+    ...(normalized.presentation?.actionBar
+      ? {
+          presentation: {
+            action_bar: {
+              x: Math.round(normalized.presentation.actionBar.x),
+              y: Math.round(normalized.presentation.actionBar.y),
+            },
+          },
+        }
+      : {}),
     outputs,
     sections: [{ id: "main", title: "Main", controls, groups }],
   };

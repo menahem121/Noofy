@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +13,7 @@ import {
   AlertCircle,
   ChevronDown,
   Download,
+  GripVertical,
   Image as ImageIcon,
   ImagePlus,
   LayoutGrid,
@@ -63,6 +65,13 @@ export interface CanvasRunState {
   disabledActionLabel?: string | null;
 }
 
+export interface CanvasActionBarPosition {
+  x: number;
+  y: number;
+}
+
+const ACTION_BAR_BOUNDARY_PADDING = 10;
+
 interface CanvasDashboardViewProps {
   controls: DashboardControlDef[];
   groups: DashboardControlGroupDef[];
@@ -72,6 +81,7 @@ interface CanvasDashboardViewProps {
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   layoutOverrides: Record<string, GridItemLayout>;
+  actionBarPosition?: CanvasActionBarPosition | null;
   isEditingLayout: boolean;
   runState: CanvasRunState;
   exportNoofyUrl: string;
@@ -91,6 +101,7 @@ interface CanvasDashboardViewProps {
   onCancelLayoutEdit: () => void;
   onEditWidgets?: () => void;
   onLayoutOverride: (controlId: string, layout: GridItemLayout) => void;
+  onActionBarPositionChange: (position: CanvasActionBarPosition) => void;
 }
 
 export function CanvasDashboardView({
@@ -102,6 +113,7 @@ export function CanvasDashboardView({
   inputValues,
   outputPreferences,
   layoutOverrides,
+  actionBarPosition,
   isEditingLayout,
   runState,
   exportNoofyUrl,
@@ -121,13 +133,19 @@ export function CanvasDashboardView({
   onCancelLayoutEdit,
   onEditWidgets,
   onLayoutOverride,
+  onActionBarPositionChange,
 }: CanvasDashboardViewProps) {
   const [movingControlId, setMovingControlId] = useState<string | null>(null);
   const [movePreview, setMovePreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [dropPreview, setDropPreview] = useState<{ controlId: string; layout: GridItemLayout } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
+  const [draggingActionBarPosition, setDraggingActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
+  const [boundedActionBarPosition, setBoundedActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
+  const [actionBarBoundsVersion, setActionBarBoundsVersion] = useState(0);
+  const frameRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const actionBarRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
     controlId: string;
@@ -144,6 +162,12 @@ export function CanvasDashboardView({
     columnWidth: number;
     currentLayout: GridItemLayout;
     dropLayout: GridItemLayout;
+  } | null>(null);
+  const actionBarDragStateRef = useRef<{
+    startPosition: CanvasActionBarPosition;
+    startClientX: number;
+    startClientY: number;
+    currentPosition: CanvasActionBarPosition;
   } | null>(null);
   const topLevelItems = useMemo(
     () => topLevelDashboardControlItems(controls, groups),
@@ -174,6 +198,44 @@ export function CanvasDashboardView({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [optionsOpen]);
+
+  const requestedActionBarPosition = draggingActionBarPosition ?? actionBarPosition ?? null;
+
+  useEffect(() => {
+    function handleResize() {
+      setActionBarBoundsVersion((version) => version + 1);
+    }
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!requestedActionBarPosition) {
+      setBoundedActionBarPosition(null);
+      return;
+    }
+    const clamped = clampActionBarPosition(
+      requestedActionBarPosition,
+      frameRef.current,
+      actionBarRef.current,
+    );
+    setBoundedActionBarPosition((current) =>
+      sameActionBarPosition(current, clamped) ? current : clamped,
+    );
+  }, [
+    requestedActionBarPosition?.x,
+    requestedActionBarPosition?.y,
+    isEditingLayout,
+    runState.canCancel,
+    runState.canRun,
+    runState.disabledActionLabel,
+    runState.disabledReason,
+    runState.isRunning,
+    actionBarBoundsVersion,
+  ]);
 
   function effectiveLayout(item: DashboardTopLevelControlItem): GridItemLayout {
     if (layoutOverrides[item.id]) return withLayoutMinimums(layoutOverrides[item.id], item);
@@ -320,12 +382,106 @@ export function CanvasDashboardView({
     window.addEventListener("pointerup", handlePointerUp);
   }
 
+  function handleActionBarDragStart(event: PointerEvent<HTMLButtonElement>) {
+    const frame = frameRef.current;
+    const actionBar = actionBarRef.current;
+    if (!frame || !actionBar) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    capturePointer(event.currentTarget, event.pointerId);
+    event.currentTarget.ownerDocument.getSelection()?.removeAllRanges();
+
+    const frameRect = frame.getBoundingClientRect();
+    const actionBarRect = actionBar.getBoundingClientRect();
+    const startPosition = clampActionBarPosition(
+      {
+        x: actionBarRect.left - frameRect.left,
+        y: actionBarRect.top - frameRect.top,
+      },
+      frame,
+      actionBar,
+    );
+    actionBarDragStateRef.current = {
+      startPosition,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      currentPosition: startPosition,
+    };
+    setDraggingActionBarPosition(startPosition);
+
+    function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
+      const dragState = actionBarDragStateRef.current;
+      if (!dragState) return;
+      pointerEvent.preventDefault();
+      const nextPosition = clampActionBarPosition(
+        {
+          x: dragState.startPosition.x + pointerEvent.clientX - dragState.startClientX,
+          y: dragState.startPosition.y + pointerEvent.clientY - dragState.startClientY,
+        },
+        frameRef.current,
+        actionBarRef.current,
+      );
+      if (sameActionBarPosition(dragState.currentPosition, nextPosition)) return;
+      dragState.currentPosition = nextPosition;
+      setDraggingActionBarPosition(nextPosition);
+    }
+
+    function finishDrag(shouldCommit: boolean) {
+      const finalPosition = actionBarDragStateRef.current?.currentPosition;
+      actionBarDragStateRef.current = null;
+      setDraggingActionBarPosition(null);
+      if (shouldCommit && finalPosition) onActionBarPositionChange(finalPosition);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    }
+
+    function handlePointerUp() {
+      finishDrag(true);
+    }
+
+    function handlePointerCancel() {
+      finishDrag(false);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+  }
+
   const canvasRows = canvasRowsForItems(canvasItems);
+  const displayedActionBarPosition = requestedActionBarPosition
+    ? boundedActionBarPosition ?? requestedActionBarPosition
+    : null;
+  const actionBarStyle = displayedActionBarPosition
+    ? {
+        left: `${displayedActionBarPosition.x}px`,
+        right: "auto",
+        top: `${displayedActionBarPosition.y}px`,
+      }
+    : undefined;
 
   return (
     <div className="canvas-dashboard">
-      <DashboardCanvasFrame className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
-        <div className="canvas-action-cluster" aria-label={isEditingLayout ? "Dashboard layout actions" : "Workflow actions"}>
+      <DashboardCanvasFrame ref={frameRef} className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
+        <div
+          ref={actionBarRef}
+          className={`canvas-action-cluster${displayedActionBarPosition ? " canvas-action-cluster--positioned" : ""}${
+            draggingActionBarPosition ? " canvas-action-cluster--dragging" : ""
+          }`}
+          style={actionBarStyle}
+          aria-label={isEditingLayout ? "Dashboard layout actions" : "Workflow actions"}
+        >
+          <button
+            className="canvas-action-cluster__drag-handle"
+            type="button"
+            aria-label="Move workflow action bar"
+            title="Move action bar"
+            onPointerDown={handleActionBarDragStart}
+          >
+            <GripVertical size={14} aria-hidden="true" />
+          </button>
           {isEditingLayout ? (
             <>
               <button className="secondary-button canvas-action-cluster__cancel" type="button" onClick={onCancelLayoutEdit}>
@@ -347,7 +503,7 @@ export function CanvasDashboardView({
                   title="Workflow options"
                   onClick={() => setOptionsOpen((open) => !open)}
                 >
-                  <SlidersHorizontal size={18} aria-hidden="true" />
+                  <SlidersHorizontal size={16} aria-hidden="true" />
                 </button>
 
                 {optionsOpen ? (
@@ -418,7 +574,7 @@ export function CanvasDashboardView({
                 disabled={!runState.canCancel}
                 onClick={onCancel}
               >
-                <Square size={16} aria-hidden="true" />
+                <Square size={14} aria-hidden="true" />
                 Cancel Run
               </button>
               <button
@@ -430,9 +586,9 @@ export function CanvasDashboardView({
                 onClick={onRun}
               >
                 {runState.isRunning ? (
-                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                  <Loader2 className="spin" size={16} aria-hidden="true" />
                 ) : (
-                  <Play size={18} aria-hidden="true" />
+                  <Play size={16} aria-hidden="true" />
                 )}
                 Run Workflow
               </button>
@@ -760,6 +916,14 @@ function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
       "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
     ),
   );
+}
+
+function capturePointer(target: Element, pointerId: number) {
+  try {
+    target.setPointerCapture?.(pointerId);
+  } catch {
+    // Window-level listeners keep dragging active if pointer capture is not available.
+  }
 }
 
 // ─── Output widget ────────────────────────────────────────────────────────────
@@ -1187,4 +1351,51 @@ function withLayoutMinimums(
     minW,
     minH,
   };
+}
+
+function clampActionBarPosition(
+  position: CanvasActionBarPosition,
+  frame: HTMLElement | null,
+  actionBar: HTMLElement | null,
+): CanvasActionBarPosition {
+  const fallback = {
+    x: Math.max(0, Math.round(position.x)),
+    y: Math.max(0, Math.round(position.y)),
+  };
+  const frameRect = frame?.getBoundingClientRect();
+  const actionBarRect = actionBar?.getBoundingClientRect();
+  if (
+    !frameRect ||
+    !actionBarRect ||
+    frameRect.width <= 0 ||
+    frameRect.height <= 0 ||
+    actionBarRect.width <= 0 ||
+    actionBarRect.height <= 0
+  ) {
+    return fallback;
+  }
+
+  const maxX = Math.max(
+    ACTION_BAR_BOUNDARY_PADDING,
+    frameRect.width - actionBarRect.width - ACTION_BAR_BOUNDARY_PADDING,
+  );
+  const maxY = Math.max(
+    ACTION_BAR_BOUNDARY_PADDING,
+    frameRect.height - actionBarRect.height - ACTION_BAR_BOUNDARY_PADDING,
+  );
+  return {
+    x: clampNumber(Math.round(position.x), ACTION_BAR_BOUNDARY_PADDING, maxX),
+    y: clampNumber(Math.round(position.y), ACTION_BAR_BOUNDARY_PADDING, maxY),
+  };
+}
+
+function sameActionBarPosition(
+  a: CanvasActionBarPosition | null,
+  b: CanvasActionBarPosition | null,
+): boolean {
+  return a?.x === b?.x && a?.y === b?.y;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

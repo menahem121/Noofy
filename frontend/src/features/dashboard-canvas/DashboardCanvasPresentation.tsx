@@ -173,21 +173,21 @@ export function sameGridLayout(a: GridItemLayout, b: GridItemLayout): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-export function DashboardCanvasFrame({
-  children,
-  className = "",
-  "aria-label": ariaLabel,
-}: {
+export const DashboardCanvasFrame = forwardRef<HTMLElement, {
   children: ReactNode;
   className?: string;
   "aria-label"?: string;
-}) {
+}>(function DashboardCanvasFrame({
+  children,
+  className = "",
+  "aria-label": ariaLabel,
+}, ref) {
   return (
-    <main className={`layout-canvas${className ? ` ${className}` : ""}`} aria-label={ariaLabel}>
+    <main ref={ref} className={`layout-canvas${className ? ` ${className}` : ""}`} aria-label={ariaLabel}>
       {children}
     </main>
   );
-}
+});
 
 export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement> & {
   rows: number;

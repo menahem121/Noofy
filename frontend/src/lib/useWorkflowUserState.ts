@@ -9,6 +9,7 @@ import {
   type WorkflowUserState,
   type OutputPreference,
   type OutputPreferences,
+  type UserStateActionBarPosition,
 } from "./api/noofyApi";
 import type { GridItemLayout } from "./gridLayout";
 
@@ -22,6 +23,7 @@ function emptyState(workflowId: string, dashboardVersion: string): WorkflowUserS
     dashboard_version: dashboardVersion,
     values: {},
     layout_overrides: {},
+    presentation_overrides: {},
     output_preferences: {},
   };
 }
@@ -52,12 +54,14 @@ function pruneState(
   for (const [id, preference] of Object.entries(state.output_preferences ?? {})) {
     if (validOutputControlIdSet.has(id)) prunedOutputPreferences[id] = preference;
   }
+  const presentationOverrides = state.presentation_overrides ?? {};
 
   return {
     ...state,
     dashboard_version: currentDashboardVersion,
     values: prunedValues,
     layout_overrides: prunedOverrides,
+    presentation_overrides: presentationOverrides,
     output_preferences: prunedOutputPreferences,
   };
 }
@@ -110,7 +114,14 @@ export function useWorkflowUserState(
     fetchUserState(workflowId)
       .then((remote) => {
         if (!active) return;
-        const pruned = pruneState(remote, packageDefaults, inputIndex, validLayoutIds, validOutputControlIds, dashboardVersion);
+        const pruned = pruneState(
+          remote,
+          packageDefaults,
+          inputIndex,
+          validLayoutIds,
+          validOutputControlIds,
+          dashboardVersion,
+        );
         const merged: WorkflowUserState = {
           ...pruned,
           values: {
@@ -129,6 +140,7 @@ export function useWorkflowUserState(
         const initial: WorkflowUserState = {
           ...emptyState(workflowId, dashboardVersion),
           values: { ...packageDefaults },
+          presentation_overrides: {},
           output_preferences: {},
         };
         setUserState(initial);
@@ -141,7 +153,15 @@ export function useWorkflowUserState(
       active = false;
       cancelPendingSave();
     };
-  }, [workflowId, dashboardVersion, packageDefaultsKey, inputIdsKey, layoutIdsKey, outputControlIdsKey, hasPackageContext]);
+  }, [
+    workflowId,
+    dashboardVersion,
+    packageDefaultsKey,
+    inputIdsKey,
+    layoutIdsKey,
+    outputControlIdsKey,
+    hasPackageContext,
+  ]);
 
   function scheduleSave(next: WorkflowUserState) {
     cancelPendingSave();
@@ -220,11 +240,38 @@ export function useWorkflowUserState(
     [],
   );
 
+  const setActionBarPositionOverride = useCallback(
+    async (position: UserStateActionBarPosition) => {
+      const override = {
+        x: Math.max(0, Math.round(position.x)),
+        y: Math.max(0, Math.round(position.y)),
+      };
+      setUserState((current) => {
+        const next = {
+          ...current,
+          presentation_overrides: {
+            ...(current.presentation_overrides ?? {}),
+            action_bar: override,
+          },
+        };
+        latestStateRef.current = next;
+        scheduleSave(next);
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workflowId],
+  );
+
   const resetLayout = useCallback(async () => {
     cancelPendingSave();
     const cleared = await deleteUserStateLayout(workflowId);
     setUserState((current) => {
-      const next = { ...current, layout_overrides: cleared.layout_overrides };
+      const next = {
+        ...current,
+        layout_overrides: cleared.layout_overrides,
+        presentation_overrides: cleared.presentation_overrides ?? {},
+      };
       latestStateRef.current = next;
       return next;
     });
@@ -242,6 +289,8 @@ export function useWorkflowUserState(
     outputPreferences: userState.output_preferences ?? {},
     setOutputPreference,
     getOutputPreferencesSnapshot,
+    actionBarPositionOverride: userState.presentation_overrides?.action_bar ?? null,
+    setActionBarPositionOverride,
     resetLayout,
     hasLayoutOverrides,
   };

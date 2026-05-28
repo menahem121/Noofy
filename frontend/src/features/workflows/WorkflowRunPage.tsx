@@ -37,10 +37,12 @@ import {
   resetDashboardCustomization,
   resolveBackendUrl,
   runWorkflow,
+  saveDashboard,
   startWorkflowModelVerification,
   startModelDownload,
   uploadDashboardAsset,
   validateWorkflow,
+  type DashboardSavePayload,
   type DashboardControlDef,
   type DashboardControlGroupDef,
   type DiagnosticEvent,
@@ -72,7 +74,7 @@ import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
-import { CanvasDashboardView } from "./CanvasDashboardView";
+import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
@@ -148,6 +150,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [modelVerificationError, setModelVerificationError] = useState<string | null>(null);
   const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
+  const [draftActionBarPosition, setDraftActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
+  const [draftActionBarTouched, setDraftActionBarTouched] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const modelVerificationStartInFlightRef = useRef(false);
@@ -221,6 +225,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     outputPreferences,
     setOutputPreference,
     getOutputPreferencesSnapshot,
+    actionBarPositionOverride,
+    setActionBarPositionOverride,
   } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardLayoutIds, dashboardControlIds);
 
   const submittedInputValues = useMemo(
@@ -777,6 +783,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   );
   const showCanvasView = viewMode === "canvas" && (state.loading || hasDashboard);
   const isEditingLayout = draftLayoutOverrides !== null;
+  const creatorActionBarPosition = actionBarPositionFromDashboard(
+    state.packageData?.dashboard?.presentation?.action_bar,
+  );
+  const userActionBarPosition = actionBarPositionFromDashboard(actionBarPositionOverride);
+  const canvasActionBarPosition = draftActionBarTouched
+    ? draftActionBarPosition
+    : userActionBarPosition ??
+      (isEditingLayout ? draftActionBarPosition ?? creatorActionBarPosition : creatorActionBarPosition);
 
   function handleEditWidgets() {
     const schema = buildDashboardSchemaForEditing(
@@ -787,25 +801,47 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       inputIndex,
       outputIndex,
       layoutOverrides,
+      creatorActionBarPosition,
     );
     if (schema) onEditWidgets?.(schema);
   }
 
   function handleEnterEditLayout() {
     setDraftLayoutOverrides({ ...layoutOverrides });
+    setDraftActionBarPosition(creatorActionBarPosition);
+    setDraftActionBarTouched(false);
   }
 
   async function handleSaveLayout() {
     if (!draftLayoutOverrides) return;
-    const entries = Object.entries(draftLayoutOverrides);
-    for (const [controlId, layout] of entries) {
-      await setLayoutOverride(controlId, layout);
+    try {
+      const entries = Object.entries(draftLayoutOverrides);
+      for (const [controlId, layout] of entries) {
+        await setLayoutOverride(controlId, layout);
+      }
+      if (draftActionBarTouched && draftActionBarPosition && state.packageData) {
+        await saveDashboard(
+          workflowId,
+          dashboardSavePayloadWithActionBarPosition(state.packageData, draftActionBarPosition),
+        );
+        await setActionBarPositionOverride(draftActionBarPosition);
+        setState((current) => updatePackageActionBarPosition(current, draftActionBarPosition));
+      }
+      setDraftLayoutOverrides(null);
+      setDraftActionBarPosition(null);
+      setDraftActionBarTouched(false);
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
     }
-    setDraftLayoutOverrides(null);
   }
 
   function handleCancelLayoutEdit() {
     setDraftLayoutOverrides(null);
+    setDraftActionBarPosition(null);
+    setDraftActionBarTouched(false);
   }
 
   async function handleRestoreDefaults() {
@@ -1016,6 +1052,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           inputValues={inputValues}
           outputPreferences={outputPreferences}
           layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
+          actionBarPosition={canvasActionBarPosition}
           isEditingLayout={isEditingLayout}
           runState={{
             isRunning,
@@ -1043,6 +1080,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onLayoutOverride={(controlId: string, layout: GridItemLayout) =>
             setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
           }
+          onActionBarPositionChange={(position) => {
+            if (isEditingLayout) {
+              setDraftActionBarPosition(position);
+              setDraftActionBarTouched(true);
+              return;
+            }
+            void setActionBarPositionOverride(position);
+          }}
         />
         {failureDialogElement}
         {loraBrowserElement}
@@ -2048,6 +2093,63 @@ function hashString(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+function actionBarPositionFromDashboard(
+  position: { x?: unknown; y?: unknown } | null | undefined,
+): CanvasActionBarPosition | null {
+  if (!position || typeof position !== "object") return null;
+  const candidate = position as { x?: unknown; y?: unknown };
+  if (typeof candidate.x !== "number" || typeof candidate.y !== "number") return null;
+  if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return null;
+  return {
+    x: Math.max(0, Math.round(candidate.x)),
+    y: Math.max(0, Math.round(candidate.y)),
+  };
+}
+
+function dashboardSavePayloadWithActionBarPosition(
+  packageData: WorkflowPackageResponse,
+  position: CanvasActionBarPosition,
+): DashboardSavePayload {
+  return {
+    inputs: packageData.inputs,
+    dashboard: {
+      ...packageData.dashboard,
+      status: "configured",
+      outputs: packageData.outputs,
+      presentation: {
+        ...(packageData.dashboard.presentation ?? {}),
+        action_bar: {
+          x: Math.max(0, Math.round(position.x)),
+          y: Math.max(0, Math.round(position.y)),
+        },
+      },
+    },
+  };
+}
+
+function updatePackageActionBarPosition(
+  current: RunPageState,
+  position: CanvasActionBarPosition,
+): RunPageState {
+  if (!current.packageData) return current;
+  return {
+    ...current,
+    packageData: {
+      ...current.packageData,
+      dashboard: {
+        ...current.packageData.dashboard,
+        presentation: {
+          ...(current.packageData.dashboard.presentation ?? {}),
+          action_bar: {
+            x: Math.max(0, Math.round(position.x)),
+            y: Math.max(0, Math.round(position.y)),
+          },
+        },
+      },
+    },
+  };
+}
+
 function buildDashboardSchemaForEditing(
   workflowId: string,
   workflowName: string,
@@ -2056,6 +2158,7 @@ function buildDashboardSchemaForEditing(
   inputIndex: Map<string, WorkflowInputDef>,
   outputIndex: Map<string, WorkflowOutputDef>,
   layoutOverrides: Record<string, GridItemLayout>,
+  actionBarPosition: CanvasActionBarPosition | null,
 ): DashboardSchema | null {
   const widgets: DashboardWidget[] = [];
   const groupedControlIds = groupedControlIdSet(groups);
@@ -2129,6 +2232,7 @@ function buildDashboardSchemaForEditing(
       gridGap: 14,
       responsive: true,
     },
+    presentation: actionBarPosition ? { actionBar: actionBarPosition } : undefined,
   };
 }
 

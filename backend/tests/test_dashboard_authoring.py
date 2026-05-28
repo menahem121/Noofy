@@ -227,6 +227,21 @@ def test_save_dashboard_transitions_status(tmp_path: Path) -> None:
     assert pkg_after.dashboard.status == "configured"
 
 
+def test_save_dashboard_persists_action_bar_presentation(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["presentation"] = {"action_bar": {"x": 120, "y": 28}}
+    service.save_dashboard(workflow_id, inputs, dashboard)
+
+    reloaded = service.workflow_loader.get_package(workflow_id)
+    assert reloaded.dashboard.presentation is not None
+    assert reloaded.dashboard.presentation.action_bar is not None
+    assert reloaded.dashboard.presentation.action_bar.x == 120
+    assert reloaded.dashboard.presentation.action_bar.y == 28
+
+
 def test_save_dashboard_rejects_invalid_binding(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)

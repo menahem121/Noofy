@@ -116,7 +116,7 @@ def _restore_packaged_workflow_icon(
 
 
 def _write_dashboard(transaction_dir: Path, package: WorkflowPackage) -> None:
-    dashboard_payload = package.dashboard.model_dump(mode="json")
+    dashboard_payload = package.dashboard.model_dump(mode="json", exclude_none=True)
     dashboard_payload["inputs"] = [
         workflow_input.model_dump(mode="json") for workflow_input in package.inputs
     ]
