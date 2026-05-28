@@ -1501,6 +1501,12 @@
   min-width: 0;
 }
 
+.dashboard-image-input--canvas {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .dashboard-image-input__file {
   display: none;
 }
@@ -1535,7 +1541,8 @@
 }
 
 .dashboard-image-input--canvas .dashboard-image-input__surface {
-  min-height: 150px;
+  flex: 1;
+  min-height: 0;
 }
 
 .dashboard-image-input--preview .dashboard-image-input__surface {
@@ -1546,7 +1553,7 @@
 }
 
 .dashboard-image-input--canvas.dashboard-image-input--preview .dashboard-image-input__surface {
-  min-height: 150px;
+  min-height: 0;
 }
 
 .dashboard-image-input__surface:hover,
@@ -1611,8 +1618,8 @@
 }
 
 .dashboard-image-input--canvas .dashboard-image-input__preview {
-  min-height: 150px;
-  max-height: 260px;
+  min-height: 0;
+  max-height: none;
 }
 
 .dashboard-image-input__overlay {
