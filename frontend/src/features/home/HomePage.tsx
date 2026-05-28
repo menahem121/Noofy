@@ -6,12 +6,10 @@ import {
   ChevronDown,
   Download,
   FileUp,
-  Loader2,
   PackagePlus,
   Plus,
   Search,
   Users,
-  X,
 } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { resolveBackendUrl } from "../../lib/api/client";
@@ -21,22 +19,10 @@ import type { NativeWorkflowImportRequest } from "../../lib/nativeWorkflowFiles"
 const REDDIT_URL = "https://www.reddit.com/r/noofy";
 
 import {
-  fetchWorkflows,
-  cancelImportModelDownload,
-  cancelWorkflowImport,
-  commitWorkflowImport,
-  downloadImportMissingModels,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
-  fetchImportModelDownloadStatus,
-  fetchImportModelVerificationStatus,
   fetchWorkflowPackage,
-  previewWorkflowPackageImport,
   removeWorkflow,
-  type ImportModelDownloadJobStatus,
-  type ImportModelVerificationJobStatus,
-  type RequiredModelAvailability,
-  type WorkflowImportResponse,
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
@@ -44,7 +30,8 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
-import { ModelVerificationProgressPanel } from "../workflows/ModelVerificationProgressPanel";
+import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/WorkflowImportModals";
+import { useWorkflowImportFlow } from "../workflows/useWorkflowImportFlow";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
 import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
@@ -58,28 +45,6 @@ import {
   type WorkflowStatus,
 } from "./homeContent";
 import { useWorkflowLibrary } from "./WorkflowLibraryProvider";
-
-interface HomeDataState {
-  importing: boolean;
-  downloadingModels: boolean;
-  downloadJob: ImportModelDownloadJobStatus | null;
-  verificationJob: ImportModelVerificationJobStatus | null;
-  pendingImport: WorkflowImportResponse | null;
-  allowCommunityPreparation: true;
-  importResult: WorkflowImportResponse | null;
-  importError: string | null;
-}
-
-const initialHomeState: HomeDataState = {
-  importing: false,
-  downloadingModels: false,
-  downloadJob: null,
-  verificationJob: null,
-  pendingImport: null,
-  allowCommunityPreparation: true,
-  importResult: null,
-  importError: null,
-};
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debounced, setDebounced] = useState(value);
@@ -319,7 +284,17 @@ export function HomePage({
   onEditDashboard,
   onNavigate,
 }: HomePageProps) {
-  const [homeData, setHomeData] = useState<HomeDataState>(initialHomeState);
+  const {
+    state: homeData,
+    startWorkflowImport,
+    failImport,
+    downloadMissingModels,
+    cancelModelDownload,
+    continueImport,
+    duplicateImport,
+    readyImportAction,
+    cancelImport,
+  } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
   const [exportDialog, setExportDialog] = useState<{
@@ -337,7 +312,7 @@ export function HomePage({
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
   const { refreshRuntime } = runtimeStatus;
-  const { refreshWorkflows, setWorkflowsFromResponse } = workflowLibrary;
+  const { refreshWorkflows } = workflowLibrary;
 
   useEffect(() => {
     void refreshRuntime({ silent: true });
@@ -425,79 +400,18 @@ export function HomePage({
     }
   }
 
-  async function startWorkflowImport(file: File) {
-    setHomeData((current) => ({
-      ...current,
-      importing: true,
-      downloadingModels: false,
-      downloadJob: null,
-      verificationJob: null,
-      pendingImport: null,
-      importResult: null,
-      importError: null,
-    }));
-
-    try {
-      const importResult = await previewWorkflowPackageImport(file, homeData.allowCommunityPreparation);
-      if (
-        importResult.import_session_id &&
-        (
-          importResult.duplicate_identity ||
-          (importResult.model_summary && importResult.model_summary.total_count > 0)
-        )
-      ) {
-        setHomeData((current) => ({
-          ...current,
-          importing: false,
-          verificationJob: null,
-          pendingImport: importResult,
-          importResult: null,
-          importError: null,
-        }));
-        return;
-      }
-      const workflows = await fetchWorkflows();
-      setWorkflowsFromResponse(workflows);
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        pendingImport: null,
-        verificationJob: null,
-        importResult,
-        importError: null,
-      }));
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        pendingImport: null,
-        verificationJob: null,
-        importResult: null,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
   useEffect(() => {
     if (!nativeImportRequest || handledNativeImportId === nativeImportRequest.id) return;
     setHandledNativeImportId(nativeImportRequest.id);
     if (nativeImportRequest.error || !nativeImportRequest.file) {
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        downloadingModels: false,
-        downloadJob: null,
-        verificationJob: null,
-        pendingImport: null,
-        importResult: null,
-        importError:
-          nativeImportRequest.error ??
+      failImport(
+        nativeImportRequest.error ??
           `Noofy could not open ${nativeImportRequest.filename ?? "the selected workflow package"}.`,
-      }));
+      );
       return;
     }
     void startWorkflowImport(nativeImportRequest.file);
-  }, [handledNativeImportId, nativeImportRequest]);
+  }, [failImport, handledNativeImportId, nativeImportRequest, startWorkflowImport]);
 
   async function handleWorkflowFileSelected(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -506,159 +420,6 @@ export function HomePage({
       return;
     }
     await startWorkflowImport(file);
-  }
-
-  async function handleDownloadMissingModels() {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    if (!sessionId) return;
-    setHomeData((current) => ({ ...current, downloadingModels: true, downloadJob: null, importError: null }));
-    try {
-      const job = await downloadImportMissingModels(sessionId);
-      setHomeData((current) => ({
-        ...current,
-        downloadingModels: true,
-        downloadJob: {
-          ...job,
-          current_model_filename: null,
-          current_model_index: null,
-          total_models: current.pendingImport?.model_summary?.missing_count ?? 0,
-          bytes_downloaded: null,
-          total_bytes: null,
-          percent: null,
-          speed_bytes_per_second: null,
-          models: [],
-          model_summary: current.pendingImport?.model_summary ?? null,
-        },
-        importError: null,
-      }));
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        downloadingModels: false,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
-  async function handleCancelModelDownload() {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    const jobId = homeData.downloadJob?.job_id;
-    if (!sessionId || !jobId) return;
-    try {
-      const status = await cancelImportModelDownload(sessionId, jobId);
-      setHomeData((current) => ({
-        ...current,
-        downloadingModels: status.status === "queued" || status.status === "running",
-        downloadJob: status,
-        importError: status.user_facing_message,
-      }));
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
-  async function handleContinueImport() {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    if (!sessionId) return;
-    setHomeData((current) => ({ ...current, importing: true, importError: null }));
-    try {
-      const importResult = await commitWorkflowImport(sessionId);
-      const workflows = await fetchWorkflows();
-      setWorkflowsFromResponse(workflows);
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        pendingImport: null,
-        verificationJob: null,
-        importResult,
-        importError: null,
-      }));
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
-  async function handleDuplicateImport(action: "replace" | "copy") {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    if (!sessionId) return;
-    setHomeData((current) => ({ ...current, importing: true, importError: null }));
-    try {
-      const importResult = await commitWorkflowImport(sessionId, action);
-      const workflows = await fetchWorkflows();
-      setWorkflowsFromResponse(workflows);
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        downloadingModels: false,
-        pendingImport: null,
-        downloadJob: null,
-        verificationJob: null,
-        importResult,
-        importError: null,
-      }));
-      if (importResult.status === "needs_input_setup" && onConfigureDashboard) {
-        onConfigureDashboard(importResult.workflow.id, importResult.workflow.name);
-        return;
-      }
-      onOpenWorkflow(importResult.workflow.id);
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
-  async function handleReadyImportAction() {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    if (!sessionId) return;
-    setHomeData((current) => ({ ...current, importing: true, downloadingModels: false, importError: null }));
-    try {
-      const importResult = await commitWorkflowImport(sessionId);
-      const workflows = await fetchWorkflows();
-      setWorkflowsFromResponse(workflows);
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        downloadingModels: false,
-        pendingImport: null,
-        downloadJob: null,
-        verificationJob: null,
-        importResult,
-        importError: null,
-      }));
-      if (importResult.status === "needs_input_setup" && onConfigureDashboard) {
-        onConfigureDashboard(importResult.workflow.id, importResult.workflow.name);
-        return;
-      }
-      onOpenWorkflow(importResult.workflow.id);
-    } catch (error) {
-      setHomeData((current) => ({
-        ...current,
-        importing: false,
-        importError: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
-
-  async function handleCancelImport() {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    if (sessionId) {
-      try {
-        await cancelWorkflowImport(sessionId);
-      } catch {
-        // The pending import is in-memory; if the backend already forgot it, the UI can still close.
-      }
-    }
-    setHomeData((current) => ({ ...current, pendingImport: null, downloadJob: null, verificationJob: null, importError: null }));
   }
 
   async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
@@ -693,116 +454,6 @@ export function HomePage({
       setCardActionError(error instanceof Error ? error.message : String(error));
     }
   }
-
-  useEffect(() => {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    const verifying =
-      homeData.verificationJob?.status === "queued" ||
-      homeData.verificationJob?.status === "running" ||
-      homeData.pendingImport?.model_summary?.models.some((model) => model.status === "checking");
-    if (!sessionId || !verifying) return;
-
-    let stopped = false;
-    let inFlight = false;
-    let interval: number | null = null;
-    const stopPolling = () => {
-      stopped = true;
-      if (interval !== null) {
-        window.clearInterval(interval);
-      }
-    };
-    const poll = async () => {
-      if (stopped || inFlight) return;
-      inFlight = true;
-      try {
-        const status = await fetchImportModelVerificationStatus(sessionId);
-        if (stopped) return;
-        const finished = ["completed", "failed"].includes(status.status);
-        setHomeData((current) => ({
-          ...current,
-          verificationJob: status,
-          pendingImport:
-            status.model_summary && current.pendingImport
-              ? { ...current.pendingImport, model_summary: status.model_summary }
-              : current.pendingImport,
-          importError: finished && status.status !== "completed" ? status.user_facing_message : current.importError,
-        }));
-        if (finished) stopPolling();
-      } catch (error) {
-        if (stopped) return;
-        stopPolling();
-        setHomeData((current) => ({
-          ...current,
-          importError: error instanceof Error ? error.message : String(error),
-        }));
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    void poll();
-    interval = window.setInterval(() => void poll(), 800);
-    return stopPolling;
-  }, [
-    homeData.pendingImport?.import_session_id,
-    homeData.pendingImport?.model_summary,
-    homeData.verificationJob?.status,
-  ]);
-
-  useEffect(() => {
-    const sessionId = homeData.pendingImport?.import_session_id;
-    const jobId = homeData.downloadJob?.job_id;
-    const active = homeData.downloadJob?.status === "queued" || homeData.downloadJob?.status === "running";
-    if (!sessionId || !jobId || !active) return;
-
-    let stopped = false;
-    let inFlight = false;
-    let interval: number | null = null;
-    const stopPolling = () => {
-      stopped = true;
-      if (interval !== null) {
-        window.clearInterval(interval);
-      }
-    };
-    const poll = async () => {
-      if (stopped || inFlight) return;
-      inFlight = true;
-      try {
-        const status = await fetchImportModelDownloadStatus(sessionId, jobId);
-        if (stopped) return;
-        const finished = ["completed", "failed", "canceled"].includes(status.status);
-        setHomeData((current) => ({
-          ...current,
-          downloadingModels: !finished,
-          downloadJob: status,
-          pendingImport:
-            status.model_summary && current.pendingImport
-              ? { ...current.pendingImport, model_summary: status.model_summary }
-              : current.pendingImport,
-          importError: finished && status.status !== "completed" ? status.user_facing_message : current.importError,
-        }));
-        if (finished) stopPolling();
-      } catch (error) {
-        if (stopped) return;
-        stopPolling();
-        setHomeData((current) => ({
-          ...current,
-          downloadingModels: false,
-          importError: error instanceof Error ? error.message : String(error),
-        }));
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    void poll();
-    interval = window.setInterval(() => void poll(), 1000);
-    return stopPolling;
-  }, [
-    homeData.pendingImport?.import_session_id,
-    homeData.downloadJob?.job_id,
-    homeData.downloadJob?.status,
-  ]);
 
   return (
     <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
@@ -880,9 +531,9 @@ export function HomePage({
             <DuplicateWorkflowModal
               importResult={homeData.pendingImport}
               busy={homeData.importing}
-              onReplace={() => void handleDuplicateImport("replace")}
-              onCopy={() => void handleDuplicateImport("copy")}
-              onCancel={() => void handleCancelImport()}
+              onReplace={() => void duplicateImport("replace")}
+              onCopy={() => void duplicateImport("copy")}
+              onCancel={() => void cancelImport()}
             />
           ) : null}
 
@@ -893,13 +544,13 @@ export function HomePage({
               importing={homeData.importing}
               downloadJob={homeData.downloadJob}
               verificationJob={homeData.verificationJob}
-              onDownload={() => void handleDownloadMissingModels()}
-              onCancelDownload={() => void handleCancelModelDownload()}
-              onContinue={() => void handleContinueImport()}
-              onReplace={() => void handleDuplicateImport("replace")}
-              onCopy={() => void handleDuplicateImport("copy")}
-              onReadyAction={() => void handleReadyImportAction()}
-              onCancel={() => void handleCancelImport()}
+              onDownload={() => void downloadMissingModels()}
+              onCancelDownload={() => void cancelModelDownload()}
+              onContinue={() => void continueImport()}
+              onReplace={() => void duplicateImport("replace")}
+              onCopy={() => void duplicateImport("copy")}
+              onReadyAction={() => void readyImportAction()}
+              onCancel={() => void cancelImport()}
             />
           ) : null}
 
@@ -1145,352 +796,6 @@ function nativeVariantSelectionKey(workflow: WorkflowCard) {
   if (workflow.title === "Text to Image") return "text_to_image";
   if (workflow.title === "Image to Image") return "image_to_image";
   return workflow.id;
-}
-
-function DuplicateWorkflowModal({
-  importResult,
-  busy,
-  onReplace,
-  onCopy,
-  onCancel,
-}: {
-  importResult: WorkflowImportResponse;
-  busy: boolean;
-  onReplace: () => void;
-  onCopy: () => void;
-  onCancel: () => void;
-}) {
-  const duplicate = importResult.duplicate_identity;
-  if (!duplicate) return null;
-  const existingName = duplicate.existing_workflow?.name ?? importResult.workflow.name;
-
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="duplicate-import-title">
-      <section className="required-models-modal" aria-busy={busy}>
-        <header className="required-models-modal__header">
-          <div>
-            <p className="eyebrow">Workflow already exists</p>
-            <h2 id="duplicate-import-title">{importResult.workflow.name}</h2>
-            <p>
-              Noofy already has {existingName}. Choose whether to replace that local workflow, import this file as a
-              separate copy, or cancel.
-            </p>
-          </div>
-          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-
-        <div className="notice notice--warning" role="status">
-          <AlertCircle size={18} aria-hidden="true" />
-          <div>
-            <strong>No silent replacement</strong>
-            <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
-          </div>
-        </div>
-
-        {busy ? (
-          <div className="required-models-modal__processing" role="status" aria-live="polite">
-            <Loader2 className="spin" size={16} aria-hidden="true" />
-            <span>Preparing workflow import...</span>
-          </div>
-        ) : null}
-
-        <footer className="required-models-modal__footer required-models-modal__footer--ready">
-          <button className="primary-button" type="button" disabled={busy} onClick={onReplace}>
-            {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
-            {busy ? "Replacing..." : "Replace Existing Workflow"}
-          </button>
-          <button className="secondary-button" type="button" disabled={busy} onClick={onCopy}>
-            Import as Copy
-          </button>
-          <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
-            Cancel Import
-          </button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function RequiredModelsModal({
-  importResult,
-  busy,
-  importing,
-  downloadJob,
-  verificationJob,
-  onDownload,
-  onCancelDownload,
-  onContinue,
-  onReplace,
-  onCopy,
-  onReadyAction,
-  onCancel,
-}: {
-  importResult: WorkflowImportResponse;
-  busy: boolean;
-  importing: boolean;
-  downloadJob: ImportModelDownloadJobStatus | null;
-  verificationJob: ImportModelVerificationJobStatus | null;
-  onDownload: () => void;
-  onCancelDownload: () => void;
-  onContinue: () => void;
-  onReplace: () => void;
-  onCopy: () => void;
-  onReadyAction: () => void;
-  onCancel: () => void;
-}) {
-  const summary = verificationJob?.model_summary ?? importResult.model_summary;
-  if (!summary) return null;
-  const duplicate = importResult.duplicate_identity;
-  const retryableStatuses = new Set([
-    "missing",
-    "download_failed",
-    "authentication_required",
-    "rate_limited",
-    "hash_mismatch",
-    "not_enough_disk_space",
-  ]);
-  const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
-  const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
-  const terminalVerification = verificationJob?.status === "completed" || verificationJob?.status === "failed";
-  const activeVerification =
-    verificationJob?.status === "queued" ||
-    verificationJob?.status === "running" ||
-    (!terminalVerification && summary.models.some((model) => model.status === "checking"));
-  const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
-  const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
-  const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
-  const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
-
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-models-title">
-      <section className="required-models-modal" aria-busy={importing}>
-        <header className="required-models-modal__header">
-          <div>
-            <p className="eyebrow">Workflow models</p>
-            <h2 id="required-models-title">{importResult.workflow.name}</h2>
-            <p>
-              Noofy is checking your local models first. Missing models can be downloaded or selected before the
-              workflow runs. If a download fails, Noofy cleans up the partial file safely.
-            </p>
-          </div>
-          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-
-        {duplicate ? (
-          <div className="notice notice--warning" role="status">
-            <AlertCircle size={18} aria-hidden="true" />
-            <div>
-              <strong>Workflow already exists</strong>
-              <span>{duplicate.user_facing_message}</span>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="required-models-list">
-          {summary.models.map((model) => (
-            <RequiredModelRow key={model.requirement_id} model={model} progress={jobModels.get(model.requirement_id)} />
-          ))}
-        </div>
-
-        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
-        {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
-
-        {importing ? (
-          <div className="required-models-modal__processing" role="status" aria-live="polite">
-            <Loader2 className="spin" size={16} aria-hidden="true" />
-            <span>Preparing workflow import...</span>
-          </div>
-        ) : null}
-
-        <footer className={`required-models-modal__footer${readyToRun ? " required-models-modal__footer--ready" : ""}`}>
-          {duplicate ? (
-            <>
-              {!readyToRun ? (
-                <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
-                  <Download size={16} aria-hidden="true" />
-                  {activeDownload ? "Downloading..." : "Download Missing Models"}
-                </button>
-              ) : null}
-              {activeDownload ? (
-                <button className="secondary-button" type="button" onClick={onCancelDownload}>
-                  Cancel Download
-                </button>
-              ) : null}
-              <button className="primary-button" type="button" disabled={busy || activeVerification} onClick={onReplace}>
-                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
-                {importing ? "Replacing..." : "Replace Existing Workflow"}
-              </button>
-              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onCopy}>
-                Import as Copy
-              </button>
-              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
-                Cancel Import
-              </button>
-            </>
-          ) : readyToRun ? (
-            <button className="primary-button" type="button" disabled={busy} onClick={onReadyAction}>
-              {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
-              {importing ? "Preparing..." : readyActionLabel}
-            </button>
-          ) : (
-            <>
-              <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
-                <Download size={16} aria-hidden="true" />
-                {activeDownload ? "Downloading..." : "Download Missing Models"}
-              </button>
-              {activeDownload ? (
-                <button className="secondary-button" type="button" onClick={onCancelDownload}>
-                  Cancel Download
-                </button>
-              ) : null}
-              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onContinue}>
-                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
-                {importing ? "Importing..." : "Continue Without Downloading"}
-              </button>
-              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
-                Cancel Import
-              </button>
-            </>
-          )}
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function importNeedsConfiguration(importResult: WorkflowImportResponse) {
-  return importResult.status === "needs_input_setup" || importResult.unresolved_input_count > 0;
-}
-
-function RequiredModelRow({
-  model,
-  progress,
-}: {
-  model: RequiredModelAvailability;
-  progress?: ImportModelDownloadJobStatus["models"][number];
-}) {
-  const status = progress?.status ?? model.status;
-  const statusLabel = progress?.status_label ?? model.status_label;
-  const message = progress?.message ?? model.message;
-  return (
-    <article className="required-model-row">
-      <div className="required-model-row__main">
-        <h3>{model.filename}</h3>
-        <p>
-          {[friendlyModelType(model.model_type), formatModelSize(model.size_bytes)]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-        {message ? <span className="required-model-row__message">{message}</span> : null}
-      </div>
-      <div className="required-model-row__meta">
-        <span className="model-identity">{verificationLabel(model.verification_level)}</span>
-        <span className={`model-status-pill model-status-pill--${status}`}>{statusLabel}</span>
-        <span className="model-source">{modelSourceLabel(model)}</span>
-      </div>
-    </article>
-  );
-}
-
-function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus }) {
-  const label = job.current_model_filename
-    ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
-    : job.user_facing_message;
-  const rawPercent = job.percent ?? (
-    job.bytes_downloaded !== null && job.total_bytes
-      ? Math.round((job.bytes_downloaded / job.total_bytes) * 100)
-      : null
-  );
-  const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
-    ? Math.max(0, Math.min(Number(rawPercent), 100))
-    : null;
-  const percentLabel = percent !== null
-    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
-    : job.status;
-
-  return (
-    <div className="model-download-progress" role="status">
-      <div className="model-download-progress__header">
-        <strong>{label}</strong>
-        <span>{percentLabel}</span>
-      </div>
-      {percent !== null ? (
-        <div
-          className="model-download-progress__bar"
-          role="progressbar"
-          aria-label="Model download progress"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-        >
-          <div
-            className="model-download-progress__bar-fill"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-      ) : null}
-      <p>
-        {[formatModelSize(job.bytes_downloaded), job.total_bytes ? formatModelSize(job.total_bytes) : null]
-          .filter(Boolean)
-          .join(" / ")}
-        {job.speed_bytes_per_second ? ` · ${formatModelSpeed(job.speed_bytes_per_second)}` : ""}
-      </p>
-      <span>{job.user_facing_message}</span>
-    </div>
-  );
-}
-
-function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
-  if (
-    job.status === "queued" ||
-    job.status === "running" ||
-    job.status === "completed" ||
-    job.status === "failed" ||
-    job.status === "canceled"
-  ) {
-    return true;
-  }
-  return job.percent !== null || job.bytes_downloaded !== null;
-}
-
-function formatModelSize(size: number | null) {
-  if (!size) return null;
-  if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GB`;
-  if (size >= 1024 ** 2) return `${Math.round(size / 1024 ** 2)} MB`;
-  return `${Math.round(size / 1024)} KB`;
-}
-
-function formatModelSpeed(bytesPerSecond: number) {
-  const size = formatModelSize(bytesPerSecond);
-  return size ? `${size}/s` : null;
-}
-
-function friendlyModelType(type?: string | null) {
-  const normalized = (type ?? "").toLowerCase();
-  if (!normalized) return "AI model";
-  if (normalized.includes("checkpoint")) return "AI model";
-  if (normalized.includes("lora")) return "Style add-on";
-  if (normalized.includes("controlnet")) return "Guidance model";
-  if (normalized.includes("vae")) return "Image helper";
-  if (normalized.includes("upscale")) return "Upscale model";
-  return "AI model";
-}
-
-function verificationLabel(level: string) {
-  if (level === "sha256_size") return "Verified file";
-  if (level === "filename_size") return "Name and size match";
-  if (level === "filename_only") return "Name match";
-  return "Model check";
-}
-
-function modelSourceLabel(model: RequiredModelAvailability) {
-  if (model.source_urls.length > 0) return "Download source known";
-  if (model.source_availability === "resolvable") return "Can search known sources";
-  return "No download source";
 }
 
 function WorkflowVariantSelect({

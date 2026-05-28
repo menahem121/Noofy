@@ -188,6 +188,68 @@ const workflowPackage = {
   },
 };
 
+const missingModelImportPreview = {
+  import_session_id: "import-session-1",
+  workflow_id: "missing_model_flow",
+  status: "imported",
+  user_facing_message: "Workflow import is ready.",
+  workflow: {
+    id: "missing_model_flow",
+    name: "Missing Model Flow",
+    version: "1.0.0",
+    description: "Needs a model.",
+    icon: "sparkles",
+    source_label: "Imported",
+    main_model: { name: "missing.safetensors", type: "checkpoint", size_bytes: 1024 },
+    category: "Txt2img",
+    last_opened: null,
+    tags: [],
+    missing_model_count: 1,
+    needs_setup: false,
+    can_remove: true,
+    can_export_noofy: true,
+    can_export_comfyui_json: true,
+    status: "imported",
+    status_label: "Imported",
+  },
+  required_model_count: 1,
+  custom_node_count: 0,
+  unresolved_input_count: 0,
+  duplicate_identity: null,
+  model_summary: {
+    workflow_id: "missing_model_flow",
+    total_count: 1,
+    available_count: 0,
+    possible_match_count: 0,
+    missing_count: 1,
+    needs_manual_download_count: 0,
+    ready_to_run: false,
+    models: [
+      {
+        requirement_id: "model-1",
+        node_id: "4",
+        node_type: "CheckpointLoaderSimple",
+        input_name: "ckpt_name",
+        filename: "missing.safetensors",
+        model_type: "checkpoint",
+        folder: "checkpoints",
+        verification_level: "filename_only",
+        size_bytes: 1024,
+        source_urls: ["https://example.test/missing.safetensors"],
+        source_availability: "known",
+        status: "missing",
+        status_label: "Missing",
+        asset_ownership: "noofy",
+        source_path: null,
+        matched_root: null,
+        matched_sha256: null,
+        matched_size_bytes: null,
+        message: null,
+      },
+    ],
+  },
+};
+
 describe("WorkflowsPage", () => {
   const fetchMock = vi.fn();
   const onNavigate = vi.fn();
@@ -584,5 +646,62 @@ describe("WorkflowsPage", () => {
       );
     });
     expect(onEditDashboard.mock.calls[0][0].widgets).toHaveLength(2);
+  });
+
+  it("opens the missing models import flow instead of blocking Workflow page imports", async () => {
+    let committed = false;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse({
+          mode: "managed",
+          reachable: true,
+          base_url: "http://127.0.0.1:8188",
+          repo_dir: "",
+          managed_process_running: true,
+          sidecar_starting: false,
+          pid: 1,
+          error: null,
+          environment: null,
+          crash_count: 0,
+          restart_attempt: 0,
+          max_restart_attempts: 3,
+          uptime_seconds: 1,
+          last_crash_at: null,
+        }));
+      }
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(jsonResponse(committed ? [...workflows, missingModelImportPreview.workflow] : workflows));
+      }
+      if (url.includes("/api/workflows/import/preview") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse(missingModelImportPreview));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-1/commit") && init?.method === "POST") {
+        committed = true;
+        return Promise.resolve(jsonResponse({ ...missingModelImportPreview, import_session_id: null, model_summary: null }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const view = renderPage();
+
+    await screen.findByRole("heading", { name: "Workflows" });
+    const input = view.container.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["noofy"], "missing-model.noofy", { type: "application/octet-stream" })] } });
+
+    expect(await screen.findByRole("dialog", { name: "Missing Model Flow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeInTheDocument();
+    expect(screen.queryByText(/This workflow needs models before it can be imported/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue Without Downloading" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/import/import-session-1/commit",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(await screen.findByText("Missing Model Flow was added to your local workflows.")).toBeInTheDocument();
+    expect(screen.getByText("Missing Model Flow")).toBeInTheDocument();
   });
 });

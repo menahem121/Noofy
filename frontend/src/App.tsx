@@ -268,6 +268,13 @@ function AppContent() {
         <WorkflowsPage
           onNavigate={navigate}
           onOpenWorkflow={openWorkflow}
+          onConfigureDashboard={(workflowId, workflowName) =>
+            setRoute({
+              name: "dashboard-builder",
+              workflowId: workflowId ?? undefined,
+              workflowName: workflowName ?? undefined,
+            })
+          }
           onEditWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",

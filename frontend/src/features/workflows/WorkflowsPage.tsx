@@ -1,5 +1,6 @@
 import { ChangeEvent, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CheckCircle2,
   ChevronDown,
   Download,
   FileUp,
@@ -15,14 +16,12 @@ import {
 } from "lucide-react";
 
 import {
-  commitWorkflowImport,
   deleteWorkflowIcon,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchWorkflowDetails,
   fetchWorkflowIcons,
   fetchWorkflowPackage,
-  previewWorkflowPackageImport,
   removeWorkflow,
   updateWorkflowMetadata,
   uploadWorkflowIcon,
@@ -40,12 +39,15 @@ import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
+import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
+import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
 import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS } from "./workflowMetadataOptions";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
+  onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets: (schema: DashboardSchema) => void;
   onEditDashboard: (schema: DashboardSchema) => void;
   initialSearchQuery?: string;
@@ -86,6 +88,7 @@ function formatBytes(bytes: number | null | undefined) {
 export function WorkflowsPage({
   onNavigate,
   onOpenWorkflow,
+  onConfigureDashboard,
   onEditWidgets,
   onEditDashboard,
   initialSearchQuery = "",
@@ -108,8 +111,16 @@ export function WorkflowsPage({
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [showExportHelp, setShowExportHelp] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
+  const {
+    state: importFlow,
+    startWorkflowImport,
+    downloadMissingModels,
+    cancelModelDownload,
+    continueImport,
+    duplicateImport,
+    readyImportAction,
+    cancelImport,
+  } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
   const [actionError, setActionError] = useState<string | null>(null);
   const [exportDialog, setExportDialog] = useState<{
     workflowName: string;
@@ -208,22 +219,7 @@ export function WorkflowsPage({
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    setImporting(true);
-    setImportError(null);
-    try {
-      const preview = await previewWorkflowPackageImport(file, true);
-      if (preview.import_session_id && (!preview.model_summary || preview.model_summary.ready_to_run)) {
-        await commitWorkflowImport(preview.import_session_id);
-      } else if (preview.import_session_id) {
-        setImportError("This workflow needs models before it can be imported from this page. Use Home to review and download missing models.");
-        return;
-      }
-      await workflowLibrary.refreshWorkflows();
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setImporting(false);
-    }
+    await startWorkflowImport(file);
   }
 
   async function handleRemove(workflow: WorkflowSummary) {
@@ -303,9 +299,14 @@ export function WorkflowsPage({
               <button className="secondary-button" type="button" onClick={() => setShowExportHelp((value) => !value)}>
                 How to export workflows from ComfyUI
               </button>
-              <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importFlow.importing || importFlow.downloadingModels}
+              >
                 <FileUp size={16} aria-hidden="true" />
-                {importing ? "Importing..." : "Import Workflow"}
+                {importFlow.importing ? "Importing..." : "Import Workflow"}
               </button>
               <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy" onChange={handleImport} />
             </div>
@@ -345,7 +346,16 @@ export function WorkflowsPage({
             </div>
           ) : null}
 
-          {importError ? <div className="notice notice--warning">{importError}</div> : null}
+          {importFlow.importResult ? (
+            <div className="notice notice--row" role="status">
+              <CheckCircle2 size={18} aria-hidden="true" />
+              <div>
+                <strong>{importFlow.importResult.user_facing_message}</strong>
+                <span>{importFlow.importResult.workflow.name} was added to your local workflows.</span>
+              </div>
+            </div>
+          ) : null}
+          {importFlow.importError ? <div className="notice notice--warning">{importFlow.importError}</div> : null}
           {actionError ? <div className="notice notice--warning">{actionError}</div> : null}
 
           <div className="models-toolbar models-toolbar--workflows">
@@ -486,6 +496,31 @@ export function WorkflowsPage({
           extension={exportDialog.extension}
           review={exportDialog.review}
           onClose={() => setExportDialog(null)}
+        />
+      ) : null}
+      {importFlow.pendingImport?.duplicate_identity && !importFlow.pendingImport.model_summary ? (
+        <DuplicateWorkflowModal
+          importResult={importFlow.pendingImport}
+          busy={importFlow.importing}
+          onReplace={() => void duplicateImport("replace")}
+          onCopy={() => void duplicateImport("copy")}
+          onCancel={() => void cancelImport()}
+        />
+      ) : null}
+      {importFlow.pendingImport?.model_summary ? (
+        <RequiredModelsModal
+          importResult={importFlow.pendingImport}
+          busy={importFlow.importing || importFlow.downloadingModels}
+          importing={importFlow.importing}
+          downloadJob={importFlow.downloadJob}
+          verificationJob={importFlow.verificationJob}
+          onDownload={() => void downloadMissingModels()}
+          onCancelDownload={() => void cancelModelDownload()}
+          onContinue={() => void continueImport()}
+          onReplace={() => void duplicateImport("replace")}
+          onCopy={() => void duplicateImport("copy")}
+          onReadyAction={() => void readyImportAction()}
+          onCancel={() => void cancelImport()}
         />
       ) : null}
     </AppLayout>

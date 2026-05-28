@@ -1,0 +1,358 @@
+import {
+  AlertCircle,
+  ArrowRight,
+  Download,
+  Loader2,
+  X,
+} from "lucide-react";
+
+import {
+  type ImportModelDownloadJobStatus,
+  type ImportModelVerificationJobStatus,
+  type RequiredModelAvailability,
+  type WorkflowImportResponse,
+} from "../../lib/api/noofyApi";
+import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
+import { importNeedsConfiguration } from "./workflowImportUtils";
+
+export function DuplicateWorkflowModal({
+  importResult,
+  busy,
+  onReplace,
+  onCopy,
+  onCancel,
+}: {
+  importResult: WorkflowImportResponse;
+  busy: boolean;
+  onReplace: () => void;
+  onCopy: () => void;
+  onCancel: () => void;
+}) {
+  const duplicate = importResult.duplicate_identity;
+  if (!duplicate) return null;
+  const existingName = duplicate.existing_workflow?.name ?? importResult.workflow.name;
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="duplicate-import-title">
+      <section className="required-models-modal" aria-busy={busy}>
+        <header className="required-models-modal__header">
+          <div>
+            <p className="eyebrow">Workflow already exists</p>
+            <h2 id="duplicate-import-title">{importResult.workflow.name}</h2>
+            <p>
+              Noofy already has {existingName}. Choose whether to replace that local workflow, import this file as a
+              separate copy, or cancel.
+            </p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="notice notice--warning" role="status">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>No silent replacement</strong>
+            <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
+          </div>
+        </div>
+
+        {busy ? (
+          <div className="required-models-modal__processing" role="status" aria-live="polite">
+            <Loader2 className="spin" size={16} aria-hidden="true" />
+            <span>Preparing workflow import...</span>
+          </div>
+        ) : null}
+
+        <footer className="required-models-modal__footer required-models-modal__footer--ready">
+          <button className="primary-button" type="button" disabled={busy} onClick={onReplace}>
+            {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+            {busy ? "Replacing..." : "Replace Existing Workflow"}
+          </button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={onCopy}>
+            Import as Copy
+          </button>
+          <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+            Cancel Import
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+export function RequiredModelsModal({
+  importResult,
+  busy,
+  importing,
+  downloadJob,
+  verificationJob,
+  onDownload,
+  onCancelDownload,
+  onContinue,
+  onReplace,
+  onCopy,
+  onReadyAction,
+  onCancel,
+}: {
+  importResult: WorkflowImportResponse;
+  busy: boolean;
+  importing: boolean;
+  downloadJob: ImportModelDownloadJobStatus | null;
+  verificationJob: ImportModelVerificationJobStatus | null;
+  onDownload: () => void;
+  onCancelDownload: () => void;
+  onContinue: () => void;
+  onReplace: () => void;
+  onCopy: () => void;
+  onReadyAction: () => void;
+  onCancel: () => void;
+}) {
+  const summary = verificationJob?.model_summary ?? importResult.model_summary;
+  if (!summary) return null;
+  const duplicate = importResult.duplicate_identity;
+  const retryableStatuses = new Set([
+    "missing",
+    "download_failed",
+    "authentication_required",
+    "rate_limited",
+    "hash_mismatch",
+    "not_enough_disk_space",
+  ]);
+  const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
+  const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
+  const terminalVerification = verificationJob?.status === "completed" || verificationJob?.status === "failed";
+  const activeVerification =
+    verificationJob?.status === "queued" ||
+    verificationJob?.status === "running" ||
+    (!terminalVerification && summary.models.some((model) => model.status === "checking"));
+  const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
+  const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
+  const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
+  const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-models-title">
+      <section className="required-models-modal" aria-busy={importing}>
+        <header className="required-models-modal__header">
+          <div>
+            <p className="eyebrow">Workflow models</p>
+            <h2 id="required-models-title">{importResult.workflow.name}</h2>
+            <p>
+              Noofy is checking your local models first. Missing models can be downloaded or selected before the
+              workflow runs. If a download fails, Noofy cleans up the partial file safely.
+            </p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        {duplicate ? (
+          <div className="notice notice--warning" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>Workflow already exists</strong>
+              <span>{duplicate.user_facing_message}</span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="required-models-list">
+          {summary.models.map((model) => (
+            <RequiredModelRow key={model.requirement_id} model={model} progress={jobModels.get(model.requirement_id)} />
+          ))}
+        </div>
+
+        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
+        {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
+
+        {importing ? (
+          <div className="required-models-modal__processing" role="status" aria-live="polite">
+            <Loader2 className="spin" size={16} aria-hidden="true" />
+            <span>Preparing workflow import...</span>
+          </div>
+        ) : null}
+
+        <footer className={`required-models-modal__footer${readyToRun ? " required-models-modal__footer--ready" : ""}`}>
+          {duplicate ? (
+            <>
+              {!readyToRun ? (
+                <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
+                  <Download size={16} aria-hidden="true" />
+                  {activeDownload ? "Downloading..." : "Download Missing Models"}
+                </button>
+              ) : null}
+              {activeDownload ? (
+                <button className="secondary-button" type="button" onClick={onCancelDownload}>
+                  Cancel Download
+                </button>
+              ) : null}
+              <button className="primary-button" type="button" disabled={busy || activeVerification} onClick={onReplace}>
+                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+                {importing ? "Replacing..." : "Replace Existing Workflow"}
+              </button>
+              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onCopy}>
+                Import as Copy
+              </button>
+              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+                Cancel Import
+              </button>
+            </>
+          ) : readyToRun ? (
+            <button className="primary-button" type="button" disabled={busy} onClick={onReadyAction}>
+              {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
+              {importing ? "Preparing..." : readyActionLabel}
+            </button>
+          ) : (
+            <>
+              <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
+                <Download size={16} aria-hidden="true" />
+                {activeDownload ? "Downloading..." : "Download Missing Models"}
+              </button>
+              {activeDownload ? (
+                <button className="secondary-button" type="button" onClick={onCancelDownload}>
+                  Cancel Download
+                </button>
+              ) : null}
+              <button className="secondary-button" type="button" disabled={busy || activeVerification} onClick={onContinue}>
+                {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+                {importing ? "Importing..." : "Continue Without Downloading"}
+              </button>
+              <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+                Cancel Import
+              </button>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function RequiredModelRow({
+  model,
+  progress,
+}: {
+  model: RequiredModelAvailability;
+  progress?: ImportModelDownloadJobStatus["models"][number];
+}) {
+  const status = progress?.status ?? model.status;
+  const statusLabel = progress?.status_label ?? model.status_label;
+  const message = progress?.message ?? model.message;
+  return (
+    <article className="required-model-row">
+      <div className="required-model-row__main">
+        <h3>{model.filename}</h3>
+        <p>
+          {[friendlyModelType(model.model_type), formatModelSize(model.size_bytes)]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+        {message ? <span className="required-model-row__message">{message}</span> : null}
+      </div>
+      <div className="required-model-row__meta">
+        <span className="model-identity">{verificationLabel(model.verification_level)}</span>
+        <span className={`model-status-pill model-status-pill--${status}`}>{statusLabel}</span>
+        <span className="model-source">{modelSourceLabel(model)}</span>
+      </div>
+    </article>
+  );
+}
+
+function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus }) {
+  const label = job.current_model_filename
+    ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
+    : job.user_facing_message;
+  const rawPercent = job.percent ?? (
+    job.bytes_downloaded !== null && job.total_bytes
+      ? Math.round((job.bytes_downloaded / job.total_bytes) * 100)
+      : null
+  );
+  const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
+    ? Math.max(0, Math.min(Number(rawPercent), 100))
+    : null;
+  const percentLabel = percent !== null
+    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+    : job.status;
+
+  return (
+    <div className="model-download-progress" role="status">
+      <div className="model-download-progress__header">
+        <strong>{label}</strong>
+        <span>{percentLabel}</span>
+      </div>
+      {percent !== null ? (
+        <div
+          className="model-download-progress__bar"
+          role="progressbar"
+          aria-label="Model download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <div
+            className="model-download-progress__bar-fill"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      ) : null}
+      <p>
+        {[formatModelSize(job.bytes_downloaded), job.total_bytes ? formatModelSize(job.total_bytes) : null]
+          .filter(Boolean)
+          .join(" / ")}
+        {job.speed_bytes_per_second ? ` · ${formatModelSpeed(job.speed_bytes_per_second)}` : ""}
+      </p>
+      <span>{job.user_facing_message}</span>
+    </div>
+  );
+}
+
+function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
+  if (
+    job.status === "queued" ||
+    job.status === "running" ||
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "canceled"
+  ) {
+    return true;
+  }
+  return job.percent !== null || job.bytes_downloaded !== null;
+}
+
+function formatModelSize(size: number | null) {
+  if (!size) return null;
+  if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GB`;
+  if (size >= 1024 ** 2) return `${Math.round(size / 1024 ** 2)} MB`;
+  return `${Math.round(size / 1024)} KB`;
+}
+
+function formatModelSpeed(bytesPerSecond: number) {
+  const size = formatModelSize(bytesPerSecond);
+  return size ? `${size}/s` : null;
+}
+
+function friendlyModelType(type?: string | null) {
+  const normalized = (type ?? "").toLowerCase();
+  if (!normalized) return "AI model";
+  if (normalized.includes("checkpoint")) return "AI model";
+  if (normalized.includes("lora")) return "Style add-on";
+  if (normalized.includes("controlnet")) return "Guidance model";
+  if (normalized.includes("vae")) return "Image helper";
+  if (normalized.includes("upscale")) return "Upscale model";
+  return "AI model";
+}
+
+function verificationLabel(level: string) {
+  if (level === "sha256_size") return "Verified file";
+  if (level === "filename_size") return "Name and size match";
+  if (level === "filename_only") return "Name match";
+  return "Model check";
+}
+
+function modelSourceLabel(model: RequiredModelAvailability) {
+  if (model.source_urls.length > 0) return "Download source known";
+  if (model.source_availability === "resolvable") return "Can search known sources";
+  return "No download source";
+}
