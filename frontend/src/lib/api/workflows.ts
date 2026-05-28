@@ -436,6 +436,7 @@ export interface BindableInputEntry {
   widget_types: string[];
   options?: string[];
   hint?: string;
+  auto_select?: boolean;
 }
 
 export interface BindableNode {

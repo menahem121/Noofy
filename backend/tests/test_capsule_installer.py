@@ -697,6 +697,75 @@ async def test_prepare_custom_node_capsule_marks_ready_after_all_smoke_stages_pa
 
 
 @pytest.mark.anyio
+async def test_prepare_imported_custom_node_capsule_uses_app_workflow_id_for_source_files(tmp_path: Path) -> None:
+    source_files_dir = tmp_path / "imported-source-files"
+    custom_node_dir = source_files_dir / "custom_nodes" / "custom-node-a"
+    custom_node_dir.mkdir(parents=True)
+    (custom_node_dir / "node.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    (source_files_dir / "comfyui_graph.json").write_text(
+        json.dumps({"1": {"class_type": "CustomNodeA", "inputs": {}}}),
+        encoding="utf-8",
+    )
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-imported-workflow-id",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "custom-node-a",
+                    "source": "bundled_from_creator_machine",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomNodeA"],
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    app_workflow_id = "unknown__test_workflow__0.1.0"
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_files_dir_resolver=lambda workflow_id: (
+            source_files_dir if workflow_id == app_workflow_id else None
+        ),
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        return _passed_smoke_report(custom_nodes=True)
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule, workflow_id=app_workflow_id)
+
+    assert state.status is InstallStatus.READY
+    assert state.runner_workspace_path is not None
+    runner_workspace = Path(state.runner_workspace_path)
+    assert (runner_workspace / "custom_nodes" / "custom-node-a" / "node.py").exists()
+
+
+@pytest.mark.anyio
 async def test_cached_non_bundled_custom_node_stays_staged_until_smoke_passes(tmp_path: Path) -> None:
     source_files_dir = tmp_path / "source-files"
     source_files_dir.mkdir()

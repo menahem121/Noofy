@@ -132,12 +132,14 @@ class RuntimeWorkspacePreparer:
         self,
         capsule_lock: CapsuleLock,
         *,
+        workflow_id: str | None = None,
         model_view_dir: Path | None = None,
         model_view_fingerprint: str | None = None,
         install_transaction: InstallTransaction | None = None,
     ) -> PreparedRuntimeWorkspace:
+        workflow_id = workflow_id or capsule_lock.workflow.package_id
         transaction = install_transaction or self.install_transaction_store.open(
-            workflow_id=capsule_lock.workflow.package_id,
+            workflow_id=workflow_id,
             capsule_fingerprint=capsule_lock.runtime.capsule_fingerprint,
         )
         try:
@@ -148,7 +150,9 @@ class RuntimeWorkspacePreparer:
                 )
             profile_selection = self._resolve_runtime_profile(capsule_lock)
             custom_node_manifest = self._custom_node_workspace_manifest(
-                capsule_lock, profile_selection
+                capsule_lock,
+                profile_selection,
+                workflow_id=workflow_id,
             )
             dependency_manifest = self._dependency_env_manifest(
                 capsule_lock,
@@ -174,7 +178,7 @@ class RuntimeWorkspacePreparer:
             dependency_manifest, dependency_env_path = (
                 self._ensure_staged_dependency_env(
                     dependency_manifest,
-                    capsule_lock.workflow.package_id,
+                    workflow_id,
                     transaction=transaction,
                     source_policy=source_policy,
                 )
@@ -182,12 +186,10 @@ class RuntimeWorkspacePreparer:
             runner_manifest, runner_workspace_path = (
                 self._ensure_staged_runner_workspace(
                     runner_manifest,
-                    capsule_lock.workflow.package_id,
+                    workflow_id,
                     transaction=transaction,
                     custom_node_manifest=custom_node_manifest,
-                    source_files_dir=self._custom_node_source_files_dir(
-                        capsule_lock.workflow.package_id
-                    ),
+                    source_files_dir=self._custom_node_source_files_dir(workflow_id),
                     cached_source_dirs=self._custom_node_cached_source_dirs(
                         capsule_lock
                     ),
@@ -1075,14 +1077,14 @@ class RuntimeWorkspacePreparer:
         self,
         capsule_lock: CapsuleLock,
         profile_selection: RuntimeProfileSelection | None,
+        *,
+        workflow_id: str,
     ) -> CustomNodeWorkspaceManifest | None:
         if self.custom_node_materializer is None or not capsule_lock.custom_nodes:
             return None
         return self.custom_node_materializer.build_manifest(
             capsule_lock=capsule_lock,
-            source_files_dir=self._custom_node_source_files_dir(
-                capsule_lock.workflow.package_id
-            ),
+            source_files_dir=self._custom_node_source_files_dir(workflow_id),
             cached_source_dirs=self._custom_node_cached_source_dirs(capsule_lock),
             profile_selection=profile_selection,
         )

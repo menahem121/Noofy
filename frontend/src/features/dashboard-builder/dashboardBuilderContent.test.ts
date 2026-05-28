@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAutomaticImageOutputWidget,
   addAutomaticImageInputWidgets,
   buildInitialDashboard,
   createDashboardWidgetForValue,
@@ -285,6 +286,7 @@ describe("workflowFromBindableInputs", () => {
             kind: "image_output",
             suggested_widget_type: "display_image",
             widget_types: ["display_image"],
+            auto_select: true,
           },
         ],
       },
@@ -302,6 +304,15 @@ describe("workflowFromBindableInputs", () => {
         description: "Choose an image from your computer.",
         defaultValue: null,
       }),
+      expect.objectContaining({
+        id: "ctrl-node-9-output_image",
+        valueId: "node-9-output_image",
+        binding: { nodeId: "9", inputName: "output_image" },
+        widgetType: "display_image",
+        title: "Result",
+        description: "Generated image will appear here.",
+        defaultValue: null,
+      }),
     ]);
 
     expect(toBackendPayload(schema).inputs).toEqual([
@@ -311,6 +322,9 @@ describe("workflowFromBindableInputs", () => {
         binding: { node_id: "10", input_name: "image" },
         default: null,
       }),
+    ]);
+    expect(toBackendPayload(schema).dashboard.outputs).toEqual([
+      { id: "image", label: "Result", node_id: "9", type: "image" },
     ]);
   });
 
@@ -350,6 +364,123 @@ describe("workflowFromBindableInputs", () => {
       widgetType: "load_image",
     });
     expect(roundTrip.widgets).toHaveLength(1);
+  });
+
+  it("adds only the selected final image output widget to an existing builder schema", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "8",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: false,
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "SaveImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+    const baseSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+
+    const schema = addAutomaticImageOutputWidget(baseSchema, workflow);
+    const roundTrip = addAutomaticImageOutputWidget(schema, workflow);
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        valueId: "node-9-output_image",
+        binding: { nodeId: "9", inputName: "output_image" },
+        widgetType: "display_image",
+      }),
+    ]);
+    expect(roundTrip.widgets).toHaveLength(1);
+  });
+
+  it("does not add an automatic output widget when the schema already has an image output", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "8",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: false,
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "SaveImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+    const baseSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-8-output_image",
+          valueId: "node-8-output_image",
+          binding: { nodeId: "8", inputName: "output_image" },
+          widgetType: "display_image",
+          title: "Preview",
+          description: "",
+          defaultValue: null,
+        },
+      ],
+    };
+
+    const schema = addAutomaticImageOutputWidget(baseSchema, workflow);
+
+    expect(schema.widgets).toHaveLength(1);
+    expect(schema.widgets[0].valueId).toBe("node-8-output_image");
   });
 
   it("suggests sliders with image-dimension defaults for width and height inputs", () => {
@@ -439,6 +570,7 @@ describe("workflowFromBindableInputs", () => {
             kind: "image_output",
             suggested_widget_type: "display_image",
             widget_types: ["display_image"],
+            auto_select: true,
           },
         ],
       },
@@ -453,6 +585,7 @@ describe("workflowFromBindableInputs", () => {
           nodeId: "9",
           inputName: "output_image",
           valueKind: "image_output",
+          autoSelect: true,
         },
       ],
     });

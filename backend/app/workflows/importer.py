@@ -77,6 +77,7 @@ from app.workflows.import_policy import (
 from app.workflows.import_normalization import (
     ImportNormalizationError,
     detect_unresolved_runtime_inputs,
+    filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
     normalize_asset_ownership,
     normalize_custom_nodes,
@@ -475,8 +476,7 @@ class NoofyArchiveImporter:
         metadata_fields = _normalized_metadata_fields(package_json)
 
         models = _normalize_models(capsule_json)
-        custom_nodes = _normalize_custom_nodes(capsule_json)
-        unresolved_inputs = _detect_unresolved_runtime_inputs(graph)
+        custom_nodes = _normalize_custom_nodes(capsule_json, package_json)
         dashboard = _normalize_dashboard(dashboard_json)
         dashboard_inputs = [
             WorkflowInput.model_validate(i)
@@ -488,6 +488,9 @@ class NoofyArchiveImporter:
             for o in (dashboard_json.get("outputs") or [])
             if isinstance(o, dict)
         ]
+        unresolved_inputs = filter_resolved_runtime_inputs(
+            _detect_unresolved_runtime_inputs(graph), dashboard_inputs
+        )
         observed_hardware = _observed_hardware(capsule_json, export_report)
 
         # Validate configured dashboards — an invalid one routes to needs_input_setup.
@@ -887,8 +890,9 @@ def _normalize_asset_ownership(value: Any) -> str:
 
 def _normalize_custom_nodes(
     capsule_json: dict[str, Any],
+    package_json: dict[str, Any] | None = None,
 ) -> list[WorkflowCustomNodeRecord]:
-    return normalize_custom_nodes(capsule_json)
+    return normalize_custom_nodes(capsule_json, package_json)
 
 
 def _normalize_dashboard(

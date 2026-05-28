@@ -293,9 +293,11 @@ def _classify_graph_inputs(
     object_info: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
+    default_image_output_node_id = _default_image_output_node_id(graph)
     for node_id, node in graph.items():
         if not isinstance(node, dict):
             continue
+        node_id_str = str(node_id)
         node_type = node.get("class_type", "")
         raw_inputs = node.get("inputs")
         if not isinstance(raw_inputs, dict):
@@ -310,6 +312,7 @@ def _classify_graph_inputs(
                     "kind": "image_output",
                     "suggested_widget_type": "display_image",
                     "widget_types": ["display_image"],
+                    "auto_select": node_id_str == default_image_output_node_id,
                 }
             )
 
@@ -353,6 +356,55 @@ def _classify_graph_inputs(
             )
 
     return nodes
+
+
+def _default_image_output_node_id(graph: dict[str, Any]) -> str | None:
+    # Use dependency depth as a deterministic approximation of execution order.
+    # If multiple output nodes have the same depth, fall back to their original
+    # graph order rather than node id, because ComfyUI ids are not chronological.
+    node_order: dict[str, int] = {}
+    candidate_ids: set[str] = set()
+    dependencies: dict[str, set[str]] = {}
+    known_node_ids = {str(node_id) for node_id in graph.keys()}
+
+    for index, (node_id, node) in enumerate(graph.items()):
+        if not isinstance(node, dict):
+            continue
+        node_id_str = str(node_id)
+        node_order[node_id_str] = index
+        if node.get("class_type") in _IMAGE_OUTPUT_NODE_TYPES:
+            candidate_ids.add(node_id_str)
+        raw_inputs = node.get("inputs")
+        if not isinstance(raw_inputs, dict):
+            dependencies[node_id_str] = set()
+            continue
+        dependencies[node_id_str] = {
+            str(value[0])
+            for value in raw_inputs.values()
+            if isinstance(value, list)
+            and len(value) >= 2
+            and isinstance(value[1], int)
+            and str(value[0]) in known_node_ids
+        }
+
+    if not candidate_ids:
+        return None
+
+    visiting: set[str] = set()
+    memo: dict[str, int] = {}
+
+    def depth(node_id: str) -> int:
+        if node_id in memo:
+            return memo[node_id]
+        if node_id in visiting:
+            return 0
+        visiting.add(node_id)
+        dep_depths = [depth(dep_id) for dep_id in dependencies.get(node_id, set())]
+        visiting.remove(node_id)
+        memo[node_id] = 1 + max(dep_depths, default=0)
+        return memo[node_id]
+
+    return max(candidate_ids, key=lambda node_id: (depth(node_id), node_order.get(node_id, -1)))
 
 
 def _is_ignored_image_node_input(node_type: str, input_name: str) -> bool:

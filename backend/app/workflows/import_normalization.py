@@ -9,6 +9,7 @@ from app.workflows.package import (
     SignedRegistryMetadata,
     UnresolvedRuntimeInput,
     WorkflowCustomNodeRecord,
+    WorkflowInput,
     WorkflowPackageSignature,
 )
 
@@ -226,63 +227,83 @@ def normalize_asset_ownership(value: Any) -> str:
 
 def normalize_custom_nodes(
     capsule_json: dict[str, Any],
+    package_json: dict[str, Any] | None = None,
 ) -> list[WorkflowCustomNodeRecord]:
     nodes = capsule_json.get("custom_nodes", [])
     if not isinstance(nodes, list):
-        return []
+        nodes = []
+    package_nodes = package_json.get("custom_nodes", []) if package_json is not None else []
+    if not isinstance(package_nodes, list):
+        package_nodes = []
+    package_nodes_by_id = {
+        str(node_id): package_node
+        for package_node in package_nodes
+        if isinstance(package_node, dict)
+        for node_id in (package_node.get("id"), package_node.get("package_id"))
+        if isinstance(node_id, str) and node_id
+    }
+    if not nodes:
+        nodes = package_nodes
 
     normalized: list[WorkflowCustomNodeRecord] = []
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        folder_name = string_field(
+        package_id = string_field(
             node,
-            "folder_name",
+            "package_id",
             fallback=string_field(node, "id", fallback="custom-node"),
         )
-        node_id = string_field(node, "id", fallback=folder_name)
+        package_node = package_nodes_by_id.get(package_id)
+        merged = {**package_node, **node} if isinstance(package_node, dict) else node
+        folder_name = string_field(
+            merged,
+            "folder_name",
+            fallback=package_id,
+        )
+        node_id = string_field(merged, "id", fallback=package_id)
         requirements_files = [
-            item for item in node.get("requirements_files", []) if isinstance(item, str)
+            item for item in merged.get("requirements_files", []) if isinstance(item, str)
         ]
         node_types = [
-            item for item in node.get("node_types", []) if isinstance(item, str)
+            item for item in merged.get("node_types", []) if isinstance(item, str)
         ]
         normalized.append(
             WorkflowCustomNodeRecord(
                 id=node_id,
                 folder_name=folder_name,
-                source=string_field(node, "source", fallback="unknown"),
-                included=bool(node.get("included")),
+                source=string_field(merged, "source", fallback="unknown"),
+                included=bool(merged.get("included", True)),
                 node_types=node_types,
                 requirements_files=requirements_files,
-                has_install_py=bool(node.get("has_install_py")),
+                has_install_py=bool(merged.get("has_install_py")),
                 sha256_manifest=(
-                    node.get("sha256_manifest")
-                    if isinstance(node.get("sha256_manifest"), str)
+                    merged.get("sha256_manifest")
+                    if isinstance(merged.get("sha256_manifest"), str)
                     else None
                 ),
                 source_ref=(
-                    node.get("source_ref")
-                    if isinstance(node.get("source_ref"), str)
+                    merged.get("source_ref")
+                    if isinstance(merged.get("source_ref"), str)
                     else None
                 ),
                 source_content_hash=(
-                    node.get("source_content_hash")
-                    if isinstance(node.get("source_content_hash"), str)
+                    merged.get("source_content_hash")
+                    if isinstance(merged.get("source_content_hash"), str)
                     else None
                 ),
                 source_cache_ref=(
-                    node.get("source_cache_ref")
-                    if isinstance(node.get("source_cache_ref"), str)
+                    merged.get("source_cache_ref")
+                    if isinstance(merged.get("source_cache_ref"), str)
                     else None
                 ),
                 source_archive_subdir=optional_string_field(
-                    node, "source_archive_subdir"
+                    merged, "source_archive_subdir"
                 )
-                or optional_string_field(node, "archive_subdir"),
+                or optional_string_field(merged, "archive_subdir"),
                 resolution_method=(
-                    node.get("resolution_method")
-                    if isinstance(node.get("resolution_method"), str)
+                    merged.get("resolution_method")
+                    if isinstance(merged.get("resolution_method"), str)
                     else None
                 ),
             )
@@ -338,6 +359,21 @@ def detect_unresolved_runtime_inputs(
                 )
             )
     return unresolved
+
+
+def filter_resolved_runtime_inputs(
+    unresolved_inputs: list[UnresolvedRuntimeInput],
+    workflow_inputs: list[WorkflowInput],
+) -> list[UnresolvedRuntimeInput]:
+    resolved_bindings = {
+        (workflow_input.binding.node_id, workflow_input.binding.input_name)
+        for workflow_input in workflow_inputs
+    }
+    return [
+        runtime_input
+        for runtime_input in unresolved_inputs
+        if (runtime_input.node_id, runtime_input.input_name) not in resolved_bindings
+    ]
 
 
 def observed_hardware(

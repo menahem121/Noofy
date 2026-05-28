@@ -3,7 +3,17 @@ from pathlib import Path
 from typing import Any
 
 from app.artifacts import ModelVerificationLevel
-from app.workflows.package import DashboardSchema, WorkflowInput, WorkflowOutput, WorkflowPackage
+from app.workflows.import_normalization import (
+    filter_resolved_runtime_inputs,
+    normalize_custom_nodes,
+)
+from app.workflows.package import (
+    DashboardSchema,
+    UnresolvedRuntimeInput,
+    WorkflowInput,
+    WorkflowOutput,
+    WorkflowPackage,
+)
 from app.workflows.store_paths import safe_store_segment
 
 _STUB_DASHBOARD_VERSION = "0.1.0"
@@ -185,6 +195,21 @@ class WorkflowPackageLoader:
         # Strip inputs/outputs from data before model_validate to avoid conflicts
         data_clean = {k: v for k, v in data.items() if k not in ("inputs", "outputs", "dashboard")}
         _enrich_required_models_from_capsule_lock(data_clean, package_dir / _CAPSULE_LOCK_FILENAME)
+        _repair_imported_custom_nodes_from_source_files(data_clean, package_dir)
+        raw_unresolved_inputs = data_clean.get("unresolved_runtime_inputs")
+        if isinstance(raw_unresolved_inputs, list):
+            package_unresolved: list[UnresolvedRuntimeInput] = []
+            for item in raw_unresolved_inputs:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    package_unresolved.append(UnresolvedRuntimeInput.model_validate(item))
+                except Exception:
+                    continue
+            data_clean["unresolved_runtime_inputs"] = [
+                item.model_dump()
+                for item in filter_resolved_runtime_inputs(package_unresolved, inputs)
+            ]
         data_clean["inputs"] = [i.model_dump() for i in inputs]
         data_clean["outputs"] = [o.model_dump() for o in outputs]
         data_clean["dashboard"] = dashboard.model_dump()
@@ -247,6 +272,38 @@ def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], caps
         if locked is None:
             continue
         _fill_required_model_identity_from_lock(model, locked)
+
+
+def _repair_imported_custom_nodes_from_source_files(
+    package_data: dict[str, Any], package_dir: Path
+) -> None:
+    raw_nodes = package_data.get("custom_nodes")
+    if isinstance(raw_nodes, list) and any(
+        isinstance(node, dict) and node.get("included") for node in raw_nodes
+    ):
+        return
+    source_package_path = package_dir / "source-files" / "package.json"
+    source_capsule_path = package_dir / "source-files" / _CAPSULE_LOCK_FILENAME
+    if not source_package_path.exists() and not source_capsule_path.exists():
+        return
+    try:
+        source_package = (
+            json.loads(source_package_path.read_text(encoding="utf-8"))
+            if source_package_path.exists()
+            else {}
+        )
+        source_capsule = (
+            json.loads(source_capsule_path.read_text(encoding="utf-8"))
+            if source_capsule_path.exists()
+            else {}
+        )
+    except (OSError, json.JSONDecodeError):
+        return
+    repaired = normalize_custom_nodes(source_capsule, source_package)
+    if repaired:
+        package_data["custom_nodes"] = [
+            node.model_dump(mode="json") for node in repaired
+        ]
 
 
 def _fill_required_model_identity_from_lock(model: dict[str, Any], locked: dict[str, Any]) -> None:

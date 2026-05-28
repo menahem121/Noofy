@@ -44,6 +44,7 @@ export interface WorkflowNodeValue {
   hint?: string;
   numberRange?: { min: number; max: number; step?: number };
   options?: string[];
+  autoSelect?: boolean;
   technical?: boolean;
 }
 
@@ -212,6 +213,10 @@ const INPUT_WIDGET_TYPES: WidgetType[] = [
 
 const OUTPUT_WIDGET_TYPES: WidgetType[] = ["display_image"];
 
+export function isOutputWidgetType(widgetType: string): boolean {
+  return widgetType === "display_image" || widgetType === "result_image";
+}
+
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   if (kind === "image_output") {
     return OUTPUT_WIDGET_TYPES;
@@ -321,6 +326,7 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
     image: "Input image",
     lora_name: "LoRA model",
     filename_prefix: "Save name",
+    output_image: "Result",
   };
 
   const key = value.inputName.toLowerCase();
@@ -344,6 +350,7 @@ export function suggestDescription(value: WorkflowNodeValue): string {
     cfg: "How strongly the prompt guides the image.",
     image: "Choose an image from your computer.",
     lora_name: "Pick a LoRA style to apply.",
+    output_image: "Generated image will appear here.",
   };
 
   const key = value.inputName.toLowerCase();
@@ -645,6 +652,7 @@ export function workflowFromBindableInputs(
       widget_types: string[];
       options?: string[];
       hint?: string;
+      auto_select?: boolean;
     }>;
   }>
 ): MockWorkflow {
@@ -685,6 +693,7 @@ export function workflowFromBindableInputs(
       rawValue: inp.current_value,
       hint: inp.hint,
       options: inp.options,
+      autoSelect: inp.auto_select,
       technical: ["steps", "cfg", "denoise", "batch_size", "scheduler", "sampler_name", "filename_prefix"].includes(
         inp.input_name
       ),
@@ -702,10 +711,9 @@ export function workflowFromBindableInputs(
 /** Convert frontend DashboardSchema into a backend save payload. */
 export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const normalized = normalizeDashboardSchema(schema);
-  const isOutputWidget = (widgetType: string) => widgetType === "display_image" || widgetType === "result_image";
   const groupedWidgetIds = groupedWidgetIdSet(normalized);
   const inputs: BackendWorkflowInput[] = normalized.widgets
-    .filter((w) => !isOutputWidget(w.widgetType))
+    .filter((w) => !isOutputWidgetType(w.widgetType))
     .map((w) => ({
       id: w.id,
       label: w.title,
@@ -720,7 +728,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       },
     }));
 
-  const outputWidgets = normalized.widgets.filter((w) => isOutputWidget(w.widgetType));
+  const outputWidgets = normalized.widgets.filter((w) => isOutputWidgetType(w.widgetType));
   const outputIdForWidget = (widgetId: string) => {
     const index = outputWidgets.findIndex((widget) => widget.id === widgetId);
     return index <= 0 ? "image" : `image_${index + 1}`;
@@ -736,8 +744,8 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     id: w.id,
     type: w.widgetType,
     label: w.title,
-    input_id: !isOutputWidget(w.widgetType) ? w.id : undefined,
-    output_id: isOutputWidget(w.widgetType) ? outputIdForWidget(w.id) : undefined,
+    input_id: !isOutputWidgetType(w.widgetType) ? w.id : undefined,
+    output_id: isOutputWidgetType(w.widgetType) ? outputIdForWidget(w.id) : undefined,
     description: w.description,
     layout: !groupedWidgetIds.has(w.id) && w.layout
       ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
@@ -802,7 +810,7 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     });
   }
 
-  return addAutomaticImageInputWidgets(
+  return addAutomaticDashboardWidgets(
     {
       version: 1,
       workflowId: workflow.id,
@@ -818,6 +826,10 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     },
     workflow,
   );
+}
+
+export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  return addAutomaticImageOutputWidget(addAutomaticImageInputWidgets(schema, workflow), workflow);
 }
 
 export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
@@ -847,6 +859,42 @@ export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow:
   }
 
   return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
+}
+
+export function addAutomaticImageOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const imageOutputRecords = workflow.nodes.flatMap((node) =>
+    node.values
+      .filter((value) => value.valueKind === "image_output")
+      .map((value) => ({ node, value })),
+  );
+  const selected =
+    imageOutputRecords.find((record) => record.value.autoSelect) ??
+    imageOutputRecords[imageOutputRecords.length - 1];
+  if (!selected) return schema;
+  const imageOutputValueIds = new Set(imageOutputRecords.map((record) => record.value.id));
+  const imageOutputBindings = new Set(
+    imageOutputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`),
+  );
+
+  const hasOutputWidget = schema.widgets.some((widget) =>
+    isOutputWidgetType(widget.widgetType) &&
+    (imageOutputValueIds.has(widget.valueId) ||
+      imageOutputBindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
+  );
+  if (hasOutputWidget) return schema;
+
+  const widget = createDashboardWidgetForValue(selected.value, selected.node);
+  return {
+    ...schema,
+    widgets: [
+      ...schema.widgets,
+      {
+        ...widget,
+        widgetType: "display_image",
+        defaultValue: null,
+      },
+    ],
+  };
 }
 
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {

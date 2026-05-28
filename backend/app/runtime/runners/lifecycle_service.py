@@ -357,6 +357,7 @@ class WorkflowRunnerLifecycleService:
         try:
             state = await self.capsule_installer.prepare(
                 capsule_lock,
+                workflow_id=workflow_id,
                 local_model_requirements=local_model_requirements,
                 workflow_execution_smoke_allowed=not package.unresolved_runtime_inputs,
             )

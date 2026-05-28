@@ -33,6 +33,7 @@ from app.workflows.bindings import package_for_input_bindings
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
+EnsureWorkflowRunner = Callable[[WorkflowPackage], Awaitable[str | None]]
 WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
 EvictIdleRunners = Callable[[MemoryGovernorDecision], Awaitable[EngineJob | None]]
 MemoryStatusPayload = Callable[..., dict[str, Any]]
@@ -65,6 +66,7 @@ class RunOrchestrator:
         validate_package: ValidatePackage,
         unavailable_package_reason: UnavailablePackageReason,
         apply_input_bindings: ApplyInputBindings,
+        ensure_workflow_runner: EnsureWorkflowRunner | None,
         workflow_run_memory_decision: WorkflowRunMemoryDecision,
         evict_idle_runners: EvictIdleRunners,
         memory_status_payload: MemoryStatusPayload,
@@ -87,6 +89,7 @@ class RunOrchestrator:
         self.validate_package = validate_package
         self.unavailable_package_reason = unavailable_package_reason
         self.apply_input_bindings = apply_input_bindings
+        self.ensure_workflow_runner = ensure_workflow_runner
         self.workflow_run_memory_decision = workflow_run_memory_decision
         self.evict_idle_runners = evict_idle_runners
         self.memory_status_payload = memory_status_payload
@@ -222,6 +225,22 @@ class RunOrchestrator:
             run_submission_snapshot=run_submission_snapshot,
         )
         runtime_package = package_for_input_bindings(package, runtime_inputs)
+        if self.ensure_workflow_runner is not None:
+            runner_unavailable = await self.ensure_workflow_runner(package)
+            if runner_unavailable is not None:
+                self._record_run_blocked(package, runner_unavailable)
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked because the workflow runner is unavailable",
+                    "runs.orchestrator",
+                    workflow_id=workflow_id,
+                    details={"error": runner_unavailable},
+                )
+                return WorkflowValidationResult(
+                    workflow_id=workflow_id,
+                    valid=False,
+                    errors=[runner_unavailable],
+                )
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
 

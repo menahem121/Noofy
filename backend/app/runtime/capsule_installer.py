@@ -81,11 +81,12 @@ class CapsuleInstaller:
         self,
         capsule_lock: CapsuleLock,
         *,
+        workflow_id: str | None = None,
         local_model_requirements: list[LocalModelRequirement] | None = None,
         workflow_execution_smoke_allowed: bool = True,
     ) -> InstallState:
         fingerprint = capsule_lock.runtime.capsule_fingerprint
-        workflow_id = capsule_lock.workflow.package_id
+        workflow_id = workflow_id or capsule_lock.workflow.package_id
         install_transaction = (
             self.workspace_preparer.install_transaction_store.open(
                 workflow_id=workflow_id,
@@ -190,6 +191,7 @@ class CapsuleInstaller:
             if self.workspace_preparer is not None:
                 prepared_workspace = self.workspace_preparer.prepare(
                     capsule_lock,
+                    workflow_id=workflow_id,
                     model_view_dir=model_view_path,
                     model_view_fingerprint=(
                         model_view.view_fingerprint if model_view is not None else None

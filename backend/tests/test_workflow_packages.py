@@ -112,6 +112,146 @@ def test_loader_enriches_weak_package_model_identity_from_capsule_lock(tmp_path:
     assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
 
 
+def test_loader_filters_unresolved_inputs_resolved_by_dashboard_override(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "image_workflow"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "image_workflow",
+                    "name": "Image Workflow",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": {
+                    "192": {
+                        "class_type": "LoadImage",
+                        "inputs": {
+                            "image": "__noofy_runtime_image_input_required__",
+                        },
+                    }
+                },
+                "unresolved_runtime_inputs": [
+                    {
+                        "node_id": "192",
+                        "node_type": "LoadImage",
+                        "input_name": "image",
+                        "current_value": "__noofy_runtime_image_input_required__",
+                        "reason": "creator_local_image_not_bundled",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "status": "configured",
+                "inputs": [
+                    {
+                        "id": "ctrl-node-192-image",
+                        "label": "Input image",
+                        "control": "load_image",
+                        "binding": {"node_id": "192", "input_name": "image"},
+                    }
+                ],
+                "outputs": [],
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {
+                                "id": "ctrl-node-192-image",
+                                "type": "load_image",
+                                "label": "Input image",
+                                "input_id": "ctrl-node-192-image",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package("image_workflow")
+
+    assert package.unresolved_runtime_inputs == []
+
+
+def test_loader_repairs_imported_custom_node_metadata_from_source_files(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "image_workflow"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "image_workflow",
+                    "name": "Image Workflow",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": {},
+                "custom_nodes": [
+                    {
+                        "id": "custom-node",
+                        "folder_name": "custom-node",
+                        "source": "bundled_from_creator_machine",
+                        "included": False,
+                        "node_types": ["ColorMatchV2"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_files = package_dir / "source-files"
+    source_files.mkdir()
+    (source_files / "package.json").write_text(
+        json.dumps(
+            {
+                "custom_nodes": [
+                    {
+                        "id": "comfyui-kjnodes",
+                        "folder_name": "ComfyUI-KJNodes",
+                        "source": "bundled_from_creator_machine",
+                        "included": True,
+                        "requirements_files": ["requirements.txt"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_files / "capsule.lock.json").write_text(
+        json.dumps(
+            {
+                "custom_nodes": [
+                    {
+                        "package_id": "comfyui-kjnodes",
+                        "source": "bundled_from_creator_machine",
+                        "trust_level": "quarantined_community",
+                        "node_types": ["ColorMatchV2"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package("image_workflow")
+
+    assert package.custom_nodes[0].id == "comfyui-kjnodes"
+    assert package.custom_nodes[0].folder_name == "ComfyUI-KJNodes"
+    assert package.custom_nodes[0].included is True
+
+
 def test_bundled_package_model_identity_is_not_weaker_than_capsule_lock() -> None:
     packages_dir = Path("app/workflows/packages")
     for capsule_file in packages_dir.glob("*/capsule.lock.json"):

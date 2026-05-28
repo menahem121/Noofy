@@ -165,6 +165,7 @@ function imageWorkflowBindableInputsResponse() {
             kind: "image_output",
             suggested_widget_type: "display_image",
             widget_types: ["display_image"],
+            auto_select: true,
           },
         ],
       },
@@ -373,16 +374,21 @@ describe("DashboardBuilderPage", () => {
 
     expect(onContinue).toHaveBeenCalledWith(
       expect.objectContaining({
-        widgets: [
+        widgets: expect.arrayContaining([
           expect.objectContaining({
             valueId: "node-10-image",
             binding: { nodeId: "10", inputName: "image" },
             widgetType: "load_image",
           }),
-        ],
+          expect.objectContaining({
+            valueId: "node-9-output_image",
+            binding: { nodeId: "9", inputName: "output_image" },
+            widgetType: "display_image",
+          }),
+        ]),
       }),
     );
-    expect(onContinue.mock.calls[0][0].widgets).toHaveLength(1);
+    expect(onContinue.mock.calls[0][0].widgets).toHaveLength(2);
   });
 
   it("hides the previous workflow while builder data for the next workflow is loading", async () => {

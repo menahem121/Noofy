@@ -41,6 +41,7 @@ from app.runtime.comfyui.comfyui_updates import (
 )
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
+    InstallStatus,
     InstallState,
 )
 from app.runtime.comfyui.launch_settings import (
@@ -72,6 +73,7 @@ from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
     JobRunnerNotFoundError,
     RunnerDescriptor,
+    RunnerStatus,
     RunnerSupervisor,
 )
 from app.runs.job_service import RunJobService
@@ -249,6 +251,7 @@ class EngineService:
             validate_package=self._validate_package,
             unavailable_package_reason=self._imported_workflow_without_preparable_capsule,
             apply_input_bindings=self._apply_input_bindings,
+            ensure_workflow_runner=self._ensure_workflow_runner_for_run,
             workflow_run_memory_decision=self.memory_service.decision_for_workflow_run,
             evict_idle_runners=self.memory_service.evict_idle_runners_for_workflow_run,
             memory_status_payload=self.memory_service.memory_status_payload,
@@ -537,6 +540,55 @@ class EngineService:
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         return await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
+
+    async def _ensure_workflow_runner_for_run(
+        self, package: WorkflowPackage
+    ) -> str | None:
+        """Prepare and bind a workflow runner before running custom-node capsules."""
+        workflow_id = package.metadata.id
+        capsule_lock = self.workflow_runner_lifecycle_service.preparable_capsule_lock(
+            workflow_id
+        )
+        if capsule_lock is None or not capsule_lock.custom_nodes:
+            return None
+
+        runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        if runner is not None and runner.status in {
+            RunnerStatus.READY,
+            RunnerStatus.IDLE,
+            RunnerStatus.IDLE_WARM,
+        }:
+            return None
+
+        install = self.workflow_runner_lifecycle_service.get_install_state(workflow_id)
+        if install.get("status") != InstallStatus.READY.value:
+            self.log_store.add(
+                "info",
+                "Preparing workflow runner before run",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "install_status": install.get("status"),
+                },
+            )
+            install = await self.workflow_runner_lifecycle_service.prepare_workflow(
+                workflow_id
+            )
+
+        if install.get("status") != InstallStatus.READY.value:
+            return _workflow_runner_unavailable_message(install)
+
+        start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
+            workflow_id
+        )
+        if start.get("status") not in {
+            RunnerStatus.READY.value,
+            RunnerStatus.IDLE.value,
+            RunnerStatus.IDLE_WARM.value,
+        }:
+            return _workflow_runner_unavailable_message(start)
+        return None
 
     async def handoff_next_queued_runner_start(
         self,
@@ -1023,6 +1075,16 @@ def _diagnostic_correlation_ids(event, details: dict[str, object]) -> dict[str, 
         if value is not None:
             correlations[key] = value
     return correlations
+
+
+def _workflow_runner_unavailable_message(payload: dict[str, object]) -> str:
+    message = payload.get("user_facing_message") or payload.get("error")
+    if isinstance(message, str) and message.strip():
+        return message
+    status = payload.get("status") or payload.get("install_status")
+    if isinstance(status, str) and status.strip():
+        return f"Workflow runner is not ready: {status}."
+    return "Workflow runner is not ready."
 
 
 def _redact_diagnostic_details(value):

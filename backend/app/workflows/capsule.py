@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from app.runtime.dependencies.isolation import CapsuleLock
+from app.workflows.import_normalization import normalize_custom_nodes
 from app.workflows.store_paths import imported_workflow_id
 
 CAPSULE_LOCK_FILENAME = "capsule.lock.json"
@@ -114,4 +115,38 @@ class CapsuleLockLoader:
     def _load(self, lock_path: Path) -> CapsuleLock:
         with lock_path.open("r", encoding="utf-8") as file:
             data = json.load(file)
+        if not data.get("custom_nodes"):
+            source_capsule_path = lock_path.parent / "source-files" / CAPSULE_LOCK_FILENAME
+            if source_capsule_path.exists():
+                try:
+                    source_data = json.loads(source_capsule_path.read_text(encoding="utf-8"))
+                    source_package_path = lock_path.parent / "source-files" / "package.json"
+                    source_package = (
+                        json.loads(source_package_path.read_text(encoding="utf-8"))
+                        if source_package_path.exists()
+                        else {}
+                    )
+                except (OSError, json.JSONDecodeError):
+                    source_data = {}
+                    source_package = {}
+                repaired_nodes = [
+                    node
+                    for node in normalize_custom_nodes(source_data, source_package)
+                    if node.included
+                ]
+                if repaired_nodes:
+                    trust = data.get("trust") if isinstance(data.get("trust"), dict) else {}
+                    trust_level = trust.get("level") or data.get("workflow", {}).get("trust_level")
+                    data["custom_nodes"] = [
+                        {
+                            "package_id": node.id,
+                            "source": node.source,
+                            "source_ref": node.source_ref,
+                            "source_content_hash": node.source_content_hash,
+                            "source_cache_ref": node.source_cache_ref,
+                            "trust_level": trust_level,
+                            "node_types": node.node_types,
+                        }
+                        for node in repaired_nodes
+                    ]
         return CapsuleLock.model_validate(data)

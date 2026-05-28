@@ -447,6 +447,7 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
             "kind": "image_output",
             "suggested_widget_type": "display_image",
             "widget_types": ["display_image"],
+            "auto_select": True,
         }
     ]
 
@@ -486,8 +487,64 @@ def test_classify_graph_inputs_marks_load_image_as_image_input_only_when_unlinke
             "kind": "image_output",
             "suggested_widget_type": "display_image",
             "widget_types": ["display_image"],
+            "auto_select": True,
         }
     ]
+
+
+def test_classify_graph_inputs_auto_selects_deepest_image_output() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
+            "2": {"class_type": "UpscaleModelLoader", "inputs": {}},
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["4", 0]}},
+            "4": {"class_type": "ImageScale", "inputs": {"image": ["2", 0]}},
+        }
+    )
+
+    output_auto_select = {
+        node["node_id"]: node["inputs"][0]["auto_select"]
+        for node in nodes
+        if node["inputs"] and node["inputs"][0]["kind"] == "image_output"
+    }
+
+    assert output_auto_select == {"1": False, "3": True}
+
+
+def test_classify_graph_inputs_tie_breaks_image_output_by_graph_order() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "save_a": {"class_type": "SaveImage", "inputs": {"images": ["decode", 0]}},
+            "decode": {"class_type": "VAEDecode", "inputs": {"samples": ["latent", 0]}},
+            "preview_b": {"class_type": "PreviewImage", "inputs": {"images": ["decode", 0]}},
+        }
+    )
+
+    output_auto_select = {
+        node["node_id"]: node["inputs"][0]["auto_select"]
+        for node in nodes
+        if node["inputs"] and node["inputs"][0]["kind"] == "image_output"
+    }
+
+    assert output_auto_select == {"save_a": False, "preview_b": True}
+
+
+def test_classify_graph_inputs_ignores_non_link_lists_when_ordering_outputs() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "save_a": {"class_type": "SaveImage", "inputs": {"images": ["base", 0]}},
+            "preview_b": {"class_type": "PreviewImage", "inputs": {"images": ["base", 0]}},
+            "base": {"class_type": "CustomNode", "inputs": {"metadata": ["preview_b", "not-a-link"]}},
+        }
+    )
+
+    output_auto_select = {
+        node["node_id"]: node["inputs"][0]["auto_select"]
+        for node in nodes
+        if node["inputs"] and node["inputs"][0]["kind"] == "image_output"
+    }
+
+    assert output_auto_select == {"save_a": False, "preview_b": True}
 
 
 def test_get_bindable_inputs_keeps_load_image_as_upload_when_object_info_has_file_options() -> None:

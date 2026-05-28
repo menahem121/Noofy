@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from datetime import UTC, datetime
 
@@ -167,6 +168,51 @@ def _isolated_descriptor(
         current_job_id=current_job_id,
         last_used_at=last_used_at,
     )
+
+
+class AutoPrepareLifecycle:
+    def __init__(self, supervisor: RunnerSupervisor, adapter: RecordingAdapter) -> None:
+        self.supervisor = supervisor
+        self.adapter = adapter
+        self.install_status = "pending"
+        self.prepare_calls: list[str] = []
+        self.start_calls: list[str] = []
+
+    def preparable_capsule_lock(self, workflow_id: str):
+        return SimpleNamespace(
+            custom_nodes=[SimpleNamespace(package_id="custom-node")],
+            runtime=SimpleNamespace(capsule_fingerprint=f"{workflow_id}-fp"),
+        )
+
+    def imported_workflow_without_preparable_capsule(self, package) -> str | None:
+        del package
+        return None
+
+    def get_install_state(self, workflow_id: str) -> dict[str, object]:
+        return {
+            "workflow_id": workflow_id,
+            "status": self.install_status,
+            "user_facing_message": "Not started",
+        }
+
+    async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
+        self.prepare_calls.append(workflow_id)
+        self.install_status = "ready"
+        return {"workflow_id": workflow_id, "status": "ready"}
+
+    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+        self.start_calls.append(workflow_id)
+        descriptor = _isolated_descriptor(status=RunnerStatus.READY)
+        self.supervisor.upsert_runner(descriptor, self.adapter)
+        self.supervisor.bind_workflow_runner(workflow_id, descriptor.runner_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "ready",
+            "runner": descriptor.model_dump(mode="json"),
+            "pid": descriptor.pid,
+            "install_status": "ready",
+            "error": None,
+        }
 
 
 # ----------------------------------------------------------------------
@@ -939,6 +985,48 @@ async def test_run_workflow_registers_job_against_acquired_runner() -> None:
     assert isinstance(job, EngineJob)
     assert supervisor.runner_for_job(job.job_id).runner_id == CORE_RUNNER_ID
     assert adapter.run_calls and adapter.run_calls[0][0] == job.job_id
+
+
+@pytest.mark.anyio
+async def test_run_workflow_auto_prepares_custom_node_runner_before_submit() -> None:
+    core_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="core-job",
+    )
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = AutoPrepareLifecycle(supervisor, isolated_adapter)
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert lifecycle.prepare_calls == ["text_to_image_v0"]
+    assert lifecycle.start_calls == ["text_to_image_v0"]
+    assert supervisor.runner_for_job(job.job_id).runner_id == "isolated-1"
+    assert isolated_adapter.run_calls == [("isolated-job", {})]
+    assert core_adapter.run_calls == []
 
 
 @pytest.mark.anyio

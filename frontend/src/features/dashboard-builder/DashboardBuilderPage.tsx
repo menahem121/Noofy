@@ -28,10 +28,11 @@ import {
   MOCK_WORKFLOW,
   NODE_ICONS,
   VALUE_KIND_ICONS,
-  addAutomaticImageInputWidgets,
+  addAutomaticDashboardWidgets,
   buildInitialDashboard,
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
+  isOutputWidgetType,
   loadDashboardDraft,
   normalizeDashboardSchema,
   saveDashboardDraft,
@@ -92,7 +93,7 @@ function reconcileDashboardSchemaForWorkflow(schema: DashboardSchema, workflow: 
       .find((value) => {
         if (value.nodeId !== widget.binding.nodeId) return false;
         if (value.inputName === widget.binding.inputName) return true;
-        return widget.widgetType === "display_image" && value.valueKind === "image_output";
+        return isOutputWidgetType(widget.widgetType) && value.valueKind === "image_output";
       });
     if (!boundValue) return widget;
 
@@ -216,7 +217,7 @@ export function DashboardBuilderPage({
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
     const nextSchema = normalizeDashboardSchema(
-      addAutomaticImageInputWidgets(
+      addAutomaticDashboardWidgets(
         reconcileDashboardSchemaForWorkflow(
           scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
           workflow,

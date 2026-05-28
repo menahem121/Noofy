@@ -72,6 +72,32 @@ def test_loader_reads_bundled_capsule_for_text_to_image_v0() -> None:
     assert lock.models[0].sha256 == "e9476a13728cd75d8279f6ec8bad753a66a1957ca375a1464dc63b37db6e3916"
 
 
+def test_loader_repairs_imported_capsule_custom_nodes_from_source_files(tmp_path: Path) -> None:
+    package_dir = tmp_path / "imported" / "unknown" / "demo" / "0.1.0"
+    _write_capsule(package_dir, "demo")
+    source_files = package_dir / "source-files"
+    source_files.mkdir()
+    source_capsule = json.loads((package_dir / CAPSULE_LOCK_FILENAME).read_text(encoding="utf-8"))
+    source_capsule["custom_nodes"] = [
+        {
+            "package_id": "comfyui-kjnodes",
+            "source": "bundled_from_creator_machine",
+            "trust_level": "quarantined_community",
+            "node_types": ["ColorMatchV2"],
+        }
+    ]
+    (source_files / CAPSULE_LOCK_FILENAME).write_text(
+        json.dumps(source_capsule), encoding="utf-8"
+    )
+
+    lock = CapsuleLockLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "imported",
+    ).get_capsule_lock("noofy__demo__0.1.0")
+
+    assert [node.package_id for node in lock.custom_nodes] == ["comfyui-kjnodes"]
+
+
 def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
     from app.workflows.loader import WorkflowPackageLoader
 
