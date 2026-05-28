@@ -162,6 +162,31 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
+def test_noofy_importer_normalizes_single_model_source_url_string() -> None:
+    source_url = "https://example.test/upscale.safetensors"
+    archive = _archive_bytes_with_capsule_update(
+        {
+            "models": [
+                {
+                    "comfyui_folder": "upscale_models",
+                    "filename": "upscale.safetensors",
+                    "source_urls": source_url,
+                    "sha256": "a" * 64,
+                    "size_bytes": 123,
+                    "verification_level": "sha256_size",
+                }
+            ]
+        },
+        archive_bytes=_small_archive_bytes(),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    model = package.required_models[0]
+    assert model.source_url == source_url
+    assert model.source_urls == [source_url]
+
+
 def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
     archive = _archive_bytes_with_package_update(
         {

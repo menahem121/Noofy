@@ -40,6 +40,37 @@ def optional_string_field(data: dict[str, Any], key: str) -> str | None:
     return None
 
 
+def normalize_source_urls(value: Any, *, fallback: Any = None) -> list[str]:
+    urls: list[str] = []
+
+    def add(candidate: str) -> None:
+        cleaned = candidate.strip()
+        if cleaned:
+            urls.append(cleaned)
+
+    def add_value(raw: Any) -> None:
+        if isinstance(raw, str):
+            add(raw)
+            return
+        if not isinstance(raw, list):
+            return
+        for item in raw:
+            if isinstance(item, str):
+                add(item)
+
+    add_value(value)
+    add_value(fallback)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        normalized.append(url)
+    return normalized
+
+
 def normalized_display_name(data: dict[str, Any], *, fallback: str) -> str:
     value = string_field(data, "display_name", fallback=fallback)
     cleaned = value.lstrip("*").strip()
@@ -114,9 +145,10 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
         filename = string_field(model, "filename", fallback="")
         if not folder or not filename:
             continue
-        source_urls = [
-            url for url in model.get("source_urls", []) if isinstance(url, str)
-        ]
+        source_urls = normalize_source_urls(
+            model.get("source_urls"),
+            fallback=model.get("source_url"),
+        )
         sha256 = model.get("sha256")
         checksum = None
         if isinstance(sha256, str) and sha256:

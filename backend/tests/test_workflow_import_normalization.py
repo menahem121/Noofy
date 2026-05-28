@@ -29,6 +29,27 @@ def test_normalize_models_preserves_identity_evidence() -> None:
     assert models[0].identity_verified_by_exporter is True
 
 
+def test_normalize_models_accepts_single_source_url_string() -> None:
+    url = "https://example.test/demo.safetensors"
+
+    models = normalize_models(
+        {
+            "models": [
+                {
+                    "comfyui_folder": "checkpoints",
+                    "filename": "demo.safetensors",
+                    "source_urls": url,
+                    "sha256": "a" * 64,
+                    "size_bytes": 123,
+                }
+            ]
+        }
+    )
+
+    assert models[0].source_urls == [url]
+    assert models[0].source_url == url
+
+
 def test_detect_unresolved_runtime_inputs_finds_local_load_image_values() -> None:
     unresolved = detect_unresolved_runtime_inputs(
         {
