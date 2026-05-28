@@ -12,14 +12,26 @@ function jsonResponse(data: unknown, status = 200) {
 
 describe("DashboardInputControl", () => {
   const fetchMock = vi.fn();
+  const createObjectUrlMock = vi.fn(() => "blob:noofy-upload-preview");
+  const revokeObjectUrlMock = vi.fn();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectUrlMock,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectUrlMock,
+    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    createObjectUrlMock.mockClear();
+    revokeObjectUrlMock.mockClear();
   });
 
   it("renders integer jump sliders with configured min, max, and step", () => {
@@ -78,14 +90,54 @@ describe("DashboardInputControl", () => {
     expect(onChange).toHaveBeenCalledWith(0.75);
   });
 
-  it("shows the uploaded asset original filename in classic image controls", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        asset_id: "12345678-1234-1234-1234-123456789abc.png",
-        original_filename: "reference portrait.png",
-        content_type: "image/png",
-      }),
+  it("shows a polished clickable upload placeholder when no image is selected", () => {
+    const onImageUpload = vi.fn();
+    const { container } = render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={onImageUpload}
+      />,
     );
+
+    const uploadTarget = screen.getByRole("button", { name: "Click here to upload an image" });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).toBeInTheDocument();
+    expect(fileInput).toHaveClass("dashboard-image-input__file");
+    expect(screen.queryByText(/Image not found/i)).not.toBeInTheDocument();
+
+    const clickSpy = vi.spyOn(fileInput!, "click").mockImplementation(() => undefined);
+    fireEvent.click(uploadTarget);
+    expect(clickSpy).toHaveBeenCalled();
+
+    const file = new File(["image"], "reference.png", { type: "image/png" });
+    fireEvent.change(fileInput!, { target: { files: [file] } });
+    expect(onImageUpload).toHaveBeenCalledWith(file);
+  });
+
+  it("shows the uploaded asset preview and original filename in classic image controls", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(
+          jsonResponse({
+            asset_id: "12345678-1234-1234-1234-123456789abc.png",
+            original_filename: "reference portrait.png",
+            content_type: "image/png",
+          }),
+        );
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
 
     render(
       <DashboardInputControl
@@ -105,7 +157,36 @@ describe("DashboardInputControl", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Loaded: reference portrait.png")).toBeInTheDocument();
+      expect(screen.getByAltText("Uploaded input")).toHaveAttribute("src", "blob:noofy-upload-preview");
+      expect(screen.getByText("reference portrait.png")).toBeInTheDocument();
+      expect(screen.getByText("Click here to replace image")).toBeInTheDocument();
+    });
+  });
+
+  it("shows a recoverable missing-asset state only when a selected asset cannot load", async () => {
+    fetchMock.mockRejectedValue(new Error("missing asset"));
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="missing-asset.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Image could not be loaded")).toBeInTheDocument();
+      expect(screen.getByText("Click here to upload an image")).toBeInTheDocument();
+      expect(screen.queryByText(/Image not found/i)).not.toBeInTheDocument();
     });
   });
 

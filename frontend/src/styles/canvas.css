@@ -554,36 +554,6 @@
   outline: none;
 }
 
-.canvas-widget-image-input {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.canvas-widget-image-input__preview {
-  width: 100%;
-  max-height: 160px;
-  object-fit: cover;
-  border-radius: 10px;
-}
-
-.canvas-widget-image-input__hint,
-.canvas-widget-image-input__filename,
-.canvas-widget-image-input__missing {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.canvas-widget-image-input__filename {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.canvas-widget-image-input__missing {
-  color: var(--error);
-}
-
 /* secondary-button small variant */
 
 .secondary-button--sm {

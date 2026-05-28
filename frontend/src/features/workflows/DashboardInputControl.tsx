@@ -1,5 +1,13 @@
-import { useEffect, useState, type CSSProperties } from "react";
-import { DownloadCloud } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
+import { DownloadCloud, ImagePlus } from "lucide-react";
 
 import {
   fetchAssetBlobUrl,
@@ -508,10 +516,12 @@ function AssetImageInput({
   variant: DashboardInputControlVariant;
   onImageUpload: (file: File) => Promise<void>;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [originalFilename, setOriginalFilename] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const assetId = typeof value === "string" ? value : null;
+  const hasAsset = Boolean(assetId);
 
   useEffect(() => {
     setBlobUrl((prev) => {
@@ -519,7 +529,8 @@ function AssetImageInput({
       return null;
     });
 
-    if (variant !== "canvas" || !assetId) {
+    if (!assetId) {
+      setMissing(false);
       return undefined;
     }
 
@@ -542,7 +553,7 @@ function AssetImageInput({
       canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [assetId, variant]);
+  }, [assetId]);
 
   useEffect(() => {
     if (!assetId) {
@@ -560,7 +571,6 @@ function AssetImageInput({
       .catch(() => {
         if (!canceled) {
           setOriginalFilename(null);
-          setMissing(true);
         }
       });
 
@@ -569,46 +579,90 @@ function AssetImageInput({
     };
   }, [assetId]);
 
-  if (variant === "classic") {
-    return (
-      <>
-        {assetId ? (
-          <small className="field-group__hint">Loaded: {originalFilename ?? assetId}</small>
-        ) : null}
-        <input
-          type="file"
-          accept="image/*"
-          disabled={disabled}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void onImageUpload(file);
-          }}
-        />
-      </>
-    );
+  function openFilePicker() {
+    if (!disabled) inputRef.current?.click();
   }
 
+  function handleSurfaceClick(event: MouseEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    openFilePicker();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    openFilePicker();
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void onImageUpload(file);
+  }
+
+  const stateClass = missing
+    ? "dashboard-image-input--missing"
+    : blobUrl
+      ? "dashboard-image-input--preview"
+      : hasAsset
+        ? "dashboard-image-input--loading"
+        : "dashboard-image-input--empty";
+
   return (
-    <div className="canvas-widget-image-input">
-      {blobUrl ? (
-        <img src={blobUrl} alt="Uploaded input" className="canvas-widget-image-input__preview" />
-      ) : missing ? (
-        <span className="canvas-widget-image-input__missing">Image not found — please re-upload</span>
-      ) : assetId ? (
-        <span className="canvas-widget-image-input__hint">Loaded</span>
-      ) : null}
-      {assetId && !missing ? (
-        <span className="canvas-widget-image-input__filename">{originalFilename ?? assetId}</span>
-      ) : null}
+    <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`}>
       <input
+        ref={inputRef}
+        className="dashboard-image-input__file"
         type="file"
         accept="image/*"
         disabled={disabled}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void onImageUpload(file);
-        }}
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={handleFileChange}
       />
+      <span
+        className="dashboard-image-input__surface"
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled}
+        onClick={handleSurfaceClick}
+        onKeyDown={handleKeyDown}
+      >
+        {blobUrl ? (
+          <>
+            <img src={blobUrl} alt="Uploaded input" className="dashboard-image-input__preview" />
+            <span className="dashboard-image-input__overlay">
+              <span className="dashboard-image-input__filename">{originalFilename ?? assetId}</span>
+              <span className="dashboard-image-input__action">Click here to replace image</span>
+            </span>
+          </>
+        ) : missing ? (
+          <>
+            <span className="dashboard-image-input__icon" aria-hidden="true">
+              <ImagePlus size={24} />
+            </span>
+            <span className="dashboard-image-input__title">Image could not be loaded</span>
+            <span className="dashboard-image-input__hint">Click here to upload an image</span>
+          </>
+        ) : assetId ? (
+          <>
+            <span className="dashboard-image-input__icon" aria-hidden="true">
+              <ImagePlus size={24} />
+            </span>
+            <span className="dashboard-image-input__title">Loading image...</span>
+            <span className="dashboard-image-input__hint">{originalFilename ?? assetId}</span>
+          </>
+        ) : (
+          <>
+            <span className="dashboard-image-input__icon" aria-hidden="true">
+              <ImagePlus size={24} />
+            </span>
+            <span className="dashboard-image-input__title">Click here to upload an image</span>
+          </>
+        )}
+      </span>
     </div>
   );
 }

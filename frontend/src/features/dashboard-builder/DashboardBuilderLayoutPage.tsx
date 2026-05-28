@@ -976,7 +976,7 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
     return (
       <div className="layout-preview-image-input">
         <ImagePlus size={22} aria-hidden="true" />
-        <span>{widget.widgetType === "load_image_mask" ? "Upload an image, then draw a mask" : "Drop an image or click to upload"}</span>
+        <span>Click here to upload an image</span>
       </div>
     );
   }

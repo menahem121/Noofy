@@ -1496,6 +1496,169 @@
   opacity: 0.55;
 }
 
+.dashboard-image-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.dashboard-image-input__file {
+  display: none;
+}
+
+.field-group .dashboard-image-input__surface,
+.dashboard-image-input__surface {
+  position: relative;
+  display: flex;
+  min-height: 168px;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  overflow: hidden;
+  padding: 18px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.07), rgba(96, 165, 250, 0.035)),
+    rgba(46, 45, 49, 0.72);
+  color: var(--text-secondary);
+  cursor: pointer;
+  outline: none;
+  text-align: center;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.dashboard-image-input--canvas .dashboard-image-input__surface {
+  min-height: 150px;
+}
+
+.dashboard-image-input--preview .dashboard-image-input__surface {
+  min-height: 184px;
+  padding: 0;
+  border-style: solid;
+  background: rgba(28, 27, 29, 0.82);
+}
+
+.dashboard-image-input--canvas.dashboard-image-input--preview .dashboard-image-input__surface {
+  min-height: 150px;
+}
+
+.dashboard-image-input__surface:hover,
+.dashboard-image-input__surface:focus-visible {
+  border-color: rgba(139, 92, 246, 0.72);
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(96, 165, 250, 0.055)),
+    rgba(55, 54, 59, 0.82);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);
+}
+
+.dashboard-image-input__surface:active {
+  transform: translateY(1px);
+}
+
+.dashboard-image-input__surface[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.dashboard-image-input__surface[aria-disabled="true"]:hover,
+.dashboard-image-input__surface[aria-disabled="true"]:focus-visible {
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: none;
+}
+
+.field-group .dashboard-image-input__icon,
+.dashboard-image-input__icon {
+  display: inline-grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(139, 92, 246, 0.14);
+  color: var(--primary-hover);
+}
+
+.field-group .dashboard-image-input__title,
+.dashboard-image-input__title {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field-group .dashboard-image-input__hint,
+.dashboard-image-input__hint {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-image-input__preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 184px;
+  object-fit: cover;
+}
+
+.dashboard-image-input--canvas .dashboard-image-input__preview {
+  min-height: 150px;
+  max-height: 260px;
+}
+
+.dashboard-image-input__overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 30px 14px 12px;
+  background: linear-gradient(180deg, transparent, rgba(28, 27, 29, 0.92));
+  text-align: left;
+}
+
+.field-group .dashboard-image-input__filename,
+.dashboard-image-input__filename {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-group .dashboard-image-input__action,
+.dashboard-image-input__action {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dashboard-image-input--missing .dashboard-image-input__surface {
+  border-style: solid;
+  border-color: rgba(248, 113, 113, 0.3);
+  background:
+    linear-gradient(135deg, rgba(248, 113, 113, 0.06), rgba(139, 92, 246, 0.055)),
+    rgba(46, 45, 49, 0.72);
+}
+
+.dashboard-image-input--missing .dashboard-image-input__icon {
+  background: rgba(248, 113, 113, 0.12);
+  color: var(--error);
+}
+
 .field-group input[type="range"]::-webkit-slider-runnable-track {
   height: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);

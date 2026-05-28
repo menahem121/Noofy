@@ -1855,7 +1855,7 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />
-        <span>Drop an image or click to upload</span>
+        <span>Click here to upload an image</span>
       </div>
     );
   }
@@ -1864,7 +1864,7 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />
-        <span>Upload an image, then draw a mask</span>
+        <span>Click here to upload an image</span>
       </div>
     );
   }
