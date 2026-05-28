@@ -97,7 +97,12 @@ class CapsuleInstaller:
         )
 
         self._transition(
-            fingerprint, InstallStatus.PREPARING, workflow_id, last_error=None
+            fingerprint,
+            InstallStatus.PREPARING,
+            workflow_id,
+            last_error=None,
+            smoke_test_status=SmokeTestStatus.NOT_RUN,
+            smoke_test_report=SmokeTestReport(),
         )
         source_policy = capsule_source_policy(capsule_lock)
         if (
@@ -576,7 +581,10 @@ def _required_smoke_stages_passed(
         return False
     if report.runner_health.status is not SmokeStageStatus.PASSED:
         return False
-    if report.workflow_execution.status is not SmokeStageStatus.PASSED:
+    if (
+        report.workflow_execution.status is not SmokeStageStatus.PASSED
+        and not _workflow_execution_smoke_is_optional(report.workflow_execution)
+    ):
         return False
     if (
         capsule_lock.custom_nodes
@@ -584,6 +592,13 @@ def _required_smoke_stages_passed(
     ):
         return False
     return True
+
+
+def _workflow_execution_smoke_is_optional(stage: SmokeStageResult) -> bool:
+    return (
+        stage.status is SmokeStageStatus.BLOCKED
+        and stage.message == "No workflow execution smoke fixture is configured."
+    )
 
 
 def _smoke_report_has_failed_stage(report: SmokeTestReport) -> bool:

@@ -106,8 +106,13 @@ class RunnerProcessCoordinator:
 def comfyui_adapter_factory(
     *,
     models_dir: Path,
+    dashboard_assets_dir: Path | None = None,
     log_store: DiagnosticsSink,
 ) -> AdapterFactory:
     from app.engine.factory import comfyui_adapter_factory as _factory
 
-    return _factory(models_dir=models_dir, log_store=log_store)
+    return _factory(
+        models_dir=models_dir,
+        dashboard_assets_dir=dashboard_assets_dir,
+        log_store=log_store,
+    )

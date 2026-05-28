@@ -118,6 +118,7 @@ class RunnerDescriptor(BaseModel):
     runner_workspace_fingerprint: str | None = None
     dependency_env_fingerprint: str | None = None
     runner_process_compatibility_key: str | None = None
+    runner_workspace_path: str | None = None
     model_view_fingerprint: str | None = None
     runtime_profile_id: str | None = None
     runtime_profile_variant_id: str | None = None

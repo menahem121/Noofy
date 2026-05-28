@@ -1030,6 +1030,108 @@ async def test_run_workflow_auto_prepares_custom_node_runner_before_submit() -> 
 
 
 @pytest.mark.anyio
+async def test_run_workflow_auto_prepare_failure_reports_root_cause() -> None:
+    core_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = AutoPrepareLifecycle(supervisor, RecordingAdapter())
+
+    async def fail_prepare(workflow_id: str) -> dict[str, object]:
+        lifecycle.prepare_calls.append(workflow_id)
+        lifecycle.install_status = "failed"
+        return {
+            "workflow_id": workflow_id,
+            "status": "failed",
+            "user_facing_message": "Cannot prepare automatically",
+            "last_error": "Node package dependency could not be resolved.",
+        }
+
+    lifecycle.prepare_workflow = fail_prepare  # type: ignore[method-assign]
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    result = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert hasattr(result, "valid") and not result.valid
+    assert result.errors == ["Node package dependency could not be resolved."]
+    assert lifecycle.prepare_calls == ["text_to_image_v0"]
+    assert lifecycle.start_calls == []
+    assert core_adapter.run_calls == []
+
+
+@pytest.mark.anyio
+async def test_run_workflow_repairs_stale_ready_runtime_artifacts_before_submit() -> None:
+    core_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="core-job",
+    )
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = AutoPrepareLifecycle(supervisor, isolated_adapter)
+    lifecycle.install_status = "ready"
+    original_start = lifecycle.start_workflow_runner
+
+    async def stale_once_start(workflow_id: str) -> dict[str, object]:
+        if not lifecycle.prepare_calls:
+            lifecycle.start_calls.append(workflow_id)
+            return {
+                "workflow_id": workflow_id,
+                "status": "failed",
+                "runner": None,
+                "pid": None,
+                "install_status": "ready",
+                "error": "Prepared runtime artifact is not ready: dependency environment manifest fingerprint mismatch, runner workspace manifest fingerprint mismatch",
+            }
+        return await original_start(workflow_id)
+
+    lifecycle.start_workflow_runner = stale_once_start  # type: ignore[method-assign]
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert lifecycle.prepare_calls == ["text_to_image_v0"]
+    assert lifecycle.start_calls == ["text_to_image_v0", "text_to_image_v0"]
+    assert supervisor.runner_for_job(job.job_id).runner_id == "isolated-1"
+    assert isolated_adapter.run_calls == [("isolated-job", {})]
+    assert core_adapter.run_calls == []
+
+
+@pytest.mark.anyio
 async def test_core_runner_run_uses_memory_governor_cautious_admission() -> None:
     adapter = RecordingAdapter(
         models=[
@@ -1057,9 +1159,9 @@ async def test_core_runner_run_uses_memory_governor_cautious_admission() -> None
     assert job.status == "queued"
     assert job.memory_decision is not None
     assert job.memory_decision["action"] == "start_co_resident"
-    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain_cautious_start"
+    assert job.memory_decision["reason_code"] == "no_resident_runners"
     assert job.memory_status is not None
-    assert job.memory_status["state"] == "memory_warning"
+    assert job.memory_status["state"] == "ready_warm_co_resident"
     assert supervisor.runner_for_job(job.job_id).runner_id == CORE_RUNNER_ID
 
 
@@ -1358,7 +1460,14 @@ async def test_get_result_records_memory_error_observation(tmp_path: Path) -> No
     service, supervisor = _build_service(
         adapter,
         memory_learning_store=learning_store,
-        memory_observer=StaticMemoryObserver(MachineMemorySnapshot(backend=MemoryBackend.CUDA)),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=10_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
     )
 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
@@ -1786,9 +1895,9 @@ async def test_run_workflow_allows_uncertain_memory_estimate_without_idle_cleanu
     assert job.status == "queued"
     assert job.memory_decision is not None
     assert job.memory_decision["action"] == "start_co_resident"
-    assert job.memory_decision["reason_code"] == "gpu_estimate_uncertain_cautious_start"
+    assert job.memory_decision["reason_code"] == "no_resident_runners"
     assert job.memory_status is not None
-    assert job.memory_status["state"] == "memory_warning"
+    assert job.memory_status["state"] == "ready_warm_co_resident"
     assert selected_adapter.run_calls == [("job-1", {})]
     assert supervisor.job_registry.snapshot() == {"job-1": "selected-runner"}
 

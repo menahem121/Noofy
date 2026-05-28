@@ -333,6 +333,122 @@ def test_prepare_uses_generated_dependency_lock_identity_when_capsule_hash_is_st
     assert installer.requests[0].lock == lock
 
 
+def test_prepare_keeps_capsule_profile_abi_for_dependency_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, lock = _capsule_with_dependency_lock()
+    source_files_dir = tmp_path / "source-files"
+    (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
+    (source_files_dir / "custom_nodes" / "node-a" / "requirements.txt").write_text(
+        "demo>=1\n",
+        encoding="utf-8",
+    )
+
+    class FakeResolver:
+        def __init__(self) -> None:
+            self.python_version: str | None = None
+
+        def resolve(self, request) -> ResolvedDependencyLock:
+            self.python_version = request.python_version
+            return lock
+
+    resolver = FakeResolver()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_resolver=resolver,
+        custom_node_source_files_dir=source_files_dir,
+        dependency_transactions_dir=tmp_path / "transactions",
+        dependency_python_executable_provider=lambda: "/opt/noofy/runtime/python",
+        log_store=LogStore(),
+    )
+    monkeypatch.setattr(
+        "app.runtime.storage.workspace_preparer.detect_python_major_minor",
+        lambda python_executable: "3.11",
+    )
+
+    prepared = preparer.prepare(base)
+
+    assert resolver.python_version == "3.11"
+    assert prepared.dependency_env_manifest.python_version == "3.11"
+    assert prepared.dependency_env_manifest.python_build_id == "cpython-3.11-noofy-dev"
+    assert prepared.dependency_env_manifest.fingerprint == base.runtime.dependency_env_fingerprint
+    assert installer.requests[0].python_version == "3.11"
+    assert installer.requests[0].python_executable == "/opt/noofy/runtime/python"
+
+
+def test_prepare_rejects_dependency_python_executable_with_wrong_profile_abi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, lock = _capsule_with_dependency_lock()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_locks={lock.lock_hash: lock},
+        dependency_transactions_dir=tmp_path / "transactions",
+        dependency_python_executable_provider=lambda: "/opt/noofy/runtime/python",
+        log_store=LogStore(),
+    )
+    monkeypatch.setattr(
+        "app.runtime.storage.workspace_preparer.detect_python_major_minor",
+        lambda python_executable: "3.14",
+    )
+
+    with pytest.raises(RuntimeError, match="Dependency environment Python ABI"):
+        preparer.prepare(base)
+
+    assert installer.requests == []
+
+
+def test_prepare_resolves_dependency_manifest_with_app_workflow_id(tmp_path: Path) -> None:
+    base = _capsule_lock()
+    lock = _dependency_lock_for_capsule(base)
+    app_workflow_id = "unknown__text_to_image_v0__0.1.0"
+    source_files_dir = tmp_path / "source-files"
+    (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
+    (source_files_dir / "custom_nodes" / "node-a" / "requirements.txt").write_text(
+        "demo>=1\n",
+        encoding="utf-8",
+    )
+
+    class FakeResolver:
+        def __init__(self) -> None:
+            self.workflow_id: str | None = None
+            self.source_dirs: list[Path] = []
+
+        def resolve(self, request) -> ResolvedDependencyLock:
+            self.workflow_id = request.workflow_id
+            self.source_dirs = request.source_dirs
+            return lock
+
+    resolver = FakeResolver()
+    installer = _FakeDependencyEnvInstaller()
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_resolver=resolver,
+        custom_node_source_files_dir_resolver=lambda workflow_id: (
+            source_files_dir if workflow_id == app_workflow_id else None
+        ),
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(base, workflow_id=app_workflow_id)
+
+    assert resolver.workflow_id == app_workflow_id
+    assert resolver.source_dirs == [source_files_dir / "custom_nodes" / "node-a"]
+    assert prepared.dependency_env_manifest.dependency_lock_hash == lock.lock_hash
+    assert installer.requests[0].lock == lock
+
+
 def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Path) -> None:
     base = _capsule_lock()
     core_lock = ResolvedDependencyLock(

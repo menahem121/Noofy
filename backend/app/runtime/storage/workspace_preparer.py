@@ -41,7 +41,11 @@ from app.runtime.dependencies.dependency_resolver import (
     UvDependencyLockResolver,
     custom_node_dependency_source_dirs,
 )
-from app.runtime.fingerprints import runner_workspace_fingerprint, sha256_fingerprint
+from app.runtime.fingerprints import (
+    dependency_env_fingerprint,
+    runner_workspace_fingerprint,
+    sha256_fingerprint,
+)
 from app.runtime.install_transactions import InstallTransaction, InstallTransactionStore
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
@@ -57,6 +61,7 @@ from app.runtime.profiles import (
     RuntimeProfileSelection,
     resolve_runtime_profile,
 )
+from app.runtime.python_abi import detect_python_major_minor
 from app.runtime.node_registry import CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME
 from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
@@ -100,6 +105,7 @@ class RuntimeWorkspacePreparer:
         custom_node_source_cache_dir: Path | None = None,
         dependency_transactions_dir: Path | None = None,
         install_transaction_store: InstallTransactionStore | None = None,
+        dependency_python_executable_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self.dependency_env_store = dependency_env_store
         self.runner_workspace_store = runner_workspace_store
@@ -127,6 +133,7 @@ class RuntimeWorkspacePreparer:
                 log_store=self.log_store,
             )
         )
+        self.dependency_python_executable_provider = dependency_python_executable_provider
 
     def prepare(
         self,
@@ -156,12 +163,14 @@ class RuntimeWorkspacePreparer:
             )
             dependency_manifest = self._dependency_env_manifest(
                 capsule_lock,
+                profile_selection=profile_selection,
                 status=InstallStatus.CHECKING_COMPATIBILITY,
             )
             dependency_manifest = self._maybe_resolve_dependency_manifest(
                 capsule_lock,
                 dependency_manifest,
                 profile_selection,
+                workflow_id=workflow_id,
             )
             runner_manifest = self._runner_workspace_manifest(
                 capsule_lock,
@@ -473,6 +482,9 @@ class RuntimeWorkspacePreparer:
                     target_dir=staging_dir,
                     python_version=manifest.python_version,
                     workflow_id=workflow_id,
+                    python_executable=self._dependency_python_executable(
+                        manifest.python_version
+                    ),
                 )
             )
             staging_dir.mkdir(parents=True, exist_ok=True)
@@ -866,6 +878,7 @@ class RuntimeWorkspacePreparer:
         self,
         capsule_lock: CapsuleLock,
         *,
+        profile_selection: RuntimeProfileSelection | None = None,
         status: InstallStatus = InstallStatus.READY,
         smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN,
     ) -> DependencyEnvManifest:
@@ -889,17 +902,35 @@ class RuntimeWorkspacePreparer:
             smoke_test_status=smoke_test_status,
         )
 
+    def _dependency_python_executable(self, expected_python_version: str) -> str | None:
+        if self.dependency_python_executable_provider is None:
+            return None
+        executable = self.dependency_python_executable_provider()
+        if executable is None:
+            return None
+        detected_python_version = detect_python_major_minor(executable)
+        if detected_python_version != expected_python_version:
+            raise RuntimeError(
+                "Dependency environment Python ABI does not match the selected "
+                "runtime profile: "
+                f"{executable} reports {detected_python_version or 'unknown'}, "
+                f"expected {expected_python_version}."
+            )
+        return executable
+
     def _maybe_resolve_dependency_manifest(
         self,
         capsule_lock: CapsuleLock,
         manifest: DependencyEnvManifest,
         profile_selection: RuntimeProfileSelection | None,
+        *,
+        workflow_id: str,
     ) -> DependencyEnvManifest:
         if self.dependency_env_installer is None:
             return manifest
         source_policy = capsule_source_policy(capsule_lock)
         source_dirs = self._custom_node_dependency_source_dirs(
-            capsule_lock.workflow.package_id,
+            workflow_id,
             capsule_lock,
         )
         if self.dependency_lock_resolver is not None and source_dirs:
@@ -921,7 +952,7 @@ class RuntimeWorkspacePreparer:
                     python_platform=_uv_python_platform(
                         manifest.os, manifest.architecture
                     ),
-                    workflow_id=capsule_lock.workflow.package_id,
+                    workflow_id=workflow_id,
                     source_policy=source_policy,
                 )
             )
@@ -966,7 +997,7 @@ class RuntimeWorkspacePreparer:
             "info",
             "Using locally resolved dependency lock for workflow",
             "runtime.workspace",
-            workflow_id=capsule_lock.workflow.package_id,
+            workflow_id=workflow_id,
             details={
                 "original_dependency_lock_hash": manifest.dependency_lock_hash,
                 "resolved_dependency_lock_hash": lock_hash,

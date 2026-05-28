@@ -1,4 +1,5 @@
 import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.runtime.dependencies.dependency_resolver import (
     DependencyResolutionError,
     DependencyResolutionRequest,
     MaterializedWheel,
+    PyPIPackageIndexClient,
     ResolvedRequirement,
     UvDependencyLockResolver,
     custom_node_dependency_source_dirs,
@@ -72,6 +74,18 @@ class _FakeDependencyEnvInstaller:
         (request.target_dir / "install.marker").write_text(
             "installed", encoding="utf-8"
         )
+
+
+def _wheel_bytes(label: str) -> bytes:
+    return (
+        b"PK\x05\x06"
+        + b"\x00" * 18
+        + label.encode("utf-8")
+    )
+
+
+def json_bytes(value: object) -> bytes:
+    return json.dumps(value).encode("utf-8")
 
 
 def test_parse_uv_compiled_requirements_handles_hash_continuations() -> None:
@@ -161,8 +175,8 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(
     assert lock.wheels[0].import_names == ["demo_import"]
     assert (tmp_path / "wheel-cache" / "demo-1.0.0-py3-none-any.whl").exists()
     assert "--generate-hashes" in commands[1]
-    assert "--no-build" in commands[1]
     assert "--only-binary" in commands[1]
+    assert ":all:" in commands[1]
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
@@ -203,6 +217,124 @@ def test_uv_resolver_blocks_setup_py_marker_before_running_uv(tmp_path: Path) ->
         )
 
     assert error.value.code is DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED
+
+
+def test_pypi_materializer_selects_target_platform_wheel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mac_bytes = _wheel_bytes("mac")
+    linux_bytes = _wheel_bytes("linux")
+    mac_digest = hashlib.sha256(mac_bytes).hexdigest()
+    linux_digest = hashlib.sha256(linux_bytes).hexdigest()
+    files = {
+        "https://files.example/contourpy-mac.whl": mac_bytes,
+        "https://files.example/contourpy-linux.whl": linux_bytes,
+    }
+    metadata = {
+        "urls": [
+            {
+                "filename": "contourpy-1.3.3-cp313-cp313-macosx_11_0_arm64.whl",
+                "url": "https://files.example/contourpy-mac.whl",
+                "digests": {"sha256": mac_digest},
+            },
+            {
+                "filename": "contourpy-1.3.3-cp313-cp313-manylinux_2_17_x86_64.whl",
+                "url": "https://files.example/contourpy-linux.whl",
+                "digests": {"sha256": linux_digest},
+            },
+        ]
+    }
+
+    class Response:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.payload
+
+    def urlopen(url: str, timeout: int):
+        if url.endswith("/json"):
+            return Response(json_bytes(metadata))
+        return Response(files[url])
+
+    monkeypatch.setattr(
+        "app.runtime.dependencies.dependency_resolver.urllib.request.urlopen",
+        urlopen,
+    )
+
+    wheel = PyPIPackageIndexClient(base_url="https://example.invalid/pypi").materialize_wheel(
+        ResolvedRequirement(
+            name="contourpy",
+            version="1.3.3",
+            hashes=[f"sha256:{mac_digest}", f"sha256:{linux_digest}"],
+            python_version="3.13",
+            python_platform="x86_64-unknown-linux-gnu",
+        ),
+        wheel_cache_dir=tmp_path,
+    )
+
+    assert wheel.wheel_filename == "contourpy-1.3.3-cp313-cp313-manylinux_2_17_x86_64.whl"
+    assert wheel.sha256 == f"sha256:{linux_digest}"
+
+
+def test_pypi_materializer_accepts_older_cp_abi3_wheel_for_target_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel_bytes = _wheel_bytes("abi3")
+    digest = hashlib.sha256(wheel_bytes).hexdigest()
+    metadata = {
+        "urls": [
+            {
+                "filename": "opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_17_x86_64.whl",
+                "url": "https://files.example/opencv.whl",
+                "digests": {"sha256": digest},
+            },
+        ]
+    }
+
+    class Response:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.payload
+
+    def urlopen(url: str, timeout: int):
+        if url.endswith("/json"):
+            return Response(json_bytes(metadata))
+        return Response(wheel_bytes)
+
+    monkeypatch.setattr(
+        "app.runtime.dependencies.dependency_resolver.urllib.request.urlopen",
+        urlopen,
+    )
+
+    wheel = PyPIPackageIndexClient(base_url="https://example.invalid/pypi").materialize_wheel(
+        ResolvedRequirement(
+            name="opencv-python-headless",
+            version="4.13.0.92",
+            hashes=[f"sha256:{digest}"],
+            python_version="3.13",
+            python_platform="x86_64-unknown-linux-gnu",
+        ),
+        wheel_cache_dir=tmp_path,
+    )
+
+    assert wheel.wheel_filename == "opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_17_x86_64.whl"
 
 
 def test_workspace_preparer_can_resolve_missing_lock_from_custom_node_sources(

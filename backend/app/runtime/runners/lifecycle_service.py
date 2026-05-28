@@ -33,6 +33,7 @@ from app.runtime.memory.memory_governor import (
 from app.runtime.models.model_store import LocalModelRequirement
 from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
 from app.runtime.runners.runner_process import RunnerLaunchSpec
+from app.runtime.python_abi import detect_python_major_minor
 from app.runtime.smoke_test import SmokeExecutionFixture
 from app.runtime.runners.supervisor import (
     QueuedRunnerStartKind,
@@ -744,7 +745,17 @@ class WorkflowRunnerLifecycleService:
 
     def _runner_launch_spec(self, capsule_lock: CapsuleLock, install_state: InstallState) -> RunnerLaunchSpec:
         assert self.runtime_manager is not None, "runtime_manager required for runner launch"
-        dependency_env_path, runner_workspace_path = _prepared_runtime_paths(install_state, capsule_lock)
+        (
+            dependency_env_path,
+            runner_workspace_path,
+            dependency_env_fingerprint,
+            runner_workspace_fingerprint,
+        ) = _prepared_runtime_paths(
+            install_state,
+            capsule_lock,
+            expected_python_version=capsule_lock.runtime.python_version,
+        )
+        self._validate_runtime_python_abi(capsule_lock)
         if install_state.smoke_test_status is not SmokeTestStatus.PASSED:
             raise ValueError(
                 "Prepared runtime smoke test has not passed: "
@@ -754,6 +765,8 @@ class WorkflowRunnerLifecycleService:
             capsule_lock,
             dependency_env_path=dependency_env_path,
             runner_workspace_path=runner_workspace_path,
+            dependency_env_fingerprint=dependency_env_fingerprint,
+            runner_workspace_fingerprint=runner_workspace_fingerprint,
             runtime_manager=self.runtime_manager,
         )
 
@@ -813,6 +826,26 @@ class WorkflowRunnerLifecycleService:
         safe = "".join(char if char.isalnum() else "-" for char in raw.lower()).strip("-")
         return f"workflow-{capsule_lock.workflow.package_id}-{safe}"
 
+    def _validate_runtime_python_abi(self, capsule_lock: CapsuleLock) -> None:
+        assert self.runtime_manager is not None, "runtime_manager required for runner launch"
+        executable = _runtime_python_executable(self.runtime_manager)
+        active_python_version = _runtime_python_version(self.runtime_manager)
+        expected_python_version = capsule_lock.runtime.python_version
+        if active_python_version == expected_python_version:
+            return
+        if active_python_version is None and not Path(executable).exists():
+            return
+        if active_python_version is None:
+            raise ValueError(
+                "Managed runner Python ABI could not be inspected; "
+                f"runtime profile requires Python {expected_python_version}."
+            )
+        raise ValueError(
+            "Managed runner Python ABI mismatch: runtime profile requires "
+            f"Python {expected_python_version}, but the active managed runner "
+            f"uses Python {active_python_version}."
+        )
+
 
 # ------------------------------------------------------------------
 # Module-level helpers used directly by factory.py and tests.
@@ -831,12 +864,20 @@ def _workflow_runner_launch_spec(
     *,
     dependency_env_path: Path,
     runner_workspace_path: Path,
+    dependency_env_fingerprint: str | None = None,
+    runner_workspace_fingerprint: str | None = None,
     runtime_manager: RuntimeManager,
     runner_id_suffix: str | None = None,
 ) -> RunnerLaunchSpec:
     runner_id = WorkflowRunnerLifecycleService._runner_id_for_capsule(capsule_lock)
     if runner_id_suffix:
         runner_id = f"{runner_id}-{runner_id_suffix}"
+    runner_workspace_fingerprint = (
+        runner_workspace_fingerprint or capsule_lock.runtime.runner_fingerprint
+    )
+    dependency_env_fingerprint = (
+        dependency_env_fingerprint or capsule_lock.runtime.dependency_env_fingerprint
+    )
     telemetry_path = runner_workspace_path / ".noofy" / "memory" / f"{runner_id}.jsonl"
     extra_args = [
         "--base-directory",
@@ -848,16 +889,16 @@ def _workflow_runner_launch_spec(
     return RunnerLaunchSpec(
         runner_id=runner_id,
         kind=RunnerKind.ISOLATED_COMFYUI,
-        fingerprint=capsule_lock.runtime.runner_fingerprint,
+        fingerprint=runner_workspace_fingerprint,
         python_executable=_runtime_python_executable(runtime_manager),
         working_dir=runner_workspace_path,
         dependency_env_path=dependency_env_path,
         runner_workspace_path=runner_workspace_path,
-        runner_workspace_fingerprint=capsule_lock.runtime.runner_fingerprint,
-        dependency_env_fingerprint=capsule_lock.runtime.dependency_env_fingerprint,
+        runner_workspace_fingerprint=runner_workspace_fingerprint,
+        dependency_env_fingerprint=dependency_env_fingerprint,
         runner_process_compatibility_key=(
             capsule_lock.runtime.runner_process_compatibility_key
-            or capsule_lock.runtime.runner_fingerprint
+            or runner_workspace_fingerprint
         ),
         runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
         runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
@@ -881,11 +922,20 @@ def _runtime_python_executable(runtime_manager: RuntimeManager) -> str:
     return runtime_manager.python_executable
 
 
+def _runtime_python_version(runtime_manager: RuntimeManager) -> str | None:
+    return detect_python_major_minor(_runtime_python_executable(runtime_manager))
+
+
 def _memory_class_for_runtime_backend(gpu_backend: str) -> RunnerMemoryClass:
     return RunnerMemoryClass.CPU_ONLY if gpu_backend.lower() == "cpu" else RunnerMemoryClass.GPU_HEAVY
 
 
-def _prepared_runtime_paths(install_state: InstallState, capsule_lock: CapsuleLock) -> tuple[Path, Path]:
+def _prepared_runtime_paths(
+    install_state: InstallState,
+    capsule_lock: CapsuleLock,
+    *,
+    expected_python_version: str | None = None,
+) -> tuple[Path, Path, str, str]:
     if not install_state.dependency_env_path or not install_state.runner_workspace_path:
         raise ValueError("Prepared runtime artifact paths are missing; prepare the workflow again.")
 
@@ -903,21 +953,41 @@ def _prepared_runtime_paths(install_state: InstallState, capsule_lock: CapsuleLo
 
     dependency_manifest = _read_dependency_manifest(dependency_env_path / "manifest.json")
     runner_manifest = _read_runner_workspace_manifest(runner_workspace_path / "manifest.json")
+    expected_dependency_fingerprint = (
+        install_state.dependency_env_fingerprint
+        or capsule_lock.runtime.dependency_env_fingerprint
+    )
+    expected_runner_fingerprint = (
+        install_state.runner_workspace_fingerprint
+        or capsule_lock.runtime.runner_fingerprint
+    )
     not_ready: list[str] = []
     if dependency_manifest.status is not InstallStatus.READY:
         not_ready.append(f"dependency environment manifest status {dependency_manifest.status.value}")
     if runner_manifest.status is not InstallStatus.READY:
         not_ready.append(f"runner workspace manifest status {runner_manifest.status.value}")
-    if dependency_manifest.fingerprint != capsule_lock.runtime.dependency_env_fingerprint:
+    if dependency_manifest.fingerprint != expected_dependency_fingerprint:
         not_ready.append("dependency environment manifest fingerprint mismatch")
-    if runner_manifest.fingerprint != capsule_lock.runtime.runner_fingerprint:
+    if (
+        expected_python_version is not None
+        and dependency_manifest.python_version != expected_python_version
+    ):
+        not_ready.append(
+            "dependency environment Python ABI mismatch"
+        )
+    if runner_manifest.fingerprint != expected_runner_fingerprint:
         not_ready.append("runner workspace manifest fingerprint mismatch")
     if runner_manifest.dependency_env_fingerprint != dependency_manifest.fingerprint:
         not_ready.append("runner workspace dependency environment mismatch")
     not_ready.extend(_invalid_model_references(install_state))
     if not_ready:
         raise ValueError(f"Prepared runtime artifact is not ready: {', '.join(not_ready)}")
-    return dependency_env_path, runner_workspace_path
+    return (
+        dependency_env_path,
+        runner_workspace_path,
+        dependency_manifest.fingerprint,
+        runner_manifest.fingerprint,
+    )
 
 
 def _read_dependency_manifest(path: Path) -> DependencyEnvManifest:

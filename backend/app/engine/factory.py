@@ -72,6 +72,10 @@ from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
+from app.workflows.import_runtime_profile import (
+    RuntimeProfileSelectionError,
+    select_import_runtime_profile,
+)
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
@@ -84,6 +88,7 @@ def comfyui_adapter_factory(
     *,
     model_roots: list[Path] | None = None,
     models_dir: Path | None = None,
+    dashboard_assets_dir: Path | None = None,
     log_store: DiagnosticsSink,
 ) -> AdapterFactory:
     roots = model_roots or ([models_dir] if models_dir is not None else None)
@@ -91,11 +96,18 @@ def comfyui_adapter_factory(
         raise ValueError("A ComfyUI adapter factory requires at least one model root.")
 
     def factory(descriptor: RunnerDescriptor) -> EngineAdapter:
+        comfyui_input_dir = (
+            Path(descriptor.runner_workspace_path) / "input"
+            if descriptor.runner_workspace_path
+            else None
+        )
         return ComfyUIEngineAdapter(
             descriptor.base_url,
             roots[0],
             descriptor.ws_url,
             log_store=log_store,
+            dashboard_assets_dir=dashboard_assets_dir,
+            comfyui_input_dir=comfyui_input_dir,
             model_roots=roots,
         )
 
@@ -106,6 +118,21 @@ def create_default_engine_service() -> EngineService:
     paths = settings.paths
     paths.ensure_directories()
     log_store = LogStore()
+    runtime_profile_catalog = load_runtime_profile_catalog(
+        DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
+    )
+    selected_runtime_profile_variant = None
+    try:
+        _, selected_runtime_profile_variant = select_import_runtime_profile(
+            runtime_profile_catalog.profiles
+        )
+    except RuntimeProfileSelectionError as exc:
+        log_store.add(
+            "warning",
+            "No supported managed runtime profile is available for this machine",
+            "runtime.profiles",
+            details={"error": str(exc)},
+        )
     model_folder_store = ModelFolderSettingsStore(
         paths.settings_dir / "model-folders.json"
     )
@@ -180,7 +207,17 @@ def create_default_engine_service() -> EngineService:
         repo_dir=active_runtime.repo_dir,
         runtime_dir=settings.runtime_dir,
         bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
-        python_executable_override=active_runtime.python_executable,
+        python_executable_override=(
+            active_runtime.python_executable
+            if active_runtime.venv_dir is None
+            else None
+        ),
+        expected_python_version=(
+            selected_runtime_profile_variant.python_version
+            if selected_runtime_profile_variant is not None
+            else None
+        ),
+        packaged_runtime=settings.packaged_runtime_active and not developer_runtime_override,
         torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
         torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
         log_store=log_store,
@@ -332,9 +369,7 @@ def create_default_engine_service() -> EngineService:
             ),
             comfyui_source_dir=active_runtime.repo_dir,
             model_view_dir=paths.model_materialized_dir,
-            runtime_profile_catalog=load_runtime_profile_catalog(
-                DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
-            ),
+            runtime_profile_catalog=runtime_profile_catalog,
             dependency_env_installer=UvDependencyEnvironmentInstaller(
                 wheel_cache_dir=paths.wheel_cache_dir,
                 uv_cache_dir=paths.cache_dir / "uv",
@@ -357,6 +392,7 @@ def create_default_engine_service() -> EngineService:
             ),
             custom_node_source_cache_dir=paths.custom_node_cache_dir,
             dependency_transactions_dir=paths.install_transactions_dir,
+            dependency_python_executable_provider=lambda: runtime_environment.python_executable,
             log_store=log_store,
         ),
         workspace_smoke_test=runner_smoke_tester.run,
@@ -367,6 +403,7 @@ def create_default_engine_service() -> EngineService:
         process_supervisor=runner_process_supervisor,
         adapter_factory=comfyui_adapter_factory(
             model_roots=model_roots,
+            dashboard_assets_dir=paths.dashboard_assets_dir,
             log_store=log_store,
         ),
         log_store=log_store,
@@ -390,11 +427,23 @@ def create_default_engine_service() -> EngineService:
         bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
         torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
         torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
+        expected_python_version=(
+            selected_runtime_profile_variant.python_version
+            if selected_runtime_profile_variant is not None
+            else None
+        ),
+        packaged_runtime=settings.packaged_runtime_active and not developer_runtime_override,
         bundled_repo_dir=settings.comfyui_repo_dir,
         bundled_python_executable=RuntimeEnvironment(
             repo_dir=settings.comfyui_repo_dir,
             runtime_dir=settings.runtime_dir,
             bootstrap_python_executable=settings.comfyui_bootstrap_python_executable,
+            expected_python_version=(
+                selected_runtime_profile_variant.python_version
+                if selected_runtime_profile_variant is not None
+                else None
+            ),
+            packaged_runtime=settings.packaged_runtime_active and not developer_runtime_override,
             torch_cuda_index_url=settings.comfyui_torch_cuda_index_url,
             torch_cpu_index_url=settings.comfyui_torch_cpu_index_url,
             log_store=log_store,

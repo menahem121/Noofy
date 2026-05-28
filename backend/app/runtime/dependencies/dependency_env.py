@@ -46,6 +46,7 @@ class DependencyEnvironmentInstallRequest:
     target_dir: Path
     python_version: str
     workflow_id: str
+    python_executable: str | None = None
 
 
 class DependencyEnvironmentInstaller(Protocol):
@@ -107,7 +108,7 @@ class UvDependencyEnvironmentInstaller:
                 self.uv_executable,
                 "venv",
                 "--python",
-                request.python_version,
+                request.python_executable or request.python_version,
                 "--no-python-downloads",
                 "--no-progress",
                 *self._uv_cache_args(),

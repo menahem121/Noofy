@@ -273,6 +273,60 @@ async def test_start_merges_runner_environment_with_parent_environment(
 
 
 @pytest.mark.anyio
+async def test_start_exposes_dependency_site_packages_without_pythonpath(
+    tmp_path: Path, monkeypatch
+) -> None:
+    created: list[tuple[list[str], dict]] = []
+    dependency_env = tmp_path / "dep-env"
+    site_packages = dependency_env / "venv" / "lib" / "python3.14" / "site-packages"
+    site_packages.mkdir(parents=True)
+    monkeypatch.setenv("PYTHONPATH", "/parent/path")
+
+    async def process_factory(command: list[str], **kwargs):
+        created.append((command, kwargs))
+        return FakeProcess()
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
+    )
+    spec = _launch_spec(tmp_path).model_copy(
+        update={"dependency_env_path": dependency_env}
+    )
+
+    await supervisor.start(spec)
+
+    process_env = created[0][1]["env"]
+    assert process_env["PYTHONPATH"] == "/parent/path"
+    assert process_env["NOOFY_DEPENDENCY_SITE_PACKAGES"] == str(site_packages)
+
+
+def test_memory_probe_appends_dependency_site_packages_after_managed_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    managed_site = tmp_path / "managed-site"
+    dependency_site = tmp_path / "dependency-site"
+    managed_site.mkdir()
+    dependency_site.mkdir()
+    original_path = list(sys.path)
+
+    monkeypatch.setenv("NOOFY_DEPENDENCY_SITE_PACKAGES", str(dependency_site))
+    try:
+        sys.path[:] = [str(managed_site)]
+        runner_memory_probe._append_dependency_site_packages()
+
+        assert sys.path == [str(managed_site), str(dependency_site.resolve())]
+    finally:
+        sys.path[:] = original_path
+
+
+@pytest.mark.anyio
 async def test_start_strips_api_token_even_without_spec_env(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -39,6 +39,13 @@ The bundled Python runtime is for the trusted backend and bootstrap tooling.
 Managed ComfyUI, PyTorch, custom nodes, and community workflow dependencies are
 installed later into app-data runtime directories and isolated dependency
 environments. They must not be installed into this trusted bundled Python.
+When a managed ComfyUI runtime profile pins a Python ABI, the bootstrap Python
+used to create that managed runner must match the profile instead of following
+the developer or system interpreter that launched the backend.
+In source-checkout development, a missing profile-matching Python is reported as
+a developer setup issue. In packaged Noofy, the bundled runtime is the fix; end
+users should reinstall or update Noofy if the bundled Python is missing or has
+the wrong ABI.
 
 ## Supported Targets
 

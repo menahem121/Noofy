@@ -145,7 +145,7 @@ For verified or registry-resolved packages the resolver:
 1. Opens an install transaction.
 2. Verifies trust evidence (signature/registry metadata) and source policy before any download.
 3. Verifies every non-core node resolves to a pinned package + content hash.
-4. Resolves dependencies under the active policy and installs them with `uv` into a staged dependency env.
+4. Resolves dependencies under the active policy and installs them with `uv` into a staged dependency env for the selected runtime-profile Python ABI.
 5. Materializes bundled or cached custom-node sources into a staged runner workspace.
 6. Materializes a per-view model tree from the shared model store (hardlink → symlink → copy fallback).
 7. Runs the split smoke suite (dependency import, custom-node import, runner health, workflow execution).
@@ -161,7 +161,9 @@ Install state records a split `smoke_test_report`. A workflow becomes `ready` on
 1. **dependency-env** — wheels import inside the staged dependency env. Uses dependency-lock `import_names` when available.
 2. **custom-node import** — staged runner registers required custom node types via `/object_info`.
 3. **runner health** — staged runner process starts on a localhost port and reports healthy.
-4. **workflow execution** — a real graph runs end-to-end. Custom-node packages must exercise at least one declared custom-node type. Workflows with unresolved runtime inputs (e.g. creator-local `LoadImage`) cannot reach `ready`; they stop at `prepared_needs_input_setup`.
+4. **workflow execution** — when a fixture is declared, a real graph runs end-to-end and custom-node packages must exercise at least one declared custom-node type.
+
+For imported community workflows, absence of an execution smoke fixture is allowed only after all runtime inputs are fully resolved and the dependency-env, custom-node import, and runner-health stages pass inside the isolated runner. Workflows with unresolved runtime inputs (e.g. creator-local `LoadImage`) cannot reach `ready`; they stop at `prepared_needs_input_setup`.
 
 Real-hardware staged smoke is run with the Makefile validation target on the Linux validation host. Unit tests use lightweight/fake runner adapters.
 
@@ -238,6 +240,8 @@ Creator `.noofy` hardware observations (peak VRAM/RAM, tested resolution, batch 
 - Development may use `backend/.venv` or `NOOFY_BACKEND_PYTHON`; external ComfyUI mode is dev-only.
 - Product builds must not depend on system Python, Homebrew Python, user PATH, Conda, or developer virtualenvs.
 - Product v1 ships a bundled Noofy-managed CPython and `uv` in the Tauri resource root, verified by [PACKAGED_RUNTIME.md](PACKAGED_RUNTIME.md). Runtime-store Python environments for ComfyUI and community workflows are prepared from this trusted bootstrap runtime into app-data paths, keeping trusted backend dependencies separate from managed ComfyUI/PyTorch and custom-node dependencies.
+- The runtime profile is the source of truth for managed ComfyUI Python. The trusted backend Python may be different, but the managed ComfyUI runner must conform to the selected profile ABI.
+- Community workflow dependency environments must target that same profile-selected runner ABI. Ready artifacts whose dependency-env manifest does not match the selected profile Python are treated as stale and rebuilt before execution, and a managed runner using a different ABI is blocked instead of making dependency envs follow it.
 - `uv` is the primary resolver and dependency-env installer; `pip` is a compatibility fallback inside managed Python environments.
 
 ## Open Risks And Follow-Ups

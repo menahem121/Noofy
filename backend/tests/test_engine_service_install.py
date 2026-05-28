@@ -582,6 +582,51 @@ async def test_start_workflow_runner_binds_ready_isolated_runner(tmp_path: Path)
 
 
 @pytest.mark.anyio
+async def test_start_workflow_runner_uses_effective_prepared_artifact_fingerprints(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="a")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    payload = await service.prepare_workflow("runner_workflow")
+    dependency_fingerprint = "sha256:" + ("b" * 64)
+    runner_fingerprint = "sha256:" + ("c" * 64)
+    dependency_manifest_path = Path(payload["dependency_env_path"]) / "manifest.json"
+    dependency_manifest = json.loads(dependency_manifest_path.read_text(encoding="utf-8"))
+    dependency_manifest["fingerprint"] = dependency_fingerprint
+    dependency_manifest_path.write_text(json.dumps(dependency_manifest), encoding="utf-8")
+    runner_manifest_path = Path(payload["runner_workspace_path"]) / "manifest.json"
+    runner_manifest = json.loads(runner_manifest_path.read_text(encoding="utf-8"))
+    runner_manifest["fingerprint"] = runner_fingerprint
+    runner_manifest["dependency_env_fingerprint"] = dependency_fingerprint
+    runner_manifest_path.write_text(json.dumps(runner_manifest), encoding="utf-8")
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+    service.capsule_installer.install_state_store.update(
+        capsule_lock.runtime.capsule_fingerprint,
+        dependency_env_fingerprint=dependency_fingerprint,
+        runner_workspace_fingerprint=runner_fingerprint,
+    )
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == RunnerStatus.READY.value
+    assert coordinator is not None
+    assert coordinator.started_specs[0].fingerprint == runner_fingerprint
+    assert coordinator.started_specs[0].runner_workspace_fingerprint == runner_fingerprint
+    assert coordinator.started_specs[0].dependency_env_fingerprint == dependency_fingerprint
+
+
+@pytest.mark.anyio
 async def test_start_workflow_runner_reuses_compatible_resident_runner(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     capsule_payload = _runner_capsule_payload(runner_char="2")
@@ -1304,6 +1349,73 @@ async def test_start_workflow_runner_blocks_manifest_fingerprint_mismatch(tmp_pa
     assert result["status"] == "failed"
     assert "runner workspace manifest fingerprint mismatch" in result["error"]
     assert "runner workspace dependency environment mismatch" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_active_runner_python_abi_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="8")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    monkeypatch.setattr(
+        "app.runtime.runners.lifecycle_service.detect_python_major_minor",
+        lambda python_executable: "3.14",
+    )
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "failed"
+    assert "Managed runner Python ABI mismatch" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_stale_dependency_manifest_python_abi(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="9")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    payload = await service.prepare_workflow("runner_workflow")
+    manifest_path = Path(payload["dependency_env_path"]) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["python_version"] = "3.14"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "failed"
+    assert "dependency environment Python ABI mismatch" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []
 

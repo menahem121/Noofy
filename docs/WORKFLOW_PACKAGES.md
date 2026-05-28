@@ -123,11 +123,11 @@ Example:
 }
 ```
 
-If a workflow has unresolved runtime inputs or no execution fixture, Noofy must not treat runner health alone as sufficient for ready status.
+If a workflow has unresolved runtime inputs, Noofy must not treat runner health alone as sufficient for ready status. Imported community workflows may omit an execution fixture only when their runtime inputs are fully resolved and dependency import, custom-node registration, and runner health smoke all pass inside the isolated runner.
 
 For core-only workflows that do not declare a fixture, Noofy may use a safe model-free fallback fixture such as `EmptyImage -> SaveImage` to prove the staged runner can execute work. This fallback is not used for custom-node packages because it would not exercise the custom node code.
 
-For packages that declare custom nodes, the smoke fixture should exercise at least one declared custom node type when possible. Registration-only checks prove the staged runner imported the node package, but execution smoke is the stronger signal before Noofy promotes isolated runtime artifacts.
+For packages that declare custom nodes, the smoke fixture should exercise at least one declared custom node type when possible. Registration-only checks prove the staged runner imported the node package, while execution smoke remains the stronger signal before Noofy promotes isolated runtime artifacts.
 
 ## Duplicate Imports
 

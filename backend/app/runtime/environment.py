@@ -49,6 +49,8 @@ class RuntimeEnvironment:
         log_store: DiagnosticsSink,
         bootstrap_python_executable: str = "python3",
         python_executable_override: str | None = None,
+        expected_python_version: str | None = None,
+        packaged_runtime: bool = False,
         required_imports: tuple[str, ...] = ("torch", "aiohttp"),
         required_runtime_checks: tuple[tuple[str, str], ...] = _REQUIRED_RUNTIME_CHECKS,
         torch_cuda_index_url: str | None = None,
@@ -66,6 +68,8 @@ class RuntimeEnvironment:
         self._venv_dir_override = venv_dir_override
         self.bootstrap_python_executable = bootstrap_python_executable
         self.python_executable_override = python_executable_override
+        self.expected_python_version = expected_python_version
+        self.packaged_runtime = packaged_runtime
         self.required_imports = required_imports
         self.required_runtime_checks = required_runtime_checks
         self.torch_cuda_index_url = torch_cuda_index_url
@@ -73,6 +77,7 @@ class RuntimeEnvironment:
         self._hardware_profile = hardware_profile
         self.log_store = log_store
         self._command_runner = command_runner or self._run_command
+        self._last_bootstrap_python_attempts: list[dict[str, object]] = []
 
     @property
     def requirements_file(self) -> Path:
@@ -119,14 +124,27 @@ class RuntimeEnvironment:
             cuda_index_url=self.torch_cuda_index_url,
             cpu_index_url=self.torch_cpu_index_url,
         )
+        python_version = (
+            await self._detect_python_version(self.python_executable)
+            if python_exists
+            else None
+        )
+        python_version_matches = (
+            self.expected_python_version is None
+            or python_version == self.expected_python_version
+        )
         dependencies = (
             await self._check_dependencies()
-            if python_exists and not _torch_install_plan_is_unsupported(torch_install_plan)
+            if python_exists
+            and python_version_matches
+            and not _torch_install_plan_is_unsupported(torch_install_plan)
             else []
         )
         error = self._status_error(
             runtime_dir_writable,
             python_exists,
+            python_version,
+            python_version_matches,
             dependencies,
             torch_install_plan=torch_install_plan,
         )
@@ -140,8 +158,16 @@ class RuntimeEnvironment:
             runtime_dir_writable=runtime_dir_writable,
             log_dir=str(self.log_dir),
             cache_dir=str(self.cache_dir),
+            runtime_distribution=(
+                "packaged" if self.packaged_runtime else "source_checkout"
+            ),
+            bootstrap_python_executable=self.bootstrap_python_executable,
+            bootstrap_python_attempts=list(self._last_bootstrap_python_attempts),
             python_executable=self.python_executable,
             python_exists=python_exists,
+            python_version=python_version,
+            expected_python_version=self.expected_python_version,
+            python_version_matches=python_version_matches,
             hardware=hardware,
             torch_install_plan=torch_install_plan,
             dependencies=dependencies,
@@ -197,18 +223,58 @@ class RuntimeEnvironment:
                 status="python_not_prepared", environment=current
             )
 
-        if not self._executable_exists(self.bootstrap_python_executable):
+        bootstrap_python = await self._resolve_bootstrap_python_executable()
+        if bootstrap_python is None:
+            error = self._bootstrap_python_missing_message()
+            log_details: dict[str, object] = {
+                "configured_python_executable": self.bootstrap_python_executable,
+                "expected_python_version": self.expected_python_version,
+                "runtime_distribution": (
+                    "packaged" if self.packaged_runtime else "source_checkout"
+                ),
+                "attempts": self._last_bootstrap_python_attempts,
+            }
+            if self.packaged_runtime:
+                log_message = "Packaged Noofy bundled Python does not match the selected runtime profile"
+            else:
+                log_message = "Source-checkout ComfyUI bootstrap Python does not match the selected runtime profile"
             self.log_store.add(
                 "error",
-                "Noofy bundled runtime executable is missing",
+                log_message,
                 "runtime.environment",
-                details={"python_executable": self.bootstrap_python_executable},
+                details=log_details,
             )
-            return RuntimeBootstrapResult(status="python_missing", environment=current)
+            return RuntimeBootstrapResult(
+                status="python_missing",
+                environment=current.model_copy(
+                    update={
+                        "error": error,
+                        "bootstrap_python_attempts": list(
+                            self._last_bootstrap_python_attempts
+                        ),
+                    }
+                ),
+            )
 
         self._ensure_writable_runtime_dirs()
+        if (
+            current.python_exists
+            and self.expected_python_version is not None
+            and current.python_version != self.expected_python_version
+        ):
+            self.log_store.add(
+                "info",
+                "Rebuilding ComfyUI runtime environment for selected profile Python",
+                "runtime.environment",
+                details={
+                    "python_executable": current.python_executable,
+                    "current_python_version": current.python_version,
+                    "expected_python_version": self.expected_python_version,
+                },
+            )
+            shutil.rmtree(self.venv_dir, ignore_errors=True)
         venv_result = await self._run_logged(
-            [self.bootstrap_python_executable, "-m", "venv", str(self.venv_dir)],
+            [bootstrap_python, "-m", "venv", str(self.venv_dir)],
             cwd=None,
             action="Create ComfyUI runtime virtual environment",
         )
@@ -278,6 +344,8 @@ class RuntimeEnvironment:
         self,
         runtime_dir_writable: bool,
         python_exists: bool,
+        python_version: str | None,
+        python_version_matches: bool,
         dependencies: list[RuntimeDependencyStatus],
         *,
         torch_install_plan: TorchInstallPlan,
@@ -294,6 +362,17 @@ class RuntimeEnvironment:
             return torch_install_plan.reason
         if not python_exists:
             return f"Noofy could not find its prepared engine runtime: {self.python_executable}"
+        if not python_version_matches:
+            if python_version is None:
+                return (
+                    "Noofy could not inspect its managed ComfyUI Python version. "
+                    f"The selected runtime profile requires Python {self.expected_python_version}."
+                )
+            return (
+                "Noofy's managed ComfyUI runtime uses Python "
+                f"{python_version}, but the selected runtime profile requires "
+                f"Python {self.expected_python_version}."
+            )
 
         missing = [
             dependency for dependency in dependencies if not dependency.available
@@ -338,6 +417,110 @@ class RuntimeEnvironment:
                 )
             )
         return dependencies
+
+    async def _detect_python_version(self, executable: str) -> str | None:
+        result = await self._command_runner(
+            [
+                executable,
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            None,
+        )
+        if result.returncode != 0:
+            return None
+        version = result.stdout.strip()
+        parts = version.split(".")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            return None
+        return version
+
+    async def _resolve_bootstrap_python_executable(self) -> str | None:
+        self._last_bootstrap_python_attempts = []
+        if self.expected_python_version is None:
+            if self._executable_exists(self.bootstrap_python_executable):
+                return self.bootstrap_python_executable
+            self._last_bootstrap_python_attempts.append(
+                {
+                    "python_executable": self.bootstrap_python_executable,
+                    "exists": False,
+                    "python_version": None,
+                    "expected_python_version": None,
+                }
+            )
+            return None
+
+        mismatches: list[dict[str, object]] = []
+        for candidate in self._bootstrap_python_candidates():
+            if not self._executable_exists(candidate):
+                self._last_bootstrap_python_attempts.append(
+                    {
+                        "python_executable": candidate,
+                        "exists": False,
+                        "python_version": None,
+                        "expected_python_version": self.expected_python_version,
+                    }
+                )
+                continue
+            version = await self._detect_python_version(candidate)
+            attempt = {
+                "python_executable": candidate,
+                "exists": True,
+                "python_version": version,
+                "expected_python_version": self.expected_python_version,
+            }
+            self._last_bootstrap_python_attempts.append(attempt)
+            if version == self.expected_python_version:
+                return candidate
+            mismatches.append(attempt)
+        if mismatches:
+            self.log_store.add(
+                "warning",
+                "Rejected ComfyUI bootstrap Python candidates with the wrong ABI",
+                "runtime.environment",
+                details={"candidates": mismatches},
+            )
+        return None
+
+    def _bootstrap_python_missing_message(self) -> str:
+        tried = _format_bootstrap_attempts(self._last_bootstrap_python_attempts)
+        if self.expected_python_version is None:
+            return (
+                "Noofy could not find the Python executable configured for managed "
+                f"ComfyUI runtime preparation. Tried: {tried}."
+            )
+        if self.packaged_runtime:
+            return (
+                "Packaged Noofy is missing a bundled Python runtime that matches "
+                f"the selected managed ComfyUI runtime profile. Required Python "
+                f"{self.expected_python_version}. Tried: {tried}. Reinstall or "
+                "update Noofy; normal users should not install Python manually."
+            )
+        return (
+            "This source checkout needs a local development Python that matches "
+            f"the selected managed ComfyUI runtime profile. Required Python "
+            f"{self.expected_python_version}. Tried: {tried}. Install Python "
+            f"{self.expected_python_version} or set COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE "
+            f"to a Python {self.expected_python_version} executable, then rerun "
+            "make install or make run."
+        )
+
+    def _bootstrap_python_candidates(self) -> list[str]:
+        if self.expected_python_version is None:
+            return [self.bootstrap_python_executable]
+        if self.packaged_runtime:
+            return [self.bootstrap_python_executable]
+        profile_python = f"python{self.expected_python_version}"
+        configured = self.bootstrap_python_executable
+        if _is_generic_python_executable(configured):
+            candidates = [profile_python, configured]
+        else:
+            candidates = [configured, profile_python]
+        unique: list[str] = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
 
     async def _detect_hardware(self) -> RuntimeHardwareProfile:
         if self._hardware_profile is None:
@@ -433,3 +616,22 @@ def _torch_install_plan_is_unsupported(plan: TorchInstallPlan) -> bool:
         plan.accelerator == UNSUPPORTED_MACOS_INTEL_ACCELERATOR
         or not plan.packages
     )
+
+
+def _is_generic_python_executable(executable: str) -> bool:
+    name = Path(executable).name.lower()
+    return name in {"python", "python.exe", "python3", "python3.exe"}
+
+
+def _format_bootstrap_attempts(attempts: list[dict[str, object]]) -> str:
+    if not attempts:
+        return "<none>"
+    formatted: list[str] = []
+    for attempt in attempts:
+        executable = str(attempt.get("python_executable") or "<unknown>")
+        if not attempt.get("exists"):
+            formatted.append(f"{executable} (missing)")
+            continue
+        version = attempt.get("python_version") or "unknown version"
+        formatted.append(f"{executable} ({version})")
+    return ", ".join(formatted)

@@ -113,6 +113,20 @@ interface RunFailureDialogState {
   copied: boolean;
 }
 
+type PreparationPhaseStatus = "pending" | "active" | "passed" | "failed" | "blocked";
+
+interface PreparationPhase {
+  id: string;
+  label: string;
+  status: PreparationPhaseStatus;
+}
+
+interface RunPreparationDialogState {
+  message: string;
+  detail: string | null;
+  phases: PreparationPhase[];
+}
+
 interface LoraBrowserDialogState {
   control: DashboardControlDef;
   input: WorkflowInputDef;
@@ -133,6 +147,20 @@ const initialState: RunPageState = {
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const watchableJobStatuses = new Set(["queued", "running"]);
+const preparationFailureStatuses = new Set([
+  "blocked_by_policy",
+  "cannot_prepare_automatically",
+  "failed",
+  "prepared_needs_input_setup",
+  "unsupported",
+  "unsupported_runtime_profile",
+]);
+const preparationBlockedStatuses = new Set([
+  "blocked_by_policy",
+  "prepared_needs_input_setup",
+  "unsupported",
+  "unsupported_runtime_profile",
+]);
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
 
@@ -140,6 +168,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
+  const [runPreparationDialog, setRunPreparationDialog] = useState<RunPreparationDialogState | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
   const [requiredModelsModalOpen, setRequiredModelsModalOpen] = useState(false);
@@ -379,14 +408,42 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     return () => window.clearInterval(interval);
   }, [modelVerificationJob?.job_id, modelVerificationJob?.status, workflowId]);
 
+  function startRunPreparationStatusPolling() {
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const statusResponse = await fetchWorkflowStatus(workflowId);
+        if (stopped) return;
+        setState((current) => ({ ...current, workflowStatus: statusResponse }));
+        setRunPreparationDialog(runPreparationDialogFromStatus(statusResponse));
+      } catch {
+        // Keep the in-progress dialog visible; the run request will surface the real failure.
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 900);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }
+
   async function handleRun() {
     if (!canRun) {
       return;
     }
 
+    const shouldTrackPreparation = shouldShowRunPreparationDialog(state.workflowStatus);
+    let stopPreparationPolling: (() => void) | null = null;
     cleanupJobWatchers();
     setIsSubmittingRun(true);
     setFailureDialog(null);
+    if (shouldTrackPreparation) {
+      setRunPreparationDialog(runPreparationDialogFromStatus(state.workflowStatus));
+      stopPreparationPolling = startRunPreparationStatusPolling();
+    } else {
+      setRunPreparationDialog(null);
+    }
     setState((current) => ({
       ...current,
       job: null,
@@ -403,22 +460,37 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       });
 
       if (!isEngineJob(response)) {
+        stopPreparationPolling?.();
         setIsSubmittingRun(false);
-        setState((current) => ({ ...current, validation: response, progress: null }));
+        setRunPreparationDialog(null);
+        const message = workflowValidationErrorMessage(response);
+        setState((current) => ({
+          ...current,
+          validation: response,
+          progress: null,
+          error: response.valid ? null : message,
+        }));
+        if (!response.valid) {
+          void openFailureDialog(message, null);
+        }
         return;
       }
 
+      stopPreparationPolling?.();
       setIsSubmittingRun(false);
+      setRunPreparationDialog(null);
       setSubmittedJob(response);
       if (isWatchableJob(response)) {
         watchJob(response.job_id);
         await pollJobOnce(response.job_id);
       }
     } catch (error) {
+      stopPreparationPolling?.();
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setIsSubmittingRun(false);
+      setRunPreparationDialog(null);
       setState((current) => ({
         ...current,
         job: null,
@@ -981,6 +1053,9 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       onCopy={() => void handleCopyFailureLogs()}
     />
   ) : null;
+  const preparationDialogElement = runPreparationDialog ? (
+    <RunPreparationDialog dialog={runPreparationDialog} />
+  ) : null;
   const loraBrowserElement = loraBrowserDialog ? (
     <CivitaiLoraBrowserModal
       workflowId={workflowId}
@@ -1090,6 +1165,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           }}
         />
         {failureDialogElement}
+        {preparationDialogElement}
         {loraBrowserElement}
         {exportDialogElement}
         {requiredModelsModalElement}
@@ -1181,10 +1257,50 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         </aside>
       </section>
       {failureDialogElement}
+      {preparationDialogElement}
       {loraBrowserElement}
       {exportDialogElement}
       {requiredModelsModalElement}
     </AppLayout>
+  );
+}
+
+function RunPreparationDialog({ dialog }: { dialog: RunPreparationDialogState }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-preparation-title">
+      <section className="workflow-preparation-modal">
+        <header className="workflow-preparation-modal__header">
+          <div>
+            <p className="eyebrow">Workflow run</p>
+            <h2 id="workflow-preparation-title">Preparing workflow</h2>
+            <p>{dialog.message}</p>
+          </div>
+          <Loader2 className="spin" size={22} aria-hidden="true" />
+        </header>
+
+        <ol className="workflow-preparation-steps" aria-label="Preparation progress">
+          {dialog.phases.map((phase) => (
+            <li key={phase.id} className={`workflow-preparation-step workflow-preparation-step--${phase.status}`}>
+              <span className="workflow-preparation-step__icon" aria-hidden="true">
+                {phase.status === "passed" ? (
+                  <CheckCircle2 size={16} />
+                ) : phase.status === "failed" || phase.status === "blocked" ? (
+                  <AlertCircle size={16} />
+                ) : phase.status === "active" ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <span />
+                )}
+              </span>
+              <span>{phase.label}</span>
+              <span className="workflow-preparation-step__status">{preparationPhaseStatusLabel(phase.status)}</span>
+            </li>
+          ))}
+        </ol>
+
+        {dialog.detail ? <p className="workflow-preparation-modal__detail">{dialog.detail}</p> : null}
+      </section>
+    </div>
   );
 }
 
@@ -1486,6 +1602,161 @@ function optimisticProgress(): JobProgress {
   };
 }
 
+function shouldShowRunPreparationDialog(workflowStatus: WorkflowStatusResponse | null) {
+  const installStatus = workflowInstallStatus(workflowStatus);
+  return Boolean(installStatus && installStatus !== "ready");
+}
+
+function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse | null): RunPreparationDialogState {
+  const install = workflowStatus?.install ?? {};
+  const installStatus = workflowInstallStatus(workflowStatus);
+  const lastError = installString(install, "last_error");
+  const userMessage = installString(install, "user_facing_message");
+  const failed = Boolean(installStatus && preparationFailureStatuses.has(installStatus));
+  return {
+    message: failed
+      ? lastError ?? userMessage ?? "Noofy could not prepare this workflow automatically."
+      : userMessage ?? "Preparing the isolated runner for this workflow.",
+    detail: failed ? userMessage && userMessage !== lastError ? userMessage : null : preparationStatusDetail(installStatus),
+    phases: preparationPhases(workflowStatus),
+  };
+}
+
+function workflowValidationErrorMessage(validation: WorkflowValidationResult) {
+  const errors = validation.errors.map((error) => error.trim()).filter(Boolean);
+  if (errors.length > 0) return errors.join("\n");
+  if (validation.missing_models.length > 0) return "This workflow still needs required models before it can run.";
+  return "Noofy could not start this workflow.";
+}
+
+function workflowInstallStatus(workflowStatus: WorkflowStatusResponse | null) {
+  return installString(workflowStatus?.install ?? {}, "status");
+}
+
+function installString(install: Record<string, unknown>, key: string) {
+  const value = install[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function preparationStatusDetail(status: string | null) {
+  switch (status) {
+    case "resolving_models":
+    case "downloading":
+    case "materializing_model_view":
+      return "Checking required model files and staging the model view.";
+    case "resolving_dependencies":
+    case "materializing_dependencies":
+    case "preparing_dependency_env":
+    case "resolving_runtime_profile":
+      return "Resolving Python packages into the workflow capsule.";
+    case "materializing_custom_nodes":
+    case "checking_compatibility":
+      return "Staging custom nodes in the isolated runner workspace.";
+    case "smoke_testing":
+      return "Starting the isolated runner and checking custom-node registration.";
+    default:
+      return "Noofy will continue the run automatically when preparation is ready.";
+  }
+}
+
+function preparationPhases(workflowStatus: WorkflowStatusResponse | null): PreparationPhase[] {
+  const install = workflowStatus?.install ?? {};
+  const installStatus = workflowInstallStatus(workflowStatus);
+  const activePhase = activePreparationPhase(installStatus);
+  const failed = Boolean(installStatus && preparationFailureStatuses.has(installStatus));
+  const blocked = Boolean(installStatus && preparationBlockedStatuses.has(installStatus));
+  const ready = installStatus === "ready";
+  const phases: PreparationPhase[] = [
+    { id: "models", label: "Check required models", status: "pending" },
+    { id: "dependencies", label: "Prepare dependency environment", status: "pending" },
+    { id: "stage_custom_nodes", label: "Stage custom-node files", status: "pending" },
+    { id: "runner", label: "Start isolated runner", status: "pending" },
+    { id: "custom_registration", label: "Check custom-node registration", status: "pending" },
+    { id: "resume", label: "Continue run", status: "pending" },
+  ];
+  const activeIndex = activePhase ? phases.findIndex((phase) => phase.id === activePhase) : -1;
+
+  return phases.map((phase, index) => {
+    const smokeStage = smokeStageStatus(install, phase.id);
+    if (smokeStage === "passed") return { ...phase, status: "passed" };
+    if (smokeStage === "failed" || smokeStage === "blocked") return { ...phase, status: smokeStage };
+    if (ready) return { ...phase, status: phase.id === "resume" ? "active" : "passed" };
+    if (phase.id === activePhase) return { ...phase, status: failed ? (blocked ? "blocked" : "failed") : "active" };
+    if (activeIndex > 0 && index < activeIndex) return { ...phase, status: "passed" };
+    return phase;
+  });
+}
+
+function activePreparationPhase(status: string | null) {
+  switch (status) {
+    case "resolving_models":
+    case "downloading":
+    case "materializing_model_view":
+      return "models";
+    case "resolving_dependencies":
+    case "materializing_dependencies":
+    case "preparing_dependency_env":
+    case "resolving_runtime_profile":
+    case "preparing":
+    case "pending":
+    case "imported":
+      return "dependencies";
+    case "materializing_custom_nodes":
+    case "checking_compatibility":
+      return "stage_custom_nodes";
+    case "smoke_testing":
+    case "prepared":
+    case "starting":
+      return "runner";
+    case "ready":
+      return "resume";
+    case "failed":
+    case "cannot_prepare_automatically":
+    case "blocked_by_policy":
+    case "unsupported_runtime_profile":
+    case "unsupported":
+      return "runner";
+    case "prepared_needs_input_setup":
+      return "resume";
+    default:
+      return "dependencies";
+  }
+}
+
+function smokeStageStatus(install: Record<string, unknown>, phaseId: string): PreparationPhaseStatus | null {
+  const stageName =
+    phaseId === "dependencies"
+      ? "dependency_env"
+      : phaseId === "custom_registration"
+        ? "custom_node_import"
+        : phaseId === "runner"
+          ? "runner_health"
+          : null;
+  if (!stageName) return null;
+  const report = install.smoke_test_report;
+  if (!report || typeof report !== "object") return null;
+  const stage = (report as Record<string, unknown>)[stageName];
+  if (!stage || typeof stage !== "object") return null;
+  const status = (stage as Record<string, unknown>).status;
+  if (status === "passed" || status === "failed" || status === "blocked") return status;
+  return null;
+}
+
+function preparationPhaseStatusLabel(status: PreparationPhaseStatus) {
+  switch (status) {
+    case "passed":
+      return "Done";
+    case "active":
+      return "Working";
+    case "failed":
+      return "Failed";
+    case "blocked":
+      return "Blocked";
+    default:
+      return "Waiting";
+  }
+}
+
 function progressMessage(progress: JobProgress | null, result: JobResult | null) {
   if (result?.status === "completed") return "Result saved by the local workflow.";
   if (result?.status === "failed") return "The local engine could not finish this run.";
@@ -1653,7 +1924,7 @@ function workflowRunDisabledReason({
   if (isBlockedByMemory) return "Not enough memory is available for this run.";
   if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
   if (backendKnownUnreachable) return "The local app service is offline.";
-  if (engineKnownUnavailable) return "The local AI engine is not ready yet.";
+  if (engineKnownUnavailable) return "The ComfyUI engine is not ready yet.";
   if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {
     return "This workflow cannot run on this machine.";
   }

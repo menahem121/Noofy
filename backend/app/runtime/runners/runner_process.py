@@ -137,6 +137,7 @@ class RunnerProcessSupervisor:
         process_env = dict(os.environ)
         if spec.env is not None:
             process_env.update(spec.env)
+        _set_dependency_site_packages_env(process_env, spec.dependency_env_path)
         process_env.pop("NOOFY_API_TOKEN", None)
         descriptor = RunnerDescriptor(
             runner_id=spec.runner_id,
@@ -148,6 +149,11 @@ class RunnerProcessSupervisor:
             runner_workspace_fingerprint=spec.runner_workspace_fingerprint,
             dependency_env_fingerprint=spec.dependency_env_fingerprint,
             runner_process_compatibility_key=spec.runner_process_compatibility_key,
+            runner_workspace_path=(
+                str(spec.runner_workspace_path)
+                if spec.runner_workspace_path is not None
+                else None
+            ),
             model_view_fingerprint=spec.model_view_fingerprint,
             runtime_profile_id=spec.runtime_profile_id,
             runtime_profile_variant_id=spec.runtime_profile_variant_id,
@@ -521,6 +527,28 @@ def _default_ws_url(base_url: str) -> str:
     parsed = urlparse(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     return urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+
+def _set_dependency_site_packages_env(
+    env: dict[str, str], dependency_env_path: Path | None
+) -> None:
+    if dependency_env_path is None:
+        return
+    site_packages = _dependency_env_site_packages(dependency_env_path)
+    if not site_packages:
+        return
+    env["NOOFY_DEPENDENCY_SITE_PACKAGES"] = os.pathsep.join(
+        str(path) for path in site_packages
+    )
+
+
+def _dependency_env_site_packages(dependency_env_path: Path) -> list[Path]:
+    venv_dir = dependency_env_path / "venv"
+    candidates = [
+        *(venv_dir / "lib").glob("python*/site-packages"),
+        venv_dir / "Lib" / "site-packages",
+    ]
+    return [path for path in candidates if path.is_dir()]
 
 
 def _process_tree_start_kwargs() -> dict[str, object]:

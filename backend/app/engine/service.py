@@ -582,6 +582,25 @@ class EngineService:
         start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
             workflow_id
         )
+        if _workflow_runner_start_needs_reprepare(start):
+            self.log_store.add(
+                "info",
+                "Re-preparing workflow runner after stale runtime artifacts",
+                "engine.service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "error": start.get("error"),
+                },
+            )
+            install = await self.workflow_runner_lifecycle_service.prepare_workflow(
+                workflow_id
+            )
+            if install.get("status") != InstallStatus.READY.value:
+                return _workflow_runner_unavailable_message(install)
+            start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
+                workflow_id
+            )
         if start.get("status") not in {
             RunnerStatus.READY.value,
             RunnerStatus.IDLE.value,
@@ -1078,13 +1097,21 @@ def _diagnostic_correlation_ids(event, details: dict[str, object]) -> dict[str, 
 
 
 def _workflow_runner_unavailable_message(payload: dict[str, object]) -> str:
-    message = payload.get("user_facing_message") or payload.get("error")
-    if isinstance(message, str) and message.strip():
-        return message
+    for key in ("last_error", "error", "user_facing_message"):
+        message = payload.get(key)
+        if isinstance(message, str) and message.strip():
+            return message
     status = payload.get("status") or payload.get("install_status")
     if isinstance(status, str) and status.strip():
         return f"Workflow runner is not ready: {status}."
     return "Workflow runner is not ready."
+
+
+def _workflow_runner_start_needs_reprepare(payload: dict[str, object]) -> bool:
+    error = payload.get("error")
+    if not isinstance(error, str):
+        return False
+    return error.startswith("Prepared runtime artifact ")
 
 
 def _redact_diagnostic_details(value):

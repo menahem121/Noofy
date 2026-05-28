@@ -338,6 +338,8 @@ def _required_custom_nodes(
         if node_type in core_node_types:
             continue
         custom_node = custom_node_type_map.get(node_type)
+        if custom_node is None and len(custom_nodes) == 1:
+            custom_node = custom_nodes[0]
         if custom_node is None:
             raise CustomNodeMaterializationError(
                 CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE,

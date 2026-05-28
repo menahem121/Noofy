@@ -267,8 +267,14 @@ class RuntimeEnvironmentStatus(BaseModel):
     runtime_dir_writable: bool
     log_dir: str
     cache_dir: str
+    runtime_distribution: str = "source"
+    bootstrap_python_executable: str | None = None
+    bootstrap_python_attempts: list[dict[str, Any]] = Field(default_factory=list)
     python_executable: str
     python_exists: bool
+    python_version: str | None = None
+    expected_python_version: str | None = None
+    python_version_matches: bool | None = None
     hardware: RuntimeHardwareProfile
     torch_install_plan: TorchInstallPlan
     dependencies: list[RuntimeDependencyStatus] = Field(default_factory=list)

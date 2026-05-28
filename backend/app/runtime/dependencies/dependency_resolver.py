@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -54,6 +54,8 @@ class ResolvedRequirement:
     version: str
     hashes: list[str]
     environment_marker: str | None = None
+    python_version: str | None = None
+    python_platform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,13 @@ class UvDependencyLockResolver:
             )
             wheels = [
                 self._wheel_from_requirement(
-                    requirement, direct_names=direct_names, resolver=resolver
+                    replace(
+                        requirement,
+                        python_version=request.python_version,
+                        python_platform=request.python_platform,
+                    ),
+                    direct_names=direct_names,
+                    resolver=resolver,
                 )
                 for requirement in requirements
             ]
@@ -190,9 +198,8 @@ class UvDependencyLockResolver:
 
     def _resolver_metadata(self, cwd: Path) -> ResolverMetadata:
         result = self._run([self.uv_executable, "--version"], cwd=cwd)
-        version = (
-            (result.stdout or "").strip().split(" ")[-1] if result.stdout else "unknown"
-        )
+        parts = (result.stdout or "").strip().split()
+        version = parts[1] if len(parts) >= 2 else "unknown"
         return ResolverMetadata(
             name="uv", version=version, command="uv pip compile --generate-hashes"
         )
@@ -212,7 +219,6 @@ class UvDependencyLockResolver:
             "compile",
             str(input_path),
             "--generate-hashes",
-            "--no-build",
             "--only-binary",
             ":all:",
             "--python-version",
@@ -324,7 +330,11 @@ class PyPIPackageIndexClient:
         for file_record in metadata.get("urls", []):
             filename = file_record.get("filename", "")
             digest = file_record.get("digests", {}).get("sha256", "").lower()
-            if not filename.endswith(".whl") or digest not in allowed_hashes:
+            if (
+                not filename.endswith(".whl")
+                or digest not in allowed_hashes
+                or not _wheel_matches_target(filename, requirement)
+            ):
                 continue
             wheel_cache_dir.mkdir(parents=True, exist_ok=True)
             target = wheel_cache_dir / filename
@@ -420,6 +430,68 @@ def _platform_tags_from_wheel(filename: str) -> list[str]:
     if len(parts) < 5:
         return []
     return ["-".join(parts[-3:])]
+
+
+def _wheel_matches_target(
+    filename: str, requirement: ResolvedRequirement
+) -> bool:
+    stem = filename.removesuffix(".whl")
+    parts = stem.split("-")
+    if len(parts) < 5:
+        return False
+    python_tags = set(parts[-3].split("."))
+    abi_tags = set(parts[-2].split("."))
+    platform_tags = set(parts[-1].split("."))
+    if not _python_tags_match(python_tags, abi_tags, requirement.python_version):
+        return False
+    return _platform_tags_match(platform_tags, requirement.python_platform)
+
+
+def _python_tags_match(
+    python_tags: set[str],
+    abi_tags: set[str],
+    python_version: str | None,
+) -> bool:
+    if python_version is None:
+        return True
+    major_minor = "".join(python_version.split(".")[:2])
+    major = python_version.split(".", 1)[0]
+    target_cp = f"cp{major_minor}"
+    if target_cp in python_tags:
+        return target_cp in abi_tags or "abi3" in abi_tags or "none" in abi_tags
+    if "abi3" in abi_tags:
+        target_version = int(major_minor)
+        for tag in python_tags:
+            if not tag.startswith("cp"):
+                continue
+            try:
+                if int(tag.removeprefix("cp")) <= target_version:
+                    return True
+            except ValueError:
+                continue
+    return f"py{major}" in python_tags or "py3" in python_tags
+
+
+def _platform_tags_match(
+    platform_tags: set[str], python_platform: str | None
+) -> bool:
+    if python_platform is None or "any" in platform_tags:
+        return True
+    if python_platform == "x86_64-unknown-linux-gnu":
+        return any(
+            tag.endswith("_x86_64")
+            and (
+                tag.startswith("manylinux")
+                or tag.startswith("musllinux")
+                or tag == "linux_x86_64"
+            )
+            for tag in platform_tags
+        )
+    if python_platform == "aarch64-apple-darwin":
+        return any(tag.startswith("macosx") and "arm64" in tag for tag in platform_tags)
+    if python_platform == "x86_64-pc-windows-msvc":
+        return "win_amd64" in platform_tags
+    return True
 
 
 def _import_names_from_wheel(path: Path) -> list[str]:

@@ -116,6 +116,30 @@ def test_materializer_rejects_unknown_non_core_node_type(tmp_path: Path) -> None
     assert error.value.code is CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE
 
 
+def test_materializer_uses_single_bundled_package_when_exported_node_types_are_incomplete(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomDeclared", "CustomOmitted"])
+    _write_custom_node(source_files, "SingleNodePack", {"node.py": "x = 1\n"})
+    capsule = _capsule(
+        [
+            {
+                "package_id": "singlenodepack",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["CustomDeclared"],
+            }
+        ]
+    )
+
+    manifest = _materializer().build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
+
+    assert [entry.custom_node_package_id for entry in manifest.entries] == [
+        "singlenodepack"
+    ]
+
+
 def test_materializer_rejects_path_traversal_source_ref(tmp_path: Path) -> None:
     source_files = tmp_path / "source-files"
     _write_graph(source_files, ["CustomRequired"])

@@ -64,7 +64,23 @@ def _run_target(target: list[str]) -> None:
     sys.argv = target
     if entrypoint.parent:
         sys.path.insert(0, str(entrypoint.parent.resolve()))
+    _append_dependency_site_packages()
     runpy.run_path(str(entrypoint), run_name="__main__")
+
+
+def _append_dependency_site_packages() -> None:
+    raw_paths = os.environ.get("NOOFY_DEPENDENCY_SITE_PACKAGES")
+    if not raw_paths:
+        return
+    for raw_path in raw_paths.split(os.pathsep):
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.is_dir():
+            continue
+        resolved = str(path.resolve())
+        if resolved not in sys.path:
+            sys.path.append(resolved)
 
 
 def _sample_loop(

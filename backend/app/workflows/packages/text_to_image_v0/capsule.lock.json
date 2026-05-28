@@ -20,7 +20,7 @@
     "fingerprint_schema_version": "0.1.0",
     "dependency_env_fingerprint": "sha256:e814fb3a544a50acf6f5465250dcb1ee34030e543ef4a4717d1e71d6984c7917",
     "runner_fingerprint": "sha256:c3b087ce80ca0ce20695a4759e37cac1d61bedfabadaabda43abcc2159329109",
-    "capsule_fingerprint": "sha256:e1cc293a5290285d11ccc16d7bf4ea88294a0a00d56010ee621ebedcfe73bb7d",
+    "capsule_fingerprint": "sha256:172ec1cd4cda0c5d1711ae9f1d5a12ac4c0ab88abd270e0b5498f2b5730969b6",
     "os": "linux",
     "architecture": "x64",
     "python_version": "3.13",

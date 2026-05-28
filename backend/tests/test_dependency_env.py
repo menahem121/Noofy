@@ -100,6 +100,44 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(
     assert "--find-links" in commands[1]
 
 
+def test_uv_dependency_installer_can_create_env_with_runtime_python_executable(
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "wheel-cache"
+    cache_dir.mkdir()
+    lock = _lock_for_cached_wheel(cache_dir)
+    commands: list[list[str]] = []
+
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    installer = UvDependencyEnvironmentInstaller(
+        wheel_cache_dir=cache_dir,
+        command_runner=runner,
+        log_store=LogStore(),
+    )
+
+    installer.install(
+        DependencyEnvironmentInstallRequest(
+            lock=lock,
+            target_dir=tmp_path / "stage",
+            python_version="3.14",
+            python_executable="/opt/noofy/runtime/python",
+            workflow_id="workflow",
+        )
+    )
+
+    assert commands[0][:4] == [
+        "uv",
+        "venv",
+        "--python",
+        "/opt/noofy/runtime/python",
+    ]
+
+
 def test_uv_dependency_installer_preserves_explicit_lock_hash(tmp_path: Path) -> None:
     cache_dir = tmp_path / "wheel-cache"
     cache_dir.mkdir()

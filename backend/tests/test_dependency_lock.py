@@ -185,6 +185,8 @@ def test_merge_resolved_dependency_locks_combines_duplicate_wheel_facts() -> Non
     assert len(merged.wheels) == 1
     assert merged.wheels[0].relationship is DependencyRelationship.CORE
     assert merged.wheels[0].requested_by == ["custom-node-a", "runtime-profile"]
+    assert merged.resolver.name == "noofy-lock-merge"
+    assert merged.wheels[0].resolver_name == "noofy-lock-merge"
     assert merged.lock_hash is not None
 
 

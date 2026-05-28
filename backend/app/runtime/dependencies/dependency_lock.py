@@ -261,6 +261,11 @@ def merge_resolved_dependency_locks(
     """Merge profile-core and custom-node locks into one dependency-env lock."""
     merged: dict[str, ResolvedDependencyWheel] = {}
     custom_locks = tuple(custom_node_locks)
+    merged_resolver = ResolverMetadata(
+        name="noofy-lock-merge",
+        version=DEPENDENCY_LOCK_SCHEMA_VERSION,
+        command="merged core and custom-node dependency locks",
+    )
     for lock in (core_lock, *custom_locks):
         _require_same_runtime(core_lock, lock)
         for wheel in lock.wheels:
@@ -272,7 +277,19 @@ def merge_resolved_dependency_locks(
 
     merged_lock = core_lock.model_copy(
         update={
-            "wheels": sorted(merged.values(), key=lambda item: (item.name, item.version, item.wheel_filename)),
+            "resolver": merged_resolver,
+            "wheels": sorted(
+                (
+                    wheel.model_copy(
+                        update={
+                            "resolver_name": merged_resolver.name,
+                            "resolver_version": merged_resolver.version,
+                        }
+                    )
+                    for wheel in merged.values()
+                ),
+                key=lambda item: (item.name, item.version, item.wheel_filename),
+            ),
             "source_policy": _merged_source_policy(core_lock, custom_locks),
             "lock_hash": None,
         }

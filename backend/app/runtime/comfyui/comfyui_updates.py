@@ -201,6 +201,8 @@ class ComfyUIUpdateService:
         torch_cuda_index_url: str | None,
         torch_cpu_index_url: str,
         log_store: DiagnosticsSink,
+        expected_python_version: str | None = None,
+        packaged_runtime: bool = False,
         bundled_repo_dir: Path | None = None,
         bundled_python_executable: str | None = None,
         release_fetcher: ReleaseFetcher | None = None,
@@ -215,6 +217,8 @@ class ComfyUIUpdateService:
         self.bootstrap_python_executable = bootstrap_python_executable
         self.torch_cuda_index_url = torch_cuda_index_url
         self.torch_cpu_index_url = torch_cpu_index_url
+        self.expected_python_version = expected_python_version
+        self.packaged_runtime = packaged_runtime
         self.bundled_repo_dir = bundled_repo_dir
         self.bundled_python_executable = bundled_python_executable
         self.log_store = log_store
@@ -601,6 +605,8 @@ class ComfyUIUpdateService:
                     repo_dir=final_source,
                     runtime_dir=self.paths.core_envs_dir / engine_id,
                     bootstrap_python_executable=self.bootstrap_python_executable,
+                    expected_python_version=self.expected_python_version,
+                    packaged_runtime=self.packaged_runtime,
                     torch_cuda_index_url=self.torch_cuda_index_url,
                     torch_cpu_index_url=self.torch_cpu_index_url,
                     log_store=self.log_store,
@@ -882,6 +888,8 @@ class ComfyUIUpdateService:
                 repo_dir=source_dir,
                 runtime_dir=transaction_dir / "env",
                 bootstrap_python_executable=self.bootstrap_python_executable,
+                expected_python_version=self.expected_python_version,
+                packaged_runtime=self.packaged_runtime,
                 torch_cuda_index_url=self.torch_cuda_index_url,
                 torch_cpu_index_url=self.torch_cpu_index_url,
                 log_store=self.log_store,
@@ -1108,6 +1116,8 @@ class ComfyUIUpdateService:
                     runtime_dir=self.paths.core_envs_dir / "bundled-comfyui",
                     bootstrap_python_executable=self.bootstrap_python_executable,
                     python_executable_override=self.bundled_python_executable,
+                    expected_python_version=self.expected_python_version,
+                    packaged_runtime=self.packaged_runtime,
                     torch_cuda_index_url=self.torch_cuda_index_url,
                     torch_cpu_index_url=self.torch_cpu_index_url,
                     log_store=self.log_store,
@@ -1200,7 +1210,8 @@ class ComfyUIUpdateService:
             repo_dir=source_path,
             runtime_dir=env_path.parent,
             bootstrap_python_executable=self.bootstrap_python_executable,
-            python_executable_override=python,
+            expected_python_version=self.expected_python_version,
+            packaged_runtime=self.packaged_runtime,
             torch_cuda_index_url=self.torch_cuda_index_url,
             torch_cpu_index_url=self.torch_cpu_index_url,
             log_store=self.log_store,

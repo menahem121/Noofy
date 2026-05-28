@@ -178,6 +178,7 @@ async def test_coordinator_stop_all_updates_status_and_unbinds_workflows(
 
 
 def test_comfyui_adapter_factory_configures_endpoint(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
     descriptor = RunnerDescriptor(
         runner_id="isolated-1",
         kind=RunnerKind.ISOLATED_COMFYUI,
@@ -185,12 +186,17 @@ def test_comfyui_adapter_factory_configures_endpoint(tmp_path: Path) -> None:
         ws_url="ws://127.0.0.1:9001/ws",
         fingerprint="sha256:" + ("a" * 64),
         status=RunnerStatus.READY,
+        runner_workspace_path=str(workspace),
     )
     factory = comfyui_adapter_factory(
-        models_dir=tmp_path / "models", log_store=LogStore()
+        models_dir=tmp_path / "models",
+        dashboard_assets_dir=tmp_path / "assets",
+        log_store=LogStore(),
     )
 
     adapter = factory(descriptor)
 
     assert adapter.base_url == "http://127.0.0.1:9001"
     assert adapter.ws_url == "ws://127.0.0.1:9001/ws"
+    assert adapter.dashboard_assets_dir == tmp_path / "assets"
+    assert adapter.comfyui_input_dir == workspace / "input"

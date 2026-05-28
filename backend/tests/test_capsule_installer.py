@@ -697,6 +697,67 @@ async def test_prepare_custom_node_capsule_marks_ready_after_all_smoke_stages_pa
 
 
 @pytest.mark.anyio
+async def test_prepare_marks_ready_when_runner_smoke_has_no_execution_fixture(tmp_path: Path) -> None:
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-no-execution-fixture",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "custom-node-a",
+                    "source": "https://example.invalid/custom-node-a.git",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomNodeA"],
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        log_store=log_store,
+    )
+
+    async def smoke_test(capsule_lock, prepared_workspace) -> SmokeTestReport:
+        return SmokeTestReport(
+            dependency_env=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            custom_node_import=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
+            workflow_execution=SmokeStageResult(
+                status=SmokeStageStatus.BLOCKED,
+                message="No workflow execution smoke fixture is configured.",
+            ),
+        )
+
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        workspace_smoke_test=smoke_test,
+        log_store=log_store,
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.READY
+    assert state.smoke_test_status is SmokeTestStatus.PASSED
+
+
+@pytest.mark.anyio
 async def test_prepare_imported_custom_node_capsule_uses_app_workflow_id_for_source_files(tmp_path: Path) -> None:
     source_files_dir = tmp_path / "imported-source-files"
     custom_node_dir = source_files_dir / "custom_nodes" / "custom-node-a"

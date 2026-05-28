@@ -917,46 +917,50 @@ fn apply_backend_environment(
     }
 
     let layout = packaged_runtime_layout(context);
-    if let Some(resource_dir) = packaged_resource_dir(context, &layout.root_dir) {
-        set_env(
-            spec,
-            "NOOFY_BUNDLED_RESOURCE_DIR",
-            resource_dir.into_os_string(),
-        );
-    }
-    if layout.comfyui_dir.exists() {
-        set_env(
-            spec,
-            "NOOFY_BUNDLED_COMFYUI_DIR",
-            layout.comfyui_dir.clone().into_os_string(),
-        );
-    }
-    if layout.workflows_dir.exists() {
-        set_env(
-            spec,
-            "NOOFY_BUNDLED_WORKFLOWS_DIR",
-            layout.workflows_dir.clone().into_os_string(),
-        );
-    }
-    if let Some(python) = layout.python_executable {
-        set_env(
-            spec,
-            "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE",
-            python.into_os_string(),
-        );
-    } else if require_packaged_python {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Packaged Noofy requires a bundled Python executable for managed ComfyUI runtime preparation.",
-        ));
-    }
-    if let Some(uv) = layout.uv_executable {
-        set_env(spec, "NOOFY_UV_EXECUTABLE", uv.into_os_string());
-    } else if require_packaged_python {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Packaged Noofy requires a bundled uv executable for isolated workflow dependency environments.",
-        ));
+    let use_packaged_runtime =
+        require_packaged_python || env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR").is_some();
+    if use_packaged_runtime {
+        if let Some(resource_dir) = packaged_resource_dir(context, &layout.root_dir) {
+            set_env(
+                spec,
+                "NOOFY_BUNDLED_RESOURCE_DIR",
+                resource_dir.into_os_string(),
+            );
+        }
+        if layout.comfyui_dir.exists() {
+            set_env(
+                spec,
+                "NOOFY_BUNDLED_COMFYUI_DIR",
+                layout.comfyui_dir.clone().into_os_string(),
+            );
+        }
+        if layout.workflows_dir.exists() {
+            set_env(
+                spec,
+                "NOOFY_BUNDLED_WORKFLOWS_DIR",
+                layout.workflows_dir.clone().into_os_string(),
+            );
+        }
+        if let Some(python) = layout.python_executable {
+            set_env(
+                spec,
+                "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE",
+                python.into_os_string(),
+            );
+        } else if require_packaged_python {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Packaged Noofy requires a bundled Python executable for managed ComfyUI runtime preparation.",
+            ));
+        }
+        if let Some(uv) = layout.uv_executable {
+            set_env(spec, "NOOFY_UV_EXECUTABLE", uv.into_os_string());
+        } else if require_packaged_python {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Packaged Noofy requires a bundled uv executable for isolated workflow dependency environments.",
+            ));
+        }
     }
 
     set_env(spec, "PYTHONNOUSERSITE", OsString::from("1"));
@@ -1477,5 +1481,48 @@ mod tests {
             Some(&OsString::from("managed"))
         );
         assert!(spec.remove_env.is_empty());
+    }
+
+    #[test]
+    fn source_backend_does_not_use_tauri_resource_dir_as_packaged_runtime() {
+        let root = temp_dir("source-runtime-with-resource-dir");
+        let manifest_dir = root.join("frontend").join("src-tauri");
+        let backend_dir = root.join("backend");
+        let python = if cfg!(windows) {
+            backend_dir.join(".venv").join("Scripts").join("python.exe")
+        } else {
+            backend_dir.join(".venv").join("bin").join("python")
+        };
+        touch(&python);
+        let resource_dir = root.join("target").join("debug").join("resources");
+        touch(
+            &resource_dir
+                .join(NOOFY_RUNTIME_RESOURCE_DIR)
+                .join("python")
+                .join("bin")
+                .join("python3"),
+        );
+        let ctx = BackendLaunchContext {
+            env: HashMap::new(),
+            manifest_dir,
+            current_exe: root
+                .join("frontend")
+                .join("src-tauri")
+                .join("target")
+                .join("debug")
+                .join("noofy"),
+            resource_dir: Some(resource_dir),
+            packaged_mode: false,
+        };
+
+        let spec = backend_launch_spec(&ctx).expect("source launch spec");
+
+        assert_eq!(PathBuf::from(spec.program.clone()), python);
+        assert_eq!(env_value(&spec, "NOOFY_BUNDLED_RESOURCE_DIR"), None);
+        assert_eq!(env_value(&spec, "NOOFY_BUNDLED_COMFYUI_DIR"), None);
+        assert_eq!(
+            env_value(&spec, "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE"),
+            None
+        );
     }
 }

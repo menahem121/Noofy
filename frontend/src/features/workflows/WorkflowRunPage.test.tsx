@@ -895,6 +895,200 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
   });
 
+  it("shows preparation progress while Run prepares a custom-node workflow and resumes after the job starts", async () => {
+    const runRequest = deferred<Response>();
+    const preparingStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: {
+        status: "resolving_dependencies",
+        user_facing_message: "Resolving custom-node dependencies.",
+        smoke_test_report: {
+          dependency_env: { status: "not_run", message: null, details: {} },
+          custom_node_import: { status: "not_run", message: null, details: {} },
+          runner_health: { status: "not_run", message: null, details: {} },
+          workflow_execution: { status: "not_run", message: null, details: {} },
+        },
+      },
+    };
+    const smokeTestingStatus = {
+      ...preparingStatus,
+      install: {
+        status: "smoke_testing",
+        user_facing_message: "Checking the isolated runner.",
+        smoke_test_report: {
+          dependency_env: { status: "passed", message: "Dependency imports passed.", details: {} },
+          custom_node_import: { status: "passed", message: "Custom node registration passed.", details: {} },
+          runner_health: { status: "not_run", message: null, details: {} },
+          workflow_execution: { status: "not_run", message: null, details: {} },
+        },
+      },
+    };
+    let statusCalls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return Promise.resolve(jsonResponse(statusCalls > 1 ? smokeTestingStatus : preparingStatus));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") return runRequest.promise;
+      if (url.endsWith("/api/jobs/job-prepared/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-prepared",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-prepared/result")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-prepared", status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Preparing workflow" })).toBeInTheDocument();
+    expect(screen.getByText(/Resolving custom-node dependencies|Checking the isolated runner/)).toBeInTheDocument();
+    expect(screen.getByText("Prepare dependency environment")).toBeInTheDocument();
+    expect(screen.getByText("Stage custom-node files")).toBeInTheDocument();
+    expect(screen.getByText("Start isolated runner")).toBeInTheDocument();
+    expect(screen.getByText("Check custom-node registration")).toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-prepared",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("does not flash the preparation dialog when a custom-node workflow is already ready", async () => {
+    const runRequest = deferred<Response>();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...workflowStatus,
+            workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+            install: { status: "ready", user_facing_message: "Ready" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") return runRequest.promise;
+      if (url.endsWith("/api/jobs/job-ready/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-ready",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-ready/result")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-ready", status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-ready",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows the root preparation blocker when Run returns a validation failure", async () => {
+    const rootCause = "Node package dependency could not be resolved.";
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...workflowStatus,
+            workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+            install: {
+              status: "pending",
+              user_facing_message: "Not started",
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [],
+            errors: [rootCause],
+          }),
+        );
+      }
+      if (url.endsWith("/api/logs?limit=200")) {
+        return Promise.resolve(
+          jsonResponse({
+            events: [diagnosticEvent("runtime.workspace", rootCause)],
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
+    expect(screen.getAllByText(rootCause).length).toBeGreaterThan(0);
+    expect(screen.getByText(/runtime\.workspace/)).toBeInTheDocument();
+  });
+
   it("blocks the run and explains missing model requirements", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
