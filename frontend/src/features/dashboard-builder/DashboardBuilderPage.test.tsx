@@ -135,6 +135,43 @@ function savedDashboardBindableInputsResponse() {
   };
 }
 
+function imageWorkflowBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "10",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: null,
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("DashboardBuilderPage", () => {
   const fetchMock = vi.fn();
 
@@ -188,11 +225,11 @@ describe("DashboardBuilderPage", () => {
 
     expect(onContinue).toHaveBeenCalledWith(
       expect.objectContaining({
-        widgets: [
+        widgets: expect.arrayContaining([
           expect.objectContaining({
             options: ["dpmpp_2m", "uni_pc", "dpm_2"],
           }),
-        ],
+        ]),
       }),
     );
   });
@@ -225,7 +262,9 @@ describe("DashboardBuilderPage", () => {
 
     expect(onContinue).toHaveBeenCalledWith(
       expect.objectContaining({
-        widgets: [expect.objectContaining({ defaultValue: 0.5, min: 0, max: 1, step: 0.25 })],
+        widgets: expect.arrayContaining([
+          expect.objectContaining({ defaultValue: 0.5, min: 0, max: 1, step: 0.25 }),
+        ]),
       }),
     );
   });
@@ -296,6 +335,54 @@ describe("DashboardBuilderPage", () => {
         ]),
       }),
     );
+  });
+
+  it("automatically creates a load image widget for bindable LoadImage inputs", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: [
+          expect.objectContaining({
+            valueId: "node-10-image",
+            binding: { nodeId: "10", inputName: "image" },
+            widgetType: "load_image",
+          }),
+        ],
+      }),
+    );
+    expect(onContinue.mock.calls[0][0].widgets).toHaveLength(1);
   });
 
   it("hides the previous workflow while builder data for the next workflow is loading", async () => {

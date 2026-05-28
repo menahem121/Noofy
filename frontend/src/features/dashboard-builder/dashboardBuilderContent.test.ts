@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAutomaticImageInputWidgets,
+  buildInitialDashboard,
   createDashboardWidgetForValue,
   dashboardDraftKey,
   loadDashboardDraft,
@@ -226,6 +228,103 @@ describe("saveDashboardDraft", () => {
 });
 
 describe("workflowFromBindableInputs", () => {
+  it("auto-creates load image widgets for bindable LoadImage inputs", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "10",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "creator-local-input.png",
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+            hint: "Reference image for the workflow.",
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+          },
+        ],
+      },
+    ]);
+
+    const schema = buildInitialDashboard(workflow);
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-10-image",
+        valueId: "node-10-image",
+        binding: { nodeId: "10", inputName: "image" },
+        widgetType: "load_image",
+        title: "Input image",
+        description: "Choose an image from your computer.",
+        defaultValue: null,
+      }),
+    ]);
+
+    expect(toBackendPayload(schema).inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-10-image",
+        control: "load_image",
+        binding: { node_id: "10", input_name: "image" },
+        default: null,
+      }),
+    ]);
+  });
+
+  it("adds missing LoadImage widgets to an existing builder schema without duplicating widgets", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "10",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: null,
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+          },
+        ],
+      },
+    ]);
+    const baseSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+
+    const schema = addAutomaticImageInputWidgets(baseSchema, workflow);
+    const roundTrip = addAutomaticImageInputWidgets(schema, workflow);
+
+    expect(schema.widgets).toHaveLength(1);
+    expect(schema.widgets[0]).toMatchObject({
+      valueId: "node-10-image",
+      widgetType: "load_image",
+    });
+    expect(roundTrip.widgets).toHaveLength(1);
+  });
+
   it("suggests sliders with image-dimension defaults for width and height inputs", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

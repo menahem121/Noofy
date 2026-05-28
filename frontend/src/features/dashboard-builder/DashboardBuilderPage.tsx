@@ -28,6 +28,7 @@ import {
   MOCK_WORKFLOW,
   NODE_ICONS,
   VALUE_KIND_ICONS,
+  addAutomaticImageInputWidgets,
   buildInitialDashboard,
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
@@ -215,8 +216,11 @@ export function DashboardBuilderPage({
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
     const nextSchema = normalizeDashboardSchema(
-      reconcileDashboardSchemaForWorkflow(
-        scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
+      addAutomaticImageInputWidgets(
+        reconcileDashboardSchemaForWorkflow(
+          scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
+          workflow,
+        ),
         workflow,
       ),
     );

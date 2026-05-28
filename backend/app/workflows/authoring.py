@@ -315,9 +315,11 @@ def _classify_graph_inputs(
             # Skip link references (arrays like ["3", 0]).
             if isinstance(value, list):
                 continue
+            if _is_ignored_image_node_input(node_type, input_name):
+                continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
             kind = _value_kind(input_name, value, node_type)
-            if option_spec.options and kind != "lora":
+            if option_spec.options and kind not in {"image_input", "lora"}:
                 kind = "select"
             if kind is None:
                 continue
@@ -331,13 +333,13 @@ def _classify_graph_inputs(
                 ),
                 "widget_types": widget_types,
             }
-            if option_spec.options:
+            if option_spec.options and kind != "image_input":
                 input_record["options"] = option_spec.options
             if option_spec.tooltip:
                 input_record["hint"] = option_spec.tooltip
             scalar_inputs.append(input_record)
 
-        if scalar_inputs or node_type in _IMAGE_NODE_TYPES:
+        if scalar_inputs:
             nodes.append(
                 {
                     "node_id": str(node_id),
@@ -349,6 +351,10 @@ def _classify_graph_inputs(
             )
 
     return nodes
+
+
+def _is_ignored_image_node_input(node_type: str, input_name: str) -> bool:
+    return node_type in _IMAGE_NODE_TYPES and input_name == "upload"
 
 
 def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:

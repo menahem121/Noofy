@@ -436,6 +436,77 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
     ]
 
 
+def test_classify_graph_inputs_marks_load_image_as_image_input_only_when_unlinked() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "10": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "creator-local-input.png", "upload": "image"},
+            },
+            "11": {
+                "class_type": "LoadImage",
+                "inputs": {"image": ["3", 0]},
+            },
+            "12": {
+                "class_type": "PreviewImage",
+                "inputs": {"images": ["10", 0]},
+            },
+        }
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["10"]["inputs"][0] == {
+        "input_name": "image",
+        "current_value": "creator-local-input.png",
+        "kind": "image_input",
+        "suggested_widget_type": "load_image",
+        "widget_types": ["load_image", "load_image_mask"],
+    }
+    assert len(input_nodes["10"]["inputs"]) == 1
+    assert "11" not in input_nodes
+    assert input_nodes["12"]["inputs"] == [
+        {
+            "input_name": "output_image",
+            "current_value": None,
+            "kind": "image_output",
+            "suggested_widget_type": "display_image",
+            "widget_types": ["display_image"],
+        }
+    ]
+
+
+def test_get_bindable_inputs_keeps_load_image_as_upload_when_object_info_has_file_options() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "10": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "creator-local-input.png"},
+            },
+        },
+        object_info={
+            "LoadImage": {
+                "input": {
+                    "required": {
+                        "image": [
+                            ["creator-local-input.png", "other.png"],
+                            {"tooltip": "Image to open."},
+                        ],
+                    }
+                }
+            }
+        },
+    )
+
+    assert nodes[0]["inputs"][0] == {
+        "input_name": "image",
+        "current_value": "creator-local-input.png",
+        "kind": "image_input",
+        "suggested_widget_type": "load_image",
+        "widget_types": ["load_image", "load_image_mask"],
+        "hint": "Image to open.",
+    }
+
+
 def test_get_bindable_inputs_uses_object_info_options_for_dropdowns(tmp_path: Path) -> None:
     del tmp_path
     graph = {

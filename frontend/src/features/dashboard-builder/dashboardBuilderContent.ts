@@ -781,19 +781,51 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
     });
   }
 
-  return {
-    version: 1,
-    workflowId: workflow.id,
-    workflowName: workflow.name,
-    widgets,
-    groups: [],
-    layout: {
-      gridColumns: 32,
-      rowHeight: 32,
-      gridGap: 14,
-      responsive: true,
+  return addAutomaticImageInputWidgets(
+    {
+      version: 1,
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      widgets,
+      groups: [],
+      layout: {
+        gridColumns: 32,
+        rowHeight: 32,
+        gridGap: 14,
+        responsive: true,
+      },
     },
-  };
+    workflow,
+  );
+}
+
+export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingBindings = new Set(
+    schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`),
+  );
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (value.valueKind !== "image_input") continue;
+      if (existingValueIds.has(value.id)) continue;
+      const bindingKey = `${value.nodeId}:${value.inputName}`;
+      if (existingBindings.has(bindingKey)) continue;
+
+      const widget = createDashboardWidgetForValue(value, node);
+      widgets.push({
+        ...widget,
+        widgetType: "load_image",
+        defaultValue: null,
+        drawMask: undefined,
+      });
+      existingValueIds.add(value.id);
+      existingBindings.add(bindingKey);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
