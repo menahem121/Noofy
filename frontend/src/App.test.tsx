@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -105,8 +105,10 @@ const modelSummary = {
 
 describe("App workflow tabs", () => {
   const fetchMock = vi.fn();
+  let lastOpened: string | null = null;
 
   beforeEach(() => {
+    lastOpened = null;
     window.localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", undefined);
@@ -115,7 +117,18 @@ describe("App workflow tabs", () => {
       const method = init?.method ?? "GET";
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtime));
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
-      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([workflowSummary]));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([{ ...workflowSummary, last_opened: lastOpened }]));
+      if (url.endsWith("/api/workflows/text_to_image_v0/open") && method === "POST") {
+        lastOpened = "2026-05-29T12:00:00+00:00";
+        return Promise.resolve(jsonResponse({
+          workflow_id: "text_to_image_v0",
+          last_opened: lastOpened,
+          workflow: {
+            ...workflowSummary,
+            last_opened: lastOpened,
+          },
+        }));
+      }
       if (url.endsWith("/api/settings/apis")) {
         return Promise.resolve(jsonResponse({ providers: {}, credential_store: { available: true } }));
       }
@@ -163,11 +176,19 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).endsWith("/api/workflows/text_to_image_v0/open") && (init as RequestInit | undefined)?.method === "POST",
+      )).toBe(true);
+    });
     const tab = await screen.findByRole("button", { name: "Text to Image" });
     expect(tab).toHaveAttribute("aria-current", "page");
     expect(screen.getAllByRole("button", { name: "Close Text to Image workspace tab" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
+    const recentSection = await screen.findByRole("region", { name: "Recently Opened" });
+    expect(within(recentSection).getByRole("heading", { name: "Text to Image" })).toBeInTheDocument();
+
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
     expect(screen.getAllByRole("button", { name: "Close Text to Image workspace tab" })).toHaveLength(1);
 

@@ -62,6 +62,14 @@ async def get_workflow_details(workflow_id: str, library: WorkflowLibraryService
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/workflows/{workflow_id}/open")
+async def record_workflow_opened(workflow_id: str, library: WorkflowLibraryServiceDep):
+    try:
+        return library.record_workflow_opened(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.put("/workflows/{workflow_id}/metadata")
 async def update_workflow_metadata(
     workflow_id: str,

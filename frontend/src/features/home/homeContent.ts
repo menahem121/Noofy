@@ -47,14 +47,6 @@ export interface WorkflowCardVariant {
   title: string;
 }
 
-export interface RecentWorkflow {
-  title: string;
-  kind: string;
-  openedAt: string;
-  statusLabel: string;
-  Icon: LucideIcon;
-}
-
 export const fallbackWorkflow: WorkflowCard = {
   id: "text_to_image_v0",
   title: "Text to Image",
@@ -126,23 +118,6 @@ export const starterWorkflows: WorkflowCard[] = [
     statusLabel: "Planned",
     Icon: Wand2,
     source: "starter",
-  },
-];
-
-export const recentWorkflows: RecentWorkflow[] = [
-  {
-    title: "Text to Image",
-    kind: "Starter workflow",
-    openedAt: "Ready to open",
-    statusLabel: "Installed",
-    Icon: ImagePlus,
-  },
-  {
-    title: "Product Photography Set",
-    kind: "Custom workflow",
-    openedAt: "Last opened yesterday",
-    statusLabel: "Draft",
-    Icon: FolderClock,
   },
 ];
 

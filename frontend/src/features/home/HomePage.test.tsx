@@ -233,12 +233,93 @@ describe("HomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New Workflow" }));
     expect(onConfigureDashboard).toHaveBeenCalledWith();
 
-    const viewAllButtons = screen.getAllByRole("button", { name: "View all" });
-    fireEvent.click(viewAllButtons[0]);
-    expect(onNavigate).toHaveBeenCalledWith("history");
-
-    fireEvent.click(viewAllButtons[1]);
+    fireEvent.click(screen.getByRole("button", { name: "View workflows" }));
     expect(onNavigate).toHaveBeenCalledWith("workflows");
+
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    expect(onNavigate).toHaveBeenCalledWith("workflows");
+  });
+
+  it("shows the last three opened workflows from backend workflow state", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return new Promise<Response>(() => {});
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [
+          {
+            id: "workflow_oldest",
+            name: "Oldest Opened",
+            version: "1.0.0",
+            description: "Old open.",
+            trust_level: "noofy_verified",
+            source_label: "Native Noofy",
+            category: "Txt2img",
+            status: "installed",
+            status_label: "Installed",
+            last_opened: "2026-05-20T10:00:00+00:00",
+          },
+          {
+            id: "workflow_second",
+            name: "Second Opened",
+            version: "1.0.0",
+            description: "Second open.",
+            trust_level: "noofy_verified",
+            source_label: "Imported",
+            category: "Restoration",
+            status: "imported",
+            status_label: "Imported",
+            last_opened: "2026-05-28T10:00:00+00:00",
+          },
+          {
+            id: "workflow_first",
+            name: "First Opened",
+            version: "1.0.0",
+            description: "First open.",
+            trust_level: "noofy_verified",
+            source_label: "Native Noofy",
+            category: "Txt2img",
+            status: "installed",
+            status_label: "Installed",
+            last_opened: "2026-05-29T10:00:00+00:00",
+          },
+          {
+            id: "workflow_third",
+            name: "Third Opened",
+            version: "1.0.0",
+            description: "Third open.",
+            trust_level: "noofy_verified",
+            source_label: "Native Noofy",
+            category: "Img2img",
+            status: "installed",
+            status_label: "Installed",
+            last_opened: "2026-05-27T10:00:00+00:00",
+          },
+        ],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    const recentSection = screen.getByRole("region", { name: "Recently Opened" });
+    const rows = Array.from(recentSection.querySelectorAll(".recent-row:not(.recent-row--empty)"));
+
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => within(row as HTMLElement).getByRole("heading").textContent)).toEqual([
+      "First Opened",
+      "Second Opened",
+      "Third Opened",
+    ]);
+    expect(within(recentSection).queryByRole("heading", { name: "Oldest Opened" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Open" }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith("workflow_second");
   });
 
   it("pressing Enter on Home search navigates to Workflows with the query preserved", async () => {

@@ -49,6 +49,11 @@ class WorkflowRunHistorySummary(BaseModel):
     run_count: int = 0
 
 
+class WorkflowOpenHistoryRecord(BaseModel):
+    workflow_id: str
+    last_opened_at: str
+
+
 class _WorkflowRunHistoryFile(BaseModel):
     records: list[WorkflowRunHistoryRecord] = Field(default_factory=list)
 
@@ -64,6 +69,7 @@ class WorkflowLibraryStore:
         self.root_dir = root_dir
         self.metadata_dir = root_dir / "metadata"
         self.run_history_dir = root_dir / "run-history"
+        self.open_history_dir = root_dir / "open-history"
 
     def metadata(self, workflow_id: str) -> WorkflowLibraryMetadata:
         path = self._metadata_path(workflow_id)
@@ -124,6 +130,30 @@ class WorkflowLibraryStore:
             records.extend(history.records)
         return sorted(records, key=lambda record: record.finished_at)
 
+    def record_workflow_opened(
+        self,
+        workflow_id: str,
+        *,
+        opened_at: datetime | None = None,
+    ) -> WorkflowOpenHistoryRecord:
+        opened = opened_at or datetime.now(UTC)
+        record = WorkflowOpenHistoryRecord(
+            workflow_id=workflow_id,
+            last_opened_at=opened.isoformat(),
+        )
+        self._write_json(self._open_history_path(workflow_id), record.model_dump(mode="json"))
+        return record
+
+    def workflow_last_opened(self, workflow_id: str) -> str | None:
+        path = self._open_history_path(workflow_id)
+        if not path.exists():
+            return None
+        try:
+            record = WorkflowOpenHistoryRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            return None
+        return record.last_opened_at
+
     def record_run_result(
         self,
         *,
@@ -153,7 +183,11 @@ class WorkflowLibraryStore:
         return self.run_history_summary(workflow_id)
 
     def remove_workflow(self, workflow_id: str) -> None:
-        for path in (self._metadata_path(workflow_id), self._run_history_path(workflow_id)):
+        for path in (
+            self._metadata_path(workflow_id),
+            self._run_history_path(workflow_id),
+            self._open_history_path(workflow_id),
+        ):
             path.unlink(missing_ok=True)
 
     def remove_all(self) -> None:
@@ -164,6 +198,9 @@ class WorkflowLibraryStore:
 
     def _run_history_path(self, workflow_id: str) -> Path:
         return self.run_history_dir / f"{safe_store_segment(workflow_id)}.json"
+
+    def _open_history_path(self, workflow_id: str) -> Path:
+        return self.open_history_dir / f"{safe_store_segment(workflow_id)}.json"
 
     def _run_history(self, workflow_id: str) -> _WorkflowRunHistoryFile:
         path = self._run_history_path(workflow_id)

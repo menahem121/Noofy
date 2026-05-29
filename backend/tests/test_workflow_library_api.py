@@ -280,6 +280,28 @@ def test_workflow_list_returns_lightweight_table_fields(tmp_path: Path) -> None:
     assert "overview" not in row
 
 
+def test_workflow_open_history_updates_last_opened_without_run_history(tmp_path: Path) -> None:
+    service, workflow_id, _, _ = _service(tmp_path)
+
+    before = next(item for item in service.list_workflows() if item["id"] == workflow_id)
+    opened = service.workflow_library_service.record_workflow_opened(workflow_id)
+    after = next(item for item in service.list_workflows() if item["id"] == workflow_id)
+
+    assert before["last_opened"] is None
+    assert opened["workflow_id"] == workflow_id
+    assert isinstance(opened["last_opened"], str)
+    assert opened["workflow"]["last_opened"] == opened["last_opened"]
+    assert after["last_opened"] == opened["last_opened"]
+    assert service.workflow_details(workflow_id)["run_history"]["run_count"] == 0
+
+
+def test_record_workflow_opened_rejects_unknown_workflow(tmp_path: Path) -> None:
+    service, _, _, _ = _service(tmp_path)
+
+    with pytest.raises(KeyError):
+        service.workflow_library_service.record_workflow_opened("missing_workflow")
+
+
 def test_workflow_list_includes_missing_model_count_without_details_payload(tmp_path: Path) -> None:
     packages_dir = tmp_path / "native-packages"
     package_dir = packages_dir / "missing_model_wf"

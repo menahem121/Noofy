@@ -13,6 +13,7 @@ interface WorkflowLibraryState {
 interface WorkflowLibraryContextValue extends WorkflowLibraryState {
   refreshWorkflows: () => Promise<WorkflowSummary[] | null>;
   setWorkflowsFromResponse: (workflows: WorkflowSummary[]) => void;
+  updateWorkflowFromResponse: (workflow: WorkflowSummary) => void;
 }
 
 const WorkflowLibraryContext = createContext<WorkflowLibraryContextValue | null>(null);
@@ -49,6 +50,23 @@ export function WorkflowLibraryProvider({
       lastLoadedAt: Date.now(),
       hasLoaded: true,
     }));
+  }, []);
+
+  const updateWorkflowFromResponse = useCallback((workflow: WorkflowSummary) => {
+    setState((current) => {
+      const existingIndex = current.workflows.findIndex((item) => item.id === workflow.id);
+      const workflows =
+        existingIndex >= 0
+          ? current.workflows.map((item) => (item.id === workflow.id ? workflow : item))
+          : [...current.workflows, workflow];
+      return {
+        ...current,
+        workflows,
+        error: null,
+        lastLoadedAt: Date.now(),
+        hasLoaded: true,
+      };
+    });
   }, []);
 
   const refreshWorkflows = useCallback(async () => {
@@ -96,8 +114,9 @@ export function WorkflowLibraryProvider({
       ...state,
       refreshWorkflows,
       setWorkflowsFromResponse,
+      updateWorkflowFromResponse,
     }),
-    [refreshWorkflows, setWorkflowsFromResponse, state],
+    [refreshWorkflows, setWorkflowsFromResponse, state, updateWorkflowFromResponse],
   );
 
   return <WorkflowLibraryContext.Provider value={value}>{children}</WorkflowLibraryContext.Provider>;

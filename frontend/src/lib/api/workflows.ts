@@ -106,6 +106,12 @@ export interface WorkflowMetadataUpdateResponse {
   workflow: WorkflowSummary;
 }
 
+export interface WorkflowOpenedResponse {
+  workflow_id: string;
+  last_opened: string | null;
+  workflow: WorkflowSummary;
+}
+
 export interface WorkflowIconOption {
   id: string;
   asset_id?: string;
@@ -580,6 +586,10 @@ export function fetchWorkflows() {
 
 export function fetchWorkflowDetails(workflowId: string) {
   return getJson<WorkflowDetails>(`/workflows/${encodeURIComponent(workflowId)}/details`);
+}
+
+export function recordWorkflowOpened(workflowId: string) {
+  return postJson<WorkflowOpenedResponse>(`/workflows/${encodeURIComponent(workflowId)}/open`);
 }
 
 export function fetchWorkflowPackage(workflowId: string): Promise<WorkflowPackageResponse> {

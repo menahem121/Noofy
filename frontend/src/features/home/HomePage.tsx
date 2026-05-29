@@ -38,7 +38,6 @@ import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
 import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
 import {
   fallbackWorkflow,
-  recentWorkflows,
   starterWorkflows,
   type WorkflowCard,
   type WorkflowCardVariant,
@@ -102,6 +101,43 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       source: "backend",
     };
   });
+}
+
+function recentlyOpenedWorkflows(workflows: WorkflowSummary[]) {
+  return [...workflows]
+    .filter((workflow) => workflow.last_opened && !Number.isNaN(new Date(workflow.last_opened).getTime()))
+    .sort(
+      (left, right) =>
+        new Date(right.last_opened ?? 0).getTime() - new Date(left.last_opened ?? 0).getTime(),
+    )
+    .slice(0, 3);
+}
+
+function recentWorkflowKind(workflow: WorkflowSummary) {
+  if (workflow.source_label === "Imported") return "Imported workflow";
+  if (workflow.source_label === "Created by me") return "Created workflow";
+  return workflow.category ? `${workflow.category} workflow` : "Workflow";
+}
+
+function formatOpenedAt(value: string | null | undefined) {
+  if (!value) return "Never opened";
+  const opened = new Date(value);
+  if (Number.isNaN(opened.getTime())) return value;
+  const diffMs = Math.max(Date.now() - opened.getTime(), 0);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return "Just now";
+  if (diffMs < hour) {
+    const minutes = Math.floor(diffMs / minute);
+    return `${minutes} min ago`;
+  }
+  if (diffMs < day) {
+    const hours = Math.floor(diffMs / hour);
+    return `${hours} hr ago`;
+  }
+  if (diffMs < 2 * day) return "Yesterday";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(opened);
 }
 
 type NativeHomeWorkflowKind = "text_to_image" | "image_to_image";
@@ -330,6 +366,10 @@ export function HomePage({
 
     return [...fallbackCards, ...starterWithoutDuplicates].slice(0, 8);
   }, [selectedNativeVariants, workflowLibrary.workflows]);
+  const recentlyOpened = useMemo(
+    () => recentlyOpenedWorkflows(workflowLibrary.workflows),
+    [workflowLibrary.workflows],
+  );
 
   const installedCount = workflowLibrary.workflows.length;
   const homeSearchResults = useMemo(
@@ -678,36 +718,60 @@ export function HomePage({
                 <h2 id="recent-title">Recently Opened</h2>
                 <p>Continue from a workflow you opened before.</p>
               </div>
-              <button className="ghost-button" type="button" onClick={() => onNavigate("history")}>
-                View all
+              <button className="ghost-button" type="button" onClick={() => onNavigate("workflows")}>
+                View workflows
                 <ArrowRight size={16} aria-hidden="true" />
               </button>
             </div>
 
             <div className="recent-list">
-              {recentWorkflows.map((recent) => (
-                <article className="recent-row" key={recent.title}>
-                  <div className="recent-row__icon" aria-hidden="true">
-                    <recent.Icon size={20} />
-                  </div>
+              {recentlyOpened.length > 0 ? (
+                recentlyOpened.map((recent) => {
+                  const Icon =
+                    WORKFLOW_ICONS[(recent.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? fallbackWorkflow.Icon;
+                  return (
+                    <article className="recent-row" key={recent.id}>
+                      <div className="recent-row__icon" aria-hidden="true">
+                        {recent.icon?.startsWith("asset:") ? (
+                          <img
+                            className="workflow-custom-icon"
+                            src={resolveBackendUrl(
+                              `/api/assets/${encodeURIComponent(recent.icon.slice("asset:".length))}`,
+                              { includeToken: true },
+                            )}
+                            alt=""
+                          />
+                        ) : (
+                          <Icon size={20} />
+                        )}
+                      </div>
+                      <div className="recent-row__body">
+                        <h3>{recent.name}</h3>
+                        <p>
+                          {recentWorkflowKind(recent)}
+                          <span aria-hidden="true" />
+                          {formatOpenedAt(recent.last_opened)}
+                        </p>
+                      </div>
+                      <span className="mini-status">{recent.status_label ?? workflowSearchStatusLabel(recent)}</span>
+                      <button
+                        className="secondary-button secondary-button--small"
+                        type="button"
+                        onClick={() => onOpenWorkflow(recent.id)}
+                      >
+                        Open
+                      </button>
+                    </article>
+                  );
+                })
+              ) : (
+                <div className="recent-row recent-row--empty" role="status">
                   <div className="recent-row__body">
-                    <h3>{recent.title}</h3>
-                    <p>
-                      {recent.kind}
-                      <span aria-hidden="true" />
-                      {recent.openedAt}
-                    </p>
+                    <h3>No recently opened workflows yet.</h3>
+                    <p>Open a workflow and it will appear here.</p>
                   </div>
-                  <span className="mini-status">{recent.statusLabel}</span>
-                  <button
-                    className="secondary-button secondary-button--small"
-                    type="button"
-                    onClick={() => onOpenWorkflow("text_to_image_v0")}
-                  >
-                    Open
-                  </button>
-                </article>
-              ))}
+                </div>
+              )}
             </div>
           </section>
 

@@ -74,6 +74,26 @@ class WorkflowLibraryService:
             for package in self.workflow_loader.list_packages()
         ]
 
+    def record_workflow_opened(self, workflow_id: str) -> dict[str, object]:
+        package = self.workflow_loader.get_package(workflow_id)
+        record = (
+            self.workflow_library_store.record_workflow_opened(workflow_id)
+            if self.workflow_library_store is not None
+            else None
+        )
+        self.log_store.add(
+            "info",
+            "Workflow opened from library",
+            "workflow.library",
+            workflow_id=workflow_id,
+            details={"last_opened": record.last_opened_at if record is not None else None},
+        )
+        return {
+            "workflow_id": workflow_id,
+            "last_opened": record.last_opened_at if record is not None else None,
+            "workflow": self.workflow_summary(package),
+        }
+
     def workflow_details(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)
         summary = self.workflow_summary(package)
@@ -289,7 +309,6 @@ class WorkflowLibraryService:
         status = _effective_workflow_status(package)
         user_facing_status = _effective_workflow_status_label(package, status)
         metadata = self._library_metadata(package)
-        history = self._run_history_summary(package)
         model_counts = self._model_count_summary(package)
         missing_model_count = model_counts["missing_model_count"]
         needs_setup = _dashboard_needs_setup(package) or status in {
@@ -306,7 +325,7 @@ class WorkflowLibraryService:
             "main_model": self._main_model_summary(package),
             "description": metadata["description"],
             "category": metadata["category"],
-            "last_opened": history["last_started_at"],
+            "last_opened": self._last_opened(package),
             "tags": metadata["tags"],
             "missing_model_count": missing_model_count,
             "needs_setup": needs_setup,
@@ -388,6 +407,11 @@ class WorkflowLibraryService:
                 "run_count": 0,
             }
         return self.workflow_library_store.run_history_summary(package.metadata.id).model_dump(mode="json")
+
+    def _last_opened(self, package: WorkflowPackage) -> str | None:
+        if self.workflow_library_store is None:
+            return None
+        return self.workflow_library_store.workflow_last_opened(package.metadata.id)
 
     def _source_label(self, package: WorkflowPackage) -> str:
         if package.import_metadata is not None:

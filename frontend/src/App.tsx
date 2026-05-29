@@ -21,6 +21,7 @@ import {
   cancelQueuedRunnerStart,
   closeWorkflowRunnerLease,
   fetchJobProgress,
+  recordWorkflowOpened,
 } from "./lib/api/noofyApi";
 import {
   consumePendingNativeWorkflowFile,
@@ -127,6 +128,11 @@ function AppContent() {
   function openWorkflow(workflowId: string, workflowName?: string) {
     workflowTabs.openWorkflowTab(workflowId, workflowNameFor(workflowId, workflowName));
     setRoute({ name: "workflow", workflowId });
+    void recordWorkflowOpened(workflowId)
+      .then((response) => workflowLibrary.updateWorkflowFromResponse(response.workflow))
+      .catch(() => {
+        // Opening a workflow should not be blocked by local history recording.
+      });
   }
 
   function navigate(routeId: AppRouteId, options?: AppNavigateOptions) {
