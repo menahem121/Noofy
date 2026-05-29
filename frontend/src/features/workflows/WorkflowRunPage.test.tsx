@@ -2733,6 +2733,14 @@ describe("WorkflowRunPage", () => {
       height: 800,
       toJSON: () => ({}),
     } as DOMRect);
+    Object.defineProperty(viewerImage, "naturalWidth", { configurable: true, value: 4096 });
+    Object.defineProperty(viewerImage, "naturalHeight", { configurable: true, value: 2048 });
+
+    fireEvent.load(viewerImage);
+
+    await waitFor(() => {
+      expect(viewerImage).toHaveStyle({ width: "1000px", height: "500px" });
+    });
 
     fireEvent.doubleClick(viewerImage, { clientX: 750, clientY: 600 });
 

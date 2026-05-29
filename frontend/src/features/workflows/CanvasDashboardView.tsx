@@ -7,6 +7,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
+  type SyntheticEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1037,10 +1038,26 @@ function ImagePreviewViewer({
     startX: number;
     startY: number;
   } | null>(null);
+  const previousImageUrlRef = useRef(imageUrl);
   const lastTapRef = useRef<{ time: number; clientX: number; clientY: number } | null>(null);
   const gestureScaleRef = useRef(1);
+  const [naturalImageSize, setNaturalImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
   const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
   const isZoomed = transform.scale > 1.001;
+
+  const measureImageStage = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    setStageSize((current) => {
+      if (current && Math.abs(current.width - rect.width) < 0.5 && Math.abs(current.height - rect.height) < 0.5) {
+        return current;
+      }
+      return { width: rect.width, height: rect.height };
+    });
+  }, []);
 
   const zoomAtPoint = useCallback((factor: number, point: { x: number; y: number }) => {
     if (!Number.isFinite(factor) || factor <= 0) return;
@@ -1056,6 +1073,39 @@ function ImagePreviewViewer({
       };
     });
   }, []);
+
+  const fittedImageSize = useMemo(() => {
+    if (!naturalImageSize || !stageSize) return null;
+    const fitScale = Math.min(1, stageSize.width / naturalImageSize.width, stageSize.height / naturalImageSize.height);
+    if (!Number.isFinite(fitScale) || fitScale <= 0) return null;
+    return {
+      width: Math.max(1, naturalImageSize.width * fitScale),
+      height: Math.max(1, naturalImageSize.height * fitScale),
+    };
+  }, [naturalImageSize, stageSize]);
+
+  useEffect(() => {
+    if (previousImageUrlRef.current === imageUrl) return;
+    previousImageUrlRef.current = imageUrl;
+    setNaturalImageSize(null);
+    setStageSize(null);
+    setTransform({ scale: 1, x: 0, y: 0 });
+  }, [imageUrl]);
+
+  useLayoutEffect(() => {
+    measureImageStage();
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => measureImageStage());
+      observer.observe(stage);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", measureImageStage);
+    return () => window.removeEventListener("resize", measureImageStage);
+  }, [measureImageStage]);
 
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -1122,6 +1172,14 @@ function ImagePreviewViewer({
 
   function resetImageView() {
     setTransform({ scale: 1, x: 0, y: 0 });
+  }
+
+  function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
+    const { naturalWidth, naturalHeight } = event.currentTarget;
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      setNaturalImageSize({ width: naturalWidth, height: naturalHeight });
+    }
+    measureImageStage();
   }
 
   function handleImageDoubleClick(event: MouseEvent<HTMLImageElement>) {
@@ -1204,7 +1262,12 @@ function ImagePreviewViewer({
           alt={`${alt} full-screen preview`}
           className={`widget-image-viewer__image${isZoomed ? " widget-image-viewer__image--zoomed" : ""}`}
           draggable={false}
-          style={{ transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})` }}
+          style={{
+            width: fittedImageSize ? `${fittedImageSize.width}px` : undefined,
+            height: fittedImageSize ? `${fittedImageSize.height}px` : undefined,
+            transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+          }}
+          onLoad={handleImageLoad}
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={handleImageDoubleClick}
           onPointerDown={handleImagePointerDown}
