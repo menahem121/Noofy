@@ -335,6 +335,10 @@ describe("WorkflowsPage", () => {
     );
   }
 
+  function workflowRowNames() {
+    return Array.from(document.querySelectorAll(".workflow-row .model-name-text")).map((element) => element.textContent);
+  }
+
   it("renders list data from the lightweight workflows endpoint and filters rows", async () => {
     renderPage();
 
@@ -346,6 +350,34 @@ describe("WorkflowsPage", () => {
 
     expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+  });
+
+  it("sorts workflows by sortable headers without clearing the current search", async () => {
+    renderPage();
+
+    expect(await screen.findByText("Native Text")).toBeInTheDocument();
+    expect(workflowRowNames()).toEqual(["Native Text", "Cleanup Flow"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Name ascending" }));
+    expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Name descending" }));
+    expect(workflowRowNames()).toEqual(["Native Text", "Cleanup Flow"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Category ascending" }));
+    expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Main model ascending" }));
+    expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Main model descending" }));
+    expect(workflowRowNames()).toEqual(["Native Text", "Cleanup Flow"]);
+
+    fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "flow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Status ascending" }));
+
+    expect(workflowRowNames()).toEqual(["Cleanup Flow"]);
+    expect(screen.getByPlaceholderText("Search workflows...")).toHaveValue("flow");
   });
 
   it("renders custom imported workflow icons in the row", async () => {
@@ -495,7 +527,7 @@ describe("WorkflowsPage", () => {
     expect(globalCss).toContain("container: workflows-list / inline-size;");
     expect(globalCss).toContain("@container workflows-list (max-width: 620px)");
     expect(globalCss).toContain("overflow-x: clip;");
-    expect(globalCss).toContain("minmax(0, 1.25fr)");
+    expect(globalCss).toContain("minmax(0, 1.15fr)");
     expect(globalCss).toContain("grid-template-areas:");
     expect(globalCss).toContain(".workflows-layout--drawer-open .workflow-page-actions");
     expect(globalCss).toContain("width: fit-content;");

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Download,
   Folder,
@@ -42,6 +43,7 @@ import {
   hexAlpha,
   MODEL_TYPE_FILTERS,
   modelFolderPath,
+  modelSourceLabel,
   normalizeType,
   SOURCE_FILTERS,
   type ModelTypeFilter,
@@ -53,6 +55,22 @@ interface ModelsPageProps {
   onNavigate: (route: AppRouteId) => void;
 }
 
+type SortDirection = "asc" | "desc";
+type ModelSortKey = "name" | "tags" | "size" | "status" | "source";
+
+interface ModelSortState {
+  key: ModelSortKey;
+  direction: SortDirection;
+}
+
+const modelStatusSortOrder: Record<string, number> = {
+  missing: 0,
+  downloading: 1,
+  ready: 2,
+  available: 2,
+  failed: 3,
+  needs_attention: 3,
+};
 
 export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const [runtimeState, setRuntimeState] = useState<{ loading: boolean; runtime: RuntimeStatus | null }>({
@@ -68,6 +86,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<ModelSortState | null>(null);
 
   const [showTagCreate, setShowTagCreate] = useState(false);
   const [newTagName, setNewTagName] = useState("");
@@ -126,7 +145,8 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const tags = inventory?.tags ?? [];
 
   const filteredModels = useMemo(() => {
-    return models.filter((model) => {
+    const tagNamesById = new Map(tags.map((tag) => [tag.id, tag.name]));
+    const filtered = models.filter((model) => {
       if (activeType !== "all" && normalizeType(model) !== activeType) return false;
       if (search) {
         const haystack = `${model.filename} ${model.folder} ${model.source_label} ${model.workflow_usage
@@ -139,7 +159,9 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       if (tagFilter !== "all" && !model.tag_ids.includes(tagFilter)) return false;
       return true;
     });
-  }, [models, activeType, search, statusFilter, sourceFilter, tagFilter]);
+    if (!sort) return filtered;
+    return stableSort(filtered, (a, b) => compareModels(a, b, sort, tagNamesById));
+  }, [models, tags, activeType, search, statusFilter, sourceFilter, tagFilter, sort]);
 
   const selectedModel = selectedModelId ? (models.find((model) => model.model_key === selectedModelId) ?? null) : null;
   const selectedModels = useMemo(
@@ -183,6 +205,13 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       }
       return next;
     });
+  }
+
+  function handleSort(key: ModelSortKey) {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
   }
 
   async function handleCreateTag() {
@@ -692,11 +721,41 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
                   aria-label="Select all models"
                 />
               </div>
-              <div className="model-col model-col-main">Name</div>
-              <div className="model-col model-col-tags">Tags</div>
-              <div className="model-col model-col-size">Size</div>
-              <div className="model-col model-col-status">Status</div>
-              <div className="model-col model-col-source">Source</div>
+              <SortableHeader
+                className="model-col model-col-main"
+                label="Name"
+                column="name"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                className="model-col model-col-tags"
+                label="Tags"
+                column="tags"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                className="model-col model-col-size"
+                label="Size"
+                column="size"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                className="model-col model-col-status"
+                label="Status"
+                column="status"
+                sort={sort}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                className="model-col model-col-source"
+                label="Source"
+                column="source"
+                sort={sort}
+                onSort={handleSort}
+              />
               <div className="model-col model-col-actions" />
             </div>
           )}
@@ -785,4 +844,98 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       </div>
     </AppLayout>
   );
+}
+
+function SortableHeader({
+  className,
+  label,
+  column,
+  sort,
+  onSort,
+}: {
+  className: string;
+  label: string;
+  column: ModelSortKey;
+  sort: ModelSortState | null;
+  onSort: (column: ModelSortKey) => void;
+}) {
+  const active = sort?.key === column;
+  const nextDirection = active && sort?.direction === "asc" ? "descending" : "ascending";
+
+  return (
+    <div className={className}>
+      <button
+        className={`sortable-header${active ? " sortable-header--active" : ""}`}
+        type="button"
+        aria-label={`Sort by ${label} ${nextDirection}`}
+        aria-pressed={active}
+        onClick={() => onSort(column)}
+      >
+        <span>{label}</span>
+        {active ? (
+          sort?.direction === "asc" ? (
+            <ChevronUp size={12} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={12} aria-hidden="true" />
+          )
+        ) : (
+          <span className="sortable-header__placeholder" aria-hidden="true" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function compareModels(
+  a: ModelInventoryEntry,
+  b: ModelInventoryEntry,
+  sort: ModelSortState,
+  tagNamesById: Map<string, string>,
+) {
+  const direction = sort.direction === "asc" ? 1 : -1;
+  let result = 0;
+
+  if (sort.key === "name") {
+    result = compareText(a.filename, b.filename);
+  } else if (sort.key === "tags") {
+    result = compareText(modelTagSortValue(a, tagNamesById), modelTagSortValue(b, tagNamesById));
+  } else if (sort.key === "size") {
+    return compareNullableNumber(a.size_bytes, b.size_bytes, direction);
+  } else if (sort.key === "status") {
+    result = compareStatus(a.status, b.status);
+  } else if (sort.key === "source") {
+    result = compareText(modelSourceLabel(a), modelSourceLabel(b));
+  }
+
+  return result * direction;
+}
+
+function modelTagSortValue(model: ModelInventoryEntry, tagNamesById: Map<string, string>) {
+  return model.tag_ids
+    .map((tagId) => tagNamesById.get(tagId) ?? tagId)
+    .sort(compareText)
+    .join(" ");
+}
+
+function compareStatus(a: string, b: string) {
+  const rank = (status: string) => modelStatusSortOrder[status] ?? 99;
+  return rank(a) - rank(b) || compareText(a, b);
+}
+
+function compareNullableNumber(a: number | null | undefined, b: number | null | undefined, direction: 1 | -1) {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return (a - b) * direction;
+}
+
+function compareText(a: string | null | undefined, b: string | null | undefined) {
+  return (a ?? "").localeCompare(b ?? "", undefined, { sensitivity: "base", numeric: true });
+}
+
+function stableSort<T>(items: T[], compare: (a: T, b: T) => number) {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => compare(a.item, b.item) || a.index - b.index)
+    .map(({ item }) => item);
 }

@@ -222,6 +222,10 @@ describe("ModelsPage", () => {
     );
   }
 
+  function modelRowNames() {
+    return Array.from(document.querySelectorAll(".model-row .model-name-text")).map((element) => element.textContent);
+  }
+
   it("renders real model inventory, source labels, and filters rows", async () => {
     renderPage();
 
@@ -234,6 +238,26 @@ describe("ModelsPage", () => {
 
     expect(screen.queryByText("base.safetensors")).not.toBeInTheDocument();
     expect(screen.getByText("style.safetensors")).toBeInTheDocument();
+  });
+
+  it("sorts models by sortable headers without clearing the current search", async () => {
+    renderPage();
+
+    await screen.findByText("base.safetensors");
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "safetensors" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Size ascending" }));
+
+    expect(modelRowNames()).toEqual([
+      "style.safetensors",
+      "flux.safetensors",
+      "missing.safetensors",
+      "base.safetensors",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Size descending" }));
+
+    expect(modelRowNames()[0]).toBe("base.safetensors");
+    expect(screen.getByPlaceholderText("Search models...")).toHaveValue("safetensors");
   });
 
   it("uses workflow names for missing workflow requirement source labels", async () => {

@@ -954,6 +954,43 @@
   letter-spacing: 0.04em;
 }
 
+.sortable-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.sortable-header:hover,
+.sortable-header--active {
+  color: var(--text-primary);
+}
+
+.sortable-header svg,
+.sortable-header__placeholder {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+.sortable-header__placeholder {
+  opacity: 0;
+}
+
+.model-col-size .sortable-header {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
 .model-col-check {
   width: 32px;
   flex: 0 0 32px;

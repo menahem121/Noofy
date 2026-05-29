@@ -380,12 +380,13 @@
 .workflow-row {
   display: grid;
   grid-template-columns:
-    minmax(0, 1.25fr)
-    minmax(0, 0.85fr)
-    minmax(0, 1.35fr)
-    minmax(0, 0.72fr)
+    minmax(0, 1.15fr)
+    minmax(0, 0.78fr)
+    minmax(0, 1.18fr)
+    minmax(92px, 0.54fr)
     minmax(0, 0.62fr)
-    minmax(0, 0.74fr)
+    minmax(0, 0.58fr)
+    minmax(0, 0.64fr)
     minmax(94px, max-content);
   gap: 12px;
   align-items: center;
@@ -453,6 +454,13 @@
 }
 
 .workflow-col-opened {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-col-status,
+.workflow-col-source {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -537,6 +545,10 @@
 .workflow-status--need_setup,
 .workflow-status--missing_models {
   color: var(--warning);
+}
+
+.workflow-status--failed {
+  color: var(--danger);
 }
 
 .workflow-action-menu {
@@ -731,13 +743,15 @@
       minmax(0, 1.3fr)
       minmax(0, 0.9fr)
       minmax(0, 1.18fr)
-      minmax(0, 0.72fr)
+      minmax(92px, 0.56fr)
+      minmax(0, 0.68fr)
       minmax(94px, max-content);
   }
 
-  .workflow-col-opened,
+  .workflow-col-category,
   .workflow-col-tags,
-  .workflows-table-head .workflow-col-opened,
+  .workflow-col-opened,
+  .workflows-table-head .workflow-col-category,
   .workflows-table-head .workflow-col-tags {
     display: none;
   }
@@ -750,13 +764,15 @@
       minmax(0, 1.3fr)
       minmax(0, 0.9fr)
       minmax(0, 1.18fr)
-      minmax(0, 0.72fr)
+      minmax(92px, 0.56fr)
+      minmax(0, 0.68fr)
       minmax(94px, max-content);
   }
 
-  .workflow-col-opened,
+  .workflow-col-category,
   .workflow-col-tags,
-  .workflows-table-head .workflow-col-opened,
+  .workflow-col-opened,
+  .workflows-table-head .workflow-col-category,
   .workflows-table-head .workflow-col-tags {
     display: none;
   }
@@ -769,6 +785,8 @@
       minmax(0, 1.12fr)
       minmax(0, 0.86fr)
       minmax(0, 1.22fr)
+      minmax(92px, 0.58fr)
+      minmax(0, 0.72fr)
       minmax(88px, max-content);
   }
 
@@ -804,6 +822,7 @@
     grid-template-areas:
       "main actions"
       "model model"
+      "status source"
       "description description"
       "category category"
       "tags tags";
@@ -823,6 +842,16 @@
 
   .workflow-col-description {
     grid-area: description;
+  }
+
+  .workflow-col-status {
+    grid-area: status;
+  }
+
+  .workflow-col-source {
+    grid-area: source;
+    justify-self: end;
+    max-width: 100%;
   }
 
   .workflow-col-category {
@@ -916,6 +945,7 @@
     grid-template-areas:
       "main actions"
       "model model"
+      "status source"
       "description description"
       "category category"
       "tags tags";
@@ -933,6 +963,15 @@
 
   .workflow-col-description {
     grid-area: description;
+  }
+
+  .workflow-col-status {
+    grid-area: status;
+  }
+
+  .workflow-col-source {
+    grid-area: source;
+    justify-self: end;
   }
 
   .workflow-col-category {

@@ -2,6 +2,7 @@ import { ChangeEvent, type MutableRefObject, type ReactNode, useEffect, useMemo,
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Download,
   FileUp,
   Loader2,
@@ -62,6 +63,21 @@ const CATEGORY_FILTERS: WorkflowCategory[] = [
   ...WORKFLOW_CATEGORY_OPTIONS,
 ];
 
+type SortDirection = "asc" | "desc";
+type WorkflowSortKey = "name" | "tags" | "status" | "source" | "category" | "mainModel";
+
+interface WorkflowSortState {
+  key: WorkflowSortKey;
+  direction: SortDirection;
+}
+
+const workflowStatusSortOrder: Record<string, number> = {
+  missing_models: 0,
+  need_setup: 1,
+  ready: 2,
+  failed: 3,
+};
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "Never";
   const date = new Date(value);
@@ -104,6 +120,7 @@ export function WorkflowsPage({
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
+  const [sort, setSort] = useState<WorkflowSortState | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [details, setDetails] = useState<Record<string, WorkflowDetails>>({});
@@ -160,16 +177,19 @@ export function WorkflowsPage({
   );
 
   const filteredWorkflows = useMemo(
-    () =>
-      searchWorkflows(workflows, {
+    () => {
+      const filtered = searchWorkflows(workflows, {
         query: search,
         activeCategory,
         categoryFilter,
         sourceFilter,
         statusFilter,
         tagFilter,
-      }),
-    [activeCategory, categoryFilter, search, sourceFilter, statusFilter, tagFilter, workflows],
+      });
+      if (!sort) return filtered;
+      return stableSort(filtered, (a, b) => compareWorkflows(a, b, sort));
+    },
+    [activeCategory, categoryFilter, search, sourceFilter, statusFilter, tagFilter, workflows, sort],
   );
 
   const selectedSummary = selectedWorkflowId
@@ -259,6 +279,13 @@ export function WorkflowsPage({
     const loaded = await fetchWorkflowDetails(workflowId);
     setDetails((current) => ({ ...current, [workflowId]: loaded }));
     await workflowLibrary.refreshWorkflows();
+  }
+
+  function handleSort(key: WorkflowSortKey) {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
   }
 
   async function handleEditDashboard(workflow: WorkflowSummary) {
@@ -410,13 +437,50 @@ export function WorkflowsPage({
             ))}
           </div>
 
-          <div className="workflows-table-head" aria-hidden="true">
-            <div className="workflow-col workflow-col-main">Workflow</div>
-            <div className="workflow-col workflow-col-model">Main model</div>
+          <div className="workflows-table-head">
+            <SortableHeader
+              className="workflow-col workflow-col-main"
+              label="Name"
+              column="name"
+              sort={sort}
+              onSort={handleSort}
+            />
+            <SortableHeader
+              className="workflow-col workflow-col-model"
+              label="Main model"
+              column="mainModel"
+              sort={sort}
+              onSort={handleSort}
+            />
             <div className="workflow-col workflow-col-description">Description</div>
-            <div className="workflow-col workflow-col-category">Category</div>
-            <div className="workflow-col workflow-col-opened">Last opened</div>
-            <div className="workflow-col workflow-col-tags">Tags</div>
+            <SortableHeader
+              className="workflow-col workflow-col-status"
+              label="Status"
+              column="status"
+              sort={sort}
+              onSort={handleSort}
+            />
+            <SortableHeader
+              className="workflow-col workflow-col-source"
+              label="Source"
+              column="source"
+              sort={sort}
+              onSort={handleSort}
+            />
+            <SortableHeader
+              className="workflow-col workflow-col-category"
+              label="Category"
+              column="category"
+              sort={sort}
+              onSort={handleSort}
+            />
+            <SortableHeader
+              className="workflow-col workflow-col-tags"
+              label="Tags"
+              column="tags"
+              sort={sort}
+              onSort={handleSort}
+            />
             <div className="workflow-col workflow-col-actions">Actions</div>
           </div>
 
@@ -604,6 +668,110 @@ function WorkflowIconVisual({
   return <Icon size={size} />;
 }
 
+function SortableHeader({
+  className,
+  label,
+  column,
+  sort,
+  onSort,
+}: {
+  className: string;
+  label: string;
+  column: WorkflowSortKey;
+  sort: WorkflowSortState | null;
+  onSort: (column: WorkflowSortKey) => void;
+}) {
+  const active = sort?.key === column;
+  const nextDirection = active && sort?.direction === "asc" ? "descending" : "ascending";
+
+  return (
+    <div className={className}>
+      <button
+        className={`sortable-header${active ? " sortable-header--active" : ""}`}
+        type="button"
+        aria-label={`Sort by ${label} ${nextDirection}`}
+        aria-pressed={active}
+        onClick={() => onSort(column)}
+      >
+        <span>{label}</span>
+        {active ? (
+          sort?.direction === "asc" ? (
+            <ChevronUp size={12} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={12} aria-hidden="true" />
+          )
+        ) : (
+          <span className="sortable-header__placeholder" aria-hidden="true" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function compareWorkflows(a: WorkflowSummary, b: WorkflowSummary, sort: WorkflowSortState) {
+  const direction = sort.direction === "asc" ? 1 : -1;
+  let result = 0;
+
+  if (sort.key === "name") {
+    result = compareText(a.name, b.name);
+  } else if (sort.key === "tags") {
+    result = compareText(workflowTagSortValue(a), workflowTagSortValue(b));
+  } else if (sort.key === "status") {
+    result = compareWorkflowStatus(a, b);
+  } else if (sort.key === "source") {
+    result = compareText(workflowSourceLabel(a), workflowSourceLabel(b));
+  } else if (sort.key === "category") {
+    result = compareText(workflowCategoryLabel(a), workflowCategoryLabel(b));
+  } else if (sort.key === "mainModel") {
+    result = compareText(workflowMainModelLabel(a), workflowMainModelLabel(b));
+  }
+
+  return result * direction;
+}
+
+function workflowTagSortValue(workflow: WorkflowSummary) {
+  return [...(workflow.tags ?? [])].sort(compareText).join(" ");
+}
+
+function compareWorkflowStatus(a: WorkflowSummary, b: WorkflowSummary) {
+  const statusA = workflowReadinessStatus(a);
+  const statusB = workflowReadinessStatus(b);
+  return workflowStatusSortOrder[statusA] - workflowStatusSortOrder[statusB] || compareText(statusA, statusB);
+}
+
+function workflowReadinessStatus(workflow: WorkflowSummary) {
+  const backendStatus = `${workflow.status ?? ""} ${workflow.status_label ?? ""}`.toLowerCase();
+  if (backendStatus.includes("fail") || backendStatus.includes("error")) return "failed";
+  return workflowStatus(workflow);
+}
+
+function workflowReadinessLabel(workflow: WorkflowSummary) {
+  return workflowReadinessStatus(workflow) === "failed" ? "Failed" : workflowStatusLabel(workflow);
+}
+
+function workflowSourceLabel(workflow: WorkflowSummary) {
+  return workflow.source_label ?? workflow.trust?.label ?? workflow.trust_level ?? "Native Noofy";
+}
+
+function workflowCategoryLabel(workflow: WorkflowSummary) {
+  return workflow.category ?? "Txt2img";
+}
+
+function workflowMainModelLabel(workflow: WorkflowSummary) {
+  return workflow.main_model?.name ?? "";
+}
+
+function compareText(a: string | null | undefined, b: string | null | undefined) {
+  return (a ?? "").localeCompare(b ?? "", undefined, { sensitivity: "base", numeric: true });
+}
+
+function stableSort<T>(items: T[], compare: (a: T, b: T) => number) {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => compare(a.item, b.item) || a.index - b.index)
+    .map(({ item }) => item);
+}
+
 function workflowSummaryExportReview(workflow: WorkflowSummary): WorkflowExportReviewModel {
   return {
     name: workflow.name,
@@ -667,6 +835,7 @@ function WorkflowRow({
 }) {
   const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
   const tags = workflow.tags ?? [];
+  const readiness = workflowReadinessStatus(workflow);
   return (
     <article
       className={`workflow-row${selected ? " workflow-row--selected" : ""}`}
@@ -679,19 +848,26 @@ function WorkflowRow({
         </div>
         <div className="model-main-body">
           <div className="model-name-text" title={workflow.name}>{workflow.name}</div>
-          <div className="model-type-text" title={workflow.source_label ?? "Native Noofy"}>{workflow.source_label ?? "Native Noofy"}</div>
+          <div className="model-type-text" title={`Category: ${workflow.category ?? "Workflow"}`}>{workflow.category ?? "Workflow"}</div>
         </div>
       </div>
-      <div className="workflow-col workflow-col-model" title={workflow.main_model?.name ?? "No model detected"}>
-        {workflow.main_model?.name ?? "No model detected"}
+      <div className="workflow-col workflow-col-model" title={workflowMainModelLabel(workflow) || "No model detected"}>
+        {workflowMainModelLabel(workflow) || "No model detected"}
       </div>
       <div className="workflow-col workflow-col-description" title={workflow.description || "No description yet"}>
         {workflow.description || "No description yet"}
       </div>
-      <div className="workflow-col workflow-col-category">
-        <span className="workflow-category-badge" title={workflow.category ?? "Txt2img"}>{workflow.category ?? "Txt2img"}</span>
+      <div className="workflow-col workflow-col-status">
+        <span className={`workflow-status workflow-status--${readiness}`}>
+          {workflowReadinessLabel(workflow)}
+        </span>
       </div>
-      <div className="workflow-col workflow-col-opened" title={formatDate(workflow.last_opened)}>{formatDate(workflow.last_opened)}</div>
+      <div className="workflow-col workflow-col-source" title={workflowSourceLabel(workflow)}>
+        {workflowSourceLabel(workflow)}
+      </div>
+      <div className="workflow-col workflow-col-category">
+        <span className="workflow-category-badge" title={workflowCategoryLabel(workflow)}>{workflowCategoryLabel(workflow)}</span>
+      </div>
       <div className="workflow-col workflow-col-tags">
         <div className="model-tags-row">
           {tags.slice(0, 2).map((tag) => (
