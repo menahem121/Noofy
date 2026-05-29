@@ -1,9 +1,10 @@
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 
-import type { JobStatus } from "../../lib/api/noofyApi";
+import { fetchJobProgress, type JobProgress, type JobStatus } from "../../lib/api/noofyApi";
 
 const STORAGE_KEY = "noofy.workflowTabs.v1";
+const activeJobStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 
 export type WorkflowRuntimeHandleSource = "job" | "workflow_run_queue" | "runner_start_queue";
 
@@ -16,6 +17,8 @@ export interface WorkflowTab {
 export interface WorkflowTabRuntimeState {
   activeJobId: string | null;
   activeJobStatus: JobStatus | string | null;
+  activeJobProgress: JobProgress | null;
+  activeJobUpdatedAt: number | null;
   handleSource: WorkflowRuntimeHandleSource | null;
   queueId: string | null;
   runnerLeaseId: string | null;
@@ -41,6 +44,8 @@ interface WorkflowTabsRouterContextValue {
 const emptyRuntimeState: WorkflowTabRuntimeState = {
   activeJobId: null,
   activeJobStatus: null,
+  activeJobProgress: null,
+  activeJobUpdatedAt: null,
   handleSource: null,
   queueId: null,
   runnerLeaseId: null,
@@ -115,6 +120,8 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  useWorkflowRuntimeProgressPolling(runtimeByWorkflowId, setWorkflowRuntime);
+
   const value = useMemo<WorkflowTabsContextValue>(
     () => ({
       tabs,
@@ -137,6 +144,85 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   );
 
   return <WorkflowTabsContext.Provider value={value}>{children}</WorkflowTabsContext.Provider>;
+}
+
+function useWorkflowRuntimeProgressPolling(
+  runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>,
+  setWorkflowRuntime: (workflowId: string, update: Partial<WorkflowTabRuntimeState>) => void,
+) {
+  const runtimeRef = useRef(runtimeByWorkflowId);
+  runtimeRef.current = runtimeByWorkflowId;
+  const hasActiveRuntime = Object.values(runtimeByWorkflowId).some(shouldPollWorkflowRuntime);
+
+  useEffect(() => {
+    if (!hasActiveRuntime) return;
+    let stopped = false;
+    let inFlight = false;
+
+    async function refreshActiveJobs() {
+      if (inFlight) return;
+      const activeEntries = Object.entries(runtimeRef.current).filter(([, runtime]) => shouldPollWorkflowRuntime(runtime));
+      if (activeEntries.length === 0) return;
+
+      inFlight = true;
+      try {
+        await Promise.all(
+          activeEntries.map(async ([workflowId, runtime]) => {
+            const jobId = runtime.activeJobId ?? runtime.queueId;
+            if (!jobId) return;
+            try {
+              const progress = await fetchJobProgress(jobId);
+              const currentRuntime = runtimeRef.current[workflowId];
+              const currentJobId = currentRuntime?.activeJobId ?? currentRuntime?.queueId;
+              if (!stopped && currentJobId === jobId) {
+                setWorkflowRuntime(workflowId, workflowRuntimeUpdateFromProgress(progress));
+              }
+            } catch {
+              // Keep the last known global progress visible through transient backend polling errors.
+            }
+          }),
+        );
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    void refreshActiveJobs();
+    const interval = window.setInterval(() => void refreshActiveJobs(), 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [hasActiveRuntime, setWorkflowRuntime]);
+}
+
+function shouldPollWorkflowRuntime(runtime: WorkflowTabRuntimeState) {
+  if (runtime.handleSource === "runner_start_queue") return false;
+  return Boolean(
+    (runtime.activeJobId ?? runtime.queueId) &&
+      runtime.activeJobStatus &&
+      activeJobStatuses.has(runtime.activeJobStatus),
+  );
+}
+
+function workflowRuntimeUpdateFromProgress(progress: JobProgress): Partial<WorkflowTabRuntimeState> {
+  const now = Date.now();
+  if (activeJobStatuses.has(progress.status)) {
+    return {
+      activeJobId: progress.job_id,
+      activeJobStatus: progress.status,
+      activeJobProgress: progress,
+      activeJobUpdatedAt: now,
+    };
+  }
+  return {
+    activeJobId: null,
+    activeJobStatus: progress.status,
+    activeJobProgress: progress,
+    activeJobUpdatedAt: now,
+    handleSource: null,
+    queueId: null,
+  };
 }
 
 export function WorkflowTabsRouteProvider({

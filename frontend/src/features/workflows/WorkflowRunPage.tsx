@@ -80,7 +80,7 @@ import {
 } from "../../lib/modelDownloadProgress";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
+import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
@@ -153,6 +153,7 @@ const initialState: RunPageState = {
 };
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
+const activeWorkflowProgressStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 const watchableJobStatuses = new Set(["queued", "running"]);
 const preparationFailureStatuses = new Set([
   "blocked_by_policy",
@@ -195,8 +196,12 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
   const workflowTabs = useOptionalWorkflowTabs();
-  const isRunning = isSubmittingRun || state.progress?.status === "queued" || state.progress?.status === "running";
-  const isWaitingForMemory = state.job?.status === "queued_pending_memory";
+  const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
+  const runtimeProgress = progressFromWorkflowRuntime(workflowRuntime);
+  const displayedProgress = state.progress ?? runtimeProgress;
+  const activeRuntimeJobId = workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
+  const isRunning = isSubmittingRun || isActiveWorkflowProgress(displayedProgress);
+  const isWaitingForMemory = state.job?.status === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
   const status = runtimeStatus.statusView;
 
@@ -510,9 +515,10 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }
 
   async function handleCancel() {
-    if (!state.job) return;
+    const jobId = state.job?.job_id ?? activeRuntimeJobId;
+    if (!jobId) return;
     try {
-      const progress = await cancelJob(state.job.job_id);
+      const progress = await cancelJob(jobId);
       cleanupJobWatchers();
       setIsSubmittingRun(false);
       setState((current) => ({ ...current, progress }));
@@ -693,19 +699,13 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }
 
   function setSubmittedJob(job: EngineJob) {
+    const progress = progressFromSubmittedJob(job);
     setIsSubmittingRun(false);
-    recordWorkflowJob(job);
+    recordWorkflowJob(job, progress);
     setState((current) => ({
       ...current,
       job,
-      progress: {
-        job_id: job.job_id,
-        status: job.status,
-        value: null,
-        max: null,
-        current_node: null,
-        message: job.memory_status?.message ?? job.message ?? "Preparing workflow...",
-      },
+      progress,
       result: null,
     }));
   }
@@ -751,10 +751,12 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     }
   }
 
-  function recordWorkflowJob(job: EngineJob) {
+  function recordWorkflowJob(job: EngineJob, progress: JobProgress) {
     workflowTabs?.setWorkflowRuntime(workflowId, {
       activeJobId: job.job_id,
       activeJobStatus: job.status,
+      activeJobProgress: progress,
+      activeJobUpdatedAt: Date.now(),
       handleSource: workflowHandleSource(job),
       queueId: job.queue_id ?? (job.status === "queued_pending_memory" ? job.job_id : null),
     });
@@ -765,6 +767,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       workflowTabs?.setWorkflowRuntime(workflowId, {
         activeJobId: null,
         activeJobStatus: progress.status,
+        activeJobProgress: progress,
+        activeJobUpdatedAt: Date.now(),
         handleSource: null,
         queueId: null,
       });
@@ -773,6 +777,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     workflowTabs?.setWorkflowRuntime(workflowId, {
       activeJobId: progress.job_id,
       activeJobStatus: progress.status,
+      activeJobProgress: progress,
+      activeJobUpdatedAt: Date.now(),
     });
   }
 
@@ -780,6 +786,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     workflowTabs?.setWorkflowRuntime(workflowId, {
       activeJobId: null,
       activeJobStatus: result.status,
+      activeJobProgress: null,
+      activeJobUpdatedAt: Date.now(),
       handleSource: null,
       queueId: null,
     });
@@ -832,11 +840,11 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         validation: activeValidation,
         workflowStatus: state.workflowStatus,
       });
-  const canCancel = Boolean(isRunning && state.job && !isBlockedByMemory);
+  const canCancel = Boolean(isRunning && (state.job || activeRuntimeJobId) && !isBlockedByMemory);
   const progressPercent =
-    state.progress?.value !== null && state.progress?.value !== undefined && state.progress.max
-      ? Math.min(100, Math.round((state.progress.value / state.progress.max) * 100))
-      : state.progress?.status === "completed"
+    displayedProgress?.value !== null && displayedProgress?.value !== undefined && displayedProgress.max
+      ? Math.min(100, Math.round((displayedProgress.value / displayedProgress.max) * 100))
+      : displayedProgress?.status === "completed"
         ? 100
         : 0;
   const topBarProgress = isRunning ? { percent: progressPercent } : null;
@@ -1231,7 +1239,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           <div className="panel-heading">
             <div>
               <h2>Preview</h2>
-              <p>{progressMessage(state.progress, state.result)}</p>
+              <p>{progressMessage(displayedProgress, state.result)}</p>
             </div>
             {state.validation?.valid ? (
               <span className="mini-status">
@@ -1598,6 +1606,24 @@ function isWatchableJob(job: EngineJob) {
   return watchableJobStatuses.has(job.status);
 }
 
+function isActiveWorkflowProgress(progress: JobProgress | null | undefined) {
+  return Boolean(progress?.status && activeWorkflowProgressStatuses.has(progress.status));
+}
+
+function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): JobProgress | null {
+  const status = runtime?.activeJobStatus;
+  const jobId = runtime?.activeJobId ?? runtime?.queueId;
+  if (!status || !jobId || !activeWorkflowProgressStatuses.has(status)) return null;
+  return runtime.activeJobProgress ?? {
+    job_id: jobId,
+    status: status as JobProgress["status"],
+    value: null,
+    max: null,
+    current_node: null,
+    message: "Preparing workflow...",
+  };
+}
+
 function optimisticProgress(): JobProgress {
   return {
     job_id: optimisticJobId,
@@ -1606,6 +1632,17 @@ function optimisticProgress(): JobProgress {
     max: null,
     current_node: null,
     message: "Starting workflow...",
+  };
+}
+
+function progressFromSubmittedJob(job: EngineJob): JobProgress {
+  return {
+    job_id: job.job_id,
+    status: job.status,
+    value: null,
+    max: null,
+    current_node: null,
+    message: job.memory_status?.message ?? job.message ?? "Preparing workflow...",
   };
 }
 

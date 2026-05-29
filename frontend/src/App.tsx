@@ -395,6 +395,8 @@ async function activeCloseState(
         ...runtime,
         activeJobId: progress.job_id,
         activeJobStatus: progress.status,
+        activeJobProgress: progress,
+        activeJobUpdatedAt: Date.now(),
       };
     }
   } catch {

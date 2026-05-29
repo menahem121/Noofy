@@ -15,7 +15,7 @@ import {
 import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
-import { WorkflowTabsTopBar } from "./WorkflowTabs";
+import { WorkflowTabsTopBar, useOptionalWorkflowTabs, type WorkflowTabRuntimeState } from "./WorkflowTabs";
 
 // Replace with your real Tipeee / donation URL when ready.
 const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
@@ -55,6 +55,8 @@ const navItems = [
   { id: "gallery", label: "Gallery", Icon: Images },
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 
+const globalProgressStatuses = new Set(["queued", "running", "queued_pending_memory"]);
+
 interface SidebarContextValue {
   sidebarOpen: boolean;
   setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -90,6 +92,8 @@ export function AppLayout({
   const isHome = activeRoute === "home";
   const effectiveOpen = isHome ? true : sidebarOpen;
   const resources = useTopBarResources();
+  const globalProgress = useGlobalWorkflowProgress();
+  const effectiveProgress = progress ?? globalProgress;
 
   function handleToggle() {
     if (!isHome) setSidebarOpen((o) => !o);
@@ -137,7 +141,7 @@ export function AppLayout({
           </button>
         </div>
 
-        {progress ? (
+        {effectiveProgress ? (
           <div className="topbar-progress">
             <div
               className="topbar-progress__track"
@@ -145,11 +149,11 @@ export function AppLayout({
               aria-label="Workflow progress"
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={progress.percent}
+              aria-valuenow={effectiveProgress.percent}
             >
-              <span style={{ width: `${progress.percent}%` }} />
+              <span style={{ width: `${effectiveProgress.percent}%` }} />
             </div>
-            <span className="topbar-progress__value">{progress.percent}%</span>
+            <span className="topbar-progress__value">{effectiveProgress.percent}%</span>
           </div>
         ) : null}
       </header>
@@ -206,6 +210,34 @@ export function AppLayout({
       </main>
     </div>
   );
+}
+
+function useGlobalWorkflowProgress(): AppTopBarProgress | null {
+  const workflowTabs = useOptionalWorkflowTabs();
+  if (!workflowTabs) return null;
+
+  const activeRuntime = Object.values(workflowTabs.runtimeByWorkflowId)
+    .filter((runtime) => runtimeTopBarProgress(runtime) !== null)
+    .sort((a, b) => (b.activeJobUpdatedAt ?? 0) - (a.activeJobUpdatedAt ?? 0))[0];
+
+  return activeRuntime ? runtimeTopBarProgress(activeRuntime) : null;
+}
+
+function runtimeTopBarProgress(runtime: WorkflowTabRuntimeState): AppTopBarProgress | null {
+  if (!runtime.activeJobStatus || !globalProgressStatuses.has(runtime.activeJobStatus)) return null;
+  return {
+    percent: jobProgressPercent(runtime.activeJobProgress, runtime.activeJobStatus),
+  };
+}
+
+function jobProgressPercent(
+  progress: WorkflowTabRuntimeState["activeJobProgress"],
+  status: WorkflowTabRuntimeState["activeJobStatus"],
+) {
+  if (progress?.value !== null && progress?.value !== undefined && progress.max) {
+    return Math.min(100, Math.round((progress.value / progress.max) * 100));
+  }
+  return status === "completed" ? 100 : 0;
 }
 
 function useTopBarResources() {

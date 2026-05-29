@@ -155,7 +155,7 @@ describe("App workflow tabs", () => {
         return Promise.resolve(jsonResponse({ job_id: "job-1", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
       }
       if (url.endsWith("/api/jobs/job-1/progress")) {
-        return Promise.resolve(jsonResponse({ job_id: "job-1", status: "running", value: null, max: null, current_node: null, message: "Generating..." }));
+        return Promise.resolve(jsonResponse({ job_id: "job-1", status: "running", value: 2, max: 10, current_node: null, message: "Generating..." }));
       }
       if (url.endsWith("/api/jobs/job-1/cancel") && method === "POST") {
         return Promise.resolve(jsonResponse({ job_id: "job-1", status: "canceled", value: null, max: null, current_node: null, message: "Canceled." }));
@@ -213,6 +213,36 @@ describe("App workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/runner/leases"))).toBe(true);
+    });
+  });
+
+  it("keeps workflow progress visible across pages and avoids duplicate bars", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "20");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "20");
+    });
+    expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeDisabled();
+    expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop and close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
     });
   });
 
