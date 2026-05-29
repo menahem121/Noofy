@@ -18,8 +18,8 @@ define REQUIRE_PYTHON
   printf '\nError: Noofy source-checkout install requires Python 3.11 or newer,\n'; \
   printf 'but no compatible Python was found in PATH.\n\n'; \
   printf '  macOS:   brew install python@3.13\n'; \
-  printf '  Ubuntu:  sudo apt install python3.13\n'; \
-  printf '  Fedora:  sudo dnf install python3.13\n'; \
+  printf '  Ubuntu:  apt install python3.13 python3.13-venv\n'; \
+  printf '  Fedora:  dnf install python3.13\n'; \
   printf '  All:     https://www.python.org/downloads\n\n'; \
   exit 1; \
 }

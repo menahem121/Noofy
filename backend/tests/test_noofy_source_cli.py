@@ -231,6 +231,58 @@ def test_runtime_bootstrap_command_delegates_to_backend_service(tmp_path: Path) 
     assert "torch" not in code.lower()
 
 
+def test_managed_runtime_python_guidance_includes_os_specific_source_fix() -> None:
+    cli = load_noofy_cli()
+    environment = {
+        "runtime_distribution": "source_checkout",
+        "expected_python_version": "3.13",
+        "bootstrap_python_attempts": [
+            {
+                "python_executable": "python3.13",
+                "exists": False,
+                "python_version": None,
+            },
+            {
+                "python_executable": "python3",
+                "exists": True,
+                "python_version": "3.14",
+            },
+        ],
+    }
+
+    linux_guidance = cli.managed_runtime_python_setup_guidance(environment, platform="linux")
+    macos_guidance = cli.managed_runtime_python_setup_guidance(environment, platform="darwin")
+    windows_guidance = cli.managed_runtime_python_setup_guidance(environment, platform="win32")
+
+    assert linux_guidance is not None
+    assert "apt install python3.13 python3.13-venv" in linux_guidance
+    assert "dnf install python3.13" in linux_guidance
+    assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=python3.13 make install" in linux_guidance
+    assert "python3.13 (missing)" in linux_guidance
+    assert "python3 (3.14)" in linux_guidance
+    assert "sudo" not in linux_guidance
+    assert macos_guidance is not None
+    assert "brew install python@3.13" in macos_guidance
+    assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in macos_guidance
+    assert windows_guidance is not None
+    assert "winget install Python.Python.3.13" in windows_guidance
+    assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in windows_guidance
+
+
+def test_managed_runtime_python_guidance_skips_packaged_runtime() -> None:
+    cli = load_noofy_cli()
+
+    assert (
+        cli.managed_runtime_python_setup_guidance(
+            {
+                "runtime_distribution": "packaged",
+                "expected_python_version": "3.13",
+            }
+        )
+        is None
+    )
+
+
 def test_format_command_redacts_inline_python_code() -> None:
     cli = load_noofy_cli()
 
@@ -350,7 +402,16 @@ def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, mo
         if capture:
             return cli.CommandResult(
                 returncode=0,
-                stdout='{"status":"requirements_missing","environment":{}}\n',
+                stdout=(
+                    '{"status":"python_missing","environment":'
+                    '{"runtime_distribution":"source_checkout",'
+                    '"expected_python_version":"3.13",'
+                    '"bootstrap_python_attempts":['
+                    '{"python_executable":"python3.13","exists":false,'
+                    '"python_version":null},'
+                    '{"python_executable":"python3","exists":true,'
+                    '"python_version":"3.14"}]}}\n'
+                ),
             )
         return cli.CommandResult(returncode=0)
 
@@ -360,5 +421,13 @@ def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, mo
         command_runner=runner,
     )
 
-    with pytest.raises(SystemExit, match="requirements_missing"):
+    with pytest.raises(SystemExit) as exc_info:
         checkout.install(skip_frontend=True)
+
+    message = str(exc_info.value)
+    assert "python_missing" in message
+    assert "The managed ComfyUI profile requires Python 3.13" in message
+    assert "python3.13 (missing)" in message
+    assert "python3 (3.14)" in message
+    assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in message
+    assert "sudo" not in message

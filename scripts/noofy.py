@@ -211,6 +211,88 @@ def runtime_status_command(backend_python: Path) -> list[str]:
     return [str(backend_python), "-c", RUNTIME_STATUS_CODE]
 
 
+def managed_runtime_python_setup_guidance(
+    environment: Mapping[str, object],
+    *,
+    platform: str | None = None,
+) -> str | None:
+    expected_version = environment.get("expected_python_version")
+    if not isinstance(expected_version, str) or not expected_version:
+        return None
+    if environment.get("runtime_distribution") == "packaged":
+        return None
+
+    attempts = environment.get("bootstrap_python_attempts")
+    selected_platform = sys.platform if platform is None else platform
+    lines = [
+        "",
+        "Source/development fix:",
+        f"  The managed ComfyUI profile requires Python {expected_version}.",
+    ]
+    attempted_lines = _format_bootstrap_python_attempt_lines(attempts)
+    if attempted_lines:
+        lines += ["  Tried:"] + [f"    {line}" for line in attempted_lines]
+    lines += [
+        "  Noofy will not install system Python or run privileged commands for you.",
+        "",
+    ]
+
+    if selected_platform == "darwin":
+        lines += [
+            "Install Python on macOS:",
+            f"  brew install python@{expected_version}",
+            (
+                "  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=\"$(brew --prefix "
+                f"python@{expected_version})/bin/python{expected_version}\" make install"
+            ),
+        ]
+    elif selected_platform == "win32":
+        lines += [
+            "Install Python on Windows:",
+            f"  winget install Python.Python.{expected_version}",
+            (
+                f"  $py = py -{expected_version} -c \"import sys; "
+                "print(sys.executable)\""
+            ),
+            "  $env:COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE = $py",
+            "  .\\scripts\\install.ps1",
+        ]
+    else:
+        lines += [
+            "Install Python on Linux:",
+            f"  apt install python{expected_version} python{expected_version}-venv",
+            f"  dnf install python{expected_version}",
+            f"  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=python{expected_version} make install",
+            (
+                "  If your distro does not package this version, install it with "
+                "your normal developer Python tool and point "
+                "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE at that executable."
+            ),
+        ]
+    return "\n".join(lines)
+
+
+def _format_bootstrap_python_attempt_lines(attempts: object) -> list[str]:
+    if not isinstance(attempts, list):
+        return []
+    lines: list[str] = []
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            continue
+        executable = attempt.get("python_executable")
+        if not isinstance(executable, str) or not executable:
+            continue
+        exists = attempt.get("exists")
+        version = attempt.get("python_version")
+        if exists is False:
+            lines.append(f"{executable} (missing)")
+        elif isinstance(version, str) and version:
+            lines.append(f"{executable} ({version})")
+        else:
+            lines.append(f"{executable} (version unknown)")
+    return lines
+
+
 def run_command(
     command: list[str],
     cwd: Path | None = None,
@@ -362,7 +444,11 @@ class NoofyCheckout:
             return True
         if status in RUNTIME_BOOTSTRAP_NONFATAL_INSTALL_STATUSES:
             return False
-        raise SystemExit(f"Managed ComfyUI runtime preparation failed with status: {status}")
+        message = f"Managed ComfyUI runtime preparation failed with status: {status}"
+        guidance = managed_runtime_python_setup_guidance(environment)
+        if guidance:
+            message = f"{message}\n{guidance}"
+        raise SystemExit(message)
 
     def doctor(self, *, data_dir: Path = DEFAULT_DATA_DIR) -> int:
         print("Noofy source-checkout doctor")

@@ -137,7 +137,7 @@ For advanced users, contributors, and Unix-like source checkouts:
 
 | Tool | Minimum | Recommended Install |
 |------|---------|---------|
-| Python | 3.11 | `brew install python@3.13` · [python.org](https://www.python.org/downloads) |
+| Python | 3.11 for the trusted source helper; Python 3.13 for the managed ComfyUI profile | `brew install python@3.13` · [python.org](https://www.python.org/downloads) |
 | Node.js + npm | LTS v18 | `brew install node` · [nodejs.org](https://nodejs.org/en/download) |
 
 ```bash
@@ -159,6 +159,11 @@ cd Noofy
 `make install` creates the trusted backend virtual environment, installs
 frontend dependencies, and prepares Noofy's managed ComfyUI runtime under
 `.noofy-runtime/data`.
+
+For source/development checkouts, the managed ComfyUI runtime profile controls
+its own Python ABI. If Python 3.13 is not available, `make install` fails with
+OS-specific install commands and a `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=...`
+override. It does not install system Python or run privileged commands.
 
 On macOS Intel, `make install` still installs the source-checkout backend and
 frontend dependencies, but managed ComfyUI runtime preparation is skipped with an
