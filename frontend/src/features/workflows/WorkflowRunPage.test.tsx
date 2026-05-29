@@ -1149,7 +1149,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage({}, engineOfflineRuntimeState);
 
-    expect(await screen.findByText("The local ComfyUI engine is offline")).toBeInTheDocument();
+    expect(await screen.findByText("The local ComfyUI engine is not reachable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
@@ -1509,7 +1509,7 @@ describe("WorkflowRunPage", () => {
     expect(
       screen.queryByText("Describe the image you want, then let Noofy run the local workflow in the background."),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("The local ComfyUI engine is offline")).not.toBeInTheDocument();
+    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
   });
 
   it("explains why the canvas run button is disabled when required models are missing", async () => {
