@@ -2708,6 +2708,7 @@ describe("WorkflowRunPage", () => {
       "src",
       "/api/jobs/job-canvas/outputs/view?filename=node-10.png&subfolder=&type=output",
     );
+    expect(screen.queryByRole("slider", { name: /compare original image/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /download result a image/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /download result b image/i })).toBeInTheDocument();
 
@@ -2791,5 +2792,159 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
     expect(clickedDownload).toBe("node-9-a.png");
     await waitFor(() => expect(revokeObjectUrl).toHaveBeenCalledWith("blob:noofy-output"));
+  });
+
+  it("shows a before and after comparison in display_image when the run used an input image", async () => {
+    const assetId = "123e4567-e89b-12d3-a456-426614174000.png";
+    let objectUrlIndex = 0;
+    const createObjectUrl = vi.fn(() => {
+      objectUrlIndex += 1;
+      return `blob:input-image-${objectUrlIndex}`;
+    });
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+
+    const packageData = {
+      metadata: {
+        id: "text_to_image_v0",
+        name: "Image Edit",
+        version: "0.1.0",
+        description: "",
+      },
+      inputs: [
+        {
+          id: "source_image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: assetId,
+          validation: {},
+        },
+      ],
+      outputs: [{ id: "image", label: "Image", node_id: "9", type: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "source_image",
+                type: "load_image",
+                label: "Input image",
+                input_id: "source_image",
+                layout: { x: 0, y: 0, w: 10, h: 8 },
+              },
+              {
+                id: "result",
+                type: "display_image",
+                label: "Result",
+                output_id: "image",
+                layout: { x: 10, y: 0, w: 14, h: 10 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith(`/api/assets/${assetId}/metadata`)) {
+        return Promise.resolve(
+          jsonResponse({
+            asset_id: assetId,
+            original_filename: "portrait.png",
+            content_type: "image/png",
+          }),
+        );
+      }
+      if (url.endsWith(`/api/assets/${assetId}`)) {
+        return Promise.resolve(new Response(new Blob(["input"], { type: "image/png" }), { status: 200 }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: { source_image: assetId },
+            layout_overrides: {},
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        expect(init?.method).toBe("POST");
+        const body = JSON.parse(String(init?.body));
+        expect(body.inputs.source_image).toBe(assetId);
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-image-edit",
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-image-edit/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-image-edit",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-image-edit/result")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-image-edit",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-image-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByAltText("Uploaded input")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const slider = await screen.findByRole("slider", { name: /compare original image/i });
+    expect(slider).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-image-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+    );
+
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    await waitFor(() => expect(slider).toHaveAttribute("aria-valuenow", "5"));
   });
 });

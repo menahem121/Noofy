@@ -21,6 +21,7 @@ import {
   createJobEventsUrl,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
+  fetchAssetBlobUrl,
   fetchModelDownloadStatus,
   fetchApiKeySettings,
   fetchJobLogs,
@@ -83,6 +84,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
+import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
@@ -169,6 +171,7 @@ const preparationBlockedStatuses = new Set([
   "unsupported",
   "unsupported_runtime_profile",
 ]);
+const comparisonImageInputControlTypes = new Set(["load_image", "load_image_mask"]);
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
 
@@ -189,6 +192,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const [draftActionBarPosition, setDraftActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
   const [draftActionBarTouched, setDraftActionBarTouched] = useState(false);
+  const [runComparisonInputAssetId, setRunComparisonInputAssetId] = useState<string | null>(null);
+  const [comparisonInputImageUrl, setComparisonInputImageUrl] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const modelVerificationStartInFlightRef = useRef(false);
@@ -206,6 +211,31 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const status = runtimeStatus.statusView;
 
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
+
+  useEffect(() => {
+    setComparisonInputImageUrl(null);
+    if (!runComparisonInputAssetId) return undefined;
+
+    let canceled = false;
+    let objectUrl: string | null = null;
+    fetchAssetBlobUrl(runComparisonInputAssetId)
+      .then((url) => {
+        if (canceled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        objectUrl = url;
+        setComparisonInputImageUrl(url);
+      })
+      .catch(() => {
+        if (!canceled) setComparisonInputImageUrl(null);
+      });
+
+    return () => {
+      canceled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [runComparisonInputAssetId]);
 
   // Build input index from package data.
   const inputIndex = useMemo<Map<string, WorkflowInputDef>>(() => {
@@ -343,6 +373,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     setModelDownloadStarting(false);
     setModelVerificationJob(null);
     setModelVerificationError(null);
+    setRunComparisonInputAssetId(null);
     return () => {
       cleanupJobWatchers();
     };
@@ -447,8 +478,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
 
     const shouldTrackPreparation = shouldShowRunPreparationDialog(state.workflowStatus);
     let stopPreparationPolling: (() => void) | null = null;
+    const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
+      state.packageData,
+      allControls,
+      submittedInputValues,
+    );
     cleanupJobWatchers();
     setIsSubmittingRun(true);
+    setRunComparisonInputAssetId(submittedComparisonInputAssetId);
     setFailureDialog(null);
     if (shouldTrackPreparation) {
       setRunPreparationDialog(runPreparationDialogFromStatus(state.workflowStatus));
@@ -475,6 +512,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         stopPreparationPolling?.();
         setIsSubmittingRun(false);
         setRunPreparationDialog(null);
+        setRunComparisonInputAssetId(null);
         const message = workflowValidationErrorMessage(response);
         setState((current) => ({
           ...current,
@@ -503,6 +541,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
       setIsSubmittingRun(false);
       setRunPreparationDialog(null);
+      setRunComparisonInputAssetId(null);
       setState((current) => ({
         ...current,
         job: null,
@@ -1139,6 +1178,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           inputIndex={inputIndex}
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
+          comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
           outputPreferences={outputPreferences}
           layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
@@ -1251,7 +1291,15 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
 
           <div className="preview-stage">
             {outputImages[0] ? (
-              <img src={outputImages[0]} alt="Generated workflow output" />
+              comparisonInputImageUrl ? (
+                <ImageComparisonSlider
+                  beforeSrc={comparisonInputImageUrl}
+                  afterSrc={outputImages[0]}
+                  alt="Generated workflow output"
+                />
+              ) : (
+                <img src={outputImages[0]} alt="Generated workflow output" />
+              )
             ) : (
               <div className="preview-empty">
                 <Image size={48} aria-hidden="true" />
@@ -2372,6 +2420,36 @@ function extractImageUrls(result: JobResult | null) {
     }
   }
   return urls;
+}
+
+function comparisonImageAssetIdForRun(
+  packageData: WorkflowPackageResponse | null,
+  controls: DashboardControlDef[],
+  inputValues: Record<string, unknown>,
+): string | null {
+  for (const control of controls) {
+    if (!comparisonImageInputControlTypes.has(control.type) || !control.input_id) continue;
+    const value = inputValues[control.input_id];
+    if (isDashboardImageAssetReference(value)) return value;
+  }
+
+  for (const input of packageData?.inputs ?? []) {
+    if (!comparisonImageInputControlTypes.has(input.control)) continue;
+    const value = inputValues[input.id];
+    if (isDashboardImageAssetReference(value)) return value;
+  }
+
+  return null;
+}
+
+function isDashboardImageAssetReference(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    /\.(?:png|jpg|jpeg|webp|gif)$/i.test(value)
+  );
 }
 
 function dashboardUserStateVersion(packageData: WorkflowPackageResponse | null): string {

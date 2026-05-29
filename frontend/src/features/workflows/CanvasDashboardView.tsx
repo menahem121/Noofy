@@ -54,6 +54,7 @@ import {
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
+import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
@@ -79,6 +80,7 @@ interface CanvasDashboardViewProps {
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   layoutOverrides: Record<string, GridItemLayout>;
@@ -111,6 +113,7 @@ export function CanvasDashboardView({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
   layoutOverrides,
@@ -642,6 +645,7 @@ export function CanvasDashboardView({
                 inputIndex={inputIndex}
                 outputIndex={outputIndex}
                 outputImagesByNodeId={outputImagesByNodeId}
+                comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
                 onChange={onChange}
@@ -713,6 +717,7 @@ function CanvasWidgetCell({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
   onChange,
@@ -729,6 +734,7 @@ function CanvasWidgetCell({
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   onChange: (inputId: string, value: unknown) => void;
@@ -790,6 +796,7 @@ function CanvasWidgetCell({
             inputIndex={inputIndex}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
+            comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             inputValues={inputValues}
             outputPreferences={outputPreferences}
             disabled={isEditingLayout}
@@ -803,6 +810,7 @@ function CanvasWidgetCell({
             control={control!}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
+            comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             imagePreviewEnabled={!isEditingLayout}
           />
         ) : (
@@ -827,6 +835,7 @@ function GroupedCanvasControls({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
   disabled,
@@ -839,6 +848,7 @@ function GroupedCanvasControls({
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   disabled: boolean;
@@ -860,6 +870,7 @@ function GroupedCanvasControls({
                   control={control}
                   outputIndex={outputIndex}
                   outputImagesByNodeId={outputImagesByNodeId}
+                  comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
                 <button
@@ -933,11 +944,13 @@ function OutputWidgetContent({
   control,
   outputIndex,
   outputImagesByNodeId,
+  comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
 }: {
   control: DashboardControlDef;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
 }) {
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
@@ -957,10 +970,26 @@ function OutputWidgetContent({
         <div className={`widget-output-image__grid${imageUrls.length > 1 ? " widget-output-image__grid--multi" : ""}`}>
           {imageUrls.map((imageUrl, index) => {
             const alt = imageUrls.length > 1 ? `Generated workflow output ${index + 1}` : "Generated workflow output";
+            const canCompare = Boolean(imagePreviewEnabled && comparisonBeforeImageUrl);
             if (!imagePreviewEnabled) {
               return (
                 <div className="widget-output-image__preview widget-output-image__preview--static" key={`${imageUrl}-${index}`}>
                   <img src={imageUrl} alt={alt} />
+                </div>
+              );
+            }
+            if (canCompare && comparisonBeforeImageUrl) {
+              return (
+                <div
+                  className="widget-output-image__preview widget-output-image__preview--comparison"
+                  key={`${imageUrl}-${index}`}
+                >
+                  <ImageComparisonSlider
+                    beforeSrc={comparisonBeforeImageUrl}
+                    afterSrc={imageUrl}
+                    alt={alt}
+                    onOpen={() => setPreviewImage({ url: imageUrl, alt })}
+                  />
                 </div>
               );
             }
