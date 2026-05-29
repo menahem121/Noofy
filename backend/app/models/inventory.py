@@ -35,6 +35,7 @@ from app.models.ownership import ModelOwnershipStore
 from app.models.paths import ensure_inside, model_key, parse_model_key
 from app.models.tags import ModelTagStore
 from app.models.folders import COMFYUI_MODEL_CATEGORIES, ModelFolderSettingsService
+from app.workflows.library import workflow_package_display_name
 
 
 MODEL_ASSET_SUFFIXES = {
@@ -277,7 +278,7 @@ class ModelInventoryService:
                 key = model_key(item.folder, item.filename)
                 workflow_ref = ModelWorkflowReference(
                     workflow_id=package.metadata.id,
-                    workflow_name=package.metadata.name,
+                    workflow_name=workflow_package_display_name(package),
                     requirement_id=item.requirement_id,
                     status=item.status,
                     status_label=item.status_label,
@@ -327,7 +328,7 @@ class ModelInventoryService:
                     existing.downloadable_references.append(
                         ModelDownloadReference(
                             workflow_id=package.metadata.id,
-                            workflow_name=package.metadata.name,
+                            workflow_name=workflow_package_display_name(package),
                             requirement_id=item.requirement_id,
                         )
                     )

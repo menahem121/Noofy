@@ -73,7 +73,20 @@ def normalize_source_urls(value: Any, *, fallback: Any = None) -> list[str]:
 
 
 def normalized_display_name(data: dict[str, Any], *, fallback: str) -> str:
-    value = string_field(data, "display_name", fallback=fallback)
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        nested_display_name = metadata.get("display_name")
+        if isinstance(nested_display_name, str) and nested_display_name.strip():
+            value = nested_display_name.strip()
+        else:
+            value = string_field(data, "display_name", fallback="").strip() or None
+            if value is None:
+                nested_name = metadata.get("name")
+                value = nested_name.strip() if isinstance(nested_name, str) and nested_name.strip() else None
+    else:
+        value = None
+    if value is None:
+        value = string_field(data, "display_name", fallback=fallback)
     cleaned = value.lstrip("*").strip()
     return cleaned or fallback
 

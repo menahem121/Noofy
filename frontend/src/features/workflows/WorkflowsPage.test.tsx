@@ -539,6 +539,20 @@ describe("WorkflowsPage", () => {
     const rowTitle = await screen.findByText("Cleanup Flow");
     fireEvent.click(rowTitle.closest("article")!);
 
+    const workflowName = await screen.findByLabelText("Workflow name");
+    fireEvent.change(workflowName, { target: { value: "Edited Cleanup Flow" } });
+    fireEvent.blur(workflowName);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"display_name":"Edited Cleanup Flow"'),
+        }),
+      );
+    });
+
     const description = await screen.findByLabelText("Description");
     fireEvent.change(description, { target: { value: "Updated cleanup description." } });
     fireEvent.blur(description);

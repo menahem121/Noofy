@@ -72,6 +72,7 @@ import type { GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
+import { workflowDisplayName } from "../../lib/workflowNames";
 import {
   failedModelMessage,
   isModelDownloadActive,
@@ -835,12 +836,21 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const unresolvedModelSummary = activeModelSummary?.models.filter((model) => model.status !== "available") ?? [];
   const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : activeValidation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
+  const workflowNameSource = workflowSummary ?? state.packageData?.metadata ?? state.packageData;
   const trust = workflowSummary?.trust;
 
   useEffect(() => {
-    const name = workflowSummary?.name ?? state.packageData?.metadata?.name;
+    if (!workflowNameSource) return;
+    const name = workflowDisplayName(workflowNameSource);
     if (name) onWorkflowNameChange?.(name);
-  }, [state.packageData?.metadata?.name, workflowSummary?.name]);
+  }, [
+    state.packageData?.display_name,
+    state.packageData?.metadata?.display_name,
+    state.packageData?.metadata?.name,
+    workflowSummary?.display_name,
+    workflowSummary?.name,
+    workflowNameSource,
+  ]);
 
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
@@ -921,7 +931,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   function handleEditWidgets() {
     const schema = buildDashboardSchemaForEditing(
       workflowId,
-      workflowSummary?.name ?? state.packageData?.metadata?.name ?? workflowId,
+      workflowDisplayName(workflowNameSource),
       allControls,
       allGroups,
       inputIndex,
@@ -992,14 +1002,14 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           Back to Home
         </button>
         <div className="detail-eyebrow-row">
-          <p className="eyebrow">{workflowSummary?.publisher_id ?? "Starter"} workflow</p>
+          <p className="eyebrow">{workflowSummary?.source_label ?? "Workflow"}</p>
           {trust ? (
             <span className={`trust-badge trust-badge--${trust.badge_tone}`} title={trust.summary}>
               {trust.label}
             </span>
           ) : null}
         </div>
-        <h1 id="workflow-title">{workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow"}</h1>
+        <h1 id="workflow-title">{workflowDisplayName(workflowNameSource)}</h1>
         <p>
           {workflowSummary?.description
             ? workflowSummary.description.replace(/^Milestone \d+\s*/i, "")
@@ -1123,9 +1133,9 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       }
     />
   ) : null;
-  const workflowDisplayName = workflowSummary?.name ?? state.packageData?.metadata?.name ?? "Workflow";
+  const workflowDisplayTitle = workflowDisplayName(workflowNameSource);
   const exportReview: WorkflowExportReviewModel = {
-    name: workflowDisplayName,
+    name: workflowDisplayTitle,
     description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
     source: workflowSummary?.source_label ?? workflowSummary?.trust?.label ?? "Noofy workflow",
     requiredModels: activeModelSummary?.models?.map((model) => ({
@@ -1138,7 +1148,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   };
   const exportDialogElement = exportDialog ? (
     <WorkflowExportDialog
-      workflowName={workflowDisplayName}
+      workflowName={workflowDisplayTitle}
       exportUrl={exportDialog.url}
       extension={exportDialog.extension}
       inputValues={exportDialog.extension === ".json" ? submittedInputValues : undefined}
@@ -1148,7 +1158,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   ) : null;
   const requiredModelsModalElement = requiredModelsModalOpen && activeModelSummary ? (
     <WorkflowRequiredModelsModal
-      workflowName={workflowDisplayName}
+      workflowName={workflowDisplayTitle}
       summary={activeModelSummary}
       downloadJob={modelDownloadJob}
       downloadError={modelDownloadError}
@@ -1193,7 +1203,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
-          exportWorkflowName={workflowSummary?.name ?? state.packageData?.metadata?.name}
+          exportWorkflowName={workflowDisplayTitle}
           exportReview={exportReview}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}

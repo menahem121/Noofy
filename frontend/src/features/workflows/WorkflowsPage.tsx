@@ -32,6 +32,7 @@ import {
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { resolveBackendUrl } from "../../lib/api/client";
+import { workflowDisplayName } from "../../lib/workflowNames";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
@@ -244,7 +245,7 @@ export function WorkflowsPage({
 
   async function handleRemove(workflow: WorkflowSummary) {
     if (!workflow.can_remove) return;
-    const confirmed = window.confirm(`Remove "${workflow.name}" from Noofy?`);
+    const confirmed = window.confirm(`Remove "${workflowDisplayName(workflow)}" from Noofy?`);
     if (!confirmed) return;
     await removeWorkflow(workflow.id);
     if (selectedWorkflowId === workflow.id) {
@@ -378,7 +379,7 @@ export function WorkflowsPage({
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
                 <strong>{importFlow.importResult.user_facing_message}</strong>
-                <span>{importFlow.importResult.workflow.name} was added to your local workflows.</span>
+                <span>{workflowDisplayName(importFlow.importResult.workflow)} was added to your local workflows.</span>
               </div>
             </div>
           ) : null}
@@ -508,14 +509,14 @@ export function WorkflowsPage({
                   onEditWidgets={() => void handleEditWidgets(workflow)}
                   onExportNoofy={() =>
                     setExportDialog({
-                      workflowName: workflow.name,
+                      workflowName: workflowDisplayName(workflow),
                       exportUrl: exportWorkflowUrl(workflow.id),
                       extension: ".noofy",
                       review: workflowSummaryExportReview(workflow),
                     })
                   }
                   onExportComfyJson={() =>
-                    setExportDialog({ workflowName: workflow.name, exportUrl: exportWorkflowComfyJsonUrl(workflow.id), extension: ".json" })
+                    setExportDialog({ workflowName: workflowDisplayName(workflow), exportUrl: exportWorkflowComfyJsonUrl(workflow.id), extension: ".json" })
                   }
                   onRemove={() => void handleRemove(workflow)}
                 />
@@ -527,7 +528,7 @@ export function WorkflowsPage({
         {selectedSummary ? (
           <aside
             className={`workflow-detail-drawer${detailsPanelOpen ? " workflow-detail-drawer--open" : ""}`}
-            aria-label={`Details for ${selectedSummary.name}`}
+            aria-label={`Details for ${workflowDisplayName(selectedSummary)}`}
           >
             {detailsLoading && !selectedDetails ? (
               <WorkflowDetailsFallback
@@ -601,6 +602,7 @@ function WorkflowDetailsFallback({
   onClose: () => void;
 }) {
   const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
+  const displayName = workflowDisplayName(workflow);
 
   return (
     <>
@@ -610,7 +612,7 @@ function WorkflowDetailsFallback({
             <WorkflowIconVisual icon={workflow.icon} size={20} Icon={Icon} />
           </div>
           <div className="detail-panel__title-text">
-            <h2 className="detail-panel__title">{workflow.name}</h2>
+            <h2 className="detail-panel__title">{displayName}</h2>
             <span className={`workflow-status workflow-status--${workflowStatus(workflow)}`}>
               {workflowStatusLabel(workflow)}
             </span>
@@ -713,7 +715,7 @@ function compareWorkflows(a: WorkflowSummary, b: WorkflowSummary, sort: Workflow
   let result = 0;
 
   if (sort.key === "name") {
-    result = compareText(a.name, b.name);
+    result = compareText(workflowDisplayName(a), workflowDisplayName(b));
   } else if (sort.key === "tags") {
     result = compareText(workflowTagSortValue(a), workflowTagSortValue(b));
   } else if (sort.key === "status") {
@@ -774,7 +776,7 @@ function stableSort<T>(items: T[], compare: (a: T, b: T) => number) {
 
 function workflowSummaryExportReview(workflow: WorkflowSummary): WorkflowExportReviewModel {
   return {
-    name: workflow.name,
+    name: workflowDisplayName(workflow),
     description: workflow.description ?? "",
     category: workflow.category ?? "",
     tags: workflow.tags ?? [],
@@ -794,7 +796,7 @@ function workflowDetailsExportReview(
   draft?: WorkflowMetadataUpdate,
 ): WorkflowExportReviewModel {
   return {
-    name: workflow.name,
+    name: draft?.display_name ?? workflowDisplayName(workflow),
     description: draft?.description ?? workflow.overview.description,
     author: draft?.author ?? workflow.overview.author,
     website: draft?.website ?? workflow.overview.website,
@@ -836,6 +838,7 @@ function WorkflowRow({
   const Icon = WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
   const tags = workflow.tags ?? [];
   const readiness = workflowReadinessStatus(workflow);
+  const displayName = workflowDisplayName(workflow);
   return (
     <article
       className={`workflow-row${selected ? " workflow-row--selected" : ""}`}
@@ -847,7 +850,7 @@ function WorkflowRow({
           <WorkflowIconVisual icon={workflow.icon} size={16} Icon={Icon} />
         </div>
         <div className="model-main-body">
-          <div className="model-name-text" title={workflow.name}>{workflow.name}</div>
+          <div className="model-name-text" title={displayName}>{displayName}</div>
           <div className="model-type-text" title={`Category: ${workflow.category ?? "Workflow"}`}>{workflow.category ?? "Workflow"}</div>
         </div>
       </div>
@@ -920,6 +923,7 @@ function WorkflowDetailsDrawer({
   ) => void;
 }) {
   const workflowMetadataDraft = useMemo<WorkflowMetadataUpdate>(() => ({
+    display_name: workflowDisplayName(workflow),
     description: workflow.overview.description,
     author: workflow.overview.author,
     website: workflow.overview.website,
@@ -935,6 +939,7 @@ function WorkflowDetailsDrawer({
   const [importingIcon, setImportingIcon] = useState(false);
   const iconInputRef = useRef<HTMLInputElement | null>(null);
   const selectedIcon = draft.icon || workflow.organization.icon || "sparkles";
+  const displayName = draft.display_name?.trim() || workflowDisplayName(workflow);
   const Icon = WORKFLOW_ICONS[(selectedIcon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? Sparkles;
 
   useEffect(() => {
@@ -1015,7 +1020,7 @@ function WorkflowDetailsDrawer({
     void saveDraft().then((saved) => {
       if (!saved) return;
       onExport(
-        workflow.name,
+        displayName,
         exportUrl,
         extension,
         extension === ".noofy" ? workflowDetailsExportReview(workflow, draft) : undefined,
@@ -1032,7 +1037,7 @@ function WorkflowDetailsDrawer({
               <WorkflowIconVisual icon={selectedIcon} size={20} Icon={Icon} />
             </div>
             <div className="detail-panel__title-text">
-              <h2 className="detail-panel__title">{workflow.name}</h2>
+              <h2 className="detail-panel__title">{displayName}</h2>
               <span className={`workflow-status workflow-status--${workflowStatus(workflow)}`}>
                 {workflowStatusLabel(workflow)}
               </span>
@@ -1052,6 +1057,12 @@ function WorkflowDetailsDrawer({
       </div>
 
       <DetailSection title="Overview">
+        <EditableField
+          label="Workflow name"
+          value={draft.display_name ?? ""}
+          onBlur={() => void saveDraft()}
+          onChange={(display_name) => setDraft((current) => ({ ...current, display_name }))}
+        />
         <EditableField
           label="Description"
           value={draft.description ?? ""}
@@ -1246,6 +1257,7 @@ function WorkflowMetadataIconPicker({
 
 function metadataDraftsEqual(left: WorkflowMetadataUpdate, right: WorkflowMetadataUpdate) {
   return (
+    (left.display_name ?? "") === (right.display_name ?? "") &&
     (left.description ?? "") === (right.description ?? "") &&
     (left.author ?? "") === (right.author ?? "") &&
     (left.website ?? "") === (right.website ?? "") &&

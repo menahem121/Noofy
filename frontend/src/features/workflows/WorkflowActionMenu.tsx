@@ -9,9 +9,12 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { workflowDisplayName } from "../../lib/workflowNames";
+
 export interface WorkflowActionMenuWorkflow {
   id: string;
   name: string;
+  display_name?: string;
   can_export_noofy?: boolean;
   can_export_comfyui_json?: boolean;
   can_remove?: boolean;
@@ -50,13 +53,14 @@ export function WorkflowActionMenu({
 }: WorkflowActionMenuProps) {
   const menuClasses = ["workflow-action-menu", menuClassName].filter(Boolean).join(" ");
   const canExportComfyJson = workflow.can_export_comfyui_json !== false;
+  const displayName = workflowDisplayName(workflow);
 
   return (
     <div className={menuClasses}>
       <button
         className={buttonClassName}
         type="button"
-        aria-label={`Actions for ${workflow.name}`}
+        aria-label={`Actions for ${displayName}`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         onClick={onToggleMenu}

@@ -60,6 +60,7 @@ from app.runtime.storage.workspace_store import (
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows import importer as importer_module
 from app.workflows import import_runtime_profile as import_runtime_profile_module
+from app.workflows.import_normalization import normalized_display_name
 from app.workflows.importer import (
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
@@ -114,6 +115,19 @@ def _test_workflow_archive_bytes(filename: str) -> bytes:
 
 def _small_archive_bytes() -> bytes:
     return _test_workflow_archive_bytes("core_empty_image_smoke.noofy")
+
+
+def test_normalized_display_name_prefers_top_level_display_over_legacy_metadata_name() -> None:
+    assert normalized_display_name(
+        {
+            "display_name": "Friendly Workflow",
+            "metadata": {
+                "name": "technical_package_id",
+                "version": "1.0.0",
+            },
+        },
+        fallback="technical_package_id",
+    ) == "Friendly Workflow"
 
 
 def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() -> None:

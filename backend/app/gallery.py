@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.engine.models import JobResult
 from app.workflows.package import WorkflowPackage
+from app.workflows.library import workflow_package_display_name
 
 GALLERY_SCHEMA_VERSION = 1
 THUMBNAIL_SIZE = (512, 512)
@@ -554,7 +555,7 @@ def build_run_submission_snapshot(
 
     return RunSubmissionSnapshot(
         workflow_id=package.metadata.id,
-        workflow_title=package.metadata.name,
+        workflow_title=workflow_package_display_name(package),
         dashboard_version=package.dashboard.version,
         values={key: _safe_setting_value(value) for key, value in inputs.items()},
         output_preferences=clean_preferences,

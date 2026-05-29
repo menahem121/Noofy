@@ -19,7 +19,11 @@ from app.history import HistoryService
 from app.trust import workflow_source_policy, workflow_trust_payload
 from app.workflows.exporter import stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
-from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
+from app.workflows.library import (
+    WorkflowLibraryStore,
+    WorkflowMetadataUpdate,
+    workflow_package_display_name,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowPackage
@@ -140,6 +144,7 @@ class WorkflowLibraryService:
         return {
             **summary,
             "overview": {
+                "display_name": metadata["display_name"],
                 "description": metadata["description"],
                 "author": metadata["author"],
                 "website": metadata["website"],
@@ -149,6 +154,7 @@ class WorkflowLibraryService:
             "models_used": models,
             "run_history": self._run_history_summary(package),
             "organization": {
+                "display_name": metadata["display_name"],
                 "category": metadata["category"],
                 "tags": metadata["tags"],
                 "icon": metadata["icon"],
@@ -165,7 +171,16 @@ class WorkflowLibraryService:
         }
 
     def workflow_package_payload(self, workflow_id: str) -> dict[str, object]:
-        return self.workflow_loader.get_package(workflow_id).model_dump()
+        package = self.workflow_loader.get_package(workflow_id)
+        payload = package.model_dump()
+        metadata = self._library_metadata(package)
+        display_name = metadata["display_name"]
+        payload["display_name"] = display_name
+        package_metadata = payload.get("metadata")
+        if isinstance(package_metadata, dict):
+            package_metadata["display_name"] = display_name
+            package_metadata["name"] = display_name
+        return payload
 
     def update_workflow_metadata(
         self,
@@ -318,7 +333,8 @@ class WorkflowLibraryService:
         }
         return {
             "id": package.metadata.id,
-            "name": package.metadata.name,
+            "name": metadata["display_name"],
+            "display_name": metadata["display_name"],
             "version": package.metadata.version,
             "icon": metadata["icon"],
             "source_label": self._source_label(package),
@@ -356,6 +372,7 @@ class WorkflowLibraryService:
             if self.workflow_library_store is not None
             else None
         )
+        display_name = workflow_package_display_name(package, stored)
         description = (
             stored.description
             if stored is not None and stored.description is not None
@@ -387,6 +404,7 @@ class WorkflowLibraryService:
             else package.metadata.icon
         ) or self._infer_workflow_icon(category)
         return {
+            "display_name": display_name,
             "description": description or "",
             "author": author or "",
             "website": website or "",
@@ -663,7 +681,7 @@ class WorkflowLibraryService:
         )
 
     def _infer_workflow_category(self, package: WorkflowPackage) -> str:
-        name = f"{package.metadata.name} {package.metadata.description}".casefold()
+        name = f"{workflow_package_display_name(package)} {package.metadata.description}".casefold()
         combined = f"{name} {self._graph_keyword_text(package.comfyui_graph)}"
         if "upscale" in combined or "esrgan" in combined:
             return "Upscaling"
@@ -746,6 +764,16 @@ class WorkflowLibraryService:
         patch = update.model_dump(mode="json", exclude_unset=True)
         for key, value in patch.items():
             if value is None:
+                continue
+            if key == "display_name":
+                if not isinstance(value, str):
+                    continue
+                value = value.strip()
+                if not value:
+                    raise ValueError("Workflow name cannot be empty.")
+                metadata["display_name"] = value
+                metadata["name"] = value
+                data["display_name"] = value
                 continue
             if isinstance(value, str):
                 value = value.strip()

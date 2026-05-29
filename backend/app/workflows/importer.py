@@ -101,6 +101,7 @@ from app.workflows.import_capsule_lock import (
     model_id,
     model_locks_from_package,
 )
+from app.workflows.library import workflow_package_display_name
 from app.workflows.store_paths import (
     imported_workflow_id,
     mutable_package_dir,
@@ -505,10 +506,12 @@ class NoofyArchiveImporter:
                 metadata=WorkflowMetadata(
                     id=workflow_id,
                     name=display_name,
+                    display_name=display_name,
                     version=version,
                     description="",
                     author=publisher_id,
                 ),
+                display_name=display_name,
                 identity=None,
                 engine="comfyui",
                 required_models=[],
@@ -532,6 +535,7 @@ class NoofyArchiveImporter:
                 metadata=WorkflowMetadata(
                     id=workflow_id,
                     name=display_name,
+                    display_name=display_name,
                     version=version,
                     description=metadata_fields["description"],
                     author=metadata_fields["author"] or publisher_id,
@@ -540,6 +544,7 @@ class NoofyArchiveImporter:
                     tags=metadata_fields["tags"],
                     icon=metadata_fields["icon"],
                 ),
+                display_name=display_name,
                 identity=WorkflowPackageIdentity(
                     publisher_id=publisher_id,
                     package_id=package_id,
@@ -741,6 +746,7 @@ def _package_imported_as_copy(package: WorkflowPackage, root_dir: Path) -> Workf
         raise NoofyImportError("Cannot import a copy of a package without identity metadata.")
 
     original_identity = package.identity
+    display_name = workflow_package_display_name(package)
     copy_index = 1
     while True:
         suffix = "-copy" if copy_index == 1 else f"-copy-{copy_index}"
@@ -773,10 +779,12 @@ def _package_imported_as_copy(package: WorkflowPackage, root_dir: Path) -> Workf
             return package.model_copy(
                 update={
                     "identity": identity,
+                    "display_name": f"{display_name}{name_suffix}",
                     "metadata": package.metadata.model_copy(
                         update={
                             "id": workflow_id,
-                            "name": f"{package.metadata.name}{name_suffix}",
+                            "name": f"{display_name}{name_suffix}",
+                            "display_name": f"{display_name}{name_suffix}",
                         }
                     ),
                     "import_metadata": import_metadata,

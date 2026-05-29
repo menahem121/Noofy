@@ -14,6 +14,7 @@ import {
   type WorkflowImportResponse,
 } from "../../lib/api/noofyApi";
 import { isModelDownloadActive } from "../../lib/modelDownloadProgress";
+import { workflowDisplayName } from "../../lib/workflowNames";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -182,7 +183,7 @@ export function useWorkflowImportFlow({
     }));
     if (openAfterImport) {
       if (importNeedsConfiguration(importResult) && onConfigureDashboard) {
-        onConfigureDashboard(importResult.workflow.id, importResult.workflow.name);
+        onConfigureDashboard(importResult.workflow.id, workflowDisplayName(importResult.workflow));
         return;
       }
       onOpenWorkflow(importResult.workflow.id);

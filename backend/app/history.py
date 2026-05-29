@@ -16,7 +16,11 @@ from pydantic import BaseModel, Field
 
 from app.diagnostics import DiagnosticsSink
 from app.gallery import GalleryItem, RunSubmissionSnapshot
-from app.workflows.library import WorkflowLibraryStore, WorkflowRunHistoryRecord
+from app.workflows.library import (
+    WorkflowLibraryStore,
+    WorkflowRunHistoryRecord,
+    workflow_package_display_name,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.store_paths import safe_store_segment
@@ -456,7 +460,13 @@ class HistoryService:
         if self.workflow_loader is None:
             return workflow_id
         try:
-            return self.workflow_loader.get_package(workflow_id).metadata.name
+            package = self.workflow_loader.get_package(workflow_id)
+            metadata = (
+                self.workflow_library_store.metadata(workflow_id)
+                if self.workflow_library_store is not None
+                else None
+            )
+            return workflow_package_display_name(package, metadata)
         except Exception:
             return workflow_id
 
@@ -471,7 +481,7 @@ class HistoryService:
 
 
 def workflow_display_name(package: WorkflowPackage) -> str:
-    return package.metadata.name or package.metadata.id
+    return workflow_package_display_name(package)
 
 
 def _event_create_payload(event_id: str, event: ActivityEventCreate) -> dict[str, object | None]:

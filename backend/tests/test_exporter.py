@@ -424,6 +424,7 @@ def test_exported_archive_applies_export_only_metadata_without_mutating_store(tm
 
     assert package_data["trust_level"] == "quarantined_community"
     assert package_data["metadata"]["name"] == "Reviewed Export"
+    assert package_data["metadata"]["display_name"] == "Reviewed Export"
     assert package_data["display_name"] == "Reviewed Export"
     assert package_data["metadata"]["description"] == "Export-ready description"
     assert package_data["metadata"]["author"] == "Noofy User"
@@ -715,7 +716,7 @@ def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Pat
 
     archive_bytes, filename = exporter.export_archive("text_to_image_v0")
 
-    assert filename == "text_to_image_v0.noofy"
+    assert filename == "Text-to-Image.noofy"
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
         names = set(zf.namelist())
         package_data = json.loads(zf.read("package.json"))

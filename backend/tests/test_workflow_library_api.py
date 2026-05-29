@@ -17,8 +17,9 @@ from app.engine.service import EngineService
 from app.runtime.runners.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
-from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
+from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate, workflow_package_display_name
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.package import WorkflowMetadata, WorkflowPackage, WorkflowPackageIdentity
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -414,6 +415,9 @@ def test_workflow_details_loads_drawer_data_separately(tmp_path: Path) -> None:
 
     details = service.workflow_details(workflow_id)
 
+    assert details["name"] == "Library Workflow"
+    assert details["display_name"] == "Library Workflow"
+    assert details["overview"]["display_name"] == "Library Workflow"
     assert details["overview"]["description"] == "Original description"
     assert details["models_used"] == []
     assert details["advanced"]["engine"] == "comfyui"
@@ -422,9 +426,10 @@ def test_workflow_details_loads_drawer_data_separately(tmp_path: Path) -> None:
 def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history_export(tmp_path: Path) -> None:
     service, workflow_id, package_dir, archive = _service(tmp_path)
 
-    service.update_workflow_metadata(
+    response = service.update_workflow_metadata(
         workflow_id,
         WorkflowMetadataUpdate(
+            display_name="Edited Cleanup Workflow",
             description="Updated description",
             author="Noofy User",
             website="https://example.test",
@@ -433,6 +438,9 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
             icon="image",
         ),
     )
+    assert response["workflow"]["name"] == "Edited Cleanup Workflow"
+    assert response["workflow"]["display_name"] == "Edited Cleanup Workflow"
+
     service.workflow_library_store.record_run_result(
         workflow_id=workflow_id,
         job_id="job-local",
@@ -442,6 +450,9 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
 
     assert (package_dir / "source-archive.noofy").read_bytes() == archive
     package_data = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
+    assert package_data["display_name"] == "Edited Cleanup Workflow"
+    assert package_data["metadata"]["name"] == "Edited Cleanup Workflow"
+    assert package_data["metadata"]["display_name"] == "Edited Cleanup Workflow"
     assert package_data["metadata"]["description"] == "Updated description"
     assert package_data["metadata"]["category"] == "Inpainting"
 
@@ -449,8 +460,44 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
     with zipfile.ZipFile(io.BytesIO(exported)) as zf:
         exported_package = json.loads(zf.read("package.json"))
         names = set(zf.namelist())
+    assert exported_package["display_name"] == "Edited Cleanup Workflow"
+    assert exported_package["metadata"]["display_name"] == "Edited Cleanup Workflow"
+    assert exported_package["metadata"]["name"] == "Edited Cleanup Workflow"
     assert exported_package["metadata"]["description"] == "Updated description"
     assert "run-history.json" not in names
+
+
+def test_empty_workflow_display_name_edit_is_rejected(tmp_path: Path) -> None:
+    service, workflow_id, _, _ = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="Workflow name cannot be empty"):
+        service.update_workflow_metadata(
+            workflow_id,
+            WorkflowMetadataUpdate(display_name="   "),
+        )
+
+
+def test_display_name_helper_preserves_explicit_display_names_with_underscores() -> None:
+    package = WorkflowPackage(
+        display_name="My_Custom Workflow",
+        metadata=WorkflowMetadata(
+            id="unknown__technical_package__1.0.0",
+            name="technical_package",
+            version="1.0.0",
+        ),
+        identity=WorkflowPackageIdentity(
+            publisher_id="unknown",
+            package_id="technical_package",
+            version="1.0.0",
+            trust_level="quarantined_community",
+            source="local",
+        ),
+        engine="comfyui",
+        required_models=[],
+        comfyui_graph={},
+    )
+
+    assert workflow_package_display_name(package) == "My_Custom Workflow"
 
 
 def test_comfyui_json_export_uses_stored_source_graph(tmp_path: Path) -> None:

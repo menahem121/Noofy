@@ -30,6 +30,7 @@ import {
   type NativeWorkflowImportRequest,
   type NativeWorkflowOpenPayload,
 } from "./lib/nativeWorkflowFiles";
+import { workflowDisplayName } from "./lib/workflowNames";
 
 type AppRoute =
   | { name: "home" }
@@ -122,7 +123,8 @@ function AppContent() {
   function workflowNameFor(workflowId: string, providedName?: string) {
     if (providedName) return providedName;
     if (workflowId === "text_to_image_v0") return "Text to Image";
-    return workflowLibrary.workflows.find((workflow) => workflow.id === workflowId)?.name ?? workflowId;
+    const workflow = workflowLibrary.workflows.find((item) => item.id === workflowId);
+    return workflow ? workflowDisplayName(workflow) : "Workflow";
   }
 
   function openWorkflow(workflowId: string, workflowName?: string) {

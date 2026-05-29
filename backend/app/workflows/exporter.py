@@ -16,7 +16,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.bindings import apply_input_bindings
-from app.workflows.library import WorkflowLibraryMetadata, WorkflowLibraryStore
+from app.workflows.library import (
+    WorkflowLibraryMetadata,
+    WorkflowLibraryStore,
+    workflow_package_display_name,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.store_paths import mutable_package_dir, path_is_within
@@ -108,7 +112,7 @@ class WorkflowExporter:
             else:
                 zf.writestr("export-report.json", json.dumps({}))
 
-        filename = f"{_safe_filename(workflow_id)}.noofy"
+        filename = f"{_safe_filename(workflow_package_display_name(package, metadata))}.noofy"
         return buf.getvalue(), filename
 
     def export_comfyui_graph(
@@ -293,6 +297,9 @@ def _build_export_package_json(
     stored_file = package_dir / "package.json" if package_dir is not None else None
     stored = _read_stored_package_json(stored_file)
     package_metadata = package.metadata.model_dump(mode="json")
+    display_name = workflow_package_display_name(package, metadata)
+    package_metadata["name"] = display_name
+    package_metadata["display_name"] = display_name
     if package.identity:
         publisher_id = package.identity.publisher_id
         package_id = package.identity.package_id
@@ -306,7 +313,7 @@ def _build_export_package_json(
         "schema_version": _stored_string(stored, "schema_version", "0.1.0"),
         "engine": package.engine,
         "metadata": package_metadata,
-        "display_name": package_metadata["name"],
+        "display_name": display_name,
         "description": package_metadata.get("description", ""),
         "author": package_metadata.get("author", ""),
         "website": package_metadata.get("website", ""),
@@ -369,6 +376,11 @@ def _apply_library_metadata(base: dict[str, Any], metadata: WorkflowLibraryMetad
     if not isinstance(package_metadata, dict):
         package_metadata = {}
     for key, value in patch.items():
+        if key == "display_name":
+            package_metadata["display_name"] = value
+            package_metadata["name"] = value
+            base["display_name"] = value
+            continue
         package_metadata[key] = value
         if key in {"description", "author", "website", "category", "tags", "icon"}:
             base[key] = value
@@ -389,6 +401,7 @@ def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> No
             continue
         package_metadata[key] = cleaned
         if key == "name":
+            package_metadata["display_name"] = cleaned
             base["display_name"] = cleaned
         else:
             base[key] = cleaned
@@ -523,4 +536,5 @@ def _export_safe_user_value(value: Any, *, credential: bool = False) -> Any:
 
 
 def _safe_filename(name: str) -> str:
-    return "".join(c if c.isalnum() or c in {"-", "_", "."} else "-" for c in name).strip("-_.")
+    cleaned = "".join(c if c.isalnum() or c in {"-", "_", "."} else "-" for c in name).strip("-_.")
+    return cleaned or "workflow"

@@ -19,6 +19,7 @@ import {
   modelDownloadPanelTone,
   modelDownloadPercentLabel,
 } from "../../lib/modelDownloadProgress";
+import { workflowDisplayName } from "../../lib/workflowNames";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -37,7 +38,8 @@ export function DuplicateWorkflowModal({
 }) {
   const duplicate = importResult.duplicate_identity;
   if (!duplicate) return null;
-  const existingName = duplicate.existing_workflow?.name ?? importResult.workflow.name;
+  const existingName = workflowDisplayName(duplicate.existing_workflow ?? importResult.workflow);
+  const incomingName = workflowDisplayName(importResult.workflow);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="duplicate-import-title">
@@ -45,7 +47,7 @@ export function DuplicateWorkflowModal({
         <header className="required-models-modal__header">
           <div>
             <p className="eyebrow">Workflow already exists</p>
-            <h2 id="duplicate-import-title">{importResult.workflow.name}</h2>
+            <h2 id="duplicate-import-title">{incomingName}</h2>
             <p>
               Noofy already has {existingName}. Choose whether to replace that local workflow, import this file as a
               separate copy, or cancel.
@@ -145,7 +147,7 @@ export function RequiredModelsModal({
         <header className="required-models-modal__header">
           <div>
             <p className="eyebrow">Workflow models</p>
-            <h2 id="required-models-title">{importResult.workflow.name}</h2>
+            <h2 id="required-models-title">{workflowDisplayName(importResult.workflow)}</h2>
             <p>
               Noofy is checking your local models first. Missing models can be downloaded or selected before the
               workflow runs. If a download fails, Noofy cleans up the partial file safely.

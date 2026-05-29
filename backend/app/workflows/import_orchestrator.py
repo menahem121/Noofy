@@ -19,6 +19,7 @@ from app.history import HistoryService
 from app.artifacts import AssetOwnership
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library_service import WorkflowLibraryService
+from app.workflows.library import workflow_package_display_name
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.user_state import UserStateService
@@ -775,7 +776,8 @@ class WorkflowImportOrchestrator:
         except Exception:
             existing_workflow = {
                 "id": package.metadata.id,
-                "name": package.metadata.name,
+                "name": workflow_package_display_name(package),
+                "display_name": workflow_package_display_name(package),
                 "version": package.metadata.version,
             }
 

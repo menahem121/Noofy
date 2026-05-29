@@ -7,10 +7,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from app.workflows.package import WorkflowPackage
 from app.workflows.store_paths import safe_store_segment
 
 
 class WorkflowLibraryMetadata(BaseModel):
+    display_name: str | None = None
     description: str | None = None
     author: str | None = None
     website: str | None = None
@@ -21,6 +23,7 @@ class WorkflowLibraryMetadata(BaseModel):
 
 
 class WorkflowMetadataUpdate(BaseModel):
+    display_name: str | None = None
     description: str | None = None
     author: str | None = None
     website: str | None = None
@@ -89,7 +92,12 @@ class WorkflowLibraryStore:
         patch = update.model_dump(mode="json", exclude_unset=True)
         cleaned: dict[str, object | None] = {}
         for key, value in patch.items():
-            if key == "tags" and isinstance(value, list):
+            if key == "display_name" and isinstance(value, str):
+                display_name = value.strip()
+                if not display_name:
+                    raise ValueError("Workflow name cannot be empty.")
+                cleaned[key] = display_name
+            elif key == "tags" and isinstance(value, list):
                 cleaned[key] = _clean_tags(value)
             elif isinstance(value, str):
                 cleaned[key] = value.strip()
@@ -231,3 +239,67 @@ def _clean_tags(tags: list[str]) -> list[str]:
         seen.add(key)
         cleaned.append(value[:40])
     return cleaned
+
+
+def workflow_package_display_name(
+    package: WorkflowPackage,
+    metadata: WorkflowLibraryMetadata | None = None,
+) -> str:
+    stored_name = _clean_display_name(metadata.display_name) if metadata is not None else None
+    if stored_name:
+        return stored_name
+
+    for explicit_name in (
+        _clean_display_name(getattr(package, "display_name", None)),
+        _clean_display_name(package.metadata.display_name),
+    ):
+        if explicit_name:
+            return explicit_name
+
+    package_name = _clean_display_name(package.metadata.name)
+    if package_name:
+        if _matches_package_identity(package_name, package):
+            return _humanize_workflow_identifier(package_name)
+        return package_name
+
+    identity_name = package.identity.package_id if package.identity is not None else package.metadata.id
+    return _humanize_workflow_identifier(identity_name) or "Workflow"
+
+
+def _clean_display_name(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _matches_package_identity(value: str, package: WorkflowPackage) -> bool:
+    technical_ids = {package.metadata.id}
+    if package.identity is not None:
+        technical_ids.add(package.identity.package_id)
+    normalized = _technical_name_key(value)
+    return normalized in {_technical_name_key(item) for item in technical_ids}
+
+
+def _technical_name_key(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _humanize_workflow_identifier(value: str) -> str:
+    words = [
+        word
+        for word in "".join(
+            character if character.isalnum() else " "
+            for character in value
+        ).split()
+        if word
+    ]
+    if not words:
+        return ""
+    return " ".join(_title_word(word) for word in words)
+
+
+def _title_word(value: str) -> str:
+    if value.isupper() or any(character.isdigit() for character in value):
+        return value
+    return value[:1].upper() + value[1:]

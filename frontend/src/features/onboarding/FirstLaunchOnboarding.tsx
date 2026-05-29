@@ -23,6 +23,7 @@ import {
   type WorkflowSummary,
 } from "../../lib/api/noofyApi";
 import { selectFolder } from "../../lib/folderDialogs";
+import { workflowDisplayName } from "../../lib/workflowNames";
 
 const TOTAL_STEPS = 4;
 const TEXT_TO_IMAGE_WORKFLOW_ID = "text_to_image_v0";
@@ -698,13 +699,13 @@ function textToImageWorkflows(workflows: WorkflowSummary[]) {
     if (!isNativeBundledWorkflow(workflow)) return false;
     if (!isStarterWorkflowOpenable(workflow)) return false;
     if (workflow.id === TEXT_TO_IMAGE_WORKFLOW_ID) return true;
-    const normalizedName = normalizeWorkflowName(workflow.name);
+    const normalizedName = normalizeWorkflowName(workflowDisplayName(workflow));
     return matchesNativeWorkflowName(normalizedName, "text to image") || workflow.category?.toLowerCase() === "txt2img";
   });
   return candidates.sort((a, b) => {
     if (a.id === TEXT_TO_IMAGE_WORKFLOW_ID) return -1;
     if (b.id === TEXT_TO_IMAGE_WORKFLOW_ID) return 1;
-    return a.name.localeCompare(b.name);
+    return workflowDisplayName(a).localeCompare(workflowDisplayName(b));
   });
 }
 
@@ -735,7 +736,8 @@ function matchesNativeWorkflowName(normalizedName: string, baseName: string) {
 }
 
 function starterVariantLabel(workflow: WorkflowSummary) {
-  const rawLabel = workflow.name
+  const displayName = workflowDisplayName(workflow);
+  const rawLabel = displayName
     .replace(/^Text\s+to\s+Image/i, "")
     .replace(/^[\s:\u2014\u2013-]+/, "")
     .trim();

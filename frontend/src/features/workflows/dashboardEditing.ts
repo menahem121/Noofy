@@ -73,7 +73,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
   return {
     version: 1,
     workflowId: packageData.metadata.id,
-    workflowName: packageData.metadata.name,
+    workflowName: packageData.metadata.display_name ?? packageData.display_name ?? packageData.metadata.name,
     widgets,
     groups,
     layout: {

@@ -15,6 +15,7 @@ export interface WorkflowTrustSummary {
 export interface WorkflowSummary {
   id: string;
   name: string;
+  display_name?: string;
   version: string;
   description: string;
   icon?: string;
@@ -67,6 +68,7 @@ export interface WorkflowRunHistorySummary {
 
 export interface WorkflowDetails extends WorkflowSummary {
   overview: {
+    display_name?: string;
     description: string;
     author: string;
     website: string;
@@ -76,6 +78,7 @@ export interface WorkflowDetails extends WorkflowSummary {
   models_used: WorkflowDetailsModel[];
   run_history: WorkflowRunHistorySummary;
   organization: {
+    display_name?: string;
     category: string;
     tags: string[];
     icon: string;
@@ -92,6 +95,7 @@ export interface WorkflowDetails extends WorkflowSummary {
 }
 
 export interface WorkflowMetadataUpdate {
+  display_name?: string;
   description?: string;
   author?: string;
   website?: string;
@@ -452,7 +456,8 @@ export interface DashboardSchemaDef {
 }
 
 export interface WorkflowPackageResponse {
-  metadata: { id: string; name: string; version: string; description: string };
+  metadata: { id: string; name: string; display_name?: string; version: string; description: string };
+  display_name?: string | null;
   identity?: Record<string, unknown> | null;
   required_models?: RequiredModelDef[];
   comfyui_graph?: Record<string, unknown>;

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { resolveBackendUrl } from "../../lib/api/client";
+import { workflowDisplayName } from "../../lib/workflowNames";
 import type { NativeWorkflowImportRequest } from "../../lib/nativeWorkflowFiles";
 
 // Replace with your real Reddit community URL when ready.
@@ -82,7 +83,7 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
 
     return {
       id: workflow.id,
-      title: workflow.name,
+      title: workflowDisplayName(workflow),
       description: friendlyDescription(workflow),
       category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
       status,
@@ -203,7 +204,7 @@ function homeWorkflowCardsFromBackend(
 function nativeHomeWorkflowKind(workflow: WorkflowSummary): NativeHomeWorkflowKind | null {
   if (!isNativeBundledWorkflow(workflow)) return null;
 
-  const normalizedName = normalizeWorkflowName(workflow.name);
+  const normalizedName = normalizeWorkflowName(workflowDisplayName(workflow));
   const category = workflow.category?.toLowerCase();
   if (matchesNativeWorkflowName(normalizedName, "text to image") || category === "txt2img") {
     return "text_to_image";
@@ -235,7 +236,8 @@ function matchesNativeWorkflowName(normalizedName: string, baseName: string) {
 }
 
 function workflowCardVariant(workflow: WorkflowSummary, group: NativeHomeWorkflowGroup): WorkflowCardVariant {
-  const rawLabel = workflow.name
+  const displayName = workflowDisplayName(workflow);
+  const rawLabel = displayName
     .replace(new RegExp(`^${group.title.replace(/\s+/g, "\\s+")}`, "i"), "")
     .replace(/^[\s:\u2014\u2013-]+/, "")
     .trim();
@@ -245,8 +247,8 @@ function workflowCardVariant(workflow: WorkflowSummary, group: NativeHomeWorkflo
 
   return {
     id: workflow.id,
-    label: rawLabel || modelLabel || workflow.name,
-    title: workflow.name,
+    label: rawLabel || modelLabel || displayName,
+    title: displayName,
   };
 }
 
@@ -530,7 +532,7 @@ export function HomePage({
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
                 <strong>{homeData.importResult.user_facing_message}</strong>
-                <span>{homeData.importResult.workflow.name} was added to your local workflows.</span>
+                <span>{workflowDisplayName(homeData.importResult.workflow)} was added to your local workflows.</span>
               </div>
               {homeData.importResult.status === "needs_input_setup" && onConfigureDashboard ? (
                 <button
@@ -540,7 +542,7 @@ export function HomePage({
                   onClick={() =>
                     onConfigureDashboard(
                       homeData.importResult!.workflow.id,
-                      homeData.importResult!.workflow.name,
+                      workflowDisplayName(homeData.importResult!.workflow),
                     )
                   }
                 >
@@ -693,7 +695,7 @@ export function HomePage({
                             onClick={() => openSearchResult(workflow)}
                           >
                             <span className="home-workflow-search__result-main">
-                              <span>{workflow.name}</span>
+                              <span>{workflowDisplayName(workflow)}</span>
                               <small>{workflow.description || workflow.status_label || workflowSearchStatusLabel(workflow)}</small>
                             </span>
                             <span className="mini-status">{workflow.status_label ?? workflowSearchStatusLabel(workflow)}</span>

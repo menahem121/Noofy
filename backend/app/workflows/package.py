@@ -36,6 +36,7 @@ class SignedRegistryMetadata(BaseModel):
 class WorkflowMetadata(BaseModel):
     id: str
     name: str
+    display_name: str | None = None
     version: str
     description: str = ""
     author: str = ""
@@ -225,6 +226,7 @@ class WorkflowSmokeTests(BaseModel):
 
 class WorkflowPackage(BaseModel):
     metadata: WorkflowMetadata
+    display_name: str | None = None
     identity: WorkflowPackageIdentity | None = None
     engine: Literal["comfyui"]
     required_models: list[RequiredModel] = Field(default_factory=list)

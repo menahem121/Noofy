@@ -1,4 +1,5 @@
 import type { WorkflowSummary } from "../../lib/api/noofyApi";
+import { workflowDisplayName } from "../../lib/workflowNames";
 
 export type WorkflowSearchStatus = "ready" | "need_setup" | "missing_models";
 
@@ -40,6 +41,7 @@ export function searchWorkflows(workflows: WorkflowSummary[], filters: WorkflowS
     if (query) {
       const haystack = [
         workflow.name,
+        workflowDisplayName(workflow),
         workflow.description,
         workflow.main_model?.name,
         category,
