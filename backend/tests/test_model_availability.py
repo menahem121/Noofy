@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -48,6 +49,7 @@ def _service(
     provider_resolver: ProviderModelResolver | None = None,
     log_store: LogStore | None = None,
     local_model_identity_store: LocalModelIdentityStore | None = None,
+    max_parallel_downloads: int = availability_module.DEFAULT_MODEL_DOWNLOAD_CONCURRENCY,
 ) -> ModelAvailabilityService:
     roots = [noofy_root]
     if external_root is not None:
@@ -58,6 +60,7 @@ def _service(
         log_store=log_store or LogStore(),
         provider_resolver=provider_resolver,
         local_model_identity_store=local_model_identity_store,
+        max_parallel_downloads=max_parallel_downloads,
     )
 
 
@@ -618,6 +621,182 @@ async def test_download_reports_progress_with_bytes(
 
 
 @pytest.mark.anyio
+async def test_download_missing_runs_bounded_parallel_downloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+    first_url = "https://example.com/models/first.safetensors"
+    second_url = "https://example.com/models/second.safetensors"
+    third_url = "https://example.com/models/third.safetensors"
+    payloads = {
+        first_url: b"first-model",
+        second_url: b"second-model",
+        third_url: b"third-model",
+    }
+    active_streams = 0
+    max_active_streams = 0
+    started_urls: list[str] = []
+    first_pair_started = asyncio.Event()
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal active_streams, max_active_streams
+        active_streams += 1
+        max_active_streams = max(max_active_streams, active_streams)
+        started_urls.append(url)
+        if len(started_urls) >= 2:
+            first_pair_started.set()
+        if len(started_urls) <= 2:
+            await first_pair_started.wait()
+        try:
+            await asyncio.sleep(0.01)
+            part_path.parent.mkdir(parents=True, exist_ok=True)
+            part_path.write_bytes(payloads[url])
+        finally:
+            active_streams -= 1
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="first.safetensors",
+                    size_bytes=len(payloads[first_url]),
+                    verification_level="filename_size",
+                    source_urls=[first_url],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="second.safetensors",
+                    size_bytes=len(payloads[second_url]),
+                    verification_level="filename_size",
+                    source_urls=[second_url],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="third.safetensors",
+                    size_bytes=len(payloads[third_url]),
+                    verification_level="filename_size",
+                    source_urls=[third_url],
+                ),
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 3
+    assert result.failed_count == 0
+    assert max_active_streams == 2
+    assert len(started_urls) == 3
+    assert (noofy_root / "checkpoints" / "first.safetensors").read_bytes() == payloads[first_url]
+    assert (noofy_root / "checkpoints" / "second.safetensors").read_bytes() == payloads[second_url]
+    assert (noofy_root / "checkpoints" / "third.safetensors").read_bytes() == payloads[third_url]
+
+
+@pytest.mark.anyio
+async def test_parallel_download_serializes_same_target_model_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"shared-model"
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+    stream_calls = 0
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal stream_calls
+        stream_calls += 1
+        await asyncio.sleep(0.01)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="shared.safetensors",
+                    size_bytes=len(payload),
+                    node_id="1",
+                    input_name="model",
+                    verification_level="filename_size",
+                    source_urls=["https://example.com/models/shared.safetensors"],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="shared.safetensors",
+                    size_bytes=len(payload),
+                    node_id="2",
+                    input_name="model",
+                    verification_level="filename_size",
+                    source_urls=["https://example.com/models/shared.safetensors"],
+                ),
+            ]
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert stream_calls == 1
+    assert (noofy_root / "checkpoints" / "shared.safetensors").read_bytes() == payload
+    assert {model.status for model in result.model_summary.models} == {"available"}
+
+
+@pytest.mark.anyio
+async def test_parallel_provider_rate_limit_fails_only_that_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"unrelated-model"
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        if "rate-limited" in url:
+            raise _http_error(url, 429)
+        await asyncio.sleep(0.01)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="rate-limited.safetensors",
+                    size_bytes=len(payload),
+                    verification_level="filename_size",
+                    source_urls=["https://huggingface.co/example/rate-limited.safetensors"],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="unrelated.safetensors",
+                    size_bytes=len(payload),
+                    verification_level="filename_size",
+                    source_urls=["https://example.com/models/unrelated.safetensors"],
+                ),
+            ]
+        )
+    )
+
+    models_by_filename = {model.filename: model for model in result.model_summary.models}
+    assert result.status == "completed_with_errors"
+    assert result.downloaded_count == 1
+    assert result.failed_count == 1
+    assert models_by_filename["rate-limited.safetensors"].status == "rate_limited"
+    assert models_by_filename["unrelated.safetensors"].status == "available"
+    assert (noofy_root / "checkpoints" / "unrelated.safetensors").read_bytes() == payload
+    assert not (noofy_root / "checkpoints" / "rate-limited.safetensors").exists()
+
+
+@pytest.mark.anyio
 async def test_failed_download_cleans_part_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -679,7 +858,7 @@ async def test_canceled_download_cleans_transaction_and_keeps_completed_files(
     completed_payload = b"completed"
     canceled_payload = b"partial"
     noofy_root = tmp_path / "Noofy Models"
-    service = _service(noofy_root=noofy_root)
+    service = _service(noofy_root=noofy_root, max_parallel_downloads=1)
     cancel_event = availability_module.asyncio.Event()
     calls = 0
 
@@ -902,6 +1081,66 @@ async def test_download_checks_disk_space_before_streaming(
     assert streamed is False
     assert result.failed_count == 1
     assert "Not enough free disk space" in (result.model_summary.models[0].message or "")
+
+
+@pytest.mark.anyio
+async def test_parallel_download_checks_batch_disk_space_before_streaming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+    streamed = False
+    model_size = 1024
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal streamed
+        streamed = True
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    monkeypatch.setattr(
+        availability_module.shutil,
+        "disk_usage",
+        lambda path: availability_module.shutil._ntuple_diskusage(
+            10,
+            9,
+            availability_module.DISK_SPACE_SAFETY_MARGIN_BYTES + model_size,
+        ),
+    )
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="first-too-large.safetensors",
+                    size_bytes=model_size,
+                    verification_level="filename_size",
+                    source_urls=["https://example.com/models/first-too-large.safetensors"],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="second-too-large.safetensors",
+                    size_bytes=model_size,
+                    verification_level="filename_size",
+                    source_urls=["https://example.com/models/second-too-large.safetensors"],
+                ),
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="manual-only.safetensors",
+                    verification_level="filename_only",
+                ),
+            ]
+        )
+    )
+
+    models_by_filename = {model.filename: model for model in result.model_summary.models}
+    assert streamed is False
+    assert result.failed_count == 2
+    assert models_by_filename["first-too-large.safetensors"].status == "not_enough_disk_space"
+    assert models_by_filename["second-too-large.safetensors"].status == "not_enough_disk_space"
+    assert models_by_filename["manual-only.safetensors"].status == "needs_manual_download"
+    assert not list((noofy_root / ".downloads").glob("*/**/*.part"))
 
 
 @pytest.mark.anyio

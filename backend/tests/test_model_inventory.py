@@ -242,6 +242,26 @@ class FakeDownloadAvailabilityService:
         return SimpleNamespace(failed_count=0, status="completed")
 
 
+class SparseFailureDownloadAvailabilityService:
+    async def download_missing(self, package, *, progress_callback=None, cancel_event=None):
+        model = package.required_models[0]
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "requirement_id": f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}",
+                    "filename": model.filename,
+                    "status": "rate_limited",
+                    "message": "Rate limited.",
+                    "model_index": 1,
+                }
+            )
+        return SimpleNamespace(
+            failed_count=1,
+            downloaded_count=0,
+            status="completed_with_errors",
+        )
+
+
 def test_model_download_job_tracks_active_job_and_downloaded_ownership(tmp_path: Path) -> None:
     async def run() -> None:
         await _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_path)
@@ -289,6 +309,53 @@ async def _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_pa
     assert status.status == "completed"
     assert status.percent == 100
     assert ownership_store.origin_for_model("checkpoints/downloaded.safetensors") == "downloaded"
+
+
+def test_model_download_job_preserves_totals_when_failure_progress_is_sparse(tmp_path: Path) -> None:
+    async def run() -> None:
+        await _assert_model_download_job_preserves_totals_when_failure_progress_is_sparse(tmp_path)
+
+    asyncio.run(run())
+
+
+async def _assert_model_download_job_preserves_totals_when_failure_progress_is_sparse(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    settings_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    model = RequiredModel(
+        folder="checkpoints",
+        filename="rate-limited.safetensors",
+        size_bytes=10,
+        node_id="1",
+        input_name="model",
+        source_url="https://example.test/rate-limited.safetensors",
+    )
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[_package([model])])
+    engine.model_availability_service = SparseFailureDownloadAvailabilityService()
+    service = ModelDownloadJobService(
+        engine_service=engine,
+        model_folder_service=settings_service,
+        ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+        log_store=engine.log_store,
+    )
+
+    started = service.start(
+        ModelDownloadStartRequest(
+            selections=[{"workflow_id": "wf_text", "requirement_id": "1:model:checkpoints/rate-limited.safetensors"}]
+        )
+    )
+    job = service._jobs[started.job_id]
+    assert job.task is not None
+    await job.task
+
+    status = service.status(started.job_id)
+    assert status.status == "failed"
+    assert status.total_bytes == 10
+    assert status.models[0].total_bytes == 10
+    assert status.models[0].status == "rate_limited"
 
 
 def test_model_download_job_sanitizes_provider_failure_diagnostics(tmp_path: Path) -> None:

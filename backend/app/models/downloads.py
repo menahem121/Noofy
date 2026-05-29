@@ -212,13 +212,24 @@ class ModelDownloadJobService:
                     job.speed_bytes_per_second = delta / elapsed
                     last_progress_at = now
                     last_progress_by_model[progress_key] = bytes_downloaded
+                previous = job.models.get(progress_key)
+                previous_bytes = (
+                    previous.bytes_downloaded
+                    if previous is not None and isinstance(previous.bytes_downloaded, int)
+                    else None
+                )
+                previous_total = (
+                    previous.total_bytes
+                    if previous is not None and isinstance(previous.total_bytes, int)
+                    else None
+                )
                 job.models[progress_key] = ImportModelDownloadProgressItem(
                     requirement_id=model_key(workflow_id, requirement_id),
                     filename=filename,
                     status=status,
                     status_label=_download_progress_status_label(status),
-                    bytes_downloaded=bytes_downloaded if isinstance(bytes_downloaded, int) else None,
-                    total_bytes=total_bytes if isinstance(total_bytes, int) else None,
+                    bytes_downloaded=bytes_downloaded if isinstance(bytes_downloaded, int) else previous_bytes,
+                    total_bytes=total_bytes if isinstance(total_bytes, int) else previous_total,
                     message=str(message) if message else None,
                 )
                 job.updated_at = now

@@ -36,6 +36,7 @@ from app.workflows.package import RequiredModel, WorkflowPackage
 
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1 << 20
+DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = 3
 PROVIDER_SEARCH_LIMIT = 20
 HUGGING_FACE_SEARCH_TERM_LIMIT = 6
 HUGGING_FACE_REPOS_PER_SEARCH_TERM = 4
@@ -71,6 +72,21 @@ class ModelDownloadFailure:
     status: str
     status_label: str
     message: str
+
+
+@dataclass(frozen=True)
+class _PendingModelDownload:
+    model: RequiredModel
+    model_index: int
+
+
+@dataclass(frozen=True)
+class _ModelDownloadOutcome:
+    requirement_id: str
+    model_index: int
+    downloaded: bool = False
+    failure: ModelDownloadFailure | None = None
+    canceled: bool = False
 
 
 @dataclass
@@ -509,6 +525,7 @@ class ModelAvailabilityService:
         log_store: DiagnosticsSink,
         provider_resolver: ProviderModelResolver | None = None,
         local_model_identity_store: LocalModelIdentityStore | None = None,
+        max_parallel_downloads: int = DEFAULT_MODEL_DOWNLOAD_CONCURRENCY,
     ) -> None:
         self.model_roots = model_roots
         self.noofy_models_dir = noofy_models_dir
@@ -517,6 +534,7 @@ class ModelAvailabilityService:
             log_store=log_store
         )
         self.local_model_identity_store = local_model_identity_store
+        self.max_parallel_downloads = max(1, max_parallel_downloads)
 
     def configure_model_roots(
         self,
@@ -595,183 +613,35 @@ class ModelAvailabilityService:
         failed_count = 0
         failures: dict[str, ModelDownloadFailure] = {}
         canceled = False
-        downloadable_models = [
-            (model, availability)
+        missing_models = [
+            model
             for model, availability in zip(package.required_models, before.models, strict=True)
             if availability.status == "missing"
         ]
+        downloadable_models = [
+            _PendingModelDownload(
+                model=model,
+                model_index=model_index,
+            )
+            for model_index, model in enumerate(missing_models, start=1)
+        ]
         total_models = len(downloadable_models)
 
-        for model_index, (model, availability) in enumerate(downloadable_models, start=1):
-            if cancel_event is not None and cancel_event.is_set():
-                failures[_requirement_id(model)] = _canceled_download_failure()
+        outcomes = await self._download_missing_models(
+            package,
+            downloadable_models,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+        for outcome in outcomes:
+            if outcome.failure is not None:
+                failures[outcome.requirement_id] = outcome.failure
+            if outcome.canceled:
                 canceled = True
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status="canceled",
-                    model_index=model_index,
-                    total_models=total_models,
-                    message="Download canceled.",
-                )
-                break
-            _emit_model_download_progress(
-                progress_callback,
-                model=model,
-                status="downloading",
-                model_index=model_index,
-                total_models=total_models,
-                bytes_downloaded=0,
-                total_bytes=model.size_bytes,
-            )
-            try:
-                downloaded = await self._download_model(
-                    model,
-                    progress_callback=progress_callback,
-                    cancel_event=cancel_event,
-                    model_index=model_index,
-                    total_models=total_models,
-                )
-                if downloaded:
-                    downloaded_count += 1
-                    _emit_model_download_progress(
-                        progress_callback,
-                        model=model,
-                        status="succeeded",
-                        model_index=model_index,
-                        total_models=total_models,
-                        bytes_downloaded=model.size_bytes,
-                        total_bytes=model.size_bytes,
-                    )
-                else:
-                    failed_count += 1
-                    requirement_id = _requirement_id(model)
-                    failures[requirement_id] = _needs_manual_download_failure()
-                    _emit_model_download_progress(
-                        progress_callback,
-                        model=model,
-                        status=failures[requirement_id].status,
-                        model_index=model_index,
-                        total_models=total_models,
-                        message=failures[requirement_id].message,
-                    )
-            except ProviderAuthenticationRequired as exc:
+            elif outcome.failure is not None:
                 failed_count += 1
-                failures[_requirement_id(model)] = ModelDownloadFailure(
-                    status="authentication_required",
-                    status_label="Authentication required",
-                    message=(
-                        self.provider_resolver.sanitize_message(str(exc))
-                        or PROVIDER_AUTH_REQUIRED_MESSAGE
-                    )
-                    + " The partial download was cleaned up safely. You can retry after updating settings, continue importing, or cancel.",
-                )
-                self.log_store.add(
-                    "warning",
-                    "Required model provider authentication needed",
-                    "workflow.models",
-                    workflow_id=package.metadata.id,
-                    details={
-                        "folder": model.folder,
-                        "filename": model.filename,
-                    },
-                )
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status=failures[_requirement_id(model)].status,
-                    model_index=model_index,
-                    total_models=total_models,
-                    message=failures[_requirement_id(model)].message,
-                )
-            except ProviderAccessDenied as exc:
-                failed_count += 1
-                failures[_requirement_id(model)] = ModelDownloadFailure(
-                    status="access_denied",
-                    status_label="Access denied",
-                    message=self.provider_resolver.sanitize_message(str(exc))
-                    + " The partial download was cleaned up safely.",
-                )
-                self.log_store.add(
-                    "warning",
-                    "Required model provider access denied",
-                    "workflow.models",
-                    workflow_id=package.metadata.id,
-                    details={
-                        "folder": model.folder,
-                        "filename": model.filename,
-                    },
-                )
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status=failures[_requirement_id(model)].status,
-                    model_index=model_index,
-                    total_models=total_models,
-                    message=failures[_requirement_id(model)].message,
-                )
-            except ProviderRateLimited as exc:
-                failed_count += 1
-                failures[_requirement_id(model)] = ModelDownloadFailure(
-                    status="rate_limited",
-                    status_label="Rate limited",
-                    message=self.provider_resolver.sanitize_message(str(exc))
-                    + " The partial download was cleaned up safely. You can retry later, continue importing, or cancel.",
-                )
-                self.log_store.add(
-                    "warning",
-                    "Required model provider rate limit reached",
-                    "workflow.models",
-                    workflow_id=package.metadata.id,
-                    details={
-                        "folder": model.folder,
-                        "filename": model.filename,
-                    },
-                )
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status=failures[_requirement_id(model)].status,
-                    model_index=model_index,
-                    total_models=total_models,
-                    message=failures[_requirement_id(model)].message,
-                )
-            except ModelDownloadCanceled:
-                failures[_requirement_id(model)] = _canceled_download_failure()
-                canceled = True
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status="canceled",
-                    model_index=model_index,
-                    total_models=total_models,
-                    message="Download canceled.",
-                )
-                break
-            except Exception as exc:
-                failed_count += 1
-                safe_error = self.provider_resolver.sanitize_message(str(exc))
-                requirement_id = _requirement_id(model)
-                failures[requirement_id] = _download_failure_for_error(safe_error)
-                self.log_store.add(
-                    "warning",
-                    "Required model download failed",
-                    "workflow.models",
-                    workflow_id=package.metadata.id,
-                    details={
-                        "folder": model.folder,
-                        "filename": model.filename,
-                        "error": safe_error,
-                    },
-                )
-                _emit_model_download_progress(
-                    progress_callback,
-                    model=model,
-                    status=failures[requirement_id].status,
-                    model_index=model_index,
-                    total_models=total_models,
-                    message=failures[requirement_id].message,
-                )
+            if outcome.downloaded:
+                downloaded_count += 1
 
         after = self.summarize(package)
         if failures:
@@ -807,6 +677,364 @@ class ModelAvailabilityService:
             downloaded_count=downloaded_count,
             failed_count=failed_count,
             model_summary=after,
+        )
+
+    async def _download_missing_models(
+        self,
+        package: WorkflowPackage,
+        items: list[_PendingModelDownload],
+        *,
+        progress_callback: ModelDownloadProgressCallback | None,
+        cancel_event: asyncio.Event | None,
+    ) -> list[_ModelDownloadOutcome]:
+        if not items:
+            return []
+
+        total_models = len(items)
+        preflight_failure = self._parallel_download_preflight_failure(items)
+        if preflight_failure is not None:
+            outcomes: list[_ModelDownloadOutcome] = []
+            for item in items:
+                if _model_needs_download_disk_preflight(item.model):
+                    outcomes.append(
+                        self._failed_download_outcome(
+                            item,
+                            total_models=total_models,
+                            progress_callback=progress_callback,
+                            failure=preflight_failure,
+                        )
+                    )
+                    continue
+                outcomes.append(
+                    await self._download_missing_model(
+                        package,
+                        item,
+                        total_models=total_models,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                    )
+                )
+            return outcomes
+
+        concurrency = min(self.max_parallel_downloads, total_models)
+        self.log_store.add(
+            "info",
+            "Starting required model downloads",
+            "workflow.models",
+            workflow_id=package.metadata.id,
+            details={
+                "model_count": total_models,
+                "max_parallel_downloads": concurrency,
+            },
+        )
+        outcomes: list[_ModelDownloadOutcome] = []
+        completed_indices: set[int] = set()
+        target_locks = {
+            _model_download_target_key(item.model): asyncio.Lock()
+            for item in items
+        }
+        next_item_index = 0
+
+        async def worker() -> None:
+            nonlocal next_item_index
+            while next_item_index < len(items):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                item = items[next_item_index]
+                next_item_index += 1
+                async with target_locks[_model_download_target_key(item.model)]:
+                    outcome = await self._download_missing_model(
+                        package,
+                        item,
+                        total_models=total_models,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                    )
+                completed_indices.add(item.model_index)
+                outcomes.append(outcome)
+                if outcome.canceled and cancel_event is not None:
+                    cancel_event.set()
+
+        workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for task in workers:
+                if not task.done():
+                    task.cancel()
+
+        if cancel_event is not None and cancel_event.is_set():
+            for item in items:
+                if item.model_index in completed_indices:
+                    continue
+                outcomes.append(
+                    self._canceled_download_outcome(
+                        item,
+                        total_models=total_models,
+                        progress_callback=progress_callback,
+                    )
+                )
+        return outcomes
+
+    async def _download_missing_model(
+        self,
+        package: WorkflowPackage,
+        item: _PendingModelDownload,
+        *,
+        total_models: int,
+        progress_callback: ModelDownloadProgressCallback | None,
+        cancel_event: asyncio.Event | None,
+    ) -> _ModelDownloadOutcome:
+        model = item.model
+        requirement_id = _requirement_id(model)
+        if cancel_event is not None and cancel_event.is_set():
+            return self._canceled_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+            )
+
+        _emit_model_download_progress(
+            progress_callback,
+            model=model,
+            status="downloading",
+            model_index=item.model_index,
+            total_models=total_models,
+            bytes_downloaded=0,
+            total_bytes=model.size_bytes,
+        )
+        try:
+            downloaded = await self._download_model(
+                model,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+                model_index=item.model_index,
+                total_models=total_models,
+            )
+            if downloaded:
+                _emit_model_download_progress(
+                    progress_callback,
+                    model=model,
+                    status="succeeded",
+                    model_index=item.model_index,
+                    total_models=total_models,
+                    bytes_downloaded=model.size_bytes,
+                    total_bytes=model.size_bytes,
+                )
+                return _ModelDownloadOutcome(
+                    requirement_id=requirement_id,
+                    model_index=item.model_index,
+                    downloaded=downloaded,
+                )
+
+            current = self._availability_for(model, deep_search=False, verify_hashes=True)
+            if current.status == "available":
+                _emit_model_download_progress(
+                    progress_callback,
+                    model=model,
+                    status="succeeded",
+                    model_index=item.model_index,
+                    total_models=total_models,
+                    bytes_downloaded=model.size_bytes,
+                    total_bytes=model.size_bytes,
+                )
+                return _ModelDownloadOutcome(
+                    requirement_id=requirement_id,
+                    model_index=item.model_index,
+                )
+
+            failure = _needs_manual_download_failure()
+            _emit_model_download_progress(
+                progress_callback,
+                model=model,
+                status=failure.status,
+                model_index=item.model_index,
+                total_models=total_models,
+                message=failure.message,
+            )
+            return _ModelDownloadOutcome(
+                requirement_id=requirement_id,
+                model_index=item.model_index,
+                failure=failure,
+            )
+        except ProviderAuthenticationRequired as exc:
+            failure = ModelDownloadFailure(
+                status="authentication_required",
+                status_label="Authentication required",
+                message=(
+                    self.provider_resolver.sanitize_message(str(exc))
+                    or PROVIDER_AUTH_REQUIRED_MESSAGE
+                )
+                + " The partial download was cleaned up safely. You can retry after updating settings, continue importing, or cancel.",
+            )
+            self.log_store.add(
+                "warning",
+                "Required model provider authentication needed",
+                "workflow.models",
+                workflow_id=package.metadata.id,
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                },
+            )
+            return self._failed_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+                failure=failure,
+            )
+        except ProviderAccessDenied as exc:
+            failure = ModelDownloadFailure(
+                status="access_denied",
+                status_label="Access denied",
+                message=self.provider_resolver.sanitize_message(str(exc))
+                + " The partial download was cleaned up safely.",
+            )
+            self.log_store.add(
+                "warning",
+                "Required model provider access denied",
+                "workflow.models",
+                workflow_id=package.metadata.id,
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                },
+            )
+            return self._failed_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+                failure=failure,
+            )
+        except ProviderRateLimited as exc:
+            failure = ModelDownloadFailure(
+                status="rate_limited",
+                status_label="Rate limited",
+                message=self.provider_resolver.sanitize_message(str(exc))
+                + " The partial download was cleaned up safely. You can retry later, continue importing, or cancel.",
+            )
+            self.log_store.add(
+                "warning",
+                "Required model provider rate limit reached",
+                "workflow.models",
+                workflow_id=package.metadata.id,
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                },
+            )
+            return self._failed_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+                failure=failure,
+            )
+        except ModelDownloadCanceled:
+            return self._canceled_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            safe_error = self.provider_resolver.sanitize_message(str(exc))
+            failure = _download_failure_for_error(safe_error)
+            self.log_store.add(
+                "warning",
+                "Required model download failed",
+                "workflow.models",
+                workflow_id=package.metadata.id,
+                details={
+                    "folder": model.folder,
+                    "filename": model.filename,
+                    "error": safe_error,
+                },
+            )
+            return self._failed_download_outcome(
+                item,
+                total_models=total_models,
+                progress_callback=progress_callback,
+                failure=failure,
+            )
+
+    def _parallel_download_preflight_failure(
+        self,
+        items: list[_PendingModelDownload],
+    ) -> ModelDownloadFailure | None:
+        if len(items) <= 1:
+            return None
+        required_bytes_by_target: dict[tuple[str, str], int] = {}
+        for item in items:
+            model = item.model
+            if not _model_needs_download_disk_preflight(model):
+                continue
+            target_key = _model_download_target_key(model)
+            required_bytes_by_target[target_key] = max(
+                required_bytes_by_target.get(target_key, 0),
+                model.size_bytes,
+            )
+        if not required_bytes_by_target:
+            return None
+        try:
+            self._validate_owned_model_root()
+            self._ensure_disk_space(sum(required_bytes_by_target.values()))
+        except Exception as exc:
+            safe_error = self.provider_resolver.sanitize_message(str(exc))
+            self.log_store.add(
+                "warning",
+                "Required model download preflight failed",
+                "workflow.models",
+                details={
+                    "model_count": len(items),
+                    "required_bytes": sum(required_bytes_by_target.values()),
+                    "error": safe_error,
+                },
+            )
+            return _download_failure_for_error(safe_error)
+        return None
+
+    def _failed_download_outcome(
+        self,
+        item: _PendingModelDownload,
+        *,
+        total_models: int,
+        progress_callback: ModelDownloadProgressCallback | None,
+        failure: ModelDownloadFailure,
+    ) -> _ModelDownloadOutcome:
+        _emit_model_download_progress(
+            progress_callback,
+            model=item.model,
+            status=failure.status,
+            model_index=item.model_index,
+            total_models=total_models,
+            message=failure.message,
+        )
+        return _ModelDownloadOutcome(
+            requirement_id=_requirement_id(item.model),
+            model_index=item.model_index,
+            failure=failure,
+        )
+
+    def _canceled_download_outcome(
+        self,
+        item: _PendingModelDownload,
+        *,
+        total_models: int,
+        progress_callback: ModelDownloadProgressCallback | None,
+    ) -> _ModelDownloadOutcome:
+        failure = _canceled_download_failure()
+        _emit_model_download_progress(
+            progress_callback,
+            model=item.model,
+            status="canceled",
+            model_index=item.model_index,
+            total_models=total_models,
+            message="Download canceled.",
+        )
+        return _ModelDownloadOutcome(
+            requirement_id=_requirement_id(item.model),
+            model_index=item.model_index,
+            failure=failure,
+            canceled=True,
         )
 
     def _availability_for(
@@ -1884,6 +2112,19 @@ def _requirement_id(model: RequiredModel) -> str:
     if model.node_id and model.input_name:
         return f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}"
     return f"{model.folder}/{model.filename}"
+
+
+def _model_download_target_key(model: RequiredModel) -> tuple[str, str]:
+    return (model.folder, model.filename.replace("\\", "/"))
+
+
+def _model_needs_download_disk_preflight(model: RequiredModel) -> bool:
+    return (
+        model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
+        and model.size_bytes is not None
+        and model.size_bytes > 0
+        and bool(_source_urls(model) or _provider_resolvable(model))
+    )
 
 
 def _normalize_sha256(value: str) -> str:

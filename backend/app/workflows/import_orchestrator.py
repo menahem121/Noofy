@@ -584,10 +584,10 @@ class WorkflowImportOrchestrator:
         job.updated_at = datetime.now(UTC)
         pending.updated_at = job.updated_at
         last_progress_at = job.updated_at
-        last_progress_bytes = 0
+        last_progress_by_model: dict[str, int] = {}
 
         def progress_callback(event: dict[str, object]) -> None:
-            nonlocal last_progress_at, last_progress_bytes
+            nonlocal last_progress_at
             now = datetime.now(UTC)
             requirement_id = str(event["requirement_id"])
             filename = str(event["filename"])
@@ -601,23 +601,40 @@ class WorkflowImportOrchestrator:
             job.current_model_filename = filename
             if isinstance(bytes_downloaded, int):
                 elapsed = max((now - last_progress_at).total_seconds(), 0.001)
-                delta = max(bytes_downloaded - last_progress_bytes, 0)
+                delta = max(bytes_downloaded - last_progress_by_model.get(requirement_id, 0), 0)
                 job.speed_bytes_per_second = delta / elapsed
-                last_progress_bytes = bytes_downloaded
+                last_progress_by_model[requirement_id] = bytes_downloaded
                 last_progress_at = now
-                job.bytes_downloaded = bytes_downloaded
+                job.bytes_downloaded = (job.bytes_downloaded or 0) + delta
             if isinstance(total_bytes, int):
-                job.total_bytes = total_bytes
+                known_total = (
+                    job.models.get(requirement_id).total_bytes
+                    if job.models and requirement_id in job.models
+                    else None
+                )
+                if not isinstance(known_total, int):
+                    job.total_bytes = (job.total_bytes or 0) + total_bytes
             label = _download_progress_status_label(status)
             if job.models is None:
                 job.models = {}
+            previous = job.models.get(requirement_id)
+            previous_bytes = (
+                previous.bytes_downloaded
+                if previous is not None and isinstance(previous.bytes_downloaded, int)
+                else None
+            )
+            previous_total = (
+                previous.total_bytes
+                if previous is not None and isinstance(previous.total_bytes, int)
+                else None
+            )
             job.models[requirement_id] = ImportModelDownloadProgressItem(
                 requirement_id=requirement_id,
                 filename=filename,
                 status=status,  # type: ignore[arg-type]
                 status_label=label,
-                bytes_downloaded=bytes_downloaded if isinstance(bytes_downloaded, int) else None,
-                total_bytes=total_bytes if isinstance(total_bytes, int) else None,
+                bytes_downloaded=bytes_downloaded if isinstance(bytes_downloaded, int) else previous_bytes,
+                total_bytes=total_bytes if isinstance(total_bytes, int) else previous_total,
                 message=str(message) if message else None,
             )
             job.updated_at = now
@@ -681,9 +698,22 @@ class WorkflowImportOrchestrator:
     def _import_download_job_status(
         self, job: _ImportModelDownloadJob
     ) -> ImportModelDownloadJobStatus:
+        items = list((job.models or {}).values())
+        known_downloaded = [
+            item.bytes_downloaded
+            for item in items
+            if isinstance(item.bytes_downloaded, int)
+        ]
+        known_totals = [
+            item.total_bytes
+            for item in items
+            if isinstance(item.total_bytes, int)
+        ]
+        bytes_downloaded = sum(known_downloaded) if known_downloaded else job.bytes_downloaded
+        total_bytes = sum(known_totals) if known_totals else job.total_bytes
         percent = None
-        if job.bytes_downloaded is not None and job.total_bytes:
-            percent = min(100.0, round((job.bytes_downloaded / job.total_bytes) * 100, 1))
+        if bytes_downloaded is not None and total_bytes:
+            percent = min(100.0, round((bytes_downloaded / total_bytes) * 100, 1))
         return ImportModelDownloadJobStatus(
             job_id=job.job_id,
             import_session_id=job.import_session_id,
@@ -693,11 +723,11 @@ class WorkflowImportOrchestrator:
             current_model_filename=job.current_model_filename,
             current_model_index=job.current_model_index,
             total_models=job.total_models,
-            bytes_downloaded=job.bytes_downloaded,
-            total_bytes=job.total_bytes,
+            bytes_downloaded=bytes_downloaded,
+            total_bytes=total_bytes,
             percent=percent,
             speed_bytes_per_second=job.speed_bytes_per_second,
-            models=list((job.models or {}).values()),
+            models=items,
             model_summary=job.model_summary,
         )
 
