@@ -302,10 +302,11 @@ async def test_bootstrap_rejects_generic_python_with_wrong_profile_abi(
     assert result.status == "python_missing"
     assert result.environment is not None
     assert "source checkout" in (result.environment.error or "")
-    assert "Required Python 3.13" in (result.environment.error or "")
+    assert "needs Python 3.13" in (result.environment.error or "")
+    assert "uv-managed Python" in (result.environment.error or "")
     assert "python3.13 (missing)" in (result.environment.error or "")
     assert "python3 (3.14)" in (result.environment.error or "")
-    assert "Install Python 3.13" in (result.environment.error or "")
+    assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in (result.environment.error or "")
     assert result.environment.bootstrap_python_attempts == [
         {
             "python_executable": "python3.13",

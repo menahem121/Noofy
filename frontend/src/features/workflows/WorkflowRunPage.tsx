@@ -1002,7 +1002,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>{runtimeStatus.engineStatus === "starting" ? "The local AI engine is starting" : "The local AI engine is offline"}</strong>
+            <strong>{runtimeStatus.engineStatus === "starting" ? "The local ComfyUI engine is starting" : "The local ComfyUI engine is not reachable"}</strong>
             <span>Open Engine Settings to prepare or start the engine before running this workflow.</span>
           </div>
         </div>

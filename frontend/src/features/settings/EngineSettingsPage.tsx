@@ -95,7 +95,7 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
   repair_failed_fallback_active: "Repair failed, so Noofy started a previous working engine.",
   repair_failed_no_fallback: "Repair failed and no fallback engine could be started.",
   repair_blocked: "Automatic repair is temporarily blocked for this ComfyUI version.",
-  external_unreachable: "The local AI engine is not reachable. Reconnect or try repair.",
+  external_unreachable: "The local ComfyUI engine is not reachable. Reconnect or try repair.",
   stopped: "Engine stopped.",
   completed: "ComfyUI was updated and validated successfully.",
   blocked: "ComfyUI updates are not available in this runtime mode.",

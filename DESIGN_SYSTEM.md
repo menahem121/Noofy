@@ -88,8 +88,8 @@ Avoid:
 Prefer:
 
 - "This workflow needs one missing model before it can run."
-- "The AI engine could not start. Open details to see the technical error."
-- "The app is preparing the local AI engine."
+- "The ComfyUI engine could not start. Open details to see the technical error."
+- "The app is preparing the local ComfyUI engine."
 
 ### Clean Workspace
 

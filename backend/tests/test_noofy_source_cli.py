@@ -255,6 +255,17 @@ def test_managed_runtime_python_guidance_includes_os_specific_source_fix() -> No
     windows_guidance = cli.managed_runtime_python_setup_guidance(environment, platform="win32")
 
     assert linux_guidance is not None
+    assert "Source/development Python fix" in linux_guidance
+    assert "Priority 1 - recommended: use uv-managed Python" in linux_guidance
+    assert "backend/.venv/bin/uv python install 3.13" in linux_guidance
+    assert (
+        'COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(backend/.venv/bin/uv python find 3.13)" make install'
+        in linux_guidance
+    )
+    assert (
+        "Priority 2 - Linux distro package fallback, only if your distro offers it"
+        in linux_guidance
+    )
     assert "apt install python3.13 python3.13-venv" in linux_guidance
     assert "dnf install python3.13" in linux_guidance
     assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=python3.13 make install" in linux_guidance
@@ -262,9 +273,11 @@ def test_managed_runtime_python_guidance_includes_os_specific_source_fix() -> No
     assert "python3 (3.14)" in linux_guidance
     assert "sudo" not in linux_guidance
     assert macos_guidance is not None
+    assert "backend/.venv/bin/uv python install 3.13" in macos_guidance
     assert "brew install python@3.13" in macos_guidance
     assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in macos_guidance
     assert windows_guidance is not None
+    assert ".\\backend\\.venv\\Scripts\\uv.exe python install 3.13" in windows_guidance
     assert "winget install Python.Python.3.13" in windows_guidance
     assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in windows_guidance
 
@@ -426,7 +439,8 @@ def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, mo
 
     message = str(exc_info.value)
     assert "python_missing" in message
-    assert "The managed ComfyUI profile requires Python 3.13" in message
+    assert "Noofy managed ComfyUI needs Python 3.13" in message
+    assert "Priority 1 - recommended: use uv-managed Python" in message
     assert "python3.13 (missing)" in message
     assert "python3 (3.14)" in message
     assert "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE" in message

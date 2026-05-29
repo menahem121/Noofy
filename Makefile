@@ -15,12 +15,12 @@ NOOFY_SCRIPT ?= scripts/noofy.py
 
 define REQUIRE_PYTHON
 @test -n "$(NOOFY_PYTHON)" || { \
-  printf '\nError: Noofy source-checkout install requires Python 3.11 or newer,\n'; \
-  printf 'but no compatible Python was found in PATH.\n\n'; \
-  printf '  macOS:   brew install python@3.13\n'; \
-  printf '  Ubuntu:  apt install python3.13 python3.13-venv\n'; \
-  printf '  Fedora:  dnf install python3.13\n'; \
-  printf '  All:     https://www.python.org/downloads\n\n'; \
+  printf '\nNoofy source-checkout install needs Python 3.11 or newer.\n'; \
+  printf 'No compatible Python was found in PATH.\n\n'; \
+  printf 'Priority 1: install Python from https://www.python.org/downloads\n'; \
+  printf 'Priority 2: use your OS package manager when it provides a compatible Python\n'; \
+  printf '  macOS:  brew install python@3.13\n'; \
+  printf '  Linux:  install python3.13 with your distro package manager, if available\n\n'; \
   exit 1; \
 }
 endef

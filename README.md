@@ -133,18 +133,53 @@ PyTorch and ComfyUI dependencies inside Noofy-managed runtime directories.
 
 For advanced users, contributors, and Unix-like source checkouts:
 
-**Prerequisites** — these are source-build tools; Noofy does not install them for you:
+**Important:** packaged Noofy should not need Python, Node, npm, ComfyUI, pip,
+venv, Homebrew, Conda, or other developer tools. The section below is only for
+people running from a source checkout.
+
+### 1. Install Source-Build Tools
+
+Noofy does not install these tools for you.
 
 | Tool | Minimum | Recommended Install |
 |------|---------|---------|
-| Python | 3.11 for the trusted source helper; Python 3.13 for the managed ComfyUI profile | `brew install python@3.13` · [python.org](https://www.python.org/downloads) |
+| Python | 3.11+ for the trusted source helper | [python.org](https://www.python.org/downloads) · Homebrew · distro package manager |
 | Node.js + npm | LTS v18 | `brew install node` · [nodejs.org](https://nodejs.org/en/download) |
+
+The managed ComfyUI runtime is separate from the trusted backend and currently
+requires **Python 3.13**. The easiest source-checkout path is usually a
+`uv`-managed Python, because distro packages may not provide exactly
+`python3.13`.
+
+### 2. Install Noofy
 
 ```bash
 git clone <repo-url> Noofy
 cd Noofy
 make install
 make run
+```
+
+If `make install` says the managed ComfyUI Python is missing, use this priority
+order:
+
+```bash
+# Priority 1: recommended, no sudo, does not change system Python
+backend/.venv/bin/uv python install 3.13
+COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(backend/.venv/bin/uv python find 3.13)" make install
+```
+
+```bash
+# Priority 2: Linux fallback, only if your distro provides Python 3.13
+apt install python3.13 python3.13-venv
+dnf install python3.13
+COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=python3.13 make install
+```
+
+```bash
+# Priority 2: macOS fallback
+brew install python@3.13
+COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(brew --prefix python@3.13)/bin/python3.13" make install
 ```
 
 On Windows PowerShell (same prerequisites apply; install Node.js LTS from [nodejs.org](https://nodejs.org/en/download) or via `winget install OpenJS.NodeJS.LTS`):
@@ -156,13 +191,31 @@ cd Noofy
 .\scripts\run.ps1
 ```
 
+If Windows source install says the managed ComfyUI Python is missing:
+
+```powershell
+# Priority 1: recommended, no admin shell needed
+.\backend\.venv\Scripts\uv.exe python install 3.13
+$py = .\backend\.venv\Scripts\uv.exe python find 3.13
+$env:COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE = $py
+.\scripts\install.ps1
+```
+
+```powershell
+# Priority 2: Windows package manager fallback
+winget install Python.Python.3.13
+$py = py -3.13 -c "import sys; print(sys.executable)"
+$env:COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE = $py
+.\scripts\install.ps1
+```
+
 `make install` creates the trusted backend virtual environment, installs
 frontend dependencies, and prepares Noofy's managed ComfyUI runtime under
 `.noofy-runtime/data`.
 
 For source/development checkouts, the managed ComfyUI runtime profile controls
-its own Python ABI. If Python 3.13 is not available, `make install` fails with
-OS-specific install commands and a `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=...`
+its own Python ABI. If Python 3.13 is not available, `make install` prints the
+same priority order shown above and a `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=...`
 override. It does not install system Python or run privileged commands.
 
 On macOS Intel, `make install` still installs the source-checkout backend and

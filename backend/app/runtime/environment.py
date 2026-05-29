@@ -497,12 +497,12 @@ class RuntimeEnvironment:
                 "update Noofy; normal users should not install Python manually."
             )
         return (
-            "This source checkout needs a local development Python that matches "
-            f"the selected managed ComfyUI runtime profile. Required Python "
-            f"{self.expected_python_version}. Tried: {tried}. Install Python "
-            f"{self.expected_python_version} or set COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE "
-            f"to a Python {self.expected_python_version} executable, then rerun "
-            "make install or make run."
+            f"This source checkout needs Python {self.expected_python_version} "
+            "for managed ComfyUI runtime preparation. Tried: "
+            f"{tried}. Recommended source/dev fix: use uv-managed Python, or set "
+            "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE to a Python "
+            f"{self.expected_python_version} executable. Then rerun make install "
+            "or make run."
         )
 
     def _bootstrap_python_candidates(self) -> list[str]:

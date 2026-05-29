@@ -226,29 +226,49 @@ def managed_runtime_python_setup_guidance(
     selected_platform = sys.platform if platform is None else platform
     lines = [
         "",
-        "Source/development fix:",
-        f"  The managed ComfyUI profile requires Python {expected_version}.",
+        "Source/development Python fix",
+        "=============================",
+        f"Noofy managed ComfyUI needs Python {expected_version}.",
+        "Your backend/source-helper Python can be different.",
     ]
     attempted_lines = _format_bootstrap_python_attempt_lines(attempts)
     if attempted_lines:
-        lines += ["  Tried:"] + [f"    {line}" for line in attempted_lines]
+        lines += [
+            "",
+            "Already tried:",
+            *[f"  - {line}" for line in attempted_lines],
+        ]
     lines += [
-        "  Noofy will not install system Python or run privileged commands for you.",
+        "",
+        "Noofy will not install system Python or run privileged commands for you.",
         "",
     ]
 
     if selected_platform == "darwin":
         lines += [
-            "Install Python on macOS:",
+            "Priority 1 - recommended: use uv-managed Python",
+            f"  backend/.venv/bin/uv python install {expected_version}",
+            (
+                '  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(backend/.venv/bin/uv '
+                f'python find {expected_version})" make install'
+            ),
+            "",
+            "Priority 2 - macOS package manager fallback",
             f"  brew install python@{expected_version}",
             (
-                "  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=\"$(brew --prefix "
+                '  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(brew --prefix '
                 f"python@{expected_version})/bin/python{expected_version}\" make install"
             ),
         ]
     elif selected_platform == "win32":
         lines += [
-            "Install Python on Windows:",
+            "Priority 1 - recommended: use uv-managed Python",
+            f"  .\\backend\\.venv\\Scripts\\uv.exe python install {expected_version}",
+            f"  $py = .\\backend\\.venv\\Scripts\\uv.exe python find {expected_version}",
+            "  $env:COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE = $py",
+            "  .\\scripts\\install.ps1",
+            "",
+            "Priority 2 - Windows package manager fallback",
             f"  winget install Python.Python.{expected_version}",
             (
                 f"  $py = py -{expected_version} -c \"import sys; "
@@ -259,14 +279,22 @@ def managed_runtime_python_setup_guidance(
         ]
     else:
         lines += [
-            "Install Python on Linux:",
+            "Priority 1 - recommended: use uv-managed Python",
+            f"  backend/.venv/bin/uv python install {expected_version}",
+            (
+                '  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE="$(backend/.venv/bin/uv '
+                f'python find {expected_version})" make install'
+            ),
+            "",
+            "Priority 2 - Linux distro package fallback, only if your distro offers it",
             f"  apt install python{expected_version} python{expected_version}-venv",
             f"  dnf install python{expected_version}",
             f"  COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE=python{expected_version} make install",
+            "",
+            "Priority 3 - any other developer Python tool",
             (
-                "  If your distro does not package this version, install it with "
-                "your normal developer Python tool and point "
-                "COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE at that executable."
+                "  Point COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE at a real "
+                f"Python {expected_version} executable, then rerun make install."
             ),
         ]
     return "\n".join(lines)
