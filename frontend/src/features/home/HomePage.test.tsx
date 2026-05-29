@@ -188,7 +188,7 @@ describe("HomePage", () => {
 
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
+    expect(screen.getByText("1 built-in workflow available.")).toBeInTheDocument();
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
     expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
   });
@@ -371,7 +371,7 @@ describe("HomePage", () => {
     expect(onOpenWorkflow).toHaveBeenCalledWith("imported_cleanup");
   });
 
-  it("shows workflow row actions on backend workflow cards", async () => {
+  it("shows workflow row actions on native backend workflow cards only", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -393,19 +393,6 @@ describe("HomePage", () => {
               can_export_noofy: true,
               can_export_comfyui_json: true,
             },
-            {
-              id: "imported_cleanup",
-              name: "Cleanup Flow",
-              version: "1.0.0",
-              description: "Clean up images.",
-              trust_level: "quarantined_community",
-              source_label: "Imported",
-              status: "imported",
-              status_label: "Imported",
-              can_remove: true,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
           ]),
         );
       }
@@ -415,8 +402,8 @@ describe("HomePage", () => {
 
     renderHomePage();
 
-    await screen.findByRole("heading", { name: "Cleanup Flow" });
-    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+    await screen.findByRole("heading", { name: "Native Text" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
 
     expect(screen.getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "View details" })).toBeInTheDocument();
@@ -424,16 +411,13 @@ describe("HomePage", () => {
     expect(screen.getByRole("menuitem", { name: "Edit Widgets" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Export .Noofy" }));
     expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Filename")).toHaveValue("Cleanup Flow.noofy");
+    expect(screen.getByLabelText("Filename")).toHaveValue("Native Text.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Export ComfyUI JSON" }));
     expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Filename")).toHaveValue("Cleanup Flow.json");
+    expect(screen.getByLabelText("Filename")).toHaveValue("Native Text.json");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
-    expect(screen.getByRole("menuitem", { name: "Remove workflow" })).toBeInTheDocument();
-
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
     expect(screen.queryByRole("menuitem", { name: "Remove workflow" })).not.toBeInTheDocument();
   });
@@ -531,7 +515,7 @@ describe("HomePage", () => {
 
     expect(screen.queryByRole("heading", { name: "Text to Image \u2014 SDXL" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Text to Image \u2014 Flux" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Text to Image \u2014 Community" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 Community" })).not.toBeInTheDocument();
     expect(textSelector).toHaveValue("native_txt_sdxl");
     expect(within(textSelector).getByRole("option", { name: "Flux" })).toBeInTheDocument();
     expect(imageSelector).toHaveValue("native_img_sdxl");
@@ -558,7 +542,7 @@ describe("HomePage", () => {
     expect(screen.getByText("Reconnect")).toBeInTheDocument();
   });
 
-  it("keeps cached workflows and Ready status visible during a silent refresh", async () => {
+  it("keeps Ready status visible without putting imported cached workflows in Built-in Workflows", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -578,11 +562,11 @@ describe("HomePage", () => {
 
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
     expect(screen.queryByText("Checking Noofy")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Cached Workflow" })).toBeInTheDocument();
-    expect(screen.getByText("1 workflow loaded locally.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Cached Workflow" })).not.toBeInTheDocument();
+    expect(screen.getByText("Starter workflows will appear here as packages are added.")).toBeInTheDocument();
   });
 
-  it("renders imported Noofy re-exports as Community with their custom icon", () => {
+  it("keeps imported Noofy re-exports out of Built-in Workflows", () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -620,11 +604,11 @@ describe("HomePage", () => {
       },
     });
 
-    expect(screen.getByRole("heading", { name: "text2img" })).toBeInTheDocument();
-    expect(screen.getByText("Community")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "text2img" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Community")).not.toBeInTheDocument();
     expect(screen.queryByText("Unsupported")).not.toBeInTheDocument();
     const icon = view.container.querySelector(".workflow-card__icon img") as HTMLImageElement | null;
-    expect(icon?.src).toContain("/api/assets/custom-icon.png");
+    expect(icon).toBeNull();
   });
 
   it("preserves cached workflows and shows a warning when workflow refresh fails", async () => {
@@ -646,7 +630,7 @@ describe("HomePage", () => {
     });
 
     expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Cached Workflow" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Cached Workflow" })).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
@@ -849,9 +833,9 @@ describe("HomePage", () => {
       });
     });
     expect((await screen.findAllByText("Needs input setup")).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("heading", { name: "EraserV4.5" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("Imported")).toBeInTheDocument();
-    expect(screen.getAllByText("Community").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: "EraserV4.5" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "eraser" } });
+    expect(await screen.findByRole("option", { name: /EraserV4.5/i })).toBeInTheDocument();
   });
 
   it("asks before importing a duplicate workflow identity", async () => {
@@ -1330,9 +1314,7 @@ describe("HomePage", () => {
         body: undefined,
       }));
     expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
-    const readyCard = (await screen.findByRole("heading", { name: "Ready Workflow" })).closest("article");
-    expect(readyCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
-    expect(readyCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
+    expect(screen.queryByRole("heading", { name: "Ready Workflow" })).not.toBeInTheDocument();
     expect(onOpenWorkflow).toHaveBeenCalledWith("ready_workflow");
   });
 
@@ -1608,9 +1590,7 @@ describe("HomePage", () => {
       expect(screen.queryByRole("dialog", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
     });
     expect(onOpenWorkflow).toHaveBeenCalledWith("core_sd15_txt2img");
-    const workflowCard = (await screen.findByRole("heading", { name: "Core SD15 Text to Image" })).closest("article");
-    expect(workflowCard?.querySelector(".workflow-status")).toHaveTextContent("Installed");
-    expect(workflowCard?.querySelector(".workflow-status")).toHaveClass("workflow-status--installed");
+    expect(screen.queryByRole("heading", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
   });
 
   it("shows a single configure action after downloaded models leave input setup remaining", async () => {

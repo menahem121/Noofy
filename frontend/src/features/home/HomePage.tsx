@@ -169,6 +169,7 @@ function homeWorkflowCardsFromBackend(
   const ungrouped: WorkflowSummary[] = [];
 
   for (const workflow of workflows) {
+    if (!isNativeBundledWorkflow(workflow)) continue;
     const groupKind = nativeHomeWorkflowKind(workflow);
     if (groupKind) {
       grouped.set(groupKind, [...(grouped.get(groupKind) ?? []), workflow]);
@@ -366,12 +367,15 @@ export function HomePage({
 
     return [...fallbackCards, ...starterWithoutDuplicates].slice(0, 8);
   }, [selectedNativeVariants, workflowLibrary.workflows]);
+  const builtInCount = useMemo(
+    () => workflowLibrary.workflows.filter(isNativeBundledWorkflow).length,
+    [workflowLibrary.workflows],
+  );
   const recentlyOpened = useMemo(
     () => recentlyOpenedWorkflows(workflowLibrary.workflows),
     [workflowLibrary.workflows],
   );
 
-  const installedCount = workflowLibrary.workflows.length;
   const homeSearchResults = useMemo(
     () =>
       debouncedHomeSearch.trim()
@@ -779,8 +783,8 @@ export function HomePage({
             <div>
               <h2 id="built-in-workflows-title">Built-in Workflows</h2>
               <p>
-                {installedCount > 0
-                  ? `${installedCount} workflow${installedCount === 1 ? "" : "s"} loaded locally.`
+                {builtInCount > 0
+                  ? `${builtInCount} built-in workflow${builtInCount === 1 ? "" : "s"} available.`
                   : "Starter workflows will appear here as packages are added."}
               </p>
             </div>
