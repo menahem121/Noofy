@@ -31,7 +31,12 @@ MODEL_VIEW_SCHEMA_VERSION = "0.1.0"
 WINDOWS_MAX_MATERIALIZED_PATH_CHARS = 240
 
 
-async def http_streaming_downloader(url: str, dest: Path) -> int:
+async def http_streaming_downloader(
+    url: str,
+    dest: Path,
+    *,
+    headers: dict[str, str] | None = None,
+) -> int:
     """Default downloader that streams `url` to `dest` via httpx.
 
     Imported lazily so that tests which inject their own downloader do not
@@ -41,7 +46,7 @@ async def http_streaming_downloader(url: str, dest: Path) -> int:
 
     bytes_written = 0
     async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-        async with client.stream("GET", url) as response:
+        async with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             with dest.open("wb") as file:
                 async for chunk in response.aiter_bytes(chunk_size=1 << 20):
@@ -63,11 +68,28 @@ class ModelSourcePolicyError(ModelDownloadError):
 
 
 class AsyncDownloader(Protocol):
-    async def download(self, url: str, *, dest: Path) -> int:
+    async def download(
+        self,
+        url: str,
+        *,
+        dest: Path,
+        headers: dict[str, str] | None = None,
+    ) -> int:
         """Stream `url` to `dest` and return total bytes written."""
 
 
-DownloadFn = Callable[[str, Path], Awaitable[int]]
+DownloadHeadersResolver = Callable[[str], dict[str, str]]
+
+
+class DownloadFn(Protocol):
+    def __call__(
+        self,
+        url: str,
+        dest: Path,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> Awaitable[int]:
+        """Stream `url` to `dest` and return total bytes written."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +185,7 @@ class ModelStore:
         transactions_dir: Path,
         log_store: DiagnosticsSink,
         downloader: DownloadFn | None = None,
+        download_headers_resolver: DownloadHeadersResolver | None = None,
         local_model_roots: list[Path] | None = None,
         owned_model_root: Path | None = None,
         symlink_capability: bool | None = None,
@@ -173,6 +196,7 @@ class ModelStore:
         self.transactions_dir = transactions_dir
         self.log_store = log_store
         self._downloader = downloader
+        self.download_headers_resolver = download_headers_resolver
         self.local_model_roots = local_model_roots or []
         self.owned_model_root = owned_model_root
         self._symlink_capability = symlink_capability
@@ -603,7 +627,11 @@ class ModelStore:
         last_error: Exception | None = None
         for url in urls:
             try:
-                return await self._invoke_downloader(url, dest)
+                return await self._invoke_downloader(
+                    url,
+                    dest,
+                    headers=self._download_headers_for_url(url),
+                )
             except Exception as exc:
                 last_error = exc
                 self.log_store.add(
@@ -618,12 +646,26 @@ class ModelStore:
             f"All source URLs failed for model download: {last_error}"
         )
 
-    async def _invoke_downloader(self, url: str, dest: Path) -> int:
+    async def _invoke_downloader(
+        self,
+        url: str,
+        dest: Path,
+        *,
+        headers: dict[str, str],
+    ) -> int:
         if self._downloader is None:
             raise ModelDownloadError(
                 "ModelStore was constructed without a downloader; cannot fetch model bytes"
             )
+        if headers:
+            return await self._downloader(url, dest, headers=headers)
         return await self._downloader(url, dest)
+
+    def _download_headers_for_url(self, url: str) -> dict[str, str]:
+        if self.download_headers_resolver is None:
+            return {}
+        headers = self.download_headers_resolver(url)
+        return headers if isinstance(headers, dict) else {}
 
     # ------------------------------------------------------------------
     # Internal: ref + materialize

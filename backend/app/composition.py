@@ -12,6 +12,7 @@ from app.models.downloads import ModelDownloadJobService
 from app.models.civitai_loras import CivitaiLoraBrowserService
 from app.models.inventory import ModelInventoryService
 from app.models.ownership import ModelOwnershipStore
+from app.models.source_auth import provider_auth_headers_for_url
 from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
@@ -173,6 +174,13 @@ def create_api_services(
     provider_resolver = getattr(model_availability_service, "provider_resolver", None)
     if provider_resolver is not None:
         provider_resolver.api_key_resolver = api_keys.get_key
+    capsule_installer = getattr(engine_service, "capsule_installer", None)
+    model_store = getattr(capsule_installer, "model_store", None)
+    if model_store is not None and hasattr(model_store, "download_headers_resolver"):
+        model_store.download_headers_resolver = lambda url: provider_auth_headers_for_url(
+            url,
+            api_keys.get_key,
+        )
     downloads = model_download_service or ModelDownloadJobService(
         engine_service=engine_service,
         model_folder_service=folders,

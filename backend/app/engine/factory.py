@@ -67,6 +67,12 @@ from app.models.folders import (
     repair_accidental_default_models_folder,
     write_extra_model_paths_config,
 )
+from app.models.source_auth import provider_auth_headers_for_url
+from app.settings.api_keys import (
+    ApiKeyMetadataStore,
+    ApiKeySettingsService,
+    create_credential_store,
+)
 from app.trust import load_trust_verifier
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.capsule import CapsuleLockLoader
@@ -312,6 +318,14 @@ def create_default_engine_service() -> EngineService:
             "runtime.install_state",
             details={"removed_count": stale_install_state_temps},
         )
+    api_key_service = ApiKeySettingsService(
+        metadata_store=ApiKeyMetadataStore(paths.settings_dir / "api-keys.json"),
+        credential_store=create_credential_store(
+            data_dir=paths.data_dir,
+            settings_dir=paths.settings_dir,
+        ),
+        log_store=log_store,
+    )
     model_store = ModelStore(
         blobs_dir=paths.model_blobs_dir,
         refs_dir=paths.model_refs_dir,
@@ -319,6 +333,10 @@ def create_default_engine_service() -> EngineService:
         transactions_dir=paths.install_transactions_dir,
         log_store=log_store,
         downloader=http_streaming_downloader,
+        download_headers_resolver=lambda url: provider_auth_headers_for_url(
+            url,
+            api_key_service.get_key,
+        ),
         local_model_roots=model_roots,
         owned_model_root=noofy_models_dir,
     )

@@ -105,6 +105,7 @@ def _build_installer(
     tmp_path: Path,
     *,
     downloader,
+    download_headers_resolver=None,
 ) -> tuple[CapsuleInstaller, InstallStateStore, LogStore]:
     log_store = LogStore()
     state_store = InstallStateStore(tmp_path / "install-state")
@@ -115,6 +116,7 @@ def _build_installer(
         transactions_dir=tmp_path / "transactions",
         log_store=log_store,
         downloader=downloader,
+        download_headers_resolver=download_headers_resolver,
     )
     installer = CapsuleInstaller(
         install_state_store=state_store,
@@ -236,6 +238,48 @@ async def test_prepare_with_model_download_succeeds(tmp_path: Path) -> None:
     assert "model-view-" in str(materialized)
     assert state.model_references[0].materialization_strategy in {"hardlink", "symlink", "copy"}
     assert state.model_references[0].materialized_file_verified is True
+
+
+@pytest.mark.anyio
+async def test_prepare_model_download_uses_provider_auth_headers(tmp_path: Path) -> None:
+    payload = b"private-civitai-model"
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-auth-model",
+            models=[
+                {
+                    **_model_record(payload),
+                    "source_urls": [
+                        "https://civitai.com/api/download/models/2979642?fileId=2859181"
+                    ],
+                }
+            ],
+        )
+    )
+    seen_headers: list[dict[str, str] | None] = []
+
+    async def downloader(
+        url: str,
+        dest: Path,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> int:
+        seen_headers.append(headers)
+        dest.write_bytes(payload)
+        return len(payload)
+
+    installer, _, _ = _build_installer(
+        tmp_path,
+        downloader=downloader,
+        download_headers_resolver=lambda url: {"Authorization": "Bearer civitai-token"}
+        if "civitai.com" in url
+        else {},
+    )
+
+    state = await installer.prepare(capsule)
+
+    assert state.status is InstallStatus.READY
+    assert seen_headers == [{"Authorization": "Bearer civitai-token"}]
 
 
 @pytest.mark.anyio
