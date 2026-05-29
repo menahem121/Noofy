@@ -62,6 +62,7 @@ class RequiredModelAvailability(BaseModel):
         "checking",
         "needs_manual_download",
         "download_failed",
+        "verification_failed",
         "authentication_required",
         "access_denied",
         "rate_limited",
@@ -123,11 +124,22 @@ class ImportModelDownloadProgressItem(BaseModel):
     requirement_id: str
     filename: str
     status: Literal[
+        "pending",
         "queued",
+        "running",
         "downloading",
         "verifying",
+        "succeeded",
         "completed",
         "failed",
+        "download_failed",
+        "verification_failed",
+        "authentication_required",
+        "access_denied",
+        "rate_limited",
+        "hash_mismatch",
+        "not_enough_disk_space",
+        "needs_manual_download",
         "canceled",
     ]
     status_label: str
@@ -140,7 +152,18 @@ class ImportModelDownloadJobStatus(BaseModel):
     job_id: str
     import_session_id: str
     workflow_id: str
-    status: Literal["queued", "running", "completed", "failed", "canceled"]
+    status: Literal[
+        "pending",
+        "queued",
+        "running",
+        "downloading",
+        "verifying",
+        "succeeded",
+        "completed",
+        "completed_with_errors",
+        "failed",
+        "canceled",
+    ]
     user_facing_message: str
     current_model_filename: str | None = None
     current_model_index: int | None = None

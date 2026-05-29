@@ -145,7 +145,7 @@ class ModelDownloadJobStart(BaseModel):
 
 class ModelDownloadJobStatus(BaseModel):
     job_id: str
-    status: Literal["queued", "running", "completed", "failed", "canceled"] | str
+    status: Literal["queued", "running", "completed", "completed_with_errors", "failed", "canceled"] | str
     user_facing_message: str
     current_model_filename: str | None = None
     current_model_index: int | None = None

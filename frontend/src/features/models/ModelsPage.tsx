@@ -30,6 +30,7 @@ import {
   type RuntimeStatus,
 } from "../../lib/api/noofyApi";
 import { openFolder } from "../../lib/folderDialogs";
+import { failedModelMessage, isModelDownloadActive, isModelDownloadFailure } from "../../lib/modelDownloadProgress";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { runtimeStatusCopy } from "../app/status";
 import { ModelImportPanel } from "./ModelImportPanel";
@@ -471,24 +472,31 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       )}
 
       {downloadJob && (
-        <div className="notice notice--row" role="status">
-          {["queued", "running"].includes(downloadJob.status) ? (
+        <div className={`notice notice--row ${isModelDownloadFailure(downloadJob.status) ? "notice--error" : ""}`} role="status">
+          {isModelDownloadActive(downloadJob.status) ? (
             <Loader2 className="spin" size={18} aria-hidden="true" />
+          ) : isModelDownloadFailure(downloadJob.status) ? (
+            <AlertTriangle size={18} aria-hidden="true" />
           ) : (
             <Download size={18} aria-hidden="true" />
           )}
           <div>
-            <strong>{downloadJob.user_facing_message}</strong>
+            <strong>{isModelDownloadFailure(downloadJob.status) ? "Some downloads failed" : downloadJob.user_facing_message}</strong>
             <span>
               {downloadJob.current_model_filename ?? "Model download"}{" "}
-              {downloadJob.percent !== null ? `${downloadJob.percent}%` : ""}
+              {!isModelDownloadFailure(downloadJob.status) && downloadJob.percent !== null ? `${downloadJob.percent}%` : ""}
             </span>
+            {failedModelMessage(downloadJob) ? <span>{failedModelMessage(downloadJob)}</span> : null}
           </div>
-          {["queued", "running"].includes(downloadJob.status) && (
+          {isModelDownloadActive(downloadJob.status) ? (
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void cancelDownload()}>
               Cancel
             </button>
-          )}
+          ) : isModelDownloadFailure(downloadJob.status) ? (
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void handleDownload(missingDownloadRefs)}>
+              Retry
+            </button>
+          ) : null}
         </div>
       )}
 

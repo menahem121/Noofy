@@ -565,6 +565,7 @@
 }
 
 .model-status-pill--download_failed,
+.model-status-pill--verification_failed,
 .model-status-pill--authentication_required,
 .model-status-pill--access_denied,
 .model-status-pill--hash_mismatch {
@@ -587,6 +588,11 @@
 }
 
 .model-status-pill--completed {
+  color: #d8ffe6;
+  background: rgba(74, 222, 128, 0.18);
+}
+
+.model-status-pill--succeeded {
   color: #d8ffe6;
   background: rgba(74, 222, 128, 0.18);
 }
@@ -626,6 +632,40 @@
   border-radius: inherit;
   background: linear-gradient(90deg, var(--primary-hover), var(--primary));
   transition: width 160ms ease;
+}
+
+.model-download-progress--failed {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.model-download-progress--failed .model-download-progress__bar-fill {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.model-download-progress--canceled .model-download-progress__bar-fill {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.model-download-progress--verifying .model-download-progress__bar-fill {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.model-download-progress--succeeded .model-download-progress__bar-fill {
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+}
+
+.model-download-progress__status {
+  font-weight: 700;
+}
+
+.model-download-progress--failed .model-download-progress__status,
+.model-download-progress .model-download-progress__failure {
+  color: #fecaca;
+}
+
+.model-download-progress > .secondary-button {
+  justify-self: start;
 }
 
 .model-download-progress p,

@@ -13,6 +13,7 @@ import {
   type ImportModelVerificationJobStatus,
   type WorkflowImportResponse,
 } from "../../lib/api/noofyApi";
+import { isModelDownloadActive } from "../../lib/modelDownloadProgress";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -154,7 +155,7 @@ export function useWorkflowImportFlow({
       const status = await cancelImportModelDownload(sessionId, jobId);
       setState((current) => ({
         ...current,
-        downloadingModels: status.status === "queued" || status.status === "running",
+        downloadingModels: isModelDownloadActive(status.status),
         downloadJob: status,
         importError: status.user_facing_message,
       }));
@@ -312,7 +313,7 @@ export function useWorkflowImportFlow({
   useEffect(() => {
     const sessionId = state.pendingImport?.import_session_id;
     const jobId = state.downloadJob?.job_id;
-    const active = state.downloadJob?.status === "queued" || state.downloadJob?.status === "running";
+    const active = isModelDownloadActive(state.downloadJob?.status);
     if (!sessionId || !jobId || !active) return;
 
     let stopped = false;
@@ -330,7 +331,7 @@ export function useWorkflowImportFlow({
       try {
         const status = await fetchImportModelDownloadStatus(sessionId, jobId);
         if (stopped) return;
-        const finished = ["completed", "failed", "canceled"].includes(status.status);
+        const finished = ["completed", "completed_with_errors", "failed", "canceled"].includes(status.status);
         setState((current) => ({
           ...current,
           downloadingModels: !finished,

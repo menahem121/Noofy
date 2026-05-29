@@ -8,6 +8,7 @@ import {
   type ModelDownloadJobStatus,
   type ModelDownloadSelection,
 } from "../../lib/api/noofyApi";
+import { isModelDownloadActive } from "../../lib/modelDownloadProgress";
 
 const ACTIVE_JOB_STORAGE_KEY = "noofy.models.activeDownloadJobId";
 
@@ -26,7 +27,7 @@ export function useModelDownloadJob(onFinished: () => void) {
       .then((job) => {
         if (!mounted || !job) return;
         setDownloadJob(job);
-        if (["queued", "running"].includes(job.status)) {
+        if (isModelDownloadActive(job.status)) {
           window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, job.job_id);
         }
       })
@@ -41,14 +42,14 @@ export function useModelDownloadJob(onFinished: () => void) {
   }, []);
 
   useEffect(() => {
-    if (!downloadJob || !["queued", "running"].includes(downloadJob.status)) return;
+    if (!downloadJob || !isModelDownloadActive(downloadJob.status)) return;
     window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, downloadJob.job_id);
     const interval = window.setInterval(() => {
       fetchModelDownloadStatus(downloadJob.job_id)
         .then((job) => {
           setDownloadJob(job);
           setDownloadError(null);
-          if (!["queued", "running"].includes(job.status)) {
+          if (!isModelDownloadActive(job.status)) {
             window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
             onFinished();
           }
@@ -89,7 +90,7 @@ export function useModelDownloadJob(onFinished: () => void) {
   return {
     downloadJob,
     downloadError,
-    downloadBusy: starting || Boolean(downloadJob && ["queued", "running"].includes(downloadJob.status)),
+    downloadBusy: starting || Boolean(downloadJob && isModelDownloadActive(downloadJob.status)),
     startDownload,
     cancelDownload,
   };

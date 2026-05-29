@@ -102,7 +102,18 @@ export interface ModelDownloadJobStart {
 
 export interface ModelDownloadJobStatus {
   job_id: string;
-  status: "queued" | "running" | "completed" | "failed" | "canceled" | string;
+  status:
+    | "pending"
+    | "queued"
+    | "running"
+    | "downloading"
+    | "verifying"
+    | "succeeded"
+    | "completed"
+    | "completed_with_errors"
+    | "failed"
+    | "canceled"
+    | string;
   user_facing_message: string;
   current_model_filename: string | null;
   current_model_index: number | null;

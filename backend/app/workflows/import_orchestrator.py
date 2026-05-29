@@ -88,10 +88,21 @@ class _ImportModelVerificationJob:
 
 def _download_progress_status_label(status: str) -> str:
     return {
+        "pending": "Pending",
         "queued": "Queued",
+        "running": "Running",
         "downloading": "Downloading",
         "verifying": "Verifying",
+        "succeeded": "Downloaded",
         "completed": "Completed",
+        "download_failed": "Download failed",
+        "verification_failed": "Verification failed",
+        "authentication_required": "Authentication required",
+        "access_denied": "Access denied",
+        "rate_limited": "Rate limited",
+        "hash_mismatch": "Hash mismatch",
+        "not_enough_disk_space": "Not enough disk space",
+        "needs_manual_download": "Needs manual download",
         "failed": "Failed",
         "canceled": "Canceled",
     }.get(status, status.replace("_", " ").title())
@@ -623,8 +634,8 @@ class WorkflowImportOrchestrator:
                 job.status = "canceled"
                 job.user_facing_message = result.user_facing_message
             elif result.failed_count:
-                job.status = "failed"
-                job.user_facing_message = result.user_facing_message
+                job.status = "completed_with_errors" if result.downloaded_count > 0 else "failed"
+                job.user_facing_message = "Some downloads failed."
             else:
                 job.status = "completed"
                 job.user_facing_message = result.user_facing_message

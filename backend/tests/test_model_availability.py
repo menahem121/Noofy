@@ -614,7 +614,7 @@ async def test_download_reports_progress_with_bytes(
     assert result.downloaded_count == 1
     assert any(event["status"] == "downloading" and event["bytes_downloaded"] == len(payload) for event in events)
     assert any(event["status"] == "verifying" for event in events)
-    assert any(event["status"] == "completed" for event in events)
+    assert any(event["status"] == "succeeded" for event in events)
 
 
 @pytest.mark.anyio
@@ -627,12 +627,22 @@ async def test_failed_download_cleans_part_file(
     service = _service(noofy_root=noofy_root)
     seen_part_paths: list[Path] = []
 
-    async def fake_stream(url: str, part_path: Path) -> None:
+    async def fake_stream(
+        url: str,
+        part_path: Path,
+        *,
+        progress_callback=None,
+        cancel_event=None,
+    ) -> None:
         seen_part_paths.append(part_path)
         part_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.write_bytes(payload)
+        if progress_callback is not None:
+            progress_callback(len(payload), len(payload))
 
     monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    events: list[dict[str, object]] = []
 
     result = await service.download_missing(
         _package(
@@ -646,7 +656,8 @@ async def test_failed_download_cleans_part_file(
                     source_urls=["https://huggingface.co/example/broken.safetensors"],
                 )
             ]
-        )
+        ),
+        progress_callback=events.append,
     )
 
     assert result.failed_count == 1
@@ -654,7 +665,10 @@ async def test_failed_download_cleans_part_file(
     assert seen_part_paths
     assert not seen_part_paths[0].exists()
     assert not seen_part_paths[0].parent.exists()
-    assert result.model_summary.models[0].status != "available"
+    assert result.model_summary.models[0].status == "verification_failed"
+    assert result.model_summary.models[0].status_label == "Verification failed"
+    assert any(event["status"] == "verification_failed" for event in events)
+    assert "identity check" in (result.model_summary.models[0].message or "")
 
 
 @pytest.mark.anyio
@@ -2420,7 +2434,7 @@ async def test_provider_search_does_not_download_similar_filename_only_result(
     assert result.downloaded_count == 0
     assert result.failed_count == 1
     assert result.status == "completed_with_errors"
-    assert result.user_facing_message == "Some models could not be downloaded."
+    assert result.user_facing_message == "Some downloads failed."
     assert result.model_summary.models[0].status == "needs_manual_download"
     assert result.model_summary.models[0].status_label == "Needs manual download"
     assert "reliable automatic download source" in (result.model_summary.models[0].message or "")

@@ -12,6 +12,13 @@ import {
   type RequiredModelAvailability,
   type WorkflowImportResponse,
 } from "../../lib/api/noofyApi";
+import {
+  failedModelMessage,
+  isModelDownloadActive,
+  isModelDownloadFailure,
+  modelDownloadPanelTone,
+  modelDownloadPercentLabel,
+} from "../../lib/modelDownloadProgress";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -108,7 +115,7 @@ export function RequiredModelsModal({
   onReadyAction: () => void;
   onCancel: () => void;
 }) {
-  const summary = verificationJob?.model_summary ?? importResult.model_summary;
+  const summary = verificationJob?.model_summary ?? downloadJob?.model_summary ?? importResult.model_summary;
   if (!summary) return null;
   const duplicate = importResult.duplicate_identity;
   const retryableStatuses = new Set([
@@ -117,16 +124,17 @@ export function RequiredModelsModal({
     "authentication_required",
     "rate_limited",
     "hash_mismatch",
+    "verification_failed",
     "not_enough_disk_space",
   ]);
   const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
-  const activeDownload = downloadJob?.status === "queued" || downloadJob?.status === "running";
+  const activeDownload = isModelDownloadActive(downloadJob?.status);
   const terminalVerification = verificationJob?.status === "completed" || verificationJob?.status === "failed";
   const activeVerification =
     verificationJob?.status === "queued" ||
     verificationJob?.status === "running" ||
     (!terminalVerification && summary.models.some((model) => model.status === "checking"));
-  const jobModels = new Map(activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : []);
+  const jobModels = new Map(downloadJob?.models.map((model) => [model.requirement_id, model]) ?? []);
   const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
   const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
   const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
@@ -164,7 +172,7 @@ export function RequiredModelsModal({
           ))}
         </div>
 
-        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} /> : null}
+        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} onRetry={onDownload} /> : null}
         {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
 
         {importing ? (
@@ -260,7 +268,7 @@ function RequiredModelRow({
   );
 }
 
-function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus }) {
+function ModelDownloadProgressPanel({ job, onRetry }: { job: ImportModelDownloadJobStatus; onRetry: () => void }) {
   const label = job.current_model_filename
     ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
     : job.user_facing_message;
@@ -272,15 +280,15 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
   const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
     ? Math.max(0, Math.min(Number(rawPercent), 100))
     : null;
-  const percentLabel = percent !== null
-    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
-    : job.status;
+  const percentLabel = modelDownloadPercentLabel(job, percent);
+  const tone = modelDownloadPanelTone(job);
+  const failureMessage = failedModelMessage(job);
 
   return (
-    <div className="model-download-progress" role="status">
+    <div className={`model-download-progress model-download-progress--${tone}`} role="status">
       <div className="model-download-progress__header">
         <strong>{label}</strong>
-        <span>{percentLabel}</span>
+        <span className="model-download-progress__status">{percentLabel}</span>
       </div>
       {percent !== null ? (
         <div
@@ -304,16 +312,27 @@ function ModelDownloadProgressPanel({ job }: { job: ImportModelDownloadJobStatus
         {job.speed_bytes_per_second ? ` · ${formatModelSpeed(job.speed_bytes_per_second)}` : ""}
       </p>
       <span>{job.user_facing_message}</span>
+      {failureMessage ? <span className="model-download-progress__failure">{failureMessage}</span> : null}
+      {isModelDownloadFailure(job.status) ? (
+        <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+          Retry Download
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
   if (
+    job.status === "pending" ||
     job.status === "queued" ||
     job.status === "running" ||
+    job.status === "downloading" ||
+    job.status === "verifying" ||
+    job.status === "succeeded" ||
     job.status === "completed" ||
     job.status === "failed" ||
+    job.status === "completed_with_errors" ||
     job.status === "canceled"
   ) {
     return true;

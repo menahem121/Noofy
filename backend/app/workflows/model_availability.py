@@ -637,7 +637,7 @@ class ModelAvailabilityService:
                     _emit_model_download_progress(
                         progress_callback,
                         model=model,
-                        status="completed",
+                        status="succeeded",
                         model_index=model_index,
                         total_models=total_models,
                         bytes_downloaded=model.size_bytes,
@@ -645,14 +645,15 @@ class ModelAvailabilityService:
                     )
                 else:
                     failed_count += 1
-                    failures[_requirement_id(model)] = _needs_manual_download_failure()
+                    requirement_id = _requirement_id(model)
+                    failures[requirement_id] = _needs_manual_download_failure()
                     _emit_model_download_progress(
                         progress_callback,
                         model=model,
-                        status="failed",
+                        status=failures[requirement_id].status,
                         model_index=model_index,
                         total_models=total_models,
-                        message=failures[_requirement_id(model)].status_label,
+                        message=failures[requirement_id].message,
                     )
             except ProviderAuthenticationRequired as exc:
                 failed_count += 1
@@ -678,10 +679,10 @@ class ModelAvailabilityService:
                 _emit_model_download_progress(
                     progress_callback,
                     model=model,
-                    status="failed",
+                    status=failures[_requirement_id(model)].status,
                     model_index=model_index,
                     total_models=total_models,
-                    message=failures[_requirement_id(model)].status_label,
+                    message=failures[_requirement_id(model)].message,
                 )
             except ProviderAccessDenied as exc:
                 failed_count += 1
@@ -704,10 +705,10 @@ class ModelAvailabilityService:
                 _emit_model_download_progress(
                     progress_callback,
                     model=model,
-                    status="failed",
+                    status=failures[_requirement_id(model)].status,
                     model_index=model_index,
                     total_models=total_models,
-                    message=failures[_requirement_id(model)].status_label,
+                    message=failures[_requirement_id(model)].message,
                 )
             except ProviderRateLimited as exc:
                 failed_count += 1
@@ -730,10 +731,10 @@ class ModelAvailabilityService:
                 _emit_model_download_progress(
                     progress_callback,
                     model=model,
-                    status="failed",
+                    status=failures[_requirement_id(model)].status,
                     model_index=model_index,
                     total_models=total_models,
-                    message=failures[_requirement_id(model)].status_label,
+                    message=failures[_requirement_id(model)].message,
                 )
             except ModelDownloadCanceled:
                 failures[_requirement_id(model)] = _canceled_download_failure()
@@ -750,7 +751,8 @@ class ModelAvailabilityService:
             except Exception as exc:
                 failed_count += 1
                 safe_error = self.provider_resolver.sanitize_message(str(exc))
-                failures[_requirement_id(model)] = _download_failure_for_error(safe_error)
+                requirement_id = _requirement_id(model)
+                failures[requirement_id] = _download_failure_for_error(safe_error)
                 self.log_store.add(
                     "warning",
                     "Required model download failed",
@@ -765,10 +767,10 @@ class ModelAvailabilityService:
                 _emit_model_download_progress(
                     progress_callback,
                     model=model,
-                    status="failed",
+                    status=failures[requirement_id].status,
                     model_index=model_index,
                     total_models=total_models,
-                    message=failures[_requirement_id(model)].status_label,
+                    message=failures[requirement_id].message,
                 )
 
         after = self.summarize(package)
@@ -797,9 +799,9 @@ class ModelAvailabilityService:
                 "Model download was canceled. Completed downloads were kept and the partial download was cleaned up safely."
                 if canceled
                 else (
-                "Some models could not be downloaded."
-                if failed_count
-                else "Model download check finished."
+                    "Some downloads failed."
+                    if failed_count
+                    else "Model download check finished."
                 )
             ),
             downloaded_count=downloaded_count,
@@ -1470,8 +1472,8 @@ def _download_failure_for_error(error: str) -> ModelDownloadFailure:
         )
     if "hash mismatch" in normalized:
         return ModelDownloadFailure(
-            status="hash_mismatch",
-            status_label="Hash mismatch",
+            status="verification_failed",
+            status_label="Verification failed",
             message=(
                 "The downloaded model did not match the expected identity check."
                 + base_suffix
@@ -1479,8 +1481,8 @@ def _download_failure_for_error(error: str) -> ModelDownloadFailure:
         )
     if "size mismatch" in normalized:
         return ModelDownloadFailure(
-            status="download_failed",
-            status_label="Download failed",
+            status="verification_failed",
+            status_label="Verification failed",
             message=(
                 "The downloaded model did not match the expected file size."
                 + base_suffix

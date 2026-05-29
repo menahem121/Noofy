@@ -83,7 +83,7 @@ class ModelDownloadJobService:
             status="queued",
             user_facing_message="Model download is queued.",
             running_message="Downloading required models...",
-            failed_message="Some models could not be downloaded.",
+            failed_message="Some downloads failed.",
             completed_message="Model download check finished.",
             started_at=now,
             updated_at=now,
@@ -187,6 +187,7 @@ class ModelDownloadJobService:
         grouped = self._selected_packages(job.selections) if not job.direct_models else {}
         failed = False
         completed = 0
+        successful_downloads = 0
         last_progress_at = job.updated_at
         last_progress_by_model: dict[str, int] = {}
 
@@ -244,6 +245,11 @@ class ModelDownloadJobService:
                     cancel_event=job.cancel_event,
                 )
                 completed += len(job.direct_models)
+                successful_downloads += getattr(
+                    result,
+                    "downloaded_count",
+                    len(job.direct_models) if result.failed_count == 0 else 0,
+                )
                 failed = failed or result.failed_count > 0
                 self._mark_downloaded_models(job.direct_models)
                 if result.status == "canceled":
@@ -258,6 +264,11 @@ class ModelDownloadJobService:
                     cancel_event=job.cancel_event,
                 )
                 completed += len(selected_package.required_models)
+                successful_downloads += getattr(
+                    result,
+                    "downloaded_count",
+                    len(selected_package.required_models) if result.failed_count == 0 else 0,
+                )
                 failed = failed or result.failed_count > 0
                 self._mark_downloaded_models(models)
                 if result.status == "canceled":
@@ -266,8 +277,12 @@ class ModelDownloadJobService:
                 job.status = "canceled"
                 job.user_facing_message = "Model download was canceled."
             elif failed:
-                job.status = "failed"
-                job.user_facing_message = job.failed_message
+                if successful_downloads > 0:
+                    job.status = "completed_with_errors"
+                    job.user_facing_message = "Some downloads failed."
+                else:
+                    job.status = "failed"
+                    job.user_facing_message = job.failed_message
             else:
                 job.status = "completed"
                 job.user_facing_message = job.completed_message
@@ -389,10 +404,21 @@ def _dedupe_selections(selections: list[ModelDownloadSelection]) -> list[ModelDo
 
 def _download_progress_status_label(status: str) -> str:
     return {
+        "pending": "Pending",
         "queued": "Queued",
+        "running": "Running",
         "downloading": "Downloading",
         "verifying": "Verifying",
+        "succeeded": "Downloaded",
         "completed": "Completed",
+        "download_failed": "Download failed",
+        "verification_failed": "Verification failed",
+        "authentication_required": "Authentication required",
+        "access_denied": "Access denied",
+        "rate_limited": "Rate limited",
+        "hash_mismatch": "Hash mismatch",
+        "not_enough_disk_space": "Not enough disk space",
+        "needs_manual_download": "Needs manual download",
         "failed": "Failed",
         "canceled": "Canceled",
     }.get(status, status.replace("_", " ").title())

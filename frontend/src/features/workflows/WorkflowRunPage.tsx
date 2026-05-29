@@ -71,6 +71,13 @@ import type { GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
+import {
+  failedModelMessage,
+  isModelDownloadActive,
+  isModelDownloadFailure,
+  modelDownloadPanelTone,
+  modelDownloadPercentLabel,
+} from "../../lib/modelDownloadProgress";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource } from "../app/WorkflowTabs";
@@ -360,13 +367,13 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }, [workflowId]);
 
   useEffect(() => {
-    if (!modelDownloadJob || !["queued", "running"].includes(modelDownloadJob.status)) return;
+    if (!modelDownloadJob || !isModelDownloadActive(modelDownloadJob.status)) return;
     const interval = window.setInterval(() => {
       fetchModelDownloadStatus(modelDownloadJob.job_id)
         .then((job) => {
           setModelDownloadJob(job);
           setModelDownloadError(null);
-          if (!["queued", "running"].includes(job.status)) {
+          if (!isModelDownloadActive(job.status)) {
             void loadRequirements();
           }
         })
@@ -2037,6 +2044,7 @@ const retryableRequiredModelStatuses = new Set([
   "authentication_required",
   "rate_limited",
   "hash_mismatch",
+  "verification_failed",
   "not_enough_disk_space",
 ]);
 
@@ -2076,7 +2084,7 @@ function WorkflowRequiredModelsModal({
   onClose: () => void;
 }) {
   const effectiveSummary = verificationJob?.model_summary ?? summary;
-  const activeDownload = Boolean(downloadJob && ["queued", "running"].includes(downloadJob.status));
+  const activeDownload = Boolean(downloadJob && isModelDownloadActive(downloadJob.status));
   const activeVerification = Boolean(verificationJob && ["queued", "running"].includes(verificationJob.status));
   const downloadable = effectiveSummary.models.some((model) => retryableRequiredModelStatuses.has(model.status));
   const progressByRequirement = new Map(downloadJob?.models.map((model) => [model.requirement_id, model]) ?? []);
@@ -2147,7 +2155,7 @@ function WorkflowRequiredModelsModal({
             </button>
           </div>
         ) : null}
-        {downloadJob && shouldShowModelDownloadProgress(downloadJob) ? <WorkflowModelDownloadProgress job={downloadJob} /> : null}
+        {downloadJob && shouldShowModelDownloadProgress(downloadJob) ? <WorkflowModelDownloadProgress job={downloadJob} onRetry={onDownload} /> : null}
         {downloadError ? (
           <div className="notice notice--error notice--compact" role="status">
             <AlertCircle size={16} aria-hidden="true" />
@@ -2203,7 +2211,7 @@ function WorkflowRequiredModelRow({
   );
 }
 
-function WorkflowModelDownloadProgress({ job }: { job: ModelDownloadJobStatus }) {
+function WorkflowModelDownloadProgress({ job, onRetry }: { job: ModelDownloadJobStatus; onRetry: () => void }) {
   const label = job.current_model_filename
     ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
     : job.user_facing_message;
@@ -2215,15 +2223,15 @@ function WorkflowModelDownloadProgress({ job }: { job: ModelDownloadJobStatus })
   const percent = rawPercent !== null && Number.isFinite(Number(rawPercent))
     ? Math.max(0, Math.min(Number(rawPercent), 100))
     : null;
-  const percentLabel = percent !== null
-    ? `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
-    : job.status;
+  const percentLabel = modelDownloadPercentLabel(job, percent);
+  const tone = modelDownloadPanelTone(job);
+  const failureMessage = failedModelMessage(job);
 
   return (
-    <div className="model-download-progress" role="status">
+    <div className={`model-download-progress model-download-progress--${tone}`} role="status">
       <div className="model-download-progress__header">
         <strong>{label}</strong>
-        <span>{percentLabel}</span>
+        <span className="model-download-progress__status">{percentLabel}</span>
       </div>
       {percent !== null ? (
         <div
@@ -2244,12 +2252,31 @@ function WorkflowModelDownloadProgress({ job }: { job: ModelDownloadJobStatus })
         {job.speed_bytes_per_second ? ` · ${formatRequiredModelSpeed(job.speed_bytes_per_second)}` : ""}
       </p>
       <span>{job.user_facing_message}</span>
+      {failureMessage ? <span className="model-download-progress__failure">{failureMessage}</span> : null}
+      {isModelDownloadFailure(job.status) ? (
+        <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+          Retry Download
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function shouldShowModelDownloadProgress(job: ModelDownloadJobStatus) {
-  if (["queued", "running", "completed", "failed", "canceled"].includes(job.status)) return true;
+  if (
+    [
+      "pending",
+      "queued",
+      "running",
+      "downloading",
+      "verifying",
+      "succeeded",
+      "completed",
+      "completed_with_errors",
+      "failed",
+      "canceled",
+    ].includes(job.status)
+  ) return true;
   return job.percent !== null || job.bytes_downloaded !== null;
 }
 

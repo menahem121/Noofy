@@ -208,6 +208,7 @@ export type RequiredModelStatus =
   | "checking"
   | "needs_manual_download"
   | "download_failed"
+  | "verification_failed"
   | "authentication_required"
   | "access_denied"
   | "rate_limited"
@@ -268,7 +269,25 @@ export interface ImportModelDownloadJobStart {
 export interface ImportModelDownloadProgressItem {
   requirement_id: string;
   filename: string;
-  status: "queued" | "downloading" | "verifying" | "completed" | "failed" | "canceled" | string;
+  status:
+    | "pending"
+    | "queued"
+    | "running"
+    | "downloading"
+    | "verifying"
+    | "succeeded"
+    | "completed"
+    | "failed"
+    | "download_failed"
+    | "verification_failed"
+    | "authentication_required"
+    | "access_denied"
+    | "rate_limited"
+    | "hash_mismatch"
+    | "not_enough_disk_space"
+    | "needs_manual_download"
+    | "canceled"
+    | string;
   status_label: string;
   bytes_downloaded: number | null;
   total_bytes: number | null;
@@ -279,7 +298,18 @@ export interface ImportModelDownloadJobStatus {
   job_id: string;
   import_session_id: string;
   workflow_id: string;
-  status: "queued" | "running" | "completed" | "failed" | "canceled" | string;
+  status:
+    | "pending"
+    | "queued"
+    | "running"
+    | "downloading"
+    | "verifying"
+    | "succeeded"
+    | "completed"
+    | "completed_with_errors"
+    | "failed"
+    | "canceled"
+    | string;
   user_facing_message: string;
   current_model_filename: string | null;
   current_model_index: number | null;
