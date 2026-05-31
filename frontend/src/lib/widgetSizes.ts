@@ -21,6 +21,7 @@ export type WidgetTypeKey =
   | "int_field"
   | "string_field"
   | "textarea"
+  | "note"
   | "toggle"
   | "load_image"
   | "load_image_mask"
@@ -36,6 +37,7 @@ const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
   int_field: "compact",
   toggle: "compact",
   string_field: "compact",
+  note: "compact",
   seed_widget: "compact",
   select: "standard",
   load_image: "media",

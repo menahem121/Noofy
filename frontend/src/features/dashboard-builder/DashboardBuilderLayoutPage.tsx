@@ -10,6 +10,7 @@ import {
   Shuffle,
   SlidersHorizontal,
   Sparkles,
+  StickyNote,
   ToggleLeft,
   Trash2,
   Type,
@@ -71,6 +72,7 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   int_field: Type,
   string_field: Type,
   textarea: Type,
+  note: StickyNote,
   toggle: ToggleLeft,
   load_image: ImagePlus,
   load_image_mask: UploadCloud,
@@ -879,6 +881,10 @@ function GroupSurfacePreview({ item }: { item: Extract<DashboardTopLevelItem, { 
 }
 
 function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
+  if (widget.widgetType === "note") {
+    return <p className="layout-preview-note-card">{widget.description}</p>;
+  }
+
   if (widget.widgetType === "textarea") {
     return (
       <div

@@ -452,6 +452,137 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
     ]
 
 
+def test_classify_graph_inputs_suggests_dashboard_note_for_comfyui_note_nodes() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "11": {
+                "class_type": "Note",
+                "title": "Before you run",
+                "inputs": {"text": "Use a square source image.\nLarge images take longer."},
+            }
+        }
+    )
+
+    assert nodes == [
+        {
+            "node_id": "11",
+            "node_type": "Note",
+            "node_title": "Before you run",
+            "is_image_node": False,
+            "is_lora_node": False,
+            "inputs": [
+                {
+                    "input_name": "note",
+                    "current_value": "Use a square source image.\nLarge images take longer.",
+                    "kind": "note",
+                    "suggested_widget_type": "note",
+                    "widget_types": ["note"],
+                    "auto_select": True,
+                }
+            ],
+        }
+    ]
+
+
+def test_classify_graph_inputs_reads_frontend_style_comfyui_note_nodes() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "nodes": [],
+            "definitions": {
+                "subgraphs": [
+                    {
+                        "id": "video-workflow",
+                        "nodes": [
+                            {
+                                "id": 12,
+                                "type": "Note",
+                                "inputs": [],
+                                "outputs": [],
+                                "widgets_values": ["This workflow needs plenty of free VRAM."],
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert nodes[0]["node_id"] == "visual:workflow/subgraph:video-workflow:node:12"
+    assert nodes[0]["node_title"] == "Note"
+    assert nodes[0]["inputs"][0] == {
+        "input_name": "note",
+        "current_value": "This workflow needs plenty of free VRAM.",
+        "kind": "note",
+        "suggested_widget_type": "note",
+        "widget_types": ["note"],
+        "auto_select": True,
+    }
+
+
+def test_save_dashboard_allows_dashboard_only_note_without_input_binding(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "creator-note",
+                        "type": "note",
+                        "label": "Before you run",
+                        "description": "Use a square source image.\nLarge images take longer.",
+                        "layout": {"x": 0, "y": 0, "w": 6, "h": 4, "min_w": 6, "min_h": 4},
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = service.save_dashboard(workflow_id, [], dashboard)
+
+    assert result["valid"] is True
+    saved = service.workflow_loader.get_package(workflow_id)
+    control = saved.dashboard.sections[0].controls[0]
+    assert control.type == "note"
+    assert control.input_id is None
+    assert control.description == "Use a square source image.\nLarge images take longer."
+
+
+def test_save_dashboard_rejects_note_output_binding(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Result", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "creator-note",
+                        "type": "note",
+                        "label": "Before you run",
+                        "description": "Read this first.",
+                        "output_id": "image",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="must not have output_id"):
+        service.save_dashboard(workflow_id, [], dashboard)
+
+
 def test_classify_graph_inputs_marks_load_image_as_image_input_only_when_unlinked() -> None:
     nodes = _classify_graph_inputs(
         {

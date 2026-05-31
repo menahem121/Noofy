@@ -16,6 +16,7 @@ Widget groups are visual containers around existing controls. A group owns one d
 | `int_field` | 6 | 4 | Compact integer or numeric text entry. |
 | `string_field` | 6 | 4 | Compact single-line text entry. |
 | `seed_widget` | 6 | 4 | Seed or variation ID controls. |
+| `note` | 6 | 4 | Read-only creator notes, instructions, explanations, or warnings. |
 | `textarea` | 8 | 6 | Multi-line prompt or text entry. |
 | `select` | 8 | 6 | Dropdown selection controls. |
 | `lora_loader` | 8 | 6 | LoRA model selection and related options. |
@@ -29,6 +30,8 @@ Widget groups are visual containers around existing controls. A group owns one d
 ## Notes
 
 - `select` is the dashboard schema type used for dropdowns.
+- `note` stores multi-line creator guidance directly in the dashboard control and does not require an executable workflow binding.
+- Creators can add dashboard-only notes directly in Dashboard Builder. Detected ComfyUI `Note` nodes are preselected as notes during analysis.
 - Use `select` for ComfyUI node inputs that expose a fixed list of choices, such as `KSampler.sampler_name` and `KSampler.scheduler`.
 - When ComfyUI `/object_info` is available through the backend, Noofy reads the valid choices from the node definition and copies them into the dashboard input validation as `options`.
 - If automatic option extraction is unavailable or incomplete for a node, the Dashboard Builder still lets the creator/importer choose the Dropdown widget and enter choices manually, one per line.

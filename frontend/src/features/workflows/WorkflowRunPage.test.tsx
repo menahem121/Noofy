@@ -234,6 +234,32 @@ const configuredPackageData = {
   },
 };
 
+function dashboardOnlyNotePackageData() {
+  return {
+    ...configuredPackageData,
+    inputs: [],
+    outputs: [],
+    dashboard: {
+      ...configuredPackageData.dashboard,
+      sections: [
+        {
+          id: "main",
+          title: "Main",
+          controls: [
+            {
+              id: "creator-note",
+              type: "note",
+              label: "Before you run",
+              description: "Use a square source image.\nLarge images take longer.",
+              layout: { x: 0, y: 0, w: 6, h: 4, min_w: 6, min_h: 4 },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 const loraPackageData = {
   metadata: {
     id: "text_to_image_v0",
@@ -345,6 +371,7 @@ const loraPackageWithMissingRequiredModel = {
 function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
   runtimeResponse: unknown | (() => unknown) = readyRuntime,
+  packageData: unknown = configuredPackageData,
 ) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -355,7 +382,7 @@ function mockConfiguredDashboardFetch(
     }
     if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
-    if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+    if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
     if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
     if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
     if (url.endsWith("/api/workflows/text_to_image_v0/export") && init?.method === "POST") {
@@ -1536,6 +1563,16 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("renders dashboard-only notes as read-only canvas cards", async () => {
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, dashboardOnlyNotePackageData());
+
+    renderRunPage();
+
+    const noteBody = await screen.findByText("Use a square source image. Large images take longer.");
+    expect(noteBody.closest(".dashboard-note-card")).toHaveClass("dashboard-note-card--canvas");
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
   it("renders canvas mode as a full-workspace canvas without the normal page header or engine notice", async () => {
     mockConfiguredDashboardFetch(fetchMock, { ...readyRuntime, reachable: false, managed_process_running: false });
 
@@ -2073,6 +2110,17 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
+  });
+
+  it("renders dashboard-only notes as read-only cards in classic mode", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, dashboardOnlyNotePackageData());
+
+    renderRunPage();
+
+    expect(await screen.findByRole("heading", { name: "Before you run" })).toBeInTheDocument();
+    expect(screen.getByText("Use a square source image. Large images take longer.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   it("shows canvas actions in the top-right options menu and closes it from outside interactions", async () => {

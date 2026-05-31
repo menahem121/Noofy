@@ -292,6 +292,23 @@ export function DashboardBuilderPage({
     setSelectedGroupId(null);
   }
 
+  function handleAddNote() {
+    const id = nextDashboardNoteId(schema);
+    const note: DashboardWidget = {
+      id,
+      valueId: `note:${id}`,
+      binding: { nodeId: "", inputName: "" },
+      widgetType: "note",
+      title: "Note",
+      description: "",
+      defaultValue: null,
+    };
+    setSchema((current) => ({ ...current, widgets: [...current.widgets, note] }));
+    setSelectedValueId(note.valueId);
+    setSelectedWidgetId(note.id);
+    setSelectedGroupId(null);
+  }
+
   function handleSelectWidget(widgetId: string) {
     const widget = schema.widgets.find((c) => c.id === widgetId);
     if (!widget) return;
@@ -495,6 +512,10 @@ export function DashboardBuilderPage({
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </label>
+              <button className="secondary-button secondary-button--small builder-add-note" type="button" onClick={handleAddNote}>
+                <Plus size={14} aria-hidden="true" />
+                Add note
+              </button>
             </div>
 
             <div className="builder-pane__scroll">
@@ -538,6 +559,12 @@ export function DashboardBuilderPage({
                 onPatchWidget={patchWidget}
                 onSelectWidget={handleSelectWidget}
               />
+            ) : selectedWidget?.widgetType === "note" ? (
+              <NoteWidgetEditor
+                widget={selectedWidget}
+                onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
+                onRemove={() => removeWidget(selectedWidget.id)}
+              />
             ) : selectedWidget && selectedValueRecord ? (
               <WidgetEditor
                 widget={selectedWidget}
@@ -570,7 +597,7 @@ export function DashboardBuilderPage({
                     <Wand2 size={26} aria-hidden="true" />
                   </div>
                   <h3>Your dashboard is empty</h3>
-                  <p>Select a workflow value and turn it into a dashboard widget.</p>
+                  <p>Select a workflow value or add a note for the people running it.</p>
                 </div>
               ) : (
                 <CreatedWidgetsList
@@ -745,6 +772,17 @@ function nextGroupId(schema: DashboardSchema): string {
   while (existing.has(id)) {
     index += 1;
     id = `group-${index}`;
+  }
+  return id;
+}
+
+function nextDashboardNoteId(schema: DashboardSchema): string {
+  const existing = new Set(schema.widgets.map((widget) => widget.id));
+  let index = 1;
+  let id = `note-${index}`;
+  while (existing.has(id)) {
+    index += 1;
+    id = `note-${index}`;
   }
   return id;
 }
@@ -973,6 +1011,36 @@ function WidgetEditor({
   );
 }
 
+function NoteWidgetEditor({
+  widget,
+  onPatch,
+  onRemove,
+}: {
+  widget: DashboardWidget;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="builder-config__inner">
+      <div className="builder-config__top">
+        <div>
+          <p className="builder-config__breadcrumb">Dashboard note</p>
+          <h2>Configure note</h2>
+          <p className="builder-config__summary">
+            Notes give people instructions, explanations, or warnings without changing the workflow.
+          </p>
+        </div>
+        <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
+          <Trash2 size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      <WidgetDetailsCard widget={widget} onPatch={onPatch} />
+      <WidgetBinding widget={widget} />
+    </div>
+  );
+}
+
 function WidgetDetailsCard({
   widget,
   onPatch,
@@ -996,7 +1064,7 @@ function WidgetDetailsFields({
 }) {
   return (
     <>
-      <FieldRow label="Widget title">
+      <FieldRow label={widget.widgetType === "note" ? "Note title" : "Widget title"}>
         <input
           type="text"
           className="builder-input"
@@ -1004,7 +1072,10 @@ function WidgetDetailsFields({
           onChange={(event) => onPatch({ title: event.target.value })}
         />
       </FieldRow>
-      <FieldRow label="Helper description" hint="Shown under the widget. Keep it short and friendly.">
+      <FieldRow
+        label={widget.widgetType === "note" ? "Note body" : "Helper description"}
+        hint={widget.widgetType === "note" ? "Supports multiple lines of creator guidance." : "Shown under the widget. Keep it short and friendly."}
+      >
         <textarea
           className="builder-input builder-input--textarea"
           rows={2}
@@ -1177,6 +1248,14 @@ function WidgetBehaviorFields({
 }
 
 function WidgetBinding({ widget }: { widget: DashboardWidget }) {
+  if (widget.widgetType === "note" && !widget.hasExecutableBinding) {
+    return (
+      <div className="builder-config__binding">
+        <span>Dashboard-only information</span>
+      </div>
+    );
+  }
+
   return (
     <div className="builder-config__binding">
       <span>Connected to</span>
@@ -1240,14 +1319,16 @@ function GroupEditor({
       <div className="builder-group-editor__children">
         {widgets.map((widget, index) => {
           const record = valueIndex.get(widget.valueId);
-          if (!record) return null;
+          if (!record && widget.widgetType !== "note") return null;
           return (
             <section className="builder-card builder-card--child-widget" key={widget.id}>
               <header className="builder-card__child-header">
                 <div>
                   <h3>{widget.title || `Widget ${index + 1}`}</h3>
                   <p>
-                    {WIDGET_TYPE_LABELS[widget.widgetType]} · node {widget.binding.nodeId} → {widget.binding.inputName}
+                    {widget.widgetType === "note"
+                      ? WIDGET_TYPE_LABELS[widget.widgetType]
+                      : `${WIDGET_TYPE_LABELS[widget.widgetType]} · node ${widget.binding.nodeId} → ${widget.binding.inputName}`}
                   </p>
                 </div>
                 <button className="secondary-button secondary-button--small" type="button" onClick={() => onSelectWidget(widget.id)}>
@@ -1257,7 +1338,9 @@ function GroupEditor({
               <div className="builder-card__body">
                 <WidgetDetailsFields widget={widget} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
                 <div className="builder-card__divider" />
-                <WidgetBehaviorFields widget={widget} value={record.value} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
+                {record && widget.widgetType !== "note" ? (
+                  <WidgetBehaviorFields widget={widget} value={record.value} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
+                ) : null}
                 <WidgetBinding widget={widget} />
               </div>
             </section>
@@ -1742,7 +1825,7 @@ function PreviewWidget({
       <div className="preview-widget__body">
         <div className="preview-widget__heading">
           <h5>{widget.title}</h5>
-          {widget.description ? <p>{widget.description}</p> : null}
+          {widget.widgetType !== "note" && widget.description ? <p>{widget.description}</p> : null}
         </div>
         <PreviewWidgetInput widget={widget} />
       </div>
@@ -1763,6 +1846,10 @@ function PreviewWidget({
 }
 
 function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
+  if (widget.widgetType === "note") {
+    return <p className="preview-note-card">{widget.description}</p>;
+  }
+
   if (widget.widgetType === "textarea") {
     return (
       <textarea

@@ -91,7 +91,7 @@ class WorkflowPackageValidator:
                         )
                     else:
                         input_ids_referenced.add(control.input_id)
-                elif control.type not in {"display_image", "result_image"}:
+                elif control.type not in {"display_image", "result_image", "note"}:
                     errors.append(
                         f"Dashboard control '{control.id}' has no input_id."
                     )
@@ -106,6 +106,10 @@ class WorkflowPackageValidator:
                         errors.append(
                             f"Dashboard control '{control.id}' references missing output '{control.output_id}'."
                         )
+                elif control.type == "note" and control.output_id:
+                    errors.append(
+                        f"Dashboard control '{control.id}' is type 'note' but must not have output_id."
+                    )
 
             for group in section.groups:
                 if group.id in seen_group_ids:

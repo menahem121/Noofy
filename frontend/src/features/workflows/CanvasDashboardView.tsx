@@ -24,6 +24,7 @@ import {
   SlidersHorizontal,
   Square,
   Sparkles,
+  StickyNote,
   ToggleLeft,
   Type,
   UploadCloud,
@@ -685,7 +686,7 @@ function CanvasWidgetDropPreview({
   if (!item) return null;
   const Icon = item.kind === "group" ? LayoutGrid : iconForControlType(item.control.type);
   const title = item.kind === "group" ? item.group.title : item.control.label;
-  const description = item.kind === "group" ? item.group.description : item.control.description;
+  const description = item.kind === "group" ? item.group.description : item.control.type === "note" ? undefined : item.control.description;
 
   return (
     <DashboardCanvasWidgetShell
@@ -749,7 +750,7 @@ function CanvasWidgetCell({
   const isOutput = control ? control.type === "display_image" || control.type === "result_image" : false;
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
-  const description = isGroup ? item.group.description : control!.description;
+  const description = isGroup ? item.group.description : control!.type === "note" ? undefined : control!.description;
 
   return (
     <DashboardCanvasWidgetShell
@@ -805,6 +806,8 @@ function CanvasWidgetCell({
             loraBrowserFor={loraBrowserFor}
             onOutputPreferenceChange={onOutputPreferenceChange}
           />
+        ) : control!.type === "note" ? (
+          <DashboardNoteBody body={control!.description} />
         ) : isOutput ? (
           <OutputWidgetContent
             control={control!}
@@ -863,8 +866,10 @@ function GroupedCanvasControls({
         const isOutput = control.type === "display_image" || control.type === "result_image";
         return (
           <div className="canvas-widget-group__control" key={control.id}>
-            {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
-            {isOutput ? (
+            {control.type !== "note" && control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
+            {control.type === "note" ? (
+              <DashboardNoteBody title={control.label} body={control.description} />
+            ) : isOutput ? (
               <>
                 <OutputWidgetContent
                   control={control}
@@ -918,7 +923,17 @@ function iconForControlType(type: string): typeof Type {
   if (type === "seed_widget") return Shuffle;
   if (type === "lora_loader") return Sparkles;
   if (type === "select") return ChevronDown;
+  if (type === "note") return StickyNote;
   return Type;
+}
+
+function DashboardNoteBody({ title, body }: { title?: string; body?: string }) {
+  return (
+    <div className="dashboard-note-card dashboard-note-card--canvas">
+      {title ? <h3>{title}</h3> : null}
+      <p>{body || "No note text added yet."}</p>
+    </div>
+  );
 }
 
 function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addAutomaticImageOutputWidget,
   addAutomaticImageInputWidgets,
+  addAutomaticNoteWidgets,
   buildInitialDashboard,
   createDashboardWidgetForValue,
   dashboardDraftKey,
@@ -103,6 +104,44 @@ describe("toBackendPayload", () => {
       binding: { node_id: "3", input_name: "sampler_name" },
       default: "euler",
       validation: { options: ["euler", "euler_ancestral"] },
+    });
+  });
+
+  it("preserves an intentional executable binding on an imported note", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "bound-note",
+          valueId: "note-value",
+          binding: { nodeId: "11", inputName: "text" },
+          widgetType: "note",
+          title: "Creator note",
+          description: "Visible guidance.",
+          defaultValue: "runtime value",
+          hasExecutableBinding: true,
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "bound-note",
+        control: "note",
+        binding: { node_id: "11", input_name: "text" },
+        default: "runtime value",
+      }),
+    ]);
+    expect(payload.dashboard.sections[0].controls[0]).toMatchObject({
+      id: "bound-note",
+      type: "note",
+      input_id: "bound-note",
     });
   });
 
@@ -256,6 +295,94 @@ describe("saveDashboardDraft", () => {
 });
 
 describe("workflowFromBindableInputs", () => {
+  it("preselects detected ComfyUI Note nodes as dashboard-only note cards", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "11",
+        node_type: "Note",
+        node_title: "Before you run",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "note",
+            current_value: "Use a square source image.\nLarge images take longer.",
+            kind: "note",
+            suggested_widget_type: "note",
+            widget_types: ["note"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+
+    const schema = addAutomaticNoteWidgets(buildInitialDashboard(workflow), workflow);
+    const payload = toBackendPayload(schema);
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-11-note",
+        widgetType: "note",
+        title: "Before you run",
+        description: "Use a square source image.\nLarge images take longer.",
+      }),
+    ]);
+    expect(payload.inputs).toEqual([]);
+    expect(payload.dashboard.sections[0].controls).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-11-note",
+        type: "note",
+        label: "Before you run",
+        description: "Use a square source image.\nLarge images take longer.",
+      }),
+    ]);
+    expect(payload.dashboard.sections[0].controls[0]).not.toHaveProperty("input_id");
+  });
+
+  it("does not duplicate a saved dashboard-only note when its ComfyUI Note node is analyzed again", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "11",
+        node_type: "Note",
+        node_title: "Before you run",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "note",
+            current_value: "Original creator guidance.",
+            kind: "note",
+            suggested_widget_type: "note",
+            widget_types: ["note"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+    const savedSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-11-note",
+          valueId: "note:ctrl-node-11-note",
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: "Edited title",
+          description: "Edited dashboard guidance.",
+          defaultValue: null,
+        },
+      ],
+    };
+
+    const schema = addAutomaticNoteWidgets(savedSchema, workflow);
+
+    expect(schema.widgets).toEqual(savedSchema.widgets);
+  });
+
   it("auto-creates load image widgets for bindable LoadImage inputs", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

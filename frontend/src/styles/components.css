@@ -1496,6 +1496,35 @@
   opacity: 0.55;
 }
 
+.dashboard-note-card {
+  padding: 14px 15px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 13px;
+  background: rgba(139, 92, 246, 0.075);
+}
+
+.dashboard-note-card h3,
+.dashboard-note-card p {
+  margin: 0;
+}
+
+.dashboard-note-card h3 {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.dashboard-note-card p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.dashboard-note-card h3 + p {
+  margin-top: 7px;
+}
+
 .dashboard-image-input {
   width: 100%;
   min-width: 0;

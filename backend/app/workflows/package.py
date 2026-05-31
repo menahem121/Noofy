@@ -94,6 +94,7 @@ DASHBOARD_CONTROL_TYPES = frozenset(
         "int_field",
         "string_field",
         "textarea",
+        "note",
         "toggle",
         "load_image",
         "load_image_mask",

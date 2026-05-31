@@ -483,6 +483,7 @@ export interface BindableInputEntry {
 export interface BindableNode {
   node_id: string;
   node_type: string;
+  node_title?: string;
   is_image_node: boolean;
   is_lora_node: boolean;
   inputs: BindableInputEntry[];

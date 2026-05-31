@@ -35,12 +35,12 @@ Exporting creates a new portable archive. Re-exported user packages strip origin
 - `status`: typically `configured` or `not_configured`.
 - `inputs[]`: workflow inputs that widgets may bind to.
 - `outputs[]`: output records that result widgets bind to.
-- `sections[].controls[]`: renderable controls with type, title, binding, default value, validation/display metadata, standalone layout, and optional output metadata.
+- `sections[].controls[]`: renderable controls with type, title, optional binding, default value, validation/display metadata, standalone layout, and optional output metadata.
 - `sections[].groups[]`: visual containers with group title, helper description, ordered control IDs, and group layout. Groups do not merge control values or bindings; each child control remains independently bound.
 
-Common control types include `slider`, `int_field`, `string_field`, `textarea`, `toggle`, `load_image`, `display_image`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
+Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `display_image`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
 
-Each input control binds to a workflow input ID, which maps to an engine graph node ID and input name. Each output control uses `output_id`, which maps to a `WorkflowOutput` and then to result entries from the job.
+Each input control binds to a workflow input ID, which maps to an engine graph node ID and input name. Each output control uses `output_id`, which maps to a `WorkflowOutput` and then to result entries from the job. Informational `note` controls may be dashboard-only: they store creator-authored multi-line text without an executable workflow binding.
 
 ## Import And Routing
 

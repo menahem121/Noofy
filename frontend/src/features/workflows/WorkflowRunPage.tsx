@@ -897,7 +897,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const topBarProgress = isRunning ? { percent: progressPercent } : null;
 
   const inputControls = allControls.filter(
-    (c) => c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.input_id),
+    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.input_id),
   );
   const inputControlIds = useMemo(() => new Set(inputControls.map((control) => control.id)), [inputControls]);
   const inputTopLevelItems = useMemo(
@@ -1540,6 +1540,14 @@ function ClassicDashboardInputControl({
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
+        if (control.type === "note") {
+          return (
+            <section className="dashboard-note-card">
+              <h3>{control.label}</h3>
+              <p>{control.description || "No note text added yet."}</p>
+            </section>
+          );
+        }
         const inputId = control.input_id ?? control.id;
         const input = control.type === "api_credential"
           ? credentialInputForControl(control)
@@ -2589,6 +2597,24 @@ function buildDashboardSchemaForEditing(
       ? undefined
       : layoutForBuilderControl(control, layoutOverrides[control.id]);
 
+    if (control.type === "note") {
+      const input = control.input_id ? inputIndex.get(control.input_id) : undefined;
+      widgets.push({
+        id: control.id,
+        valueId: input?.id ?? `note:${control.id}`,
+        binding: input
+          ? { nodeId: input.binding.node_id, inputName: input.binding.input_name }
+          : { nodeId: "", inputName: "" },
+        widgetType: "note",
+        title: control.label,
+        description: control.description ?? "",
+        defaultValue: input?.default ?? null,
+        ...(input ? { hasExecutableBinding: true } : {}),
+        layout,
+      });
+      continue;
+    }
+
     if (control.input_id) {
       const input = inputIndex.get(control.input_id);
       if (!input) continue;
@@ -2723,6 +2749,7 @@ function toBuilderWidgetType(type: string): WidgetType {
     "int_field",
     "string_field",
     "textarea",
+    "note",
     "toggle",
     "load_image",
     "load_image_mask",

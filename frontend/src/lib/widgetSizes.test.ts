@@ -9,6 +9,7 @@ describe("defaultLayoutForWidgetType", () => {
     ["string_field", 6, 4],
     ["seed_widget", 6, 4],
     ["textarea", 8, 6],
+    ["note", 6, 4],
     ["select", 8, 6],
     ["lora_loader", 8, 6],
     ["slider", 10, 4],

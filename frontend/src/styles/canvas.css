@@ -239,6 +239,12 @@
   align-self: flex-start;
 }
 
+.dashboard-note-card--canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .layout-canvas-resize-handles {
   position: absolute;
   inset: 0;

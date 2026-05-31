@@ -235,6 +235,42 @@ describe("DashboardBuilderPage", () => {
     );
   });
 
+  it("adds and edits a dashboard-only note without a workflow binding", async () => {
+    const onContinue = vi.fn();
+
+    render(
+      <DashboardBuilderPage
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /add note/i }));
+    fireEvent.change(screen.getByLabelText(/note title/i), { target: { value: "Before you run" } });
+    fireEvent.change(screen.getByLabelText(/note body/i), { target: { value: "Use a square source image." } });
+
+    const notePreview = document.querySelector(".preview-note-card");
+    expect(notePreview).toHaveTextContent("Use a square source image.");
+    expect(notePreview?.closest(".preview-widget")?.querySelector(".preview-widget__heading p")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: expect.arrayContaining([
+          expect.objectContaining({
+            id: "note-1",
+            valueId: "note:note-1",
+            binding: { nodeId: "", inputName: "" },
+            widgetType: "note",
+            title: "Before you run",
+            description: "Use a square source image.",
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("validates slider range, step size, and default value inline", async () => {
     const onContinue = vi.fn();
 

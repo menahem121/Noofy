@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -285,6 +285,7 @@ _IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask"})
 _IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
+_NOTE_NODE_TYPES = frozenset({"Note"})
 
 
 def _classify_graph_inputs(
@@ -293,13 +294,18 @@ def _classify_graph_inputs(
     object_info: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
+    seen_note_node_ids: set[str] = set()
     default_image_output_node_id = _default_image_output_node_id(graph)
     for node_id, node in graph.items():
         if not isinstance(node, dict):
             continue
         node_id_str = str(node_id)
-        node_type = node.get("class_type", "")
+        node_type = node.get("class_type") or node.get("type") or ""
         raw_inputs = node.get("inputs")
+        if node_type in _NOTE_NODE_TYPES:
+            nodes.append(_classified_note_node(node_id_str, node))
+            seen_note_node_ids.add(node_id_str)
+            continue
         if not isinstance(raw_inputs, dict):
             continue
 
@@ -355,7 +361,89 @@ def _classify_graph_inputs(
                 }
             )
 
+    for node_id, node in _iter_frontend_note_nodes(graph):
+        if node_id in seen_note_node_ids:
+            continue
+        nodes.append(_classified_note_node(node_id, node))
+        seen_note_node_ids.add(node_id)
+
     return nodes
+
+
+def _classified_note_node(node_id: str, node: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "node_id": node_id,
+        "node_type": "Note",
+        "node_title": _note_title(node),
+        "is_image_node": False,
+        "is_lora_node": False,
+        "inputs": [
+            {
+                "input_name": "note",
+                "current_value": _note_body(node),
+                "kind": "note",
+                "suggested_widget_type": "note",
+                "widget_types": ["note"],
+                "auto_select": True,
+            }
+        ],
+    }
+
+
+def _iter_frontend_note_nodes(
+    payload: Mapping[str, Any],
+    *,
+    scope: str = "workflow",
+) -> Iterator[tuple[str, Mapping[str, Any]]]:
+    raw_nodes = payload.get("nodes")
+    if isinstance(raw_nodes, list):
+        for index, node in enumerate(raw_nodes):
+            if not isinstance(node, Mapping) or node.get("type") not in _NOTE_NODE_TYPES:
+                continue
+            node_id = node.get("id", index)
+            yield f"visual:{scope}:node:{node_id}", node
+
+    definitions = payload.get("definitions")
+    if not isinstance(definitions, Mapping):
+        return
+    subgraphs = definitions.get("subgraphs")
+    if not isinstance(subgraphs, list):
+        return
+    for index, subgraph in enumerate(subgraphs):
+        if not isinstance(subgraph, Mapping):
+            continue
+        subgraph_id = subgraph.get("id", index)
+        yield from _iter_frontend_note_nodes(
+            subgraph,
+            scope=f"{scope}/subgraph:{subgraph_id}",
+        )
+
+
+def _note_title(node: Mapping[str, Any]) -> str:
+    title = node.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    metadata = node.get("_meta")
+    if isinstance(metadata, Mapping):
+        title = metadata.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return "Note"
+
+
+def _note_body(node: Mapping[str, Any]) -> str:
+    inputs = node.get("inputs")
+    if isinstance(inputs, Mapping):
+        for key in ("text", "note", "body", "content"):
+            value = inputs.get(key)
+            if isinstance(value, str):
+                return value
+    widget_values = node.get("widgets_values")
+    if isinstance(widget_values, list):
+        for value in widget_values:
+            if isinstance(value, str):
+                return value
+    return ""
 
 
 def _default_image_output_node_id(graph: dict[str, Any]) -> str | None:

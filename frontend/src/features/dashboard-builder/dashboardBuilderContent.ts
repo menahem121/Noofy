@@ -8,6 +8,7 @@ import {
   Shuffle,
   SlidersHorizontal,
   Sparkles,
+  StickyNote,
   Type,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ export type WidgetType =
   | "int_field"
   | "string_field"
   | "textarea"
+  | "note"
   | "toggle"
   | "load_image"
   | "load_image_mask"
@@ -28,6 +30,7 @@ export type WorkflowValueKind =
   | "string"
   | "number"
   | "boolean"
+  | "note"
   | "image_input"
   | "image_output"
   | "seed"
@@ -48,7 +51,7 @@ export interface WorkflowNodeValue {
   technical?: boolean;
 }
 
-export type NodeIconKind = "text" | "sampler" | "image" | "image-input" | "lora" | "tune" | "output" | "save";
+export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "lora" | "tune" | "output" | "save";
 
 export interface WorkflowNode {
   id: string;
@@ -103,6 +106,7 @@ export interface DashboardWidget {
   step?: number;
   options?: string[];
   drawMask?: boolean;
+  hasExecutableBinding?: boolean;
   layout?: DashboardWidgetLayout;
 }
 
@@ -164,6 +168,7 @@ export function clearDashboardDraft(workflowId: string) {
 
 export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
   text: Type,
+  note: StickyNote,
   sampler: Shuffle,
   image: ImageIcon,
   "image-input": ImagePlus,
@@ -175,6 +180,7 @@ export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
 
 export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   string: Type,
+  note: StickyNote,
   number: SlidersHorizontal,
   boolean: SlidersHorizontal,
   image_input: ImagePlus,
@@ -189,6 +195,7 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   int_field: "Number field",
   string_field: "Single line text",
   textarea: "Multi-line text",
+  note: "Note",
   toggle: "On / off",
   load_image: "Load image",
   load_image_mask: "Load image with mask",
@@ -218,6 +225,10 @@ export function isOutputWidgetType(widgetType: string): boolean {
 }
 
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
+  if (kind === "note") {
+    return ["note"];
+  }
+
   if (kind === "image_output") {
     return OUTPUT_WIDGET_TYPES;
   }
@@ -254,6 +265,7 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
 }
 
 export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
+  if (value.valueKind === "note") return "note";
   if (value.valueKind === "image_output") return "display_image";
   if (value.valueKind === "image_input") return "load_image";
   if (value.valueKind === "seed") return "seed_widget";
@@ -312,6 +324,8 @@ function isImageDimensionValue(value: Pick<WorkflowNodeValue, "inputName" | "lab
 }
 
 export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): string {
+  if (value.valueKind === "note") return nodeTitle || "Note";
+
   const labelMap: Record<string, string> = {
     text: nodeTitle.toLowerCase().includes("negative") ? "Negative prompt" : "Prompt",
     prompt: "Prompt",
@@ -338,6 +352,10 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
 }
 
 export function suggestDescription(value: WorkflowNodeValue): string {
+  if (value.valueKind === "note") {
+    return typeof value.rawValue === "string" ? value.rawValue : "";
+  }
+
   const hints: Record<string, string> = {
     text: "Describe what you want to create.",
     prompt: "Describe what you want to create.",
@@ -642,6 +660,7 @@ export function workflowFromBindableInputs(
   nodes: Array<{
     node_id: string;
     node_type: string;
+    node_title?: string;
     is_image_node: boolean;
     is_lora_node: boolean;
     inputs: Array<{
@@ -660,6 +679,7 @@ export function workflowFromBindableInputs(
     if (isImageNode) return "image-input";
     if (isLoraNode) return "lora";
     const t = nodeType.toLowerCase();
+    if (t === "note") return "note";
     if (t.includes("clip") || t.includes("text")) return "text";
     if (t.includes("ksampler") || t.includes("sampler")) return "sampler";
     if (t.includes("save")) return "save";
@@ -671,6 +691,7 @@ export function workflowFromBindableInputs(
   function valueKindFromString(kind: string): WorkflowValueKind {
     if (kind === "image_input") return "image_input";
     if (kind === "image_output") return "image_output";
+    if (kind === "note") return "note";
     if (kind === "seed") return "seed";
     if (kind === "lora") return "lora";
     if (kind === "select") return "select";
@@ -682,7 +703,7 @@ export function workflowFromBindableInputs(
   const builtNodes: WorkflowNode[] = nodes.map((node) => ({
     id: node.node_id,
     classType: node.node_type,
-    title: node.node_type,
+    title: node.node_title ?? node.node_type,
     iconKind: nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
     values: node.inputs.map((inp) => ({
       id: `node-${node.node_id}-${inp.input_name}`,
@@ -713,7 +734,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const normalized = normalizeDashboardSchema(schema);
   const groupedWidgetIds = groupedWidgetIdSet(normalized);
   const inputs: BackendWorkflowInput[] = normalized.widgets
-    .filter((w) => !isOutputWidgetType(w.widgetType))
+    .filter((w) => !isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w))
     .map((w) => ({
       id: w.id,
       label: w.title,
@@ -744,8 +765,8 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     id: w.id,
     type: w.widgetType,
     label: w.title,
-    input_id: !isOutputWidgetType(w.widgetType) ? w.id : undefined,
-    output_id: isOutputWidgetType(w.widgetType) ? outputIdForWidget(w.id) : undefined,
+    ...(!isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w) ? { input_id: w.id } : {}),
+    ...(isOutputWidgetType(w.widgetType) ? { output_id: outputIdForWidget(w.id) } : {}),
     description: w.description,
     layout: !groupedWidgetIds.has(w.id) && w.layout
       ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
@@ -790,6 +811,10 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   return { inputs, dashboard };
 }
 
+function hasExecutableWorkflowBinding(widget: DashboardWidget): boolean {
+  return widget.widgetType !== "note" || widget.hasExecutableBinding === true;
+}
+
 export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
   const promptValue = workflow.nodes
     .flatMap((node) => node.values)
@@ -829,7 +854,30 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
 }
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
-  return addAutomaticImageOutputWidget(addAutomaticImageInputWidgets(schema, workflow), workflow);
+  return addAutomaticImageOutputWidget(addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow), workflow);
+}
+
+export function addAutomaticNoteWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingWidgetIds = new Set(schema.widgets.map((widget) => widget.id));
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (
+        value.valueKind !== "note" ||
+        existingValueIds.has(value.id) ||
+        existingWidgetIds.has(`ctrl-${value.id}`)
+      ) {
+        continue;
+      }
+      widgets.push(createDashboardWidgetForValue(value, node));
+      existingValueIds.add(value.id);
+      existingWidgetIds.add(`ctrl-${value.id}`);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
 export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {

@@ -36,7 +36,22 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           }
         : undefined;
 
-      if (control.input_id) {
+      if (control.type === "note") {
+        const input = control.input_id ? inputIndex.get(control.input_id) : undefined;
+        widgets.push({
+          id: control.id,
+          valueId: input?.id ?? `note:${control.id}`,
+          binding: input
+            ? { nodeId: input.binding.node_id, inputName: input.binding.input_name }
+            : { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: control.label,
+          description: control.description ?? "",
+          defaultValue: input?.default ?? null,
+          ...(input ? { hasExecutableBinding: true } : {}),
+          layout,
+        });
+      } else if (control.input_id) {
         const input = inputIndex.get(control.input_id);
         if (!input) continue;
         widgets.push({
@@ -124,6 +139,7 @@ function toBuilderWidgetType(type: string): WidgetType {
     "int_field",
     "string_field",
     "textarea",
+    "note",
     "toggle",
     "load_image",
     "load_image_mask",
