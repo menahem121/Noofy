@@ -190,6 +190,40 @@ Endpoint:
 validation reflects Noofy-verified availability (not just raw engine
 `object_info`).
 
+### Local Verification Performance
+
+For `sha256_size` models, identity is decided by a full-file SHA-256 compare; size
+mismatches short-circuit before any hashing. Computed hashes are cached in the
+stat-keyed local model identity store, so the first time a file is seen pays the hash
+cost and later verifications are instant until the file changes.
+
+To speed up first-time imports and pre-run checks, Noofy verifies multiple required
+models in **bounded parallel** (each file is still fully hashed — the identity guarantee
+is unchanged; only execution is overlapped). Single-file hashing uses
+`hashlib.file_digest`.
+
+Tuning and safety:
+
+- `MODEL_VERIFICATION_MAX_CONCURRENCY` (environment variable, default `3`) caps how
+  many models hash at once. **Set it to `1` to force fully serial verification** — useful
+  on slow, removable, or network model storage. The effective value is also bounded by
+  CPU count and the number of models.
+- Noofy auto-clamps to serial when the model root looks like a network or rotational
+  filesystem (best-effort, never fatal). Some cloud block devices report as rotational;
+  use the env var above to override.
+
+Diagnostics (source `workflow.models`):
+
+- `Model verification running serially (parallelism auto-disabled for this storage)` —
+  a `warning` emitted at job start only when filesystem detection clamps to serial
+  (`downgrade_reason` of `network_fs` or `rotational`), carrying `selected_concurrency`
+  and `downgrade_reason` so an unexpected serial downgrade is easy to spot. Deliberate
+  config overrides and the happy path are not warned about.
+- `Model verification completed` — emitted at job end with `duration_ms`, model/file
+  count, `cache_hits`, `cache_misses`, `bytes_hashed`, `selected_concurrency`, and
+  `downgrade_reason` (`none`, `single_model`, `config_override`, `network_fs`,
+  `rotational`).
+
 ## Provider Resolver
 
 When a required model has no usable `source_urls` from the package, Noofy can

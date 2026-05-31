@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import hashlib
 from datetime import UTC, datetime, timedelta
 
@@ -11,6 +12,7 @@ from app.engine.models import RequiredModelSummary
 from app.engine.service import EngineService, IMPORT_SESSION_TTL, ImportSessionExpiredError
 from app.main import create_app
 from app.runtime.runners.supervisor import RunnerSupervisor
+from app.workflows import model_availability as availability_module
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
@@ -589,3 +591,112 @@ def test_trust_policy_endpoint_returns_public_key_metadata_only(monkeypatch) -> 
     assert payload["secrets_exposed"] is False
     assert "secret" not in str(payload["trusted_keys"]).casefold()
     assert "local-secret" not in str(payload)
+
+
+def test_import_model_verification_runs_async_and_logs_metrics(tmp_path, monkeypatch) -> None:
+    # Two locally-present SHA256 models exercise the async (parallel) verification path
+    # end-to-end and the structured completion diagnostic. Force the parallel happy path
+    # so the assertions are deterministic regardless of the test host's filesystem.
+    monkeypatch.setattr(
+        availability_module, "_verification_filesystem_downgrade_reason", lambda roots: None
+    )
+    monkeypatch.setattr(
+        availability_module,
+        "settings",
+        dataclasses.replace(availability_module.settings, model_verification_max_concurrency=4),
+    )
+    payload_a = b"local-model-a"
+    payload_b = b"local-model-b-longer"
+    sha_a = hashlib.sha256(payload_a).hexdigest()
+    sha_b = hashlib.sha256(payload_b).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    (noofy_root / "checkpoints").mkdir(parents=True)
+    (noofy_root / "checkpoints" / "a.safetensors").write_bytes(payload_a)
+    (noofy_root / "checkpoints" / "b.safetensors").write_bytes(payload_b)
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(id="multi_model_wf", name="Multi Model", version="0.1.0"),
+        engine="comfyui",
+        required_models=[
+            RequiredModel(
+                node_id="loader-a",
+                input_name="ckpt_name",
+                folder="checkpoints",
+                filename="a.safetensors",
+                checksum=f"sha256:{sha_a}",
+                size_bytes=len(payload_a),
+                verification_level="sha256_size",
+            ),
+            RequiredModel(
+                node_id="loader-b",
+                input_name="ckpt_name",
+                folder="checkpoints",
+                filename="b.safetensors",
+                checksum=f"sha256:{sha_b}",
+                size_bytes=len(payload_b),
+                verification_level="sha256_size",
+            ),
+        ],
+        comfyui_graph={},
+    )
+    main_log = LogStore()
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=main_log,
+        imported_package_store=FakePackageStore(package),
+        model_availability_service=ModelAvailabilityService(
+            model_roots=[noofy_root],
+            noofy_models_dir=noofy_root,
+            log_store=LogStore(),
+        ),
+    )
+    orchestrator = service.workflow_import_orchestrator
+
+    async def run() -> str:
+        # A running loop forces the async parallel verification job (not the sync fallback).
+        preview = service.preview_workflow_import(b"archive")
+        for _ in range(500):
+            status = orchestrator.import_model_verification_status(preview.import_session_id)
+            if status.status in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        return preview.import_session_id
+
+    session_id = asyncio.run(run())
+
+    verification = orchestrator.import_model_verification_status(session_id)
+    assert verification.status == "completed"
+    assert verification.model_summary is not None
+    assert verification.model_summary.ready_to_run is True
+    assert {m.status for m in verification.model_summary.models} == {"available"}
+
+    completed = [
+        event
+        for event in main_log.list_events().events
+        if event.message == "Model verification completed"
+    ]
+    assert len(completed) == 1
+    details = completed[0].details or {}
+    assert details["model_count"] == 2
+    assert details["file_count"] == 2
+    # Cold cache: both files hashed exactly once, nothing served from cache.
+    assert details["cache_hits"] == 0
+    assert details["cache_misses"] == 2
+    assert details["bytes_hashed"] == len(payload_a) + len(payload_b)
+    assert details["selected_concurrency"] >= 1
+    # Forced happy path: no filesystem clamp, so no serial-downgrade warning is emitted.
+    assert details["downgrade_reason"] == "none"
+    assert not [
+        event
+        for event in main_log.list_events().events
+        if event.message.startswith("Model verification running serially")
+    ]
+    # Both the summary and the top-level models list are normalized to the package's
+    # declared order (deterministic despite completion-ordered parallel results).
+    assert [m.filename for m in verification.model_summary.models] == [
+        "a.safetensors",
+        "b.safetensors",
+    ]
+    assert [m.filename for m in verification.models] == ["a.safetensors", "b.safetensors"]

@@ -6,9 +6,10 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -37,6 +38,22 @@ from app.workflows.package import RequiredModel, WorkflowPackage
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1 << 20
 DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = 3
+DEFAULT_MODEL_VERIFICATION_CONCURRENCY = 3
+# Network/remote filesystem types where parallel full-file hashing tends to hurt
+# (high latency, flaky I/O). Verification is clamped to serial on these roots.
+NETWORK_VERIFICATION_FILESYSTEM_TYPES = frozenset(
+    {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smbfs",
+        "smb3",
+        "afpfs",
+        "ncpfs",
+        "9p",
+        "sshfs",
+    }
+)
 PROVIDER_SEARCH_LIMIT = 20
 HUGGING_FACE_SEARCH_TERM_LIMIT = 6
 HUGGING_FACE_REPOS_PER_SEARCH_TERM = 4
@@ -45,6 +62,29 @@ PROVIDER_AUTH_REQUIRED_MESSAGE = (
     "This model source requires an API key for the provider account that can access it."
 )
 ACTIVE_DOWNLOAD_TRANSACTION_STATUSES = {"downloading", "verifying", "placing"}
+
+
+@dataclass
+class VerifyHashMetrics:
+    """Thread-safe accumulator for SHA-256 verification work during one job.
+
+    Threaded through ``summarize``/``_cached_sha256_file`` so a verification job
+    can report cache effectiveness and how many bytes were actually hashed.
+    """
+
+    cache_hits: int = 0
+    cache_misses: int = 0
+    bytes_hashed: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def record_cache_hit(self) -> None:
+        with self._lock:
+            self.cache_hits += 1
+
+    def record_cache_miss(self, *, bytes_hashed: int) -> None:
+        with self._lock:
+            self.cache_misses += 1
+            self.bytes_hashed += max(0, bytes_hashed)
 
 
 class ModelAvailabilityError(RuntimeError):
@@ -545,6 +585,29 @@ class ModelAvailabilityService:
         self.model_roots = model_roots
         self.noofy_models_dir = noofy_models_dir
 
+    def select_verification_concurrency(self, model_count: int) -> tuple[int, str]:
+        """Pick a safe concurrency for parallel model verification.
+
+        Returns ``(effective_concurrency, downgrade_reason)`` where the reason is one of
+        ``"none"``, ``"single_model"``, ``"config_override"``, ``"network_fs"``, or
+        ``"rotational"``. Parallel full-file hashing helps on SSD/NVMe but can hurt on
+        slow rotational, removable, or network mounts, so the effective value is clamped.
+        """
+        if model_count <= 1:
+            return 1, "single_model"
+        try:
+            configured = int(settings.model_verification_max_concurrency)
+        except (TypeError, ValueError):
+            configured = DEFAULT_MODEL_VERIFICATION_CONCURRENCY
+        if configured <= 1:
+            return 1, "config_override"
+        downgrade_reason = _verification_filesystem_downgrade_reason(self._safe_model_roots())
+        if downgrade_reason is not None:
+            return 1, downgrade_reason
+        cpu_cap = os.cpu_count() or 1
+        effective = max(1, min(configured, cpu_cap, model_count))
+        return effective, "none"
+
     def cleanup_interrupted_downloads(self) -> int:
         downloads_dir = self.noofy_models_dir / ".downloads"
         if not downloads_dir.is_dir():
@@ -577,12 +640,14 @@ class ModelAvailabilityService:
         *,
         deep_search: bool = True,
         verify_hashes: bool = True,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelSummary:
         models = [
             self._availability_for(
                 model,
                 deep_search=deep_search,
                 verify_hashes=verify_hashes,
+                metrics=metrics,
             )
             for model in package.required_models
         ]
@@ -1043,6 +1108,7 @@ class ModelAvailabilityService:
         *,
         deep_search: bool,
         verify_hashes: bool,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelAvailability:
         source_urls = _source_urls(model)
         candidates = self._local_candidates(model, deep_search=deep_search)
@@ -1070,8 +1136,12 @@ class ModelAvailabilityService:
                 candidate,
                 root=root,
                 verify_hashes=verify_hashes,
+                metrics=metrics,
             )
             if status == "available":
+                # The status check above already hashed (and cached) this file when
+                # needed, so this lookup is a cache hit; pass no metrics to avoid
+                # double-counting the same file.
                 matched_sha256 = (
                     self._cached_sha256_file(candidate, root=root)
                     if verify_hashes
@@ -1125,6 +1195,7 @@ class ModelAvailabilityService:
         *,
         root: Path,
         verify_hashes: bool = True,
+        metrics: VerifyHashMetrics | None = None,
     ) -> str:
         if not path.is_file():
             return "missing"
@@ -1136,7 +1207,7 @@ class ModelAvailabilityService:
                 return "possible_match"
             if not verify_hashes:
                 return "possible_match"
-            return "available" if self._cached_sha256_file(path, root=root) == _normalize_sha256(model.checksum) else "possible_match"
+            return "available" if self._cached_sha256_file(path, root=root, metrics=metrics) == _normalize_sha256(model.checksum) else "possible_match"
         if model.verification_level is ModelVerificationLevel.FILENAME_SIZE:
             return "available" if model.size_bytes is not None and size == model.size_bytes else "possible_match"
         return "possible_match"
@@ -1455,7 +1526,13 @@ class ModelAvailabilityService:
             return actual
         return known_sha256
 
-    def _cached_sha256_file(self, path: Path, *, root: Path) -> str:
+    def _cached_sha256_file(
+        self,
+        path: Path,
+        *,
+        root: Path,
+        metrics: VerifyHashMetrics | None = None,
+    ) -> str:
         context = self._local_identity_context(path, root=root)
         if self.local_model_identity_store is not None:
             try:
@@ -1474,6 +1551,8 @@ class ModelAvailabilityService:
                 )
                 cached = None
             if cached:
+                if metrics is not None:
+                    metrics.record_cache_hit()
                 return cached
         self.log_store.add(
             "info",
@@ -1486,6 +1565,12 @@ class ModelAvailabilityService:
             },
         )
         sha256 = _sha256_file(path)
+        if metrics is not None:
+            try:
+                hashed_bytes = path.stat().st_size
+            except OSError:
+                hashed_bytes = 0
+            metrics.record_cache_miss(bytes_hashed=hashed_bytes)
         self._remember_cached_sha256(path, root=root, sha256=sha256)
         return sha256
 
@@ -2114,6 +2199,15 @@ def _requirement_id(model: RequiredModel) -> str:
     return f"{model.folder}/{model.filename}"
 
 
+def requirement_id_for(model: RequiredModel) -> str:
+    """Public, stable identity for a required model.
+
+    Matches the ``requirement_id`` produced on ``RequiredModelAvailability`` so callers
+    can normalize completion-ordered results back to the package's model order.
+    """
+    return _requirement_id(model)
+
+
 def _model_download_target_key(model: RequiredModel) -> tuple[str, str]:
     return (model.folder, model.filename.replace("\\", "/"))
 
@@ -2131,15 +2225,115 @@ def _normalize_sha256(value: str) -> str:
     return value.split(":", 1)[1] if value.startswith("sha256:") else value
 
 
-def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
+def _sha256_file(path: Path) -> str:
+    # ``hashlib.file_digest`` (Python 3.11+) is a C-level read/hash loop that uses a
+    # larger internal buffer and releases the GIL while hashing, so it is faster than a
+    # hand-rolled loop and scales better when several files hash concurrently. Output is
+    # byte-for-byte identical to hashlib.sha256 over the file.
     with path.open("rb") as file:
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+def _verification_filesystem_downgrade_reason(roots: list[Path]) -> str | None:
+    """Best-effort, never-raising probe of model roots.
+
+    Returns a downgrade reason (``"network_fs"`` or ``"rotational"``) if any root sits on
+    a slow/network/rotational filesystem, else ``None``. Network roots take priority and
+    short-circuit. Detection is platform-limited (Linux ``/proc/mounts`` + ``/sys/block``);
+    anything unknown or erroring falls through to ``None`` (no downgrade).
+    """
+    fallback: str | None = None
+    for root in roots:
+        try:
+            reason = _filesystem_slow_reason(root)
+        except Exception:
+            reason = None
+        if reason == "network_fs":
+            return "network_fs"
+        if reason is not None and fallback is None:
+            fallback = reason
+    return fallback
+
+
+def _filesystem_slow_reason(path: Path) -> str | None:
+    mounts = _read_linux_mounts()
+    if not mounts:
+        return None
+    target = path.expanduser().resolve(strict=False)
+    device, fstype = _mount_for_path(target, mounts)
+    if fstype is None:
+        return None
+    normalized_fstype = fstype.split(".", 1)[-1] if fstype.startswith("fuse.") else fstype
+    if (
+        normalized_fstype in NETWORK_VERIFICATION_FILESYSTEM_TYPES
+        or fstype in NETWORK_VERIFICATION_FILESYSTEM_TYPES
+    ):
+        return "network_fs"
+    if device and _device_is_rotational(device):
+        return "rotational"
+    return None
+
+
+def _read_linux_mounts() -> list[tuple[str, str, str]]:
+    try:
+        raw = Path("/proc/mounts").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    entries: list[tuple[str, str, str]] = []
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        entries.append(
+            (_unescape_mount_field(parts[0]), _unescape_mount_field(parts[1]), parts[2])
+        )
+    return entries
+
+
+def _mount_for_path(
+    target: Path, mounts: list[tuple[str, str, str]]
+) -> tuple[str | None, str | None]:
+    best_device: str | None = None
+    best_fstype: str | None = None
+    best_len = -1
+    for device, mount_point, fstype in mounts:
+        try:
+            mount_path = Path(mount_point)
+        except (TypeError, ValueError):
+            continue
+        if (target == mount_path or _is_relative_to(target, mount_path)) and len(
+            mount_point
+        ) > best_len:
+            best_len = len(mount_point)
+            best_device = device
+            best_fstype = fstype
+    return best_device, best_fstype
+
+
+def _unescape_mount_field(value: str) -> str:
+    if "\\" not in value:
+        return value
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), value)
+
+
+def _device_is_rotational(device: str) -> bool:
+    if not device.startswith("/dev/"):
+        return False
+    name = os.path.basename(device)
+    # Try the device as named, then its parent block device (strip a trailing
+    # partition suffix like sda1 -> sda or nvme0n1p1 -> nvme0n1).
+    candidates = [name]
+    stripped = re.sub(r"p?\d+$", "", name)
+    if stripped and stripped != name:
+        candidates.append(stripped)
+    for candidate in candidates:
+        rotational_path = Path("/sys/block") / candidate / "queue" / "rotational"
+        try:
+            if rotational_path.exists():
+                return rotational_path.read_text(encoding="utf-8").strip() == "1"
+        except OSError:
+            continue
+    return False
 
 
 def _nearest_existing_parent(path: Path) -> Path | None:

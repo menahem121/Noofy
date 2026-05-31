@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import os
@@ -209,10 +210,10 @@ def test_model_summary_persists_and_reuses_cached_sha256(
     original_sha256_file = availability_module._sha256_file
     calls = 0
 
-    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    def counting_sha256(path: Path) -> str:
         nonlocal calls
         calls += 1
-        return original_sha256_file(path, chunk_size)
+        return original_sha256_file(path)
 
     monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
 
@@ -222,7 +223,7 @@ def test_model_summary_persists_and_reuses_cached_sha256(
     assert first.models[0].matched_sha256 == sha
     assert calls == 1
 
-    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+    def fail_if_hashing(path: Path) -> str:
         raise AssertionError("unchanged cached model should not be re-hashed")
 
     monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
@@ -250,10 +251,10 @@ def test_model_summary_invalidates_cache_when_size_changes(
     original_sha256_file = availability_module._sha256_file
     calls = 0
 
-    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    def counting_sha256(path: Path) -> str:
         nonlocal calls
         calls += 1
-        return original_sha256_file(path, chunk_size)
+        return original_sha256_file(path)
 
     monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
 
@@ -306,10 +307,10 @@ def test_model_summary_invalidates_cache_when_mtime_changes(
     original_sha256_file = availability_module._sha256_file
     calls = 0
 
-    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    def counting_sha256(path: Path) -> str:
         nonlocal calls
         calls += 1
-        return original_sha256_file(path, chunk_size)
+        return original_sha256_file(path)
 
     monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
     package = _package(
@@ -349,10 +350,10 @@ def test_model_summary_invalidates_cache_when_inode_changes(
     original_sha256_file = availability_module._sha256_file
     calls = 0
 
-    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    def counting_sha256(path: Path) -> str:
         nonlocal calls
         calls += 1
-        return original_sha256_file(path, chunk_size)
+        return original_sha256_file(path)
 
     monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
     package = _package(
@@ -413,7 +414,7 @@ def test_model_summary_reuses_cache_after_noofy_models_folder_moves(
     os.utime(new_path, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
     new_service = _service(noofy_root=new_root, local_model_identity_store=store)
 
-    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+    def fail_if_hashing(path: Path) -> str:
         raise AssertionError("moved model should reuse cached hash")
 
     monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
@@ -457,7 +458,7 @@ def test_external_comfyui_models_are_cached_but_remain_user_local(
     assert first.models[0].status == "available"
     assert first.models[0].asset_ownership is AssetOwnership.USER_LOCAL
 
-    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+    def fail_if_hashing(path: Path) -> str:
         raise AssertionError("external cached model should not be re-hashed")
 
     monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
@@ -540,10 +541,10 @@ async def test_downloaded_model_final_hash_is_cached_for_future_summaries(
         part_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.write_bytes(payload)
 
-    def counting_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    def counting_sha256(path: Path) -> str:
         nonlocal calls
         calls += 1
-        return original_sha256_file(path, chunk_size)
+        return original_sha256_file(path)
 
     monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
     monkeypatch.setattr(availability_module, "_sha256_file", counting_sha256)
@@ -565,7 +566,7 @@ async def test_downloaded_model_final_hash_is_cached_for_future_summaries(
     assert result.downloaded_count == 1
     assert calls == 1
 
-    def fail_if_hashing(path: Path, chunk_size: int = 1 << 20) -> str:
+    def fail_if_hashing(path: Path) -> str:
         raise AssertionError("downloaded cached model should not be re-hashed")
 
     monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
@@ -2678,3 +2679,120 @@ async def test_provider_search_does_not_download_similar_filename_only_result(
     assert result.model_summary.models[0].status_label == "Needs manual download"
     assert "reliable automatic download source" in (result.model_summary.models[0].message or "")
     assert not (noofy_root / "checkpoints" / "target-model.safetensors").exists()
+
+
+def test_sha256_file_matches_hashlib_reference(tmp_path: Path) -> None:
+    # file_digest output must be byte-for-byte identical to hashlib.sha256 over the file.
+    payload = os.urandom(3_500_000)
+    target = tmp_path / "blob.bin"
+    target.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    assert availability_module._sha256_file(target) == expected
+
+
+def test_verify_hash_metrics_account_for_miss_then_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"metrics-model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    first_metrics = availability_module.VerifyHashMetrics()
+    first = service.summarize(package, metrics=first_metrics)
+    assert first.models[0].status == "available"
+    # First pass hashes once (cold cache) and records only the missed file's bytes.
+    assert first_metrics.cache_misses == 1
+    assert first_metrics.cache_hits == 0
+    assert first_metrics.bytes_hashed == len(payload)
+
+    second_metrics = availability_module.VerifyHashMetrics()
+    second = service.summarize(package, metrics=second_metrics)
+    assert second.models[0].status == "available"
+    # Second pass is served from the persistent cache: a hit, and nothing re-hashed.
+    assert second_metrics.cache_hits == 1
+    assert second_metrics.cache_misses == 0
+    assert second_metrics.bytes_hashed == 0
+
+
+def test_select_verification_concurrency_single_model_is_serial(tmp_path: Path) -> None:
+    service = _service(noofy_root=tmp_path / "Noofy Models")
+    assert service.select_verification_concurrency(1) == (1, "single_model")
+    assert service.select_verification_concurrency(0) == (1, "single_model")
+
+
+def _settings_with_concurrency(value: int) -> object:
+    # Settings is a frozen dataclass; copy it with only the concurrency field overridden
+    # (other reads like comfyui_repo_dir must keep working) and rebind the module global.
+    return dataclasses.replace(
+        availability_module.settings, model_verification_max_concurrency=value
+    )
+
+
+def test_select_verification_concurrency_respects_config_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(noofy_root=tmp_path / "Noofy Models")
+    monkeypatch.setattr(availability_module, "settings", _settings_with_concurrency(1))
+    assert service.select_verification_concurrency(4) == (1, "config_override")
+
+
+def test_select_verification_concurrency_clamps_on_slow_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(noofy_root=tmp_path / "Noofy Models")
+    monkeypatch.setattr(availability_module, "settings", _settings_with_concurrency(4))
+    monkeypatch.setattr(
+        availability_module,
+        "_verification_filesystem_downgrade_reason",
+        lambda roots: "network_fs",
+    )
+    assert service.select_verification_concurrency(4) == (1, "network_fs")
+
+
+def test_select_verification_concurrency_parallel_on_fast_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(noofy_root=tmp_path / "Noofy Models")
+    monkeypatch.setattr(availability_module, "settings", _settings_with_concurrency(4))
+    monkeypatch.setattr(
+        availability_module, "_verification_filesystem_downgrade_reason", lambda roots: None
+    )
+    monkeypatch.setattr(availability_module.os, "cpu_count", lambda: 8)
+    effective, reason = service.select_verification_concurrency(6)
+    assert reason == "none"
+    # min(configured=4, cpu=8, models=6) == 4
+    assert effective == 4
+
+
+def test_filesystem_downgrade_reason_is_non_fatal_on_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(path: Path) -> str | None:
+        raise OSError("unreadable mount table")
+
+    monkeypatch.setattr(availability_module, "_filesystem_slow_reason", boom)
+    # A raising probe must be swallowed and treated as "no downgrade".
+    assert (
+        availability_module._verification_filesystem_downgrade_reason([Path("/tmp")])
+        is None
+    )

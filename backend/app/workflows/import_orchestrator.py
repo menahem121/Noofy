@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -20,9 +21,18 @@ from app.artifacts import AssetOwnership
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.library import workflow_package_display_name
-from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.model_availability import (
+    ModelAvailabilityService,
+    VerifyHashMetrics,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.user_state import UserStateService
+from app.workflows.verification_dispatch import (
+    log_verification_concurrency,
+    log_verification_metrics,
+    order_by_package,
+    run_parallel_model_verification,
+)
 
 IMPORT_SESSION_TTL = timedelta(hours=1)
 
@@ -445,16 +455,43 @@ class WorkflowImportOrchestrator:
             job.updated_at = datetime.now(UTC)
             return
         self._begin_model_verification_job(job, pending)
+        metrics = VerifyHashMetrics()
+        models = list(pending.package.required_models)
+        concurrency, downgrade_reason = (
+            self.model_availability_service.select_verification_concurrency(len(models))
+        )
+        log_verification_concurrency(
+            self.log_store,
+            workflow_id=pending.package.metadata.id,
+            model_count=len(models),
+            selected_concurrency=concurrency,
+            downgrade_reason=downgrade_reason,
+        )
+        started_at = time.monotonic()
         try:
-            for index, model in enumerate(pending.package.required_models, start=1):
-                self._record_model_verification_progress(job, pending, index, model)
-                availability = await asyncio.to_thread(
-                    self._verify_import_model,
-                    pending.package,
-                    model,
-                )
-                self._record_verified_import_model(job, pending, availability)
+            await run_parallel_model_verification(
+                models,
+                verify=lambda model: self._verify_import_model(
+                    pending.package, model, metrics
+                ),
+                on_start=lambda index, model: self._record_model_verification_progress(
+                    job, pending, index, model
+                ),
+                on_result=lambda availability: self._record_verified_import_model(
+                    job, pending, availability
+                ),
+                concurrency=concurrency,
+            )
             self._finish_model_verification_job(job, pending)
+            log_verification_metrics(
+                self.log_store,
+                workflow_id=pending.package.metadata.id,
+                duration_ms=int((time.monotonic() - started_at) * 1000),
+                model_count=len(models),
+                metrics=metrics,
+                selected_concurrency=concurrency,
+                downgrade_reason=downgrade_reason,
+            )
         except Exception as exc:
             self._fail_model_verification_job(job, pending, exc)
 
@@ -563,12 +600,14 @@ class WorkflowImportOrchestrator:
         self,
         package: WorkflowPackage,
         model: RequiredModel,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelAvailability:
         single_model_package = package.model_copy(update={"required_models": [model]})
         summary = self.workflow_library_service.model_availability_summary_for_package(
             single_model_package,
             fast=True,
             verify_hashes=True,
+            metrics=metrics,
         )
         return summary.models[0]
 
@@ -750,7 +789,13 @@ class WorkflowImportOrchestrator:
             total_models=job.total_models,
             verified_models=job.verified_models,
             percent=percent,
-            models=list((job.models or {}).values()),
+            # Prefer the package-ordered summary so the list stays deterministic under
+            # parallel (completion-ordered) verification.
+            models=(
+                list(job.model_summary.models)
+                if job.model_summary is not None
+                else list((job.models or {}).values())
+            ),
             model_summary=job.model_summary,
         )
 
@@ -816,6 +861,7 @@ class WorkflowImportOrchestrator:
         package: WorkflowPackage,
         models: list[RequiredModelAvailability],
     ) -> RequiredModelSummary:
+        models = order_by_package(package, models)
         available_count = sum(model.status == "available" for model in models)
         possible_count = sum(model.status == "possible_match" for model in models)
         missing_count = sum(model.status == "missing" for model in models)

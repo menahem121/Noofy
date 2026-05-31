@@ -39,6 +39,33 @@ def test_log_store_filters_by_job_and_latest_error() -> None:
     assert store.latest_error().job_id == "job-1"
 
 
+def test_log_store_add_is_thread_safe_under_concurrent_writers() -> None:
+    # Parallel verification writes diagnostics from multiple worker threads at once;
+    # ids must stay unique and no event may be lost or corrupt the deque.
+    import threading
+
+    store = LogStore(max_events=10_000)
+    writers = 8
+    per_writer = 250
+    start = threading.Barrier(writers)
+
+    def writer(index: int) -> None:
+        start.wait()
+        for n in range(per_writer):
+            store.add("info", f"event-{index}-{n}", "test")
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    events = store.list_events(limit=10_000).events
+    assert len(events) == writers * per_writer
+    ids = [event.id for event in events]
+    assert len(set(ids)) == len(ids)  # no duplicate ids from the id counter race
+
+
 def test_diagnostic_payload_redacts_secrets_and_hides_developer_details_by_default() -> (
     None
 ):

@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import shutil
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,8 +26,17 @@ from app.workflows.library import (
     workflow_package_display_name,
 )
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.model_availability import (
+    ModelAvailabilityService,
+    VerifyHashMetrics,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
+from app.workflows.verification_dispatch import (
+    log_verification_concurrency,
+    log_verification_metrics,
+    order_by_package,
+    run_parallel_model_verification,
+)
 from app.workflows.store_paths import (
     assert_path_within,
     mutable_package_dir,
@@ -313,11 +323,13 @@ class WorkflowLibraryService:
         *,
         fast: bool = False,
         verify_hashes: bool = False,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelSummary:
         return self._summarize_models(
             package,
             fast=fast,
             verify_hashes=verify_hashes,
+            metrics=metrics,
         )
 
     def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
@@ -491,6 +503,7 @@ class WorkflowLibraryService:
         *,
         fast: bool = False,
         verify_hashes: bool = False,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelSummary:
         summarize = self.model_availability_service.summarize
         if not fast:
@@ -501,22 +514,50 @@ class WorkflowLibraryService:
             return summarize(package)
         if "deep_search" not in parameters or "verify_hashes" not in parameters:
             return summarize(package)
-        return summarize(package, deep_search=False, verify_hashes=verify_hashes)
+        kwargs: dict[str, object] = {"deep_search": False, "verify_hashes": verify_hashes}
+        if "metrics" in parameters:
+            kwargs["metrics"] = metrics
+        return summarize(package, **kwargs)
 
     async def _run_model_verification_job(self, job_id: str) -> None:
         job = self._model_verification_jobs[job_id]
         package = self.workflow_loader.get_package(job.workflow_id)
         self._begin_model_verification_job(job)
+        metrics = VerifyHashMetrics()
+        models = list(package.required_models)
+        concurrency, downgrade_reason = (
+            self.model_availability_service.select_verification_concurrency(len(models))
+        )
+        log_verification_concurrency(
+            self.log_store,
+            workflow_id=job.workflow_id,
+            model_count=len(models),
+            selected_concurrency=concurrency,
+            downgrade_reason=downgrade_reason,
+        )
+        started_at = time.monotonic()
         try:
-            for index, model in enumerate(package.required_models, start=1):
-                self._record_model_verification_progress(job, index, model)
-                availability = await asyncio.to_thread(
-                    self._verify_workflow_model,
-                    package,
-                    model,
-                )
-                self._record_verified_model(job, package, availability)
+            await run_parallel_model_verification(
+                models,
+                verify=lambda model: self._verify_workflow_model(package, model, metrics),
+                on_start=lambda index, model: self._record_model_verification_progress(
+                    job, index, model
+                ),
+                on_result=lambda availability: self._record_verified_model(
+                    job, package, availability
+                ),
+                concurrency=concurrency,
+            )
             self._finish_model_verification_job(job)
+            log_verification_metrics(
+                self.log_store,
+                workflow_id=job.workflow_id,
+                duration_ms=int((time.monotonic() - started_at) * 1000),
+                model_count=len(models),
+                metrics=metrics,
+                selected_concurrency=concurrency,
+                downgrade_reason=downgrade_reason,
+            )
         except Exception as exc:
             self._fail_model_verification_job(job, exc)
 
@@ -613,12 +654,17 @@ class WorkflowLibraryService:
         self,
         package: WorkflowPackage,
         model: RequiredModel,
+        metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelAvailability:
         single_model_package = package.model_copy(update={"required_models": [model]})
+        # ``metrics`` is only forwarded when present so the call stays compatible with
+        # availability services (e.g. test stubs) whose ``summarize`` predates the kwarg.
+        kwargs: dict[str, object] = {"deep_search": True, "verify_hashes": True}
+        if metrics is not None:
+            kwargs["metrics"] = metrics
         return self.model_availability_service.summarize(
             single_model_package,
-            deep_search=True,
-            verify_hashes=True,
+            **kwargs,
         ).models[0]
 
     def _checking_model_summary(self, package: WorkflowPackage) -> RequiredModelSummary:
@@ -644,6 +690,7 @@ class WorkflowLibraryService:
         package: WorkflowPackage,
         models: list[RequiredModelAvailability],
     ) -> RequiredModelSummary:
+        models = order_by_package(package, models)
         available_count = sum(model.status == "available" for model in models)
         possible_count = sum(model.status == "possible_match" for model in models)
         missing_count = sum(model.status == "missing" for model in models)
@@ -676,7 +723,13 @@ class WorkflowLibraryService:
             total_models=job.total_models,
             verified_models=job.verified_models,
             percent=percent,
-            models=list((job.models or {}).values()),
+            # Prefer the package-ordered summary so the list stays deterministic under
+            # parallel (completion-ordered) verification.
+            models=(
+                list(job.model_summary.models)
+                if job.model_summary is not None
+                else list((job.models or {}).values())
+            ),
             model_summary=job.model_summary,
         )
 
