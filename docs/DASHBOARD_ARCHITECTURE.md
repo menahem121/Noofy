@@ -38,7 +38,9 @@ Exporting creates a new portable archive. Re-exported user packages strip origin
 - `sections[].controls[]`: renderable controls with type, title, optional binding, default value, validation/display metadata, standalone layout, and optional output metadata.
 - `sections[].groups[]`: visual containers with group title, helper description, ordered control IDs, and group layout. Groups do not merge control values or bindings; each child control remains independently bound.
 
-Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `display_image`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
+Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `load_audio`, `display_image`, `display_audio`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
+
+Media output records include a media `kind` such as `image` or `audio` and keep the legacy `type` field for compatibility. Result renderers should read `kind` first and fall back to `type` for older packages.
 
 Each input control binds to a workflow input ID, which maps to an engine graph node ID and input name. Each output control uses `output_id`, which maps to a `WorkflowOutput` and then to result entries from the job. Informational `note` controls may be dashboard-only: they store creator-authored multi-line text without an executable workflow binding.
 
@@ -103,8 +105,9 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 - Values, layout overrides, and output widget preferences live under `{data_dir}/user-state/{workflow_id}.json`.
 - `WorkflowUserState.output_preferences` stores per-control Gallery Auto Save preferences. Missing preferences mean Auto Save is off.
 - Image inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/image`.
+- Audio inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/audio`, form field `audio`. Supported dashboard audio assets are streamed to temporary files first, validated as wav, mp3, flac, ogg, or m4a, capped at 100 GB per file, and moved atomically into place. Audio dashboard assets are local app data and are not stored inside portable `.noofy` packages.
 - ComfyUI `input/` is staging-only. The backend stages dashboard assets into the runner-visible input directory immediately before execution.
-- Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs.
+- Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs. Audio widgets render backend media URLs directly in native `<audio>` elements so large files are not blob-fetched into memory.
 - Generated result media is also served through the backend API. Job results contain app-owned output URLs such as `/api/jobs/{job_id}/outputs/view?...`, while the selected `EngineAdapter` performs any engine-specific file retrieval.
 
 `WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back. Native workflow dashboard overrides are reset by deleting the override file, which restores the bundled dashboard schema on the next package load.
@@ -113,7 +116,7 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 
 Auto Save is decided at run submission. The frontend sends the current output preference snapshot with `POST /api/workflows/{id}/run`; the backend validates it against the active dashboard schema and stores it with the job context. Later toggle changes affect future runs only.
 
-Completed jobs save only final images whose `control_id -> output_id -> node_id` mapping matches an Auto Save-enabled output widget from the stored run snapshot. Gallery metadata and idempotency state live in `{data_dir}/outputs/gallery/gallery.db`; full images and thumbnails are stored in flat `images/` and `thumbnails/` folders. `GalleryStore` uses SQLite `BEGIN IMMEDIATE` write transactions as the cross-process serialization point for Gallery metadata and file allocation, so correctness does not depend on an undocumented single-backend-process guarantee for a data directory.
+Completed jobs save only final media whose `control_id -> output_id -> node_id` mapping matches an Auto Save-enabled output widget from the stored run snapshot and the current Gallery media support. Output preferences are keyed by output control ID and must not assume every output is an image. Gallery metadata and idempotency state live in `{data_dir}/outputs/gallery/gallery.db`; full images and thumbnails are stored in flat `images/` and `thumbnails/` folders. `GalleryStore` uses SQLite `BEGIN IMMEDIATE` write transactions as the cross-process serialization point for Gallery metadata and file allocation, so correctness does not depend on an undocumented single-backend-process guarantee for a data directory.
 
 ## Backend API Surface
 
@@ -131,6 +134,7 @@ Important dashboard APIs:
 - `PUT /api/workflows/{id}/dashboard`: save a configured dashboard.
 - `DELETE /api/workflows/{id}/dashboard`: remove a user-owned native dashboard override and fall back to the bundled dashboard.
 - `POST /api/workflows/{id}/assets/image`: store a Noofy dashboard image asset.
+- `POST /api/workflows/{id}/assets/audio`: store a Noofy dashboard audio asset.
 - `POST /api/workflows/{id}/uploads/image`: upload or stage a workflow image input through the workflow-selected engine adapter.
 - `GET /api/assets/{asset_id}`: serve a dashboard asset.
 - `GET /api/jobs/{job_id}/outputs/view`: serve generated job output media through the job-bound engine adapter.

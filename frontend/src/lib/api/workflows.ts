@@ -396,6 +396,7 @@ export interface WorkflowOutputDef {
   label: string;
   node_id: string;
   type: string;
+  kind?: string | null;
 }
 
 export interface RequiredModelDef {
@@ -485,6 +486,7 @@ export interface BindableNode {
   node_type: string;
   node_title?: string;
   is_image_node: boolean;
+  is_audio_node?: boolean;
   is_lora_node: boolean;
   inputs: BindableInputEntry[];
 }
@@ -567,6 +569,10 @@ export interface DashboardAssetMetadata {
   asset_id: string;
   original_filename: string;
   content_type: string;
+  kind?: string;
+  size?: number;
+  format?: string;
+  duration_seconds?: number;
 }
 
 // ─── Workflow functions ───────────────────────────────────────────────────────
@@ -789,6 +795,77 @@ export async function uploadDashboardAsset(
   return response.json() as Promise<DashboardAssetUploadResponse>;
 }
 
+export interface UploadProgress {
+  loaded: number;
+  total: number | null;
+  percent: number | null;
+}
+
+export async function uploadDashboardAudioAsset(
+  workflowId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<DashboardAssetUploadResponse> {
+  const formData = new FormData();
+  formData.append("audio", file);
+  const token = getApiToken();
+  const url = `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/audio`;
+
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.setRequestHeader("Accept", "application/json");
+    if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
+    const abortRequest = () => request.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abortRequest);
+    if (signal?.aborted) {
+      reject(new Error("Audio upload was canceled."));
+      return;
+    }
+    signal?.addEventListener("abort", abortRequest, { once: true });
+    request.upload.onprogress = (event) => {
+      const total = event.lengthComputable ? event.total : file.size || null;
+      onProgress?.({
+        loaded: event.loaded,
+        total,
+        percent: total ? Math.min(100, Math.round((event.loaded / total) * 100)) : null,
+      });
+    };
+    request.onload = () => {
+      cleanup();
+      if (request.status >= 200 && request.status < 300) {
+        try {
+          resolve(JSON.parse(request.responseText) as DashboardAssetUploadResponse);
+        } catch {
+          reject(new Error("Noofy local app service returned an invalid audio upload response."));
+        }
+        return;
+      }
+      reject(new Error(xhrErrorMessage(request)));
+    };
+    request.onerror = () => {
+      cleanup();
+      reject(new Error("Audio upload failed."));
+    };
+    request.onabort = () => {
+      cleanup();
+      reject(new Error("Audio upload was canceled."));
+    };
+    request.send(formData);
+  });
+}
+
+function xhrErrorMessage(request: XMLHttpRequest): string {
+  try {
+    const payload = JSON.parse(request.responseText) as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) return payload.detail;
+  } catch {
+    // Fall through to stable fallback.
+  }
+  return `Noofy local app service returned ${request.status}`;
+}
+
 export function fetchWorkflowIcons(): Promise<WorkflowIconsResponse> {
   return getJson<WorkflowIconsResponse>("/workflow-icons");
 }
@@ -820,6 +897,10 @@ export async function fetchAssetBlobUrl(assetId: string): Promise<string> {
 
 export function fetchAssetMetadata(assetId: string): Promise<DashboardAssetMetadata> {
   return getJson<DashboardAssetMetadata>(`/assets/${encodeURIComponent(assetId)}/metadata`);
+}
+
+export function dashboardAssetMediaUrl(assetId: string): string {
+  return resolveBackendUrl(`/assets/${encodeURIComponent(assetId)}`, { includeToken: true });
 }
 
 export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {

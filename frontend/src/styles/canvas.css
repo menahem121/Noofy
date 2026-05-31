@@ -425,6 +425,54 @@
   outline-offset: 2px;
 }
 
+.widget-output-audio {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.widget-output-audio__item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(20, 19, 22, 0.42);
+}
+
+.widget-output-audio__player {
+  width: 100%;
+}
+
+.widget-output-audio__meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.widget-output-audio__meta strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-output-audio__meta span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.widget-output-audio__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .widget-image-viewer {
   position: fixed;
   inset: 0;

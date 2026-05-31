@@ -24,6 +24,8 @@ def is_job_query_token_request(request: Request) -> bool:
         path.endswith("/export") or path.endswith("/export/comfyui-json")
     ):
         return True
+    if path.startswith("/api/assets/"):
+        return True
     return path.startswith("/api/gallery/") and (
         path.endswith("/image") or path.endswith("/thumbnail")
     )
@@ -39,7 +41,7 @@ def bearer_token(request: Request) -> str | None:
 
 def request_token(request: Request) -> str | None:
     if is_job_query_token_request(request):
-        return request.query_params.get("token")
+        return request.query_params.get("token") or bearer_token(request)
     return bearer_token(request)
 
 

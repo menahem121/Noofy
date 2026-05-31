@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.composition import create_api_services
 from app.diagnostics import LogStore
+from app.engine.models import EngineOutputStream
 from app.main import create_app
 from app.models.ownership import ModelOwnershipStore
 from app.workflows.import_orchestrator import WorkflowImportOrchestrator
@@ -37,6 +38,15 @@ def test_run_routes_use_run_services_before_engine_facade(monkeypatch):
             assert subfolder == "preview"
             assert output_type == "output"
             return b"image-bytes", "image/png"
+
+        async def stream_output(self, job_id: str, filename: str, subfolder: str, output_type: str, range_header: str | None = None):
+            del range_header
+            content, media_type = await self.fetch_output(job_id, filename, subfolder, output_type)
+
+            async def body():
+                yield content
+
+            return EngineOutputStream(body=body(), media_type=media_type)
 
     class FakeRunResultService:
         async def get_result(self, job_id: str):

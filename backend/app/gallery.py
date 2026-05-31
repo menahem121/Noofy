@@ -37,6 +37,7 @@ class GalleryOutputWidgetSnapshot(BaseModel):
     output_id: str
     node_id: str
     widget_title: str
+    media_kind: str = "image"
 
 
 class GalleryInputSnapshot(BaseModel):
@@ -419,7 +420,8 @@ class GalleryCaptureService:
         enabled = {
             widget.control_id: widget
             for widget in snapshot.output_widgets
-            if snapshot.output_preferences.get(widget.control_id, OutputPreference()).auto_save
+            if widget.media_kind == "image"
+            and snapshot.output_preferences.get(widget.control_id, OutputPreference()).auto_save
         }
         if not enabled:
             return []
@@ -447,7 +449,7 @@ class GalleryCaptureService:
                         continue
                     filename = _safe_basename(str(image.get("filename") or f"image-{index}.png"))
                     subfolder = str(image.get("subfolder") or "")
-                    output_type = str(image.get("type") or "output")
+                    output_type = str(image.get("output_type") or image.get("type") or "output")
                     idempotency = _capture_idempotency_key(
                         job_id=result.job_id,
                         control_id=widget.control_id,
@@ -510,7 +512,7 @@ def build_run_submission_snapshot(
     valid_output_control_ids: set[str] = set()
     for section in package.dashboard.sections:
         for control in section.controls:
-            if control.type not in {"display_image", "result_image"} or not control.output_id:
+            if control.type not in {"display_image", "display_audio", "result_image"} or not control.output_id:
                 continue
             output = outputs_by_id.get(control.output_id)
             if output is None:
@@ -522,6 +524,7 @@ def build_run_submission_snapshot(
                     output_id=output.id,
                     node_id=output.node_id,
                     widget_title=control.label or output.label,
+                    media_kind=output.kind or output.type,
                 )
             )
 

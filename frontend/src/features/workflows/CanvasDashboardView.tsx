@@ -14,6 +14,8 @@ import {
   AlertCircle,
   ChevronDown,
   Download,
+  ExternalLink,
+  FileAudio,
   GripVertical,
   Image as ImageIcon,
   ImagePlus,
@@ -35,6 +37,7 @@ import {
   type DashboardControlDef,
   type DashboardControlGroupDef,
   type OutputPreferences,
+  type UploadProgress,
   type WorkflowInputDef,
   type WorkflowOutputDef,
 } from "../../lib/api/noofyApi";
@@ -57,6 +60,7 @@ import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
+import { audioMetadataLabel, type OutputAudioMedia } from "./audioMedia";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 
@@ -81,6 +85,7 @@ interface CanvasDashboardViewProps {
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -94,6 +99,7 @@ interface CanvasDashboardViewProps {
   exportReview?: WorkflowExportReviewModel;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onRun: () => void;
@@ -114,6 +120,7 @@ export function CanvasDashboardView({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  outputAudiosByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -127,6 +134,7 @@ export function CanvasDashboardView({
   exportReview,
   onChange,
   onImageUpload,
+  onAudioUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
   onRun,
@@ -646,11 +654,13 @@ export function CanvasDashboardView({
                 inputIndex={inputIndex}
                 outputIndex={outputIndex}
                 outputImagesByNodeId={outputImagesByNodeId}
+                outputAudiosByNodeId={outputAudiosByNodeId}
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                onAudioUpload={onAudioUpload}
                 loraBrowserFor={loraBrowserFor}
                 onOutputPreferenceChange={onOutputPreferenceChange}
                 onMoveStart={(event) => handleMoveStart(event, item.id, displayLayout)}
@@ -718,11 +728,13 @@ function CanvasWidgetCell({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  outputAudiosByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
   onChange,
   onImageUpload,
+  onAudioUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
   onMoveStart,
@@ -735,11 +747,13 @@ function CanvasWidgetCell({
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
@@ -747,7 +761,7 @@ function CanvasWidgetCell({
 }) {
   const isGroup = item.kind === "group";
   const control = item.kind === "control" ? item.control : null;
-  const isOutput = control ? control.type === "display_image" || control.type === "result_image" : false;
+  const isOutput = control ? control.type === "display_image" || control.type === "display_audio" || control.type === "result_image" : false;
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
   const description = isGroup ? item.group.description : control!.type === "note" ? undefined : control!.description;
@@ -797,12 +811,14 @@ function CanvasWidgetCell({
             inputIndex={inputIndex}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
+            outputAudiosByNodeId={outputAudiosByNodeId}
             comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             inputValues={inputValues}
             outputPreferences={outputPreferences}
             disabled={isEditingLayout}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            onAudioUpload={onAudioUpload}
             loraBrowserFor={loraBrowserFor}
             onOutputPreferenceChange={onOutputPreferenceChange}
           />
@@ -813,6 +829,7 @@ function CanvasWidgetCell({
             control={control!}
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
+            outputAudiosByNodeId={outputAudiosByNodeId}
             comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             imagePreviewEnabled={!isEditingLayout}
           />
@@ -824,6 +841,7 @@ function CanvasWidgetCell({
             disabled={isEditingLayout}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            onAudioUpload={onAudioUpload}
             loraBrowserFor={loraBrowserFor}
           />
         )}
@@ -838,12 +856,14 @@ function GroupedCanvasControls({
   inputIndex,
   outputIndex,
   outputImagesByNodeId,
+  outputAudiosByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
   disabled,
   onChange,
   onImageUpload,
+  onAudioUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
 }: {
@@ -851,19 +871,21 @@ function GroupedCanvasControls({
   inputIndex: Map<string, WorkflowInputDef>;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
 }) {
   return (
     <div className="canvas-widget-group">
       {item.controls.map((control) => {
-        const isOutput = control.type === "display_image" || control.type === "result_image";
+        const isOutput = control.type === "display_image" || control.type === "display_audio" || control.type === "result_image";
         return (
           <div className="canvas-widget-group__control" key={control.id}>
             {control.type !== "note" && control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
@@ -875,6 +897,7 @@ function GroupedCanvasControls({
                   control={control}
                   outputIndex={outputIndex}
                   outputImagesByNodeId={outputImagesByNodeId}
+                  outputAudiosByNodeId={outputAudiosByNodeId}
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
@@ -904,6 +927,7 @@ function GroupedCanvasControls({
                 disabled={disabled}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                onAudioUpload={onAudioUpload}
                 loraBrowserFor={loraBrowserFor}
               />
             )}
@@ -919,7 +943,9 @@ function iconForControlType(type: string): typeof Type {
   if (type === "toggle") return ToggleLeft;
   if (type === "load_image") return ImagePlus;
   if (type === "load_image_mask") return UploadCloud;
+  if (type === "load_audio") return FileAudio;
   if (type === "display_image" || type === "result_image") return Sparkles;
+  if (type === "display_audio") return FileAudio;
   if (type === "seed_widget") return Shuffle;
   if (type === "lora_loader") return Sparkles;
   if (type === "select") return ChevronDown;
@@ -940,7 +966,7 @@ function shouldIgnoreWidgetMove(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
+      "button, input, textarea, select, audio, a, [role='button'], .layout-canvas-resize-handle, .layout-canvas-resize-handles",
     ),
   );
 }
@@ -959,17 +985,22 @@ function OutputWidgetContent({
   control,
   outputIndex,
   outputImagesByNodeId,
+  outputAudiosByNodeId,
   comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
 }: {
   control: DashboardControlDef;
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
+  outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
 }) {
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
-  const imageUrls = output ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
+  const outputKind = output?.kind ?? output?.type;
+  const wantsAudio = outputKind === "audio" || control.type === "display_audio";
+  const imageUrls = output && !wantsAudio ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
+  const audioOutputs = output && wantsAudio ? outputAudiosByNodeId.get(output.node_id) ?? [] : [];
   const firstImageUrl = imageUrls[0];
   const [previewImage, setPreviewImage] = useState<{ url: string; alt: string; beforeImageUrl?: string } | null>(null);
 
@@ -1054,10 +1085,50 @@ function OutputWidgetContent({
     );
   }
 
+  if (audioOutputs.length > 0) {
+    return (
+      <div className="widget-output-audio">
+        {audioOutputs.map((audio, index) => (
+          <div className="widget-output-audio__item" key={`${audio.url}-${index}`}>
+            <audio className="widget-output-audio__player" controls src={audio.url} preload="metadata" />
+            <div className="widget-output-audio__meta">
+              <strong>{audio.filename}</strong>
+              <span>{audioOutputMetaLabel(audio)}</span>
+            </div>
+            <div className="widget-output-audio__actions">
+              <button
+                className="secondary-button secondary-button--small"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  downloadMediaDirect(audio.url, audio.filename);
+                }}
+              >
+                <Download size={14} aria-hidden="true" />
+                Download
+              </button>
+              <button
+                className="secondary-button secondary-button--small"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  window.open(audio.url, "_blank", "noopener,noreferrer");
+                }}
+              >
+                <ExternalLink size={14} aria-hidden="true" />
+                Open
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="widget-output-placeholder">
-      <ImageIcon size={36} aria-hidden="true" />
-      <span>Your generated image will appear here.</span>
+      {outputKind === "audio" || control.type === "display_audio" ? <FileAudio size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
+      <span>{outputKind === "audio" || control.type === "display_audio" ? "Your generated audio will appear here." : "Your generated image will appear here."}</span>
     </div>
   );
 }
@@ -1352,6 +1423,10 @@ function ImagePreviewViewer({
   );
 }
 
+function audioOutputMetaLabel(audio: OutputAudioMedia): string {
+  return audioMetadataLabel(null, audio.mimeType, audio.size, audio.durationSeconds, "Audio output");
+}
+
 function clampImageScale(scale: number) {
   return Math.min(Math.max(scale, 1), 8);
 }
@@ -1376,6 +1451,7 @@ function InputWidgetContent({
   disabled,
   onChange,
   onImageUpload,
+  onAudioUpload,
   loraBrowserFor,
 }: {
   control: DashboardControlDef;
@@ -1384,6 +1460,7 @@ function InputWidgetContent({
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   const inputId = control.input_id ?? control.id;
@@ -1402,6 +1479,7 @@ function InputWidgetContent({
       loraBrowser={loraBrowserFor?.(control, input)}
       onChange={(value) => onChange(input.id, value)}
       onImageUpload={(file) => onImageUpload(input.id, file)}
+      onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
     />
   );
 }
@@ -1435,6 +1513,17 @@ async function downloadImage(imageUrl: string) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+}
+
+function downloadMediaDirect(mediaUrl: string, filename: string) {
+  const link = document.createElement("a");
+  const url = new URL(mediaUrl, window.location.href);
+  url.searchParams.set("download", "true");
+  link.href = url.toString();
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function filenameFromImageUrl(imageUrl: string) {

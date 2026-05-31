@@ -200,6 +200,72 @@ def test_build_run_submission_snapshot_redacts_sensitive_values_and_paths() -> N
     assert snapshot.inputs[1].value == {"filename": "input.png", "redacted": "local_path"}
 
 
+def test_build_run_submission_snapshot_preserves_audio_output_preferences() -> None:
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(id="wf-audio", name="Audio Workflow", version="1"),
+        engine="comfyui",
+        comfyui_graph={"12": {"class_type": "SaveAudio", "inputs": {}}},
+        outputs=[WorkflowOutput(id="audio", label="Audio", node_id="12", type="audio", kind="audio")],
+        dashboard=DashboardSchema(
+            version="1",
+            status="configured",
+            sections=[
+                DashboardSection(
+                    id="main",
+                    title="Main",
+                    controls=[
+                        DashboardControl(id="result-audio", type="display_audio", label="Audio", output_id="audio"),
+                    ],
+                )
+            ],
+        ),
+    )
+
+    snapshot = build_run_submission_snapshot(
+        package=package,
+        inputs={},
+        output_preferences_snapshot={"result-audio": OutputPreference(auto_save=True)},
+    )
+
+    assert snapshot.output_preferences["result-audio"].auto_save is True
+    assert snapshot.output_widgets[0].media_kind == "audio"
+
+
+@pytest.mark.anyio
+async def test_gallery_capture_leaves_audio_outputs_for_future_media_gallery_support(tmp_path: Path) -> None:
+    capture = GalleryCaptureService(GalleryStore(tmp_path / "gallery"))
+    snapshot = RunSubmissionSnapshot(
+        workflow_id="wf-audio",
+        workflow_title="Audio Workflow",
+        dashboard_version="1",
+        output_preferences={"result-audio": OutputPreference(auto_save=True)},
+        output_widgets=[
+            GalleryOutputWidgetSnapshot(
+                control_id="result-audio",
+                output_id="audio",
+                node_id="12",
+                widget_title="Audio",
+                media_kind="audio",
+            ),
+        ],
+    )
+
+    async def fail_if_fetched(job_id: str, filename: str, subfolder: str, output_type: str):
+        raise AssertionError("image-only Gallery capture must leave audio outputs untouched")
+
+    saved = await capture.save_completed_job_outputs(
+        result=JobResult(
+            job_id="job-audio",
+            status="completed",
+            outputs=[{"node_id": "12", "output": {"audio": [{"filename": "speech.wav", "type": "audio", "output_type": "output"}]}}],
+        ),
+        snapshot=snapshot,
+        fetch_output=fail_if_fetched,
+    )
+
+    assert saved == []
+
+
 def test_gallery_delete_keeps_row_when_file_staging_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = GalleryStore(tmp_path / "gallery")
     item = store.save_image(_captured_image(idempotency_key="delete-failure"))

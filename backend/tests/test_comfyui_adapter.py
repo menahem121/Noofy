@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import app.engine.comfyui_adapter as comfyui_adapter_module
 from app.diagnostics import LogStore
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.models import JobProgress, JobResult
@@ -15,6 +16,27 @@ from app.runs.credentials import (
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
+
+
+def _media_package(control: str, node_id: str = "10", input_name: str = "image") -> WorkflowPackage:
+    return WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "media_wf", "name": "Media Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [],
+            "custom_nodes": [],
+            "comfyui_graph": {node_id: {"class_type": "MediaNode", "inputs": {input_name: ""}}},
+            "inputs": [
+                {
+                    "id": "media",
+                    "label": "Media",
+                    "control": control,
+                    "binding": {"node_id": node_id, "input_name": input_name},
+                    "default": None,
+                }
+            ],
+        }
+    )
 
 
 def _api_credential_package() -> WorkflowPackage:
@@ -76,6 +98,16 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
                             "type": "output",
                         }
                     ]
+                },
+                "12": {
+                    "audio": [
+                        {
+                            "filename": "speech.wav",
+                            "subfolder": "",
+                            "type": "output",
+                            "size": 1024,
+                        }
+                    ]
                 }
             },
         },
@@ -86,6 +118,12 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
     view_url = result.outputs[0]["output"]["images"][0]["view_url"]
     assert view_url.startswith("/api/jobs/job-1/outputs/view?")
     assert "sample+image.png" in view_url
+    audio = result.outputs[1]["output"]["audio"][0]
+    assert audio["kind"] == "audio"
+    assert audio["type"] == "audio"
+    assert audio["output_type"] == "output"
+    assert audio["mime_type"] == "audio/x-wav"
+    assert audio["url"].startswith("/api/jobs/job-1/outputs/view?")
 
 
 @pytest.mark.anyio
@@ -387,6 +425,55 @@ async def test_fetch_output_reads_from_configured_view_endpoint(
 
 
 @pytest.mark.anyio
+async def test_stream_output_forwards_range_and_response_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["range"] == "bytes=0-4"
+        return httpx.Response(
+            206,
+            content=b"audio",
+            headers={
+                "accept-ranges": "bytes",
+                "content-range": "bytes 0-4/10",
+                "content-type": "audio/wav",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+    adapter.job_store.set_result(
+        JobResult(
+            job_id="job-1",
+            status="completed",
+            outputs=[
+                {
+                    "node_id": "12",
+                    "output": {
+                        "audio": [{"filename": "speech.wav", "subfolder": "", "type": "output"}]
+                    },
+                }
+            ],
+        )
+    )
+
+    output = await adapter.stream_output("job-1", "speech.wav", "", "output", "bytes=0-4")
+
+    assert b"".join([chunk async for chunk in output.body]) == b"audio"
+    assert output.status_code == 206
+    assert output.media_type == "audio/wav"
+    assert output.headers["accept-ranges"] == "bytes"
+    assert output.headers["content-range"] == "bytes 0-4/10"
+
+
+@pytest.mark.anyio
 async def test_fetch_output_rejects_files_not_owned_by_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -589,7 +676,11 @@ def test_stage_assets_copies_file_and_rewrites_graph(tmp_path: Path) -> None:
         }
     }
 
-    new_graph, staged = adapter._stage_assets(graph, "job-99")
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_image", input_name="image"),
+        graph,
+        "job-99",
+    )
 
     assert len(staged) == 1
     staged_path = staged[0]
@@ -618,11 +709,135 @@ def test_stage_assets_uses_explicit_comfyui_input_dir(tmp_path: Path) -> None:
     )
 
     _new_graph, staged = adapter._stage_assets(
+        _media_package("load_image", input_name="image"),
         {"10": {"class_type": "LoadImage", "inputs": {"image": asset_id}}},
         "job-99",
     )
 
     assert staged[0].parent == tmp_path / "noofy-input" / "staging"
+
+
+def test_stage_assets_uses_audio_dashboard_binding(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.wav"
+    (assets_dir / asset_id).write_bytes(b"RIFF\x24\x00\x00\x00WAVEaudio")
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+    graph = {
+        "custom": {
+            "class_type": "CustomAudioNode",
+            "inputs": {"audio_path": asset_id, "other": asset_id},
+        }
+    }
+
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_audio", node_id="custom", input_name="audio_path"),
+        graph,
+        "job-audio",
+    )
+
+    assert len(staged) == 1
+    assert new_graph["custom"]["inputs"]["audio_path"].startswith("staging/")
+    assert new_graph["custom"]["inputs"]["other"] == asset_id
+    assert graph["custom"]["inputs"]["audio_path"] == asset_id
+
+
+def test_stage_assets_reuses_one_file_for_multiple_saved_bindings(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.wav"
+    (assets_dir / asset_id).write_bytes(b"RIFF\x24\x00\x00\x00WAVEaudio")
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "audio_wf", "name": "Audio Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [],
+            "custom_nodes": [],
+            "comfyui_graph": {},
+            "inputs": [
+                {"id": "first", "label": "First", "control": "load_audio", "binding": {"node_id": "1", "input_name": "audio"}},
+                {"id": "second", "label": "Second", "control": "load_audio", "binding": {"node_id": "2", "input_name": "path"}},
+            ],
+        }
+    )
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+
+    graph, staged = adapter._stage_assets(
+        package,
+        {
+            "1": {"class_type": "FirstAudioNode", "inputs": {"audio": asset_id}},
+            "2": {"class_type": "SecondAudioNode", "inputs": {"path": asset_id}},
+        },
+        "job-shared",
+    )
+
+    assert len(staged) == 1
+    assert graph["1"]["inputs"]["audio"] == graph["2"]["inputs"]["path"]
+
+
+def test_stage_assets_cleans_partial_files_when_staging_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    first_asset_id = "12345678-1234-1234-1234-123456789abc.wav"
+    second_asset_id = "abcdef12-1234-1234-1234-123456789abc.wav"
+    (assets_dir / first_asset_id).write_bytes(b"first")
+    (assets_dir / second_asset_id).write_bytes(b"second")
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "audio_wf", "name": "Audio Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [],
+            "custom_nodes": [],
+            "comfyui_graph": {},
+            "inputs": [
+                {"id": "first", "label": "First", "control": "load_audio", "binding": {"node_id": "1", "input_name": "audio"}},
+                {"id": "second", "label": "Second", "control": "load_audio", "binding": {"node_id": "2", "input_name": "audio"}},
+            ],
+        }
+    )
+    original_stage = comfyui_adapter_module._stage_asset_file
+    calls = 0
+
+    def fail_second_stage(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("disk failure")
+        original_stage(source, target)
+
+    monkeypatch.setattr(comfyui_adapter_module, "_stage_asset_file", fail_second_stage)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(OSError, match="disk failure"):
+        adapter._stage_assets(
+            package,
+            {
+                "1": {"class_type": "FirstAudioNode", "inputs": {"audio": first_asset_id}},
+                "2": {"class_type": "SecondAudioNode", "inputs": {"audio": second_asset_id}},
+            },
+            "job-partial",
+        )
+
+    assert not list((tmp_path / "input" / "staging").glob("*"))
 
 
 def test_stage_assets_skips_missing_asset(tmp_path: Path) -> None:
@@ -643,7 +858,11 @@ def test_stage_assets_skips_missing_asset(tmp_path: Path) -> None:
             "inputs": {"image": "missing-00000000-0000-0000-0000-000000000000.png"},
         }
     }
-    new_graph, staged = adapter._stage_assets(graph, "job-1")
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_image", input_name="image"),
+        graph,
+        "job-1",
+    )
     assert staged == []
     assert (
         new_graph["10"]["inputs"]["image"]
@@ -669,7 +888,11 @@ def test_stage_assets_ignores_non_asset_values(tmp_path: Path) -> None:
             "inputs": {"seed": 42, "model": "v1-5.safetensors"},
         }
     }
-    new_graph, staged = adapter._stage_assets(graph, "job-1")
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_image", input_name="image"),
+        graph,
+        "job-1",
+    )
     assert staged == []
     assert new_graph["5"]["inputs"]["seed"] == 42
 

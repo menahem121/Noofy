@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  FileAudio,
   GripVertical,
   ImagePlus,
   LayoutGrid,
@@ -1934,11 +1935,29 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
     );
   }
 
+  if (widget.widgetType === "load_audio") {
+    return (
+      <div className="preview-image-input">
+        <FileAudio size={20} aria-hidden="true" />
+        <span>Click here to upload audio</span>
+      </div>
+    );
+  }
+
   if (widget.widgetType === "display_image") {
     return (
       <div className="preview-image-output">
         <Sparkles size={22} aria-hidden="true" />
         <span>Generated image will appear here</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "display_audio") {
+    return (
+      <div className="preview-image-output">
+        <FileAudio size={22} aria-hidden="true" />
+        <span>Generated audio will appear here</span>
       </div>
     );
   }

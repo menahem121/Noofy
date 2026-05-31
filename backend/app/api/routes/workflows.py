@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -20,7 +21,7 @@ from app.workflows.import_orchestrator import (
     DuplicateWorkflowIdentityError,
     ImportSessionExpiredError,
 )
-from app.workflows.assets import AssetUploadError
+from app.workflows.assets import AssetUploadError, MAX_AUDIO_ASSET_BYTES
 from app.workflows.authoring import DashboardAuthoringError
 from app.workflows.exporter import WorkflowExportError
 from app.workflows.importer import NoofyImportError
@@ -623,5 +624,37 @@ async def upload_dashboard_asset(
     original_filename = image.filename or "upload"
     try:
         return asset_service.store(data, content_type, original_filename)
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/assets/audio")
+async def upload_dashboard_audio_asset(
+    workflow_id: str,
+    request: Request,
+    asset_service: DashboardAssetServiceDep,
+    audio: UploadFile = File(...),
+):
+    content_type = audio.content_type or "application/octet-stream"
+    original_filename = audio.filename or "upload"
+    content_length = request.headers.get("content-length")
+    request_size = int(content_length) if content_length and content_length.isdigit() else None
+    upload_size = audio.size if isinstance(audio.size, int) and audio.size >= 0 else None
+    declared_size = upload_size if upload_size is not None else request_size
+    if upload_size is None and declared_size is not None and declared_size > MAX_AUDIO_ASSET_BYTES:
+        # Multipart framing makes Content-Length slightly larger than the file.
+        # Preserve exact 100 GB uploads while still rejecting obviously oversized
+        # requests before copying the parsed upload into dashboard storage.
+        multipart_allowance = 1024 * 1024
+        declared_size = None if declared_size <= MAX_AUDIO_ASSET_BYTES + multipart_allowance else MAX_AUDIO_ASSET_BYTES + 1
+    try:
+        await audio.seek(0)
+        return await asyncio.to_thread(
+            asset_service.store_audio_stream,
+            audio.file,
+            content_type,
+            original_filename,
+            declared_size=declared_size,
+        )
     except AssetUploadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

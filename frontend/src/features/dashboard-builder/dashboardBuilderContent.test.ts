@@ -180,7 +180,7 @@ describe("toBackendPayload", () => {
 
     expect(payload.dashboard.status).toBe("configured");
     expect(payload.dashboard.outputs).toEqual([
-      { id: "image", label: "Result", node_id: "9", type: "image" },
+      { id: "image", label: "Result", node_id: "9", type: "image", kind: "image" },
     ]);
     expect(payload.dashboard.sections[0].controls[1]).toMatchObject({
       id: "ctrl-output",
@@ -451,7 +451,7 @@ describe("workflowFromBindableInputs", () => {
       }),
     ]);
     expect(toBackendPayload(schema).dashboard.outputs).toEqual([
-      { id: "image", label: "Result", node_id: "9", type: "image" },
+      { id: "image", label: "Result", node_id: "9", type: "image", kind: "image" },
     ]);
   });
 

@@ -1,5 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import RunJobServiceDep, RunResultServiceDep
 
@@ -46,19 +49,31 @@ async def get_result(job_id: str, result_service: RunResultServiceDep):
 async def get_job_output_view(
     job_id: str,
     job_service: RunJobServiceDep,
+    request: Request,
     filename: str,
     subfolder: str = "",
     output_type: str = Query("output", alias="type"),
+    download: bool = False,
 ):
     try:
-        content, media_type = await job_service.fetch_output(
+        output = await job_service.stream_output(
             job_id,
             filename,
             subfolder,
             output_type,
+            request.headers.get("range"),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return Response(content=content, media_type=media_type)
+    headers = dict(output.headers)
+    if download:
+        safe_filename = Path(filename.replace("\\", "/")).name.strip() or "noofy-output"
+        headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(safe_filename)}"
+    return StreamingResponse(
+        output.body,
+        status_code=output.status_code,
+        media_type=output.media_type,
+        headers=headers,
+    )

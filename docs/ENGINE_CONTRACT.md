@@ -35,7 +35,7 @@ For v1, `ComfyUIEngineAdapter` should normally talk to an app-managed ComfyUI si
 
 ComfyUI sidecar lifecycle, launch settings, bootstrap, update, rebuild, and repair operations are runtime management concerns owned by `ComfyUISidecarService`, not workflow execution operations on the engine contract.
 
-Workflow image uploads and generated output reads are adapter operations. The route layer and run/result services select the workflow/job-bound runner first, then dispatch through that runner's adapter. `EngineService` may still delegate these operations during migration, but it is not the long-term owner. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
+Workflow image uploads, dashboard media staging, and generated output reads are adapter operations. The route layer and run/result services select the workflow/job-bound runner first, then dispatch through that runner's adapter. `EngineService` may still delegate these operations during migration, but it is not the long-term owner. ComfyUI upload and `/view` calls are implementation details behind `ComfyUIEngineAdapter`.
 
 The Models page is an app-management surface. The frontend calls Noofy backend
 model endpoints only; it must not call ComfyUI `/models`, Hugging Face, or
@@ -66,8 +66,10 @@ For the first adapter:
 - Track progress through ComfyUI `/ws`.
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
 - Read queue and job state through `/queue` and `/history`.
-- Retrieve generated files through ComfyUI `/view` inside the adapter, while returning backend-owned media URLs such as `/api/jobs/{job_id}/outputs/view?...` to the frontend.
+- Retrieve generated files through ComfyUI `/view` inside the adapter, while returning backend-owned media URLs such as `/api/jobs/{job_id}/outputs/view?...` to the frontend. Player-facing reads stream through the backend and forward byte ranges so large audio does not need to be buffered in memory before playback.
+- Normalize media outputs with app-owned `kind` and compatibility `type` fields so image and audio outputs can share the result contract. Keep the engine retrieval bucket separate as `output_type`.
 - Upload image inputs through ComfyUI `/upload/image` inside the adapter, selected by workflow runner.
+- Stage dashboard-owned media assets into ComfyUI `input/staging/` according to saved dashboard input bindings. Staging must replace only the bound graph input value and must not mutate the source graph.
 - Inspect models and node information through `/models` and `/object_info`.
 
 ## Diagnostics

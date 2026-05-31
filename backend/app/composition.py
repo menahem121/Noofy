@@ -203,7 +203,10 @@ def create_api_services(
             else getattr(engine_service, "comfyui_sidecar_service", engine_service)
         ),
         user_state_service=user_state,
-        asset_service=asset_service or DashboardAssetService(settings.paths.dashboard_assets_dir),
+        asset_service=asset_service or DashboardAssetService(
+            settings.paths.dashboard_assets_dir,
+            log_store=getattr(engine_service, "log_store", None),
+        ),
         gallery_store=gallery,
         api_key_service=api_keys,
         onboarding_service=onboarding,

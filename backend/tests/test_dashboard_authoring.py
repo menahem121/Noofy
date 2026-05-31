@@ -623,6 +623,38 @@ def test_classify_graph_inputs_marks_load_image_as_image_input_only_when_unlinke
     ]
 
 
+def test_classify_graph_inputs_includes_audio_widgets() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "20": {
+                "class_type": "LoadAudio",
+                "inputs": {"audio": "creator-local-audio.wav"},
+            },
+            "21": {
+                "class_type": "SaveAudioMP3",
+                "inputs": {"audio": ["20", 0], "filename_prefix": "voice"},
+            },
+        }
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["20"]["inputs"][0] == {
+        "input_name": "audio",
+        "current_value": "creator-local-audio.wav",
+        "kind": "audio_input",
+        "suggested_widget_type": "load_audio",
+        "widget_types": ["load_audio"],
+    }
+    assert input_nodes["21"]["inputs"][0] == {
+        "input_name": "output_audio",
+        "current_value": None,
+        "kind": "audio_output",
+        "suggested_widget_type": "display_audio",
+        "widget_types": ["display_audio"],
+        "auto_select": True,
+    }
+
+
 def test_classify_graph_inputs_auto_selects_deepest_image_output() -> None:
     nodes = _classify_graph_inputs(
         {

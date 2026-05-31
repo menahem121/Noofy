@@ -344,6 +344,35 @@ def test_validator_reports_missing_model() -> None:
     assert result.missing_models[0].filename == "v1-5-pruned-emaonly-fp16.safetensors"
 
 
+def test_validator_rejects_audio_widget_bound_to_image_output() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "invalid_audio", "name": "Invalid Audio", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"9": {"class_type": "SaveImage", "inputs": {}}},
+            "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image", "kind": "image"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "audio", "type": "display_audio", "label": "Audio", "output_id": "image"},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert not result.valid
+    assert "type 'display_audio' but output 'image' is 'image'" in result.errors[0]
+
+
 def test_input_bindings_are_applied() -> None:
     package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
     service = EngineService(

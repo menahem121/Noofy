@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
-from app.engine.models import DiagnosticLogResponse, JobProgress, LogLevel
+from app.engine.models import DiagnosticLogResponse, EngineOutputStream, JobProgress, LogLevel
 from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerSupervisor
 from app.workflows.loader import WorkflowPackageLoader
 
@@ -57,6 +57,23 @@ class RunJobService:
     ) -> tuple[bytes, str]:
         adapter = self._adapter_for_job(job_id)
         return await adapter.fetch_output(job_id, filename, subfolder, output_type)
+
+    async def stream_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+        range_header: str | None = None,
+    ) -> EngineOutputStream:
+        adapter = self._adapter_for_job(job_id)
+        return await adapter.stream_output(
+            job_id,
+            filename,
+            subfolder,
+            output_type,
+            range_header,
+        )
 
     async def upload_workflow_image(
         self,

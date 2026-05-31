@@ -1,6 +1,12 @@
 from typing import Any, Protocol
 
-from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
+from app.engine.models import (
+    EngineJob,
+    EngineOutputStream,
+    JobProgress,
+    JobResult,
+    ModelInfo,
+)
 from app.workflows.package import WorkflowPackage
 
 
@@ -43,6 +49,16 @@ class EngineAdapter(Protocol):
         output_type: str,
     ) -> tuple[bytes, str]:
         """Fetch a generated output file for an app-owned job."""
+
+    async def stream_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+        range_header: str | None = None,
+    ) -> EngineOutputStream:
+        """Stream generated output media for an app-owned job."""
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         """Update this adapter's active engine endpoint."""

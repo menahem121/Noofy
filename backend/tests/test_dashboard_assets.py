@@ -1,10 +1,13 @@
 """Tests for DashboardAssetService."""
 import struct
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.workflows.assets as assets_module
+from app.diagnostics import LogStore
 from app.main import create_app
 from app.workflows.assets import AssetUploadError, DashboardAssetService
 
@@ -50,6 +53,7 @@ def _make_png(width: int = 1, height: int = 1) -> bytes:
 
 
 PNG_BYTES = _make_png()
+WAV_BYTES = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt " + b"\x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
 
 
 def test_store_png_returns_asset_id(tmp_path: Path) -> None:
@@ -128,6 +132,124 @@ def test_metadata_returns_original_filename(tmp_path: Path) -> None:
     }
 
 
+def test_store_audio_stream_returns_metadata(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_audio_stream(BytesIO(WAV_BYTES), "audio/wav", "voice.wav", declared_size=len(WAV_BYTES))
+
+    assert result["asset_id"].endswith(".wav")
+    assert result["kind"] == "audio"
+    assert result["original_filename"] == "voice.wav"
+    assert result["content_type"] == "audio/wav"
+    assert result["size"] == len(WAV_BYTES)
+    assert result["duration_seconds"] == 0
+    assert svc.asset_path(result["asset_id"]).read_bytes() == WAV_BYTES
+    assert svc.metadata(result["asset_id"])["kind"] == "audio"
+
+
+def test_store_audio_stream_sanitizes_original_filename(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_audio_stream(BytesIO(WAV_BYTES), "audio/wav", r"C:\uploads\voice.wav")
+
+    assert result["original_filename"] == "voice.wav"
+    assert svc.metadata(result["asset_id"])["original_filename"] == "voice.wav"
+
+
+def test_store_audio_stream_rejects_mismatched_content(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="does not match"):
+        svc.store_audio_stream(BytesIO(WAV_BYTES), "audio/mpeg", "voice.mp3")
+
+
+def test_store_audio_stream_rejects_mismatched_filename_extension(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="extension '.mp3' does not match"):
+        svc.store_audio_stream(BytesIO(WAV_BYTES), "audio/wav", "voice.mp3")
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "data"),
+    [
+        ("voice.mp3", "audio/mpeg", b"ID3\x04\x00\x00\x00\x00\x00\x00"),
+        ("voice.flac", "audio/flac", b"fLaC\x00\x00\x00\x22"),
+        ("voice.ogg", "audio/ogg", b"OggS\x00\x02"),
+        ("voice.m4a", "audio/mp4", b"\x00\x00\x00\x18ftypM4A "),
+    ],
+)
+def test_store_audio_stream_accepts_supported_audio_headers(
+    tmp_path: Path,
+    filename: str,
+    content_type: str,
+    data: bytes,
+) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_audio_stream(BytesIO(data), content_type, filename)
+
+    assert result["asset_id"].endswith(Path(filename).suffix)
+    assert result["format"] == Path(filename).suffix.removeprefix(".")
+
+
+def test_store_audio_stream_rejects_declared_file_over_cap(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="100 GB"):
+        svc.store_audio_stream(
+            BytesIO(WAV_BYTES),
+            "audio/wav",
+            "voice.wav",
+            declared_size=assets_module.MAX_AUDIO_ASSET_BYTES + 1,
+        )
+
+
+def test_store_audio_stream_rejects_insufficient_disk_space(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    monkeypatch.setattr(
+        assets_module.shutil,
+        "disk_usage",
+        lambda _path: assets_module.shutil._ntuple_diskusage(total=1024, used=1024, free=0),
+    )
+
+    with pytest.raises(AssetUploadError, match="Not enough free disk space"):
+        svc.store_audio_stream(
+            BytesIO(WAV_BYTES),
+            "audio/wav",
+            "voice.wav",
+            declared_size=len(WAV_BYTES),
+        )
+
+
+def test_store_audio_stream_records_structured_diagnostics(tmp_path: Path) -> None:
+    log_store = LogStore()
+    svc = DashboardAssetService(tmp_path / "assets", log_store=log_store)
+
+    result = svc.store_audio_stream(BytesIO(WAV_BYTES), "audio/wav", "voice.wav")
+    with pytest.raises(AssetUploadError):
+        svc.store_audio_stream(BytesIO(b"broken"), "audio/wav", "broken.wav")
+
+    events = log_store.list_events().events
+    assert events[-2].message == "Stored dashboard audio asset"
+    assert events[-2].details["asset_id"] == result["asset_id"]
+    assert events[-2].details["size"] == len(WAV_BYTES)
+    assert events[-1].message == "Dashboard audio asset upload failed"
+
+
+def test_store_audio_stream_cleans_failed_upload(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="valid audio"):
+        svc.store_audio_stream(BytesIO(b"not audio"), "audio/wav", "broken.wav")
+
+    assert not list((tmp_path / "assets").glob("*.tmp"))
+    assert not list((tmp_path / "assets").glob("*.wav"))
+
+
 def test_workflow_icon_upload_is_resized_and_listed(tmp_path: Path) -> None:
     from PIL import Image
 
@@ -195,6 +317,23 @@ def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -
     assert (tmp_path / "assets" / body["asset_id"]).exists()
 
 
+def test_upload_dashboard_audio_asset_route_streams_file(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf-1/assets/audio",
+            files={"audio": ("voice.wav", WAV_BYTES, "audio/wav")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"].endswith(".wav")
+    assert body["kind"] == "audio"
+    assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
 def test_serve_dashboard_asset_route_returns_file_and_metadata(tmp_path: Path) -> None:
     asset_service = DashboardAssetService(tmp_path / "assets")
     stored = asset_service.store(PNG_BYTES, "image/png", "input.png")
@@ -239,3 +378,20 @@ def test_dashboard_asset_routes_require_bearer_token_when_auth_enabled(
 
     assert missing.status_code == 401
     assert allowed.status_code == 200
+
+
+def test_dashboard_asset_routes_allow_query_token_for_media_elements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    stored = asset_service.store_audio_stream(BytesIO(WAV_BYTES), "audio/wav", "secure.wav")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.get(f"/api/assets/{stored['asset_id']}?token=secret-token")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == WAV_BYTES

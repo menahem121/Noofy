@@ -9,7 +9,7 @@ from app.api.schemas import ComfyUILaunchSettings
 from app.composition import ApiServices, create_api_services
 from app.core.config import settings as real_settings
 from app.diagnostics import LogStore
-from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus
+from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus, EngineOutputStream
 from app import main as main_module
 from app.main import create_app, _sanitized_request_validation_exception_handler
 from app.runtime.comfyui.launch_settings import comfyui_launch_response
@@ -59,6 +59,7 @@ class FakeEngineService:
 class FakeRunJobService:
     def __init__(self, log_store: LogStore | None = None) -> None:
         self.log_store = log_store
+        self.range_header: str | None = None
 
     async def fetch_output(
         self,
@@ -72,6 +73,27 @@ class FakeRunJobService:
         assert subfolder == "preview"
         assert output_type == "output"
         return b"image-bytes", "image/png"
+
+    async def stream_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+        range_header: str | None = None,
+    ) -> EngineOutputStream:
+        self.range_header = range_header
+        content, media_type = await self.fetch_output(job_id, filename, subfolder, output_type)
+
+        async def body():
+            yield content
+
+        return EngineOutputStream(
+            body=body(),
+            media_type=media_type,
+            status_code=206 if range_header else 200,
+            headers={"content-range": "bytes 0-4/11"} if range_header else {},
+        )
 
     def list_job_logs(self, job_id: str, *, level=None, limit: int = 200):
         assert self.log_store is not None
@@ -299,6 +321,25 @@ def test_job_output_view_endpoint_returns_backend_owned_media(monkeypatch) -> No
     assert response.status_code == 200
     assert response.content == b"image-bytes"
     assert response.headers["content-type"] == "image/png"
+
+
+def test_job_output_view_endpoint_forwards_range_requests(monkeypatch) -> None:
+    run_job_service = FakeRunJobService()
+
+    with TestClient(
+        create_app(
+            services=_services(run_job_service=run_job_service),
+        )
+    ) as client:
+        response = client.get(
+            "/api/jobs/job-1/outputs/view",
+            params={"filename": "result.png", "subfolder": "preview", "type": "output"},
+            headers={"Range": "bytes=0-4"},
+        )
+
+    assert run_job_service.range_header == "bytes=0-4"
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 0-4/11"
 
 
 def test_app_shutdown_calls_engine_service_shutdown(monkeypatch) -> None:

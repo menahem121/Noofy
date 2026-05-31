@@ -86,6 +86,7 @@ class WorkflowOutput(BaseModel):
     label: str
     node_id: str
     type: str
+    kind: str | None = None
 
 
 DASHBOARD_CONTROL_TYPES = frozenset(
@@ -98,7 +99,9 @@ DASHBOARD_CONTROL_TYPES = frozenset(
         "toggle",
         "load_image",
         "load_image_mask",
+        "load_audio",
         "display_image",
+        "display_audio",
         "seed_widget",
         "lora_loader",
         "select",

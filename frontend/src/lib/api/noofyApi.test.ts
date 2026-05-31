@@ -4,6 +4,7 @@ import {
   cancelModelDownload,
   createModelTag,
   createJobEventsUrl,
+  dashboardAssetMediaUrl,
   deleteModelFile,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
@@ -174,6 +175,17 @@ describe("noofyApi", () => {
     );
     expect(exportWorkflowComfyJsonUrl("workflow 1")).toBe(
       "http://127.0.0.1:9123/api/workflows/workflow%201/export/comfyui-json?token=runtime%20secret",
+    );
+  });
+
+  it("adds the runtime token to dashboard media URLs only when rendered", () => {
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiBaseUrl: "http://127.0.0.1:9123/api/",
+      apiToken: "runtime secret",
+    };
+
+    expect(dashboardAssetMediaUrl("asset.wav")).toBe(
+      "http://127.0.0.1:9123/api/assets/asset.wav?token=runtime%20secret",
     );
   });
 

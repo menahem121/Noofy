@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -18,6 +20,14 @@ JobStatus = Literal[
 ]
 LogLevel = Literal["debug", "info", "warning", "error"]
 RuntimeMode = Literal["external", "managed"]
+
+
+@dataclass
+class EngineOutputStream:
+    body: AsyncIterator[bytes]
+    media_type: str
+    status_code: int = 200
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 class WorkflowRunRequest(BaseModel):

@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Cpu,
+  FileAudio,
   Image as ImageIcon,
   ImagePlus,
   Layers,
@@ -21,7 +22,9 @@ export type WidgetType =
   | "toggle"
   | "load_image"
   | "load_image_mask"
+  | "load_audio"
   | "display_image"
+  | "display_audio"
   | "seed_widget"
   | "lora_loader"
   | "select";
@@ -33,6 +36,8 @@ export type WorkflowValueKind =
   | "note"
   | "image_input"
   | "image_output"
+  | "audio_input"
+  | "audio_output"
   | "seed"
   | "lora"
   | "select";
@@ -51,7 +56,7 @@ export interface WorkflowNodeValue {
   technical?: boolean;
 }
 
-export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "lora" | "tune" | "output" | "save";
+export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "lora" | "tune" | "output" | "save";
 
 export interface WorkflowNode {
   id: string;
@@ -172,6 +177,7 @@ export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
   sampler: Shuffle,
   image: ImageIcon,
   "image-input": ImagePlus,
+  audio: FileAudio,
   lora: Sparkles,
   tune: SlidersHorizontal,
   output: ImageIcon,
@@ -185,6 +191,8 @@ export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   boolean: SlidersHorizontal,
   image_input: ImagePlus,
   image_output: ImageIcon,
+  audio_input: FileAudio,
+  audio_output: FileAudio,
   seed: Shuffle,
   lora: Sparkles,
   select: Layers,
@@ -199,7 +207,9 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   toggle: "On / off",
   load_image: "Load image",
   load_image_mask: "Load image with mask",
+  load_audio: "Load audio",
   display_image: "Display image",
+  display_audio: "Display audio",
   seed_widget: "Variation ID (seed)",
   lora_loader: "LoRA loader",
   select: "Dropdown",
@@ -213,15 +223,14 @@ const INPUT_WIDGET_TYPES: WidgetType[] = [
   "toggle",
   "load_image",
   "load_image_mask",
+  "load_audio",
   "seed_widget",
   "lora_loader",
   "select",
 ];
 
-const OUTPUT_WIDGET_TYPES: WidgetType[] = ["display_image"];
-
 export function isOutputWidgetType(widgetType: string): boolean {
-  return widgetType === "display_image" || widgetType === "result_image";
+  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "result_image";
 }
 
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
@@ -230,11 +239,19 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   }
 
   if (kind === "image_output") {
-    return OUTPUT_WIDGET_TYPES;
+    return ["display_image"];
+  }
+
+  if (kind === "audio_output") {
+    return ["display_audio"];
   }
 
   if (kind === "image_input") {
     return ["load_image", "load_image_mask"];
+  }
+
+  if (kind === "audio_input") {
+    return ["load_audio"];
   }
 
   if (kind === "seed") {
@@ -268,6 +285,8 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "note") return "note";
   if (value.valueKind === "image_output") return "display_image";
   if (value.valueKind === "image_input") return "load_image";
+  if (value.valueKind === "audio_output") return "display_audio";
+  if (value.valueKind === "audio_input") return "load_audio";
   if (value.valueKind === "seed") return "seed_widget";
   if (value.valueKind === "lora") return "lora_loader";
   if (value.valueKind === "boolean") return "toggle";
@@ -338,6 +357,8 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
     cfg: "Prompt strength",
     strength: "Strength",
     image: "Input image",
+    audio: "Input audio",
+    output_audio: "Result",
     lora_name: "LoRA model",
     filename_prefix: "Save name",
     output_image: "Result",
@@ -367,8 +388,10 @@ export function suggestDescription(value: WorkflowNodeValue): string {
     steps: "More passes can add detail but take longer.",
     cfg: "How strongly the prompt guides the image.",
     image: "Choose an image from your computer.",
+    audio: "Choose an audio file from your computer.",
     lora_name: "Pick a LoRA style to apply.",
     output_image: "Generated image will appear here.",
+    output_audio: "Generated audio will appear here.",
   };
 
   const key = value.inputName.toLowerCase();
@@ -644,7 +667,7 @@ export interface BackendDashboardPayload {
   version: string;
   status?: string;
   presentation?: { action_bar?: { x: number; y: number } };
-  outputs?: Array<{ id: string; label: string; node_id: string; type: string }>;
+  outputs?: Array<{ id: string; label: string; node_id: string; type: string; kind?: string }>;
   sections: BackendDashboardSection[];
 }
 
@@ -662,6 +685,7 @@ export function workflowFromBindableInputs(
     node_type: string;
     node_title?: string;
     is_image_node: boolean;
+    is_audio_node?: boolean;
     is_lora_node: boolean;
     inputs: Array<{
       input_name: string;
@@ -679,6 +703,7 @@ export function workflowFromBindableInputs(
     if (isImageNode) return "image-input";
     if (isLoraNode) return "lora";
     const t = nodeType.toLowerCase();
+    if (t.includes("audio")) return "audio";
     if (t === "note") return "note";
     if (t.includes("clip") || t.includes("text")) return "text";
     if (t.includes("ksampler") || t.includes("sampler")) return "sampler";
@@ -691,6 +716,8 @@ export function workflowFromBindableInputs(
   function valueKindFromString(kind: string): WorkflowValueKind {
     if (kind === "image_input") return "image_input";
     if (kind === "image_output") return "image_output";
+    if (kind === "audio_input") return "audio_input";
+    if (kind === "audio_output") return "audio_output";
     if (kind === "note") return "note";
     if (kind === "seed") return "seed";
     if (kind === "lora") return "lora";
@@ -704,7 +731,7 @@ export function workflowFromBindableInputs(
     id: node.node_id,
     classType: node.node_type,
     title: node.node_title ?? node.node_type,
-    iconKind: nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
+    iconKind: node.is_audio_node ? "audio" : nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
     values: node.inputs.map((inp) => ({
       id: `node-${node.node_id}-${inp.input_name}`,
       nodeId: node.node_id,
@@ -751,14 +778,18 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
 
   const outputWidgets = normalized.widgets.filter((w) => isOutputWidgetType(w.widgetType));
   const outputIdForWidget = (widgetId: string) => {
-    const index = outputWidgets.findIndex((widget) => widget.id === widgetId);
-    return index <= 0 ? "image" : `image_${index + 1}`;
+    const widget = outputWidgets.find((item) => item.id === widgetId);
+    const kind = mediaKindForOutputWidget(widget?.widgetType);
+    const sameKindWidgets = outputWidgets.filter((item) => mediaKindForOutputWidget(item.widgetType) === kind);
+    const index = sameKindWidgets.findIndex((item) => item.id === widgetId);
+    return index <= 0 ? kind : `${kind}_${index + 1}`;
   };
   const outputs = outputWidgets.map((w) => ({
     id: outputIdForWidget(w.id),
     label: w.title,
     node_id: w.binding.nodeId,
-    type: "image",
+    type: mediaKindForOutputWidget(w.widgetType),
+    kind: mediaKindForOutputWidget(w.widgetType),
   }));
 
   const controls: BackendDashboardControl[] = normalized.widgets.map((w, i) => ({
@@ -811,6 +842,10 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   return { inputs, dashboard };
 }
 
+function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" {
+  return widgetType === "display_audio" ? "audio" : "image";
+}
+
 function hasExecutableWorkflowBinding(widget: DashboardWidget): boolean {
   return widget.widgetType !== "note" || widget.hasExecutableBinding === true;
 }
@@ -854,7 +889,16 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
 }
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
-  return addAutomaticImageOutputWidget(addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow), workflow);
+  return addAutomaticAudioOutputWidget(
+    addAutomaticImageOutputWidget(
+      addAutomaticAudioInputWidgets(
+        addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow),
+        workflow,
+      ),
+      workflow,
+    ),
+    workflow,
+  );
 }
 
 export function addAutomaticNoteWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
@@ -909,6 +953,33 @@ export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow:
   return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
+export function addAutomaticAudioInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingBindings = new Set(
+    schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`),
+  );
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (value.valueKind !== "audio_input") continue;
+      if (existingValueIds.has(value.id)) continue;
+      const bindingKey = `${value.nodeId}:${value.inputName}`;
+      if (existingBindings.has(bindingKey)) continue;
+
+      widgets.push({
+        ...createDashboardWidgetForValue(value, node),
+        widgetType: "load_audio",
+        defaultValue: null,
+      });
+      existingValueIds.add(value.id);
+      existingBindings.add(bindingKey);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
+}
+
 export function addAutomaticImageOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
   const imageOutputRecords = workflow.nodes.flatMap((node) =>
     node.values
@@ -939,6 +1010,41 @@ export function addAutomaticImageOutputWidget(schema: DashboardSchema, workflow:
       {
         ...widget,
         widgetType: "display_image",
+        defaultValue: null,
+      },
+    ],
+  };
+}
+
+export function addAutomaticAudioOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const audioOutputRecords = workflow.nodes.flatMap((node) =>
+    node.values
+      .filter((value) => value.valueKind === "audio_output")
+      .map((value) => ({ node, value })),
+  );
+  const selected =
+    audioOutputRecords.find((record) => record.value.autoSelect) ??
+    audioOutputRecords[audioOutputRecords.length - 1];
+  if (!selected) return schema;
+  const audioOutputValueIds = new Set(audioOutputRecords.map((record) => record.value.id));
+  const audioOutputBindings = new Set(
+    audioOutputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`),
+  );
+
+  const hasOutputWidget = schema.widgets.some((widget) =>
+    widget.widgetType === "display_audio" &&
+    (audioOutputValueIds.has(widget.valueId) ||
+      audioOutputBindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
+  );
+  if (hasOutputWidget) return schema;
+
+  return {
+    ...schema,
+    widgets: [
+      ...schema.widgets,
+      {
+        ...createDashboardWidgetForValue(selected.value, selected.node),
+        widgetType: "display_audio",
         defaultValue: null,
       },
     ],

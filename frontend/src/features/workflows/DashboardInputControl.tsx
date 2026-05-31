@@ -7,16 +7,20 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { DownloadCloud, ImagePlus } from "lucide-react";
+import { DownloadCloud, FileAudio, ImagePlus, RefreshCw, Trash2, X } from "lucide-react";
 
 import {
+  dashboardAssetMediaUrl,
   fetchAssetBlobUrl,
   fetchAssetMetadata,
   updateExternalApiKey,
   type DashboardControlDef,
+  type DashboardAssetMetadata,
   type WorkflowInputDef,
+  type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
+import { audioMetadataLabel } from "./audioMedia";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
@@ -37,6 +41,7 @@ interface DashboardInputControlProps {
   loraBrowser?: LoraBrowserControlProps;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
+  onAudioUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }
 
 export function DashboardInputControl({
@@ -49,6 +54,7 @@ export function DashboardInputControl({
   loraBrowser,
   onChange,
   onImageUpload,
+  onAudioUpload = async () => undefined,
 }: DashboardInputControlProps) {
   const label = control.label || input.label;
   const description = control.description;
@@ -59,7 +65,7 @@ export function DashboardInputControl({
       return (
         <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
           {description ? <small>{description}</small> : null}
-          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, loraBrowser)}
         </label>
       );
     }
@@ -68,7 +74,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -76,14 +82,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, loraBrowser)}</>;
 }
 
 function renderControl(
@@ -95,6 +101,7 @@ function renderControl(
   variant: DashboardInputControlVariant,
   onChange: (value: unknown) => void,
   onImageUpload: (file: File) => Promise<void>,
+  onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   loraBrowser?: LoraBrowserControlProps,
 ) {
   const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
@@ -184,6 +191,17 @@ function renderControl(
           disabled={disabled}
           variant={variant}
           onImageUpload={onImageUpload}
+        />
+      );
+
+    case "load_audio":
+      return (
+        <AssetAudioInput
+          value={value}
+          disabled={disabled}
+          variant={variant}
+          onChange={onChange}
+          onAudioUpload={onAudioUpload}
         />
       );
 
@@ -663,6 +681,151 @@ function AssetImageInput({
           </>
         )}
       </span>
+    </div>
+  );
+}
+
+function AssetAudioInput({
+  value,
+  disabled,
+  variant,
+  onChange,
+  onAudioUpload,
+}: {
+  value: unknown;
+  disabled: boolean;
+  variant: DashboardInputControlVariant;
+  onChange: (value: unknown) => void;
+  onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const assetId = typeof value === "string" ? value : null;
+  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : null;
+
+  useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    setMetadata(null);
+    setDuration(null);
+    setError(null);
+    if (!assetId) {
+      return;
+    }
+
+    let canceled = false;
+    fetchAssetMetadata(assetId)
+      .then((result) => {
+        if (!canceled) {
+          setMetadata(result);
+          if (typeof result.duration_seconds === "number") setDuration(result.duration_seconds);
+        }
+      })
+      .catch(() => {
+        if (!canceled) setError("Audio metadata could not be loaded. Choose another file if playback fails.");
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [assetId]);
+
+  function openFilePicker() {
+    if (!disabled && !uploading) inputRef.current?.click();
+  }
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    setUploadProgress({ loaded: 0, total: file.size || null, percent: 0 });
+    setError(null);
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+    try {
+      await onAudioUpload(file, setUploadProgress, abortController.signal);
+      setUploadProgress(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (uploadAbortRef.current === abortController) uploadAbortRef.current = null;
+      setUploading(false);
+    }
+  }
+
+  function removeAudio() {
+    if (disabled || uploading) return;
+    onChange(null);
+    setMetadata(null);
+    setDuration(null);
+    setError(null);
+  }
+
+  return (
+    <div className={`dashboard-audio-input dashboard-audio-input--${variant}${assetId ? " dashboard-audio-input--selected" : ""}`}>
+      <input
+        ref={inputRef}
+        className="dashboard-image-input__file"
+        type="file"
+        accept="audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/flac,audio/x-flac,audio/ogg,application/ogg,audio/mp4,audio/x-m4a,.wav,.mp3,.flac,.ogg,.m4a"
+        disabled={disabled || uploading}
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => void handleFileChange(event)}
+      />
+      {assetId && mediaUrl ? (
+        <div className="dashboard-audio-input__selected">
+          <audio
+            className="dashboard-audio-input__player"
+            controls
+            src={mediaUrl}
+            preload="metadata"
+            onLoadedMetadata={(event) => {
+              const nextDuration = event.currentTarget.duration;
+              if (Number.isFinite(nextDuration)) setDuration(nextDuration);
+            }}
+            onError={() => setError("Audio could not be loaded. Choose another file.")}
+          />
+          <div className="dashboard-audio-input__meta">
+            <strong>{metadata?.original_filename ?? assetId}</strong>
+            <span>{audioMetadataLabel(metadata?.format, metadata?.content_type, metadata?.size, duration, "Audio file")}</span>
+          </div>
+          <div className="dashboard-audio-input__actions">
+            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
+              <RefreshCw size={14} aria-hidden="true" />
+              Replace
+            </button>
+            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={removeAudio}>
+              <Trash2 size={14} aria-hidden="true" />
+              Remove
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="dashboard-audio-input__empty" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
+          <FileAudio size={22} aria-hidden="true" />
+          <span>{uploading ? "Uploading audio..." : "Click here to upload audio"}</span>
+          {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
+        </button>
+      )}
+      {uploading && uploadProgress ? (
+        <div className="dashboard-audio-input__progress-row">
+          <div className="dashboard-audio-input__progress" aria-label="Audio upload progress">
+            <span style={{ width: `${uploadProgress.percent ?? 0}%` }} />
+          </div>
+          <button className="secondary-button secondary-button--small" type="button" onClick={() => uploadAbortRef.current?.abort()}>
+            <X size={14} aria-hidden="true" />
+            Cancel upload
+          </button>
+        </div>
+      ) : null}
+      {error ? <small className="field-error">{error}</small> : null}
     </div>
   );
 }

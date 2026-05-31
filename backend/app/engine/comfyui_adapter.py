@@ -1,7 +1,10 @@
 import asyncio
 import contextlib
 import json
+import mimetypes
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -12,14 +15,21 @@ import websockets
 
 from app.engine.job_store import JobStore
 from app.diagnostics import DiagnosticsSink, sanitize_text
-from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
+from app.engine.models import (
+    EngineJob,
+    EngineOutputStream,
+    JobProgress,
+    JobResult,
+    ModelInfo,
+)
 from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
 
 _ASSET_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif)$",
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif|wav|mp3|flac|ogg|m4a)$",
     re.IGNORECASE,
 )
+_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio"})
 
 
 class ComfyUIEngineAdapter:
@@ -81,7 +91,11 @@ class ComfyUIEngineAdapter:
         )
 
         if self.dashboard_assets_dir is not None:
-            graph, self._staged_files[job_id] = self._stage_assets(graph, job_id)
+            graph, self._staged_files[job_id] = self._stage_assets(
+                workflow_package,
+                graph,
+                job_id,
+            )
 
         if options.get("listen_for_events", True):
             await self._start_event_listener(
@@ -253,27 +267,66 @@ class ComfyUIEngineAdapter:
         subfolder: str,
         output_type: str,
     ) -> tuple[bytes, str]:
+        stream = await self.stream_output(job_id, filename, subfolder, output_type)
+        return b"".join([chunk async for chunk in stream.body]), stream.media_type
+
+    async def stream_output(
+        self,
+        job_id: str,
+        filename: str,
+        subfolder: str,
+        output_type: str,
+        range_header: str | None = None,
+    ) -> EngineOutputStream:
         await self._ensure_output_belongs_to_job(
             job_id=job_id,
             filename=filename,
             subfolder=subfolder,
             output_type=output_type,
         )
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
+        client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
+        try:
+            request = client.build_request(
+                "GET",
                 f"{self.base_url}/view",
-                params={
-                    "filename": filename,
-                    "subfolder": subfolder,
-                    "type": output_type,
-                },
+                params={"filename": filename, "subfolder": subfolder, "type": output_type},
+                headers={"Range": range_header} if range_header else None,
             )
+            response = await client.send(request, stream=True)
+        except Exception:
+            await client.aclose()
+            raise
 
-        if response.status_code != 200:
+        if response.status_code not in {200, 206}:
+            await response.aclose()
+            await client.aclose()
             raise ValueError(f"ComfyUI output fetch failed with status {response.status_code}")
-        return (
-            response.content,
-            response.headers.get("content-type", "application/octet-stream"),
+
+        async def body():
+            try:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        forwarded_headers = {
+            name: value
+            for name in (
+                "accept-ranges",
+                "cache-control",
+                "content-length",
+                "content-range",
+                "etag",
+                "last-modified",
+            )
+            if (value := response.headers.get(name)) is not None
+        }
+        return EngineOutputStream(
+            body=body(),
+            media_type=response.headers.get("content-type", "application/octet-stream"),
+            status_code=response.status_code,
+            headers=forwarded_headers,
         )
 
     async def _ensure_output_belongs_to_job(
@@ -340,7 +393,7 @@ class ComfyUIEngineAdapter:
                     if (
                         str(item.get("filename") or "") == filename
                         and str(item.get("subfolder") or "") == subfolder
-                        and str(item.get("type") or "output") == output_type
+                        and str(item.get("output_type") or item.get("type") or "output") == output_type
                     ):
                         return True
         return False
@@ -756,12 +809,10 @@ class ComfyUIEngineAdapter:
             items = enriched.get(output_type)
             if not isinstance(items, list):
                 continue
+            kind = output_type[:-1] if output_type.endswith("s") else output_type
             enriched[output_type] = [
                 (
-                    {
-                        **item,
-                        "view_url": self._build_view_url(job_id, item),
-                    }
+                    self._enrich_media_output(job_id, item, kind)
                     if isinstance(item, dict)
                     else item
                 )
@@ -769,12 +820,32 @@ class ComfyUIEngineAdapter:
             ]
         return enriched
 
+    def _enrich_media_output(
+        self,
+        job_id: str,
+        item: dict[str, Any],
+        kind: str,
+    ) -> dict[str, Any]:
+        output_type = str(item.get("output_type") or item.get("type") or "output")
+        view_url = self._build_view_url(job_id, item)
+        return {
+            **item,
+            "kind": kind,
+            "type": kind,
+            "output_type": output_type,
+            "url": view_url,
+            "view_url": view_url,
+            "mime_type": item.get("mime_type")
+            or mimetypes.guess_type(str(item.get("filename") or ""))[0]
+            or ("audio/mpeg" if kind == "audio" else "application/octet-stream"),
+        }
+
     def _build_view_url(self, job_id: str, item: dict[str, Any]) -> str:
         query = urlencode(
             {
                 "filename": item.get("filename", ""),
                 "subfolder": item.get("subfolder", ""),
-                "type": item.get("type", "output"),
+                "type": item.get("output_type") or item.get("type", "output"),
             }
         )
         return f"/api/jobs/{job_id}/outputs/view?{query}"
@@ -790,31 +861,34 @@ class ComfyUIEngineAdapter:
 
     def _stage_assets(
         self,
+        workflow_package: WorkflowPackage,
         graph: dict[str, Any],
         job_id: str,
     ) -> tuple[dict[str, Any], list[Path]]:
-        """Copy dashboard asset files into ComfyUI's input/staging/ dir.
-
-        For each input whose value looks like an asset_id (UUID + image ext),
-        the asset file is copied to ComfyUI input/staging/ and the graph node
-        value is replaced with the staged filename so ComfyUI can load it.
-        """
+        """Materialize bound dashboard media assets into ComfyUI input/staging/."""
         if self.dashboard_assets_dir is None:
             return graph, []
 
         staged: list[Path] = []
         staged_graph: dict[str, Any] | None = None
         cloned_inputs_by_node: dict[str, dict[str, Any]] = {}
-
         comfyui_input_dir = self.comfyui_input_dir / "staging"
+        media_bindings = {
+            (workflow_input.binding.node_id, workflow_input.binding.input_name): workflow_input
+            for workflow_input in workflow_package.inputs
+            if workflow_input.control in _DASHBOARD_MEDIA_CONTROLS
+        }
 
-        for node_id, node_def in graph.items():
-            if not isinstance(node_def, dict):
-                continue
-            node_inputs = node_def.get("inputs", {})
-            if not isinstance(node_inputs, dict):
-                continue
-            for input_name, value in list(node_inputs.items()):
+        staged_paths_by_asset_id: dict[str, Path] = {}
+        try:
+            for (node_id, input_name), workflow_input in media_bindings.items():
+                node_def = graph.get(node_id)
+                if not isinstance(node_def, dict):
+                    continue
+                node_inputs = node_def.get("inputs", {})
+                if not isinstance(node_inputs, dict):
+                    continue
+                value = node_inputs.get(input_name)
                 if not isinstance(value, str) or not _ASSET_ID_RE.match(value):
                     continue
                 asset_path = self.dashboard_assets_dir / value
@@ -824,16 +898,19 @@ class ComfyUIEngineAdapter:
                         "Dashboard asset not found; skipping staging",
                         "comfyui.adapter",
                         job_id=job_id,
-                        details={"asset_id": value, "node_id": node_id},
+                        details={"asset_id": value, "node_id": node_id, "input_name": input_name},
                     )
                     continue
-                comfyui_input_dir.mkdir(parents=True, exist_ok=True)
-                staged_name = f"{job_id}_{value}"
-                staged_path = comfyui_input_dir / staged_name
-                import shutil as _shutil
-
-                _shutil.copy2(asset_path, staged_path)
-                staged.append(staged_path)
+                staged_path = staged_paths_by_asset_id.get(value)
+                if staged_path is None:
+                    comfyui_input_dir.mkdir(parents=True, exist_ok=True)
+                    staged_name = f"{job_id}_{value}"
+                    staged_path = comfyui_input_dir / staged_name
+                    _stage_asset_file(asset_path, staged_path)
+                    staged_paths_by_asset_id[value] = staged_path
+                    staged.append(staged_path)
+                else:
+                    staged_name = staged_path.name
                 if staged_graph is None:
                     staged_graph = dict(graph)
                 if node_id not in cloned_inputs_by_node:
@@ -844,7 +921,7 @@ class ComfyUIEngineAdapter:
                     cloned_inputs_by_node[node_id] = node_inputs
                 else:
                     node_inputs = cloned_inputs_by_node[node_id]
-                # ComfyUI expects filename relative to its input/ root
+                # ComfyUI expects filename relative to its input/ root.
                 node_inputs[input_name] = f"staging/{staged_name}"
                 self.log_store.add(
                     "debug",
@@ -855,8 +932,15 @@ class ComfyUIEngineAdapter:
                         "asset_id": value,
                         "staged": staged_name,
                         "node_id": node_id,
+                        "input_name": input_name,
+                        "control": workflow_input.control,
                     },
                 )
+        except Exception:
+            for staged_path in staged:
+                with contextlib.suppress(OSError):
+                    staged_path.unlink()
+            raise
 
         return staged_graph or graph, staged
 
@@ -865,3 +949,12 @@ class ComfyUIEngineAdapter:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+
+def _stage_asset_file(source: Path, target: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        target.unlink()
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)

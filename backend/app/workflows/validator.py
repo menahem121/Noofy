@@ -20,6 +20,7 @@ class WorkflowPackageValidator:
         graph_node_ids = set(package.comfyui_graph.keys())
         input_ids = {workflow_input.id for workflow_input in package.inputs}
         output_ids = {workflow_output.id for workflow_output in package.outputs}
+        outputs_by_id = {workflow_output.id: workflow_output for workflow_output in package.outputs}
 
         # Validate input bindings reference graph nodes.
         for workflow_input in package.inputs:
@@ -91,13 +92,13 @@ class WorkflowPackageValidator:
                         )
                     else:
                         input_ids_referenced.add(control.input_id)
-                elif control.type not in {"display_image", "result_image", "note"}:
+                elif control.type not in {"display_image", "display_audio", "result_image", "note"}:
                     errors.append(
                         f"Dashboard control '{control.id}' has no input_id."
                     )
 
-                # Output image controls must reference a known output.
-                if control.type in {"display_image", "result_image"}:
+                # Output media controls must reference a known output.
+                if control.type in {"display_image", "display_audio", "result_image"}:
                     if not control.output_id:
                         errors.append(
                             f"Dashboard control '{control.id}' is type '{control.type}' but has no output_id."
@@ -106,6 +107,17 @@ class WorkflowPackageValidator:
                         errors.append(
                             f"Dashboard control '{control.id}' references missing output '{control.output_id}'."
                         )
+                    else:
+                        output = outputs_by_id[control.output_id]
+                        output_kind = output.kind or output.type
+                        if control.type == "display_audio" and output_kind != "audio":
+                            errors.append(
+                                f"Dashboard control '{control.id}' is type 'display_audio' but output '{output.id}' is '{output_kind}'."
+                            )
+                        if control.type in {"display_image", "result_image"} and output_kind != "image":
+                            errors.append(
+                                f"Dashboard control '{control.id}' is type '{control.type}' but output '{output.id}' is '{output_kind}'."
+                            )
                 elif control.type == "note" and control.output_id:
                     errors.append(
                         f"Dashboard control '{control.id}' is type 'note' but must not have output_id."

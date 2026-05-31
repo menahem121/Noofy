@@ -71,11 +71,12 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
       } else if (control.output_id) {
         const output = outputIndex.get(control.output_id);
         if (!output) continue;
+        const outputKind = output.kind ?? output.type;
         widgets.push({
           id: control.id,
           valueId: output.id,
           binding: { nodeId: output.node_id, inputName: "" },
-          widgetType: "display_image",
+          widgetType: outputKind === "audio" ? "display_audio" : "display_image",
           title: control.label,
           description: control.description ?? "",
           defaultValue: null,
@@ -143,7 +144,9 @@ function toBuilderWidgetType(type: string): WidgetType {
     "toggle",
     "load_image",
     "load_image_mask",
+    "load_audio",
     "display_image",
+    "display_audio",
     "seed_widget",
     "lora_loader",
     "select",

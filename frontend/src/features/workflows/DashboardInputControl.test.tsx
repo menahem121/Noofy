@@ -190,6 +190,88 @@ describe("DashboardInputControl", () => {
     });
   });
 
+  it("renders audio assets through backend media URLs with metadata and remove controls", async () => {
+    const onChange = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      expect(url).toContain("/api/assets/12345678-1234-1234-1234-123456789abc.wav/metadata");
+      return Promise.resolve(
+        jsonResponse({
+          asset_id: "12345678-1234-1234-1234-123456789abc.wav",
+          kind: "audio",
+          original_filename: "narration.wav",
+          content_type: "audio/wav",
+          size: 2048,
+          format: "wav",
+          duration_seconds: 3.5,
+        }),
+      );
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "audio", type: "load_audio", label: "Input audio", input_id: "audio" }}
+        input={{
+          id: "audio",
+          label: "Input audio",
+          control: "load_audio",
+          binding: { node_id: "10", input_name: "audio_path" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.wav"
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+        onAudioUpload={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("narration.wav")).toBeInTheDocument();
+      expect(screen.getByText(/WAV/)).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onChange).toHaveBeenCalledWith(null);
+    const audio = document.querySelector("audio");
+    expect(audio).toHaveAttribute("src", "/api/assets/12345678-1234-1234-1234-123456789abc.wav");
+    expect(createObjectUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a long audio upload to be canceled", async () => {
+    let uploadSignal: AbortSignal | undefined;
+    const onAudioUpload = vi.fn((_file: File, _onProgress: unknown, signal?: AbortSignal) => {
+      uploadSignal = signal;
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("Audio upload was canceled.")), { once: true });
+      });
+    });
+    const { container } = render(
+      <DashboardInputControl
+        control={{ id: "audio", type: "load_audio", label: "Input audio", input_id: "audio" }}
+        input={{
+          id: "audio",
+          label: "Input audio",
+          control: "load_audio",
+          binding: { node_id: "10", input_name: "audio" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onAudioUpload={onAudioUpload}
+      />,
+    );
+
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(fileInput!, { target: { files: [new File(["audio"], "speech.wav", { type: "audio/wav" })] } });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel upload" }));
+
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(await screen.findByText("Audio upload was canceled.")).toBeInTheDocument();
+  });
+
   it("saves API credentials through settings and emits only a reference", async () => {
     const onChange = vi.fn();
     fetchMock.mockResolvedValue(

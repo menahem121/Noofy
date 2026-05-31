@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.composition import ApiServices
-from app.engine.models import ComfyUIRuntimeStatus
+from app.engine.models import ComfyUIRuntimeStatus, EngineOutputStream
 from app.main import create_app
 
 
@@ -31,6 +31,14 @@ class FakeRunResultService:
 class FakeRunJobService:
     async def fetch_output(self, job_id: str, filename: str, subfolder: str, output_type: str):
         return b"image-bytes", "image/png"
+
+    async def stream_output(self, job_id: str, filename: str, subfolder: str, output_type: str, range_header: str | None = None):
+        del job_id, filename, subfolder, output_type, range_header
+
+        async def body():
+            yield b"image-bytes"
+
+        return EngineOutputStream(body=body(), media_type="image/png")
 
 
 class FakeWorkflowExporter:
@@ -172,6 +180,22 @@ def test_job_output_view_accepts_query_token(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.content == b"image-bytes"
+
+
+def test_job_output_download_uses_attachment_header(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+
+    with TestClient(
+        create_app(
+            services=_services(run_job_service=FakeRunJobService()),
+        )
+    ) as client:
+        response = client.get(
+            "/api/jobs/job-1/outputs/view?filename=speech%20sample.wav&type=output&download=true&token=secret-token"
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''speech%20sample.wav"
 
 
 def test_workflow_export_downloads_accept_query_token(monkeypatch) -> None:

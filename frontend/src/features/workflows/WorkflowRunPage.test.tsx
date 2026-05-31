@@ -1563,6 +1563,86 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("renders generated audio with backend-owned player, download, open, and Auto Save actions", async () => {
+    const audioPackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "audio", label: "Audio", node_id: "12", type: "audio", kind: "audio" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [{
+            id: "result-audio",
+            type: "display_audio",
+            label: "Audio result",
+            output_id: "audio",
+            layout: { x: 0, y: 0, w: 12, h: 6 },
+          }],
+        }],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, audioPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-audio", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
+      }
+      if (url.endsWith("/api/jobs/job-audio/progress")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-audio", status: "completed", value: 1, max: 1, message: "Execution completed" }));
+      }
+      if (url.endsWith("/api/jobs/job-audio/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-audio",
+          status: "completed",
+          outputs: [{
+            node_id: "12",
+            output: {
+              audio: [{
+                filename: "speech.wav",
+                kind: "audio",
+                type: "audio",
+                output_type: "output",
+                mime_type: "audio/wav",
+                size: 2048,
+                duration_seconds: 2,
+                url: "/api/jobs/job-audio/outputs/view?filename=speech.wav&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+    let downloadUrl = "";
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function captureDownload(this: HTMLAnchorElement) {
+      downloadUrl = this.href;
+    });
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    renderRunPage();
+
+    expect(await screen.findByRole("button", { name: /enable auto save for audio result/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByText("speech.wav")).toBeInTheDocument();
+    expect(document.querySelector("audio")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-audio/outputs/view?filename=speech.wav&subfolder=&type=output",
+    );
+    expect(screen.getByText("WAV · 2 KB · 0:02")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(downloadUrl).toContain("download=true");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/jobs/job-audio/outputs/view?filename=speech.wav&subfolder=&type=output",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
   it("renders dashboard-only notes as read-only canvas cards", async () => {
     mockConfiguredDashboardFetch(fetchMock, readyRuntime, dashboardOnlyNotePackageData());
 

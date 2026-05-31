@@ -1723,6 +1723,8 @@
   .layout-canvas-widget__preview-surface *,
   .widget-output-placeholder,
   .widget-output-placeholder *,
+  .widget-output-audio,
+  .widget-output-audio *,
   .widget-output-image__download,
   .canvas-widget-slider,
   .canvas-widget-slider *,
@@ -1730,6 +1732,8 @@
   .canvas-widget-toggle *,
   .dashboard-image-input,
   .dashboard-image-input *,
+  .dashboard-audio-input,
+  .dashboard-audio-input *,
   .layout-canvas-resize-handles,
   .layout-canvas-resize-handles *
 ) {
