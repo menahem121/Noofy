@@ -60,7 +60,7 @@ from app.engine.factory import create_default_engine_service
 async def main():
     service = create_default_engine_service()
     try:
-        result = await service.runtime_manager.status()
+        result = await service.runtime_manager.status(include_environment=True)
         print(json.dumps(result.model_dump(mode="json"), sort_keys=True))
     finally:
         await service.shutdown()
@@ -426,6 +426,7 @@ class NoofyCheckout:
 
     def install_backend_dependencies(self) -> None:
         print("Installing trusted backend dependencies into backend/.venv")
+        self.ensure_backend_pip()
         self.command_runner(
             [str(self.backend_python), "-m", "pip", "install", "--upgrade", "pip"],
             self.backend_dir,
@@ -438,6 +439,34 @@ class NoofyCheckout:
             None,
             False,
         )
+
+    def ensure_backend_pip(self) -> None:
+        try:
+            self.command_runner(
+                [
+                    str(self.backend_python),
+                    "-c",
+                    "import sys\ntry:\n import pip\nexcept Exception:\n sys.exit(1)",
+                ],
+                self.backend_dir,
+                None,
+                False,
+            )
+        except subprocess.CalledProcessError:
+            print("Backend venv is missing pip; bootstrapping it with ensurepip")
+            try:
+                self.command_runner(
+                    [str(self.backend_python), "-m", "ensurepip", "--upgrade"],
+                    self.backend_dir,
+                    None,
+                    False,
+                )
+            except subprocess.CalledProcessError:
+                raise SystemExit(
+                    "Backend venv is missing pip, and Python could not bootstrap it with ensurepip.\n"
+                    "Install Python with venv/ensurepip support, remove backend/.venv, "
+                    "and run the source-checkout install command again."
+                ) from None
 
     def install_frontend_dependencies(self) -> None:
         require_node()
@@ -492,11 +521,18 @@ class NoofyCheckout:
         result = self.command_runner(runtime_status_command(self.backend_python), self.backend_dir, env, True)
         payload = _load_json_output(result.stdout)
         environment = payload.get("environment") if isinstance(payload.get("environment"), dict) else {}
-        print(f"Runtime status: {payload.get('status', 'unknown')}")
+        print(f"Runtime mode: {payload.get('mode', 'unknown')}")
         print(f"Runtime prepared: {environment.get('prepared')}")
+        print(f"Sidecar reachable: {payload.get('reachable')}")
+        if not environment:
+            print("Runtime error: managed runtime environment status is unavailable")
+            return 1
         error = environment.get("error")
         if error:
             print(f"Runtime error: {error}")
+            return 1
+        if environment.get("prepared") is not True:
+            print("Runtime error: managed runtime environment is not prepared")
             return 1
         return 0
 

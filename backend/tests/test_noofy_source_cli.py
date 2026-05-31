@@ -1,5 +1,6 @@
 import importlib.util
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -231,6 +232,13 @@ def test_runtime_bootstrap_command_delegates_to_backend_service(tmp_path: Path) 
     assert "torch" not in code.lower()
 
 
+def test_runtime_status_command_requests_environment_details(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    command = cli.runtime_status_command(tmp_path / "backend" / ".venv" / "bin" / "python")
+
+    assert "status(include_environment=True)" in command[-1]
+
+
 def test_managed_runtime_python_guidance_includes_os_specific_source_fix() -> None:
     cli = load_noofy_cli()
     environment = {
@@ -316,6 +324,95 @@ def test_ensure_backend_venv_is_idempotent_when_python_exists(tmp_path: Path) ->
     cli.NoofyCheckout(root=tmp_path, command_runner=runner).ensure_backend_venv()
 
     assert calls == []
+
+
+def test_install_backend_dependencies_keeps_existing_pip(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    backend_python = cli.backend_python_path(tmp_path)
+    calls = []
+
+    def runner(command, cwd, env, capture):
+        calls.append(command)
+        return cli.CommandResult(returncode=0)
+
+    cli.NoofyCheckout(root=tmp_path, command_runner=runner).install_backend_dependencies()
+
+    assert [str(backend_python), "-m", "ensurepip", "--upgrade"] not in calls
+    assert calls[-2:] == [
+        [str(backend_python), "-m", "pip", "install", "--upgrade", "pip"],
+        [str(backend_python), "-m", "pip", "install", "-e", ".[dev]"],
+    ]
+
+
+def test_install_backend_dependencies_bootstraps_missing_pip(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+    backend_python = cli.backend_python_path(tmp_path)
+    calls = []
+
+    def runner(command, cwd, env, capture):
+        calls.append(command)
+        if command[1] == "-c":
+            raise subprocess.CalledProcessError(1, command)
+        return cli.CommandResult(returncode=0)
+
+    cli.NoofyCheckout(root=tmp_path, command_runner=runner).install_backend_dependencies()
+
+    assert calls[1:] == [
+        [str(backend_python), "-m", "ensurepip", "--upgrade"],
+        [str(backend_python), "-m", "pip", "install", "--upgrade", "pip"],
+        [str(backend_python), "-m", "pip", "install", "-e", ".[dev]"],
+    ]
+
+
+def test_install_backend_dependencies_reports_unavailable_ensurepip(tmp_path: Path) -> None:
+    cli = load_noofy_cli()
+
+    def runner(command, cwd, env, capture):
+        raise subprocess.CalledProcessError(1, command)
+
+    checkout = cli.NoofyCheckout(root=tmp_path, command_runner=runner)
+
+    with pytest.raises(SystemExit, match="Install Python with venv/ensurepip support"):
+        checkout.install_backend_dependencies()
+
+
+def test_doctor_reports_prepared_runtime_environment(tmp_path: Path, capsys) -> None:
+    cli = load_noofy_cli()
+    backend_python = cli.backend_python_path(tmp_path)
+    backend_python.parent.mkdir(parents=True)
+    backend_python.write_text("", encoding="utf-8")
+
+    def runner(command, cwd, env, capture):
+        return cli.CommandResult(
+            returncode=0,
+            stdout='{"mode":"managed","reachable":false,"environment":{"prepared":true}}\n',
+        )
+
+    result = cli.NoofyCheckout(root=tmp_path, command_runner=runner).doctor()
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Runtime mode: managed" in output
+    assert "Runtime prepared: True" in output
+    assert "Sidecar reachable: False" in output
+
+
+def test_doctor_reports_missing_runtime_environment_details(tmp_path: Path, capsys) -> None:
+    cli = load_noofy_cli()
+    backend_python = cli.backend_python_path(tmp_path)
+    backend_python.parent.mkdir(parents=True)
+    backend_python.write_text("", encoding="utf-8")
+
+    def runner(command, cwd, env, capture):
+        return cli.CommandResult(
+            returncode=0,
+            stdout='{"mode":"managed","reachable":false,"environment":null}\n',
+        )
+
+    result = cli.NoofyCheckout(root=tmp_path, command_runner=runner).doctor()
+
+    assert result == 1
+    assert "Runtime error: managed runtime environment status is unavailable" in capsys.readouterr().out
 
 
 def test_run_reports_missing_frontend_dependencies(tmp_path: Path) -> None:
