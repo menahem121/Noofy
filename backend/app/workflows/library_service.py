@@ -17,6 +17,13 @@ from app.engine.models import (
     WorkflowModelVerificationJobStatus,
 )
 from app.history import HistoryService
+from app.runtime.memory.hardware_warning import evaluate_workflow_hardware_warning
+from app.runtime.memory.memory_governor import (
+    LocalMemoryEvidenceSummary,
+    LocalMemoryLearningStore,
+    MachineMemoryObserver,
+    MachineMemorySnapshot,
+)
 from app.trust import workflow_source_policy, workflow_trust_payload
 from app.workflows.exporter import stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
@@ -72,6 +79,8 @@ class WorkflowLibraryService:
         workflow_library_store: WorkflowLibraryStore | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
         history_service: HistoryService | None = None,
+        memory_observer: MachineMemoryObserver | None = None,
+        memory_learning_store: LocalMemoryLearningStore | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.model_availability_service = model_availability_service
@@ -79,12 +88,21 @@ class WorkflowLibraryService:
         self.workflow_library_store = workflow_library_store
         self.imported_package_store = imported_package_store
         self.history_service = history_service
+        self.memory_observer = memory_observer
+        self.memory_learning_store = memory_learning_store
         self._model_verification_jobs: dict[str, _WorkflowModelVerificationJob] = {}
         self._active_model_verification_by_workflow: dict[str, str] = {}
 
     def list_workflows(self) -> list[dict[str, object]]:
+        hardware_warning_snapshot, hardware_warning_snapshot_loaded = self._hardware_warning_snapshot()
+        hardware_warning_local_summaries = self._hardware_warning_local_summaries()
         return [
-            self.workflow_summary(package)
+            self.workflow_summary(
+                package,
+                hardware_warning_snapshot=hardware_warning_snapshot,
+                hardware_warning_snapshot_loaded=hardware_warning_snapshot_loaded,
+                hardware_warning_local_summaries=hardware_warning_local_summaries,
+            )
             for package in self.workflow_loader.list_packages()
         ]
 
@@ -332,7 +350,14 @@ class WorkflowLibraryService:
             metrics=metrics,
         )
 
-    def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
+    def workflow_summary(
+        self,
+        package: WorkflowPackage,
+        *,
+        hardware_warning_snapshot: MachineMemorySnapshot | None = None,
+        hardware_warning_snapshot_loaded: bool = False,
+        hardware_warning_local_summaries: list[LocalMemoryEvidenceSummary] | None = None,
+    ) -> dict[str, object]:
         status = _effective_workflow_status(package)
         user_facing_status = _effective_workflow_status_label(package, status)
         metadata = self._library_metadata(package)
@@ -376,7 +401,46 @@ class WorkflowLibraryService:
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
             "custom_node_count": len(package.custom_nodes),
             "required_model_count": len(package.required_models),
+            "hardware_warning": self._hardware_warning(
+                package,
+                machine_snapshot=hardware_warning_snapshot,
+                machine_snapshot_loaded=hardware_warning_snapshot_loaded,
+                local_summaries=hardware_warning_local_summaries,
+            ),
         }
+
+    def _hardware_warning_snapshot(self) -> tuple[MachineMemorySnapshot | None, bool]:
+        if self.memory_observer is None:
+            return None, True
+        try:
+            return self.memory_observer.snapshot(), True
+        except Exception:
+            return None, True
+
+    def _hardware_warning(
+        self,
+        package: WorkflowPackage,
+        *,
+        machine_snapshot: MachineMemorySnapshot | None = None,
+        machine_snapshot_loaded: bool = False,
+        local_summaries: list[LocalMemoryEvidenceSummary] | None = None,
+    ) -> dict[str, object] | None:
+        warning = evaluate_workflow_hardware_warning(
+            package,
+            memory_observer=None if machine_snapshot_loaded else self.memory_observer,
+            memory_learning_store=self.memory_learning_store,
+            machine_snapshot=machine_snapshot,
+            local_summaries=local_summaries,
+        )
+        return warning.model_dump(mode="json") if warning is not None else None
+
+    def _hardware_warning_local_summaries(self) -> list[LocalMemoryEvidenceSummary]:
+        if self.memory_learning_store is None:
+            return []
+        try:
+            return self.memory_learning_store.list_summaries()
+        except Exception:
+            return []
 
     def _library_metadata(self, package: WorkflowPackage) -> dict[str, object]:
         stored = (

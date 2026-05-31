@@ -11,6 +11,7 @@ import {
   PackageOpen,
   Wand2,
 } from "lucide-react";
+import type { WorkflowHardwareWarning } from "../../lib/api/noofyApi";
 
 export type WorkflowStatus =
   | "installed"
@@ -35,6 +36,7 @@ export interface WorkflowCard {
   canRemove?: boolean;
   canExportNoofy?: boolean;
   canExportComfyJson?: boolean;
+  hardwareWarning?: WorkflowHardwareWarning | null;
   icon?: string;
   Icon: LucideIcon;
   source: "backend" | "starter";

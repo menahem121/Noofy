@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import shutil
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,17 @@ from app.diagnostics import LogStore
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.engine.models import EngineJob, JobResult, ModelInfo, RequiredModelAvailability, RequiredModelSummary
 from app.engine.service import EngineService
+from app.runtime.memory.hardware_warning import HardwareWarningReasonCode, evaluate_workflow_hardware_warning
+from app.runtime.memory.memory_governor import (
+    LocalMemoryLearningStore,
+    LocalMemoryObservation,
+    MachineMemorySnapshot,
+    MemoryAttributionQuality,
+    MemoryBackend,
+    MemoryObservationOutcome,
+    MemoryPressureLevel,
+    MemorySignalQuality,
+)
 from app.runtime.runners.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_ID, RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
@@ -26,6 +38,26 @@ from app.workflows.validator import WorkflowPackageValidator
 class StubRuntimeManager:
     base_url = "http://127.0.0.1:8188"
     ws_url = "ws://127.0.0.1:8188/ws"
+
+
+class StubMemoryObserver:
+    def __init__(self, snapshot: MachineMemorySnapshot) -> None:
+        self.snapshot_value = snapshot
+        self.snapshot_count = 0
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        self.snapshot_count += 1
+        return self.snapshot_value
+
+
+class CountingMemoryLearningStore(LocalMemoryLearningStore):
+    def __init__(self, root_dir: Path) -> None:
+        super().__init__(root_dir)
+        self.list_summaries_count = 0
+
+    def list_summaries(self):
+        self.list_summaries_count += 1
+        return super().list_summaries()
 
 
 class FakeAvailabilityService:
@@ -268,6 +300,102 @@ def _native_run_service(tmp_path: Path) -> tuple[EngineService, str]:
     return service, "native_run"
 
 
+def _hardware_warning_service(
+    tmp_path: Path,
+    *,
+    observed_hardware: dict[str, Any] | None = None,
+    required_model_size_bytes: int | None = None,
+    memory_snapshot: MachineMemorySnapshot | None = None,
+    memory_learning_store: LocalMemoryLearningStore | None = None,
+) -> tuple[EngineService, str, StubMemoryObserver | None]:
+    packages_dir = tmp_path / "hardware-packages"
+    package_dir = packages_dir / "hardware_warning_wf"
+    package_dir.mkdir(parents=True)
+    required_models = []
+    if required_model_size_bytes is not None:
+        required_models.append(
+            {
+                "folder": "checkpoints",
+                "filename": "heavy.safetensors",
+                "model_type": "checkpoint",
+                "size_bytes": required_model_size_bytes,
+            }
+        )
+    package_payload: dict[str, Any] = {
+        "metadata": {
+            "id": "hardware_warning_wf",
+            "name": "Hardware Warning",
+            "version": "1.0.0",
+            "description": "Tests hardware warnings.",
+        },
+        "engine": "comfyui",
+        "required_models": required_models,
+        "comfyui_graph": {"1": {"class_type": "SaveImage", "inputs": {}}},
+        "inputs": [],
+        "outputs": [],
+        "custom_nodes": [],
+        "unresolved_runtime_inputs": [],
+    }
+    if observed_hardware is not None:
+        package_payload["observed_hardware"] = observed_hardware
+    (package_dir / "package.json").write_text(json.dumps(package_payload), encoding="utf-8")
+    (package_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "status": "configured",
+                "inputs": [],
+                "outputs": [{"id": "image", "label": "Image", "node_id": "1", "type": "image"}],
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "result", "type": "result_image", "label": "Result", "output_id": "image"}
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    observer = StubMemoryObserver(memory_snapshot) if memory_snapshot is not None else None
+    service = EngineService(
+        WorkflowPackageLoader(packages_dir),
+        WorkflowPackageValidator(),
+        RunnerSupervisor(),
+        StubRuntimeManager(),
+        LogStore(),
+        model_availability_service=FakeAvailabilityService(),
+        workflow_library_store=WorkflowLibraryStore(tmp_path / "library"),
+        memory_observer=observer,
+        memory_learning_store=memory_learning_store,
+    )
+    return service, "hardware_warning_wf", observer
+
+
+def _cuda_snapshot(
+    *,
+    total_vram_mb: int = 12_000,
+    free_vram_mb: int = 8_000,
+    total_ram_mb: int = 64_000,
+    free_ram_mb: int = 48_000,
+    memory_pressure: MemoryPressureLevel = MemoryPressureLevel.LOW,
+) -> MachineMemorySnapshot:
+    return MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        machine_profile_id="machine-a",
+        device_name="Test GPU",
+        total_vram_mb=total_vram_mb,
+        free_vram_mb=free_vram_mb,
+        total_ram_mb=total_ram_mb,
+        free_ram_mb=free_ram_mb,
+        memory_pressure=memory_pressure,
+        signal_quality=MemorySignalQuality.BACKEND_API,
+        signal_sources=["test"],
+    )
+
+
 def test_workflow_list_returns_lightweight_table_fields(tmp_path: Path) -> None:
     service, workflow_id, _, _ = _service(tmp_path)
 
@@ -277,8 +405,230 @@ def test_workflow_list_returns_lightweight_table_fields(tmp_path: Path) -> None:
     assert row["main_model"]["name"] == "No model detected"
     assert row["category"] == "Txt2img"
     assert row["can_remove"] is True
+    assert row["hardware_warning"] is None
     assert "models_used" not in row
     assert "overview" not in row
+
+
+def test_hardware_warning_is_yellow_for_temporary_low_free_memory(tmp_path: Path) -> None:
+    service, workflow_id, observer = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=12_000, free_vram_mb=1_500),
+    )
+
+    row = next(item for item in service.list_workflows() if item["id"] == workflow_id)
+    warning = row["hardware_warning"]
+
+    assert observer is not None
+    assert observer.snapshot_count == 1
+    assert warning["severity"] == "medium"
+    assert warning["confidence"] == "low"
+    assert HardwareWarningReasonCode.TEMPORARY_LOW_FREE_MEMORY.value in warning["reason_codes"]
+
+
+def test_workflow_list_reads_hardware_warning_signals_once(tmp_path: Path) -> None:
+    learning = CountingMemoryLearningStore(tmp_path / "learning")
+    service, workflow_id, observer = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(),
+        memory_learning_store=learning,
+    )
+    packages_dir = tmp_path / "hardware-packages"
+    shutil.copytree(packages_dir / workflow_id, packages_dir / "hardware_warning_wf_2")
+    second_package_path = packages_dir / "hardware_warning_wf_2" / "package.json"
+    second_package = json.loads(second_package_path.read_text(encoding="utf-8"))
+    second_package["metadata"]["id"] = "hardware_warning_wf_2"
+    second_package["metadata"]["name"] = "Hardware Warning Two"
+    second_package_path.write_text(json.dumps(second_package), encoding="utf-8")
+
+    rows = service.list_workflows()
+
+    assert len(rows) == 2
+    assert observer is not None
+    assert observer.snapshot_count == 1
+    assert learning.list_summaries_count == 1
+
+
+def test_hardware_warning_is_red_for_matching_local_memory_failure(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            outcome=MemoryObservationOutcome.MEMORY_ERROR,
+            peak_vram_mb=7_000,
+            attribution_quality=MemoryAttributionQuality.PROCESS_TREE,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=12_000, free_vram_mb=9_000),
+        memory_learning_store=learning,
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "high"
+    assert warning["confidence"] == "high"
+    assert warning["evidence"]["local_memory_error_runs"] == 1
+    assert warning["evidence"]["local_input_profile_match"] == "matching"
+    assert warning["reason_codes"] == [HardwareWarningReasonCode.LOCAL_MEMORY_ERROR.value]
+
+
+def test_matching_local_success_suppresses_creator_only_hardware_warning(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-a",
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=1_200,
+            peak_ram_mb=900,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        observed_hardware={"observed_peak_vram_mb": 12_000},
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+        memory_learning_store=learning,
+    )
+
+    package = service.workflow_loader.get_package(workflow_id)
+    warning = evaluate_workflow_hardware_warning(
+        package,
+        memory_learning_store=learning,
+        machine_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+        input_profile_fingerprint="settings-a",
+    )
+
+    assert warning is None
+
+
+def test_mismatched_local_success_does_not_suppress_creator_warning(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-a",
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=1_200,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        observed_hardware={"observed_peak_vram_mb": 12_000},
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+        memory_learning_store=learning,
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "medium"
+    assert warning["evidence"]["local_input_profile_match"] == "mismatched"
+    assert HardwareWarningReasonCode.LOCAL_SUCCESS_SETTINGS_MISMATCH.value in warning["reason_codes"]
+    assert HardwareWarningReasonCode.CREATOR_OBSERVED_MEMORY_HINT.value in warning["reason_codes"]
+    assert set(warning["reason_codes"]).issubset({code.value for code in HardwareWarningReasonCode})
+
+
+def test_profiled_local_memory_failure_still_produces_advisory_warning_for_card(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-a",
+            outcome=MemoryObservationOutcome.MEMORY_ERROR,
+            peak_vram_mb=7_000,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=12_000, free_vram_mb=9_000),
+        memory_learning_store=learning,
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "medium"
+    assert warning["confidence"] == "low"
+    assert warning["evidence"]["local_memory_error_runs"] == 1
+    assert warning["evidence"]["local_input_profile_match"] == "mismatched"
+    assert warning["reason_codes"] == [HardwareWarningReasonCode.LOCAL_MEMORY_ERROR_SETTINGS_MISMATCH.value]
+
+
+def test_stale_local_memory_failure_does_not_warn(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            outcome=MemoryObservationOutcome.MEMORY_ERROR,
+            peak_vram_mb=7_000,
+            observed_at=(datetime.now(UTC) - timedelta(days=60)).isoformat(),
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=12_000, free_vram_mb=9_000),
+        memory_learning_store=learning,
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning is None
+
+
+def test_model_size_capacity_risk_can_produce_red_warning(tmp_path: Path) -> None:
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        required_model_size_bytes=8 * 1024 * 1024 * 1024,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "high"
+    assert warning["confidence"] == "low"
+    assert HardwareWarningReasonCode.MODEL_SIZE_HEURISTIC.value in warning["reason_codes"]
+    assert HardwareWarningReasonCode.ESTIMATED_VRAM_CAPACITY_RISK.value in warning["reason_codes"]
+
+
+def test_near_capacity_model_size_heuristic_stays_yellow(tmp_path: Path) -> None:
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        required_model_size_bytes=5_500 * 1024 * 1024,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=8_000),
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "medium"
+    assert warning["confidence"] == "low"
+    assert warning["estimate"]["source"] == "heuristic"
+    assert HardwareWarningReasonCode.ESTIMATED_VRAM_CAPACITY_RISK.value in warning["reason_codes"]
+
+
+def test_hardware_warning_developer_details_are_diagnostic_safe(tmp_path: Path) -> None:
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        observed_hardware={"observed_peak_vram_mb": 12_000},
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+    details_text = json.dumps(warning["developer_details"], sort_keys=True)
+
+    assert warning["severity"] == "medium"
+    assert "machine-a" not in details_text
+    assert "Test GPU" not in details_text
+    assert "machine_profile_id" not in details_text
 
 
 def test_workflow_open_history_updates_last_opened_without_run_history(tmp_path: Path) -> None:
@@ -460,10 +810,18 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
     with zipfile.ZipFile(io.BytesIO(exported)) as zf:
         exported_package = json.loads(zf.read("package.json"))
         names = set(zf.namelist())
+        exported_json_text = "\n".join(
+            zf.read(name).decode("utf-8")
+            for name in names
+            if name.endswith(".json")
+        )
     assert exported_package["display_name"] == "Edited Cleanup Workflow"
     assert exported_package["metadata"]["display_name"] == "Edited Cleanup Workflow"
     assert exported_package["metadata"]["name"] == "Edited Cleanup Workflow"
     assert exported_package["metadata"]["description"] == "Updated description"
+    assert "hardware_warning" not in exported_package
+    assert "hardware_warning" not in exported_json_text
+    assert "local_memory_error_runs" not in exported_json_text
     assert "run-history.json" not in names
 
 

@@ -12,6 +12,63 @@ export interface WorkflowTrustSummary {
   signature_status: string;
 }
 
+export type WorkflowHardwareWarningSeverity = "medium" | "high";
+export type WorkflowHardwareWarningConfidence = "low" | "medium" | "high";
+export type WorkflowHardwareWarningEstimateSource =
+  | "declared"
+  | "creator_observed"
+  | "local_observed"
+  | "heuristic"
+  | "unknown";
+export type WorkflowHardwareWarningReasonCode =
+  | "local_memory_error"
+  | "local_memory_error_settings_mismatch"
+  | "local_success_settings_mismatch"
+  | "temporary_low_free_memory"
+  | "memory_pressure_high"
+  | "estimated_vram_shortfall"
+  | "estimated_ram_shortfall"
+  | "estimated_vram_capacity_risk"
+  | "estimated_ram_capacity_risk"
+  | "creator_observed_memory_hint"
+  | "model_size_heuristic";
+
+export interface WorkflowHardwareWarningEstimate {
+  estimated_peak_vram_mb: number | null;
+  estimated_peak_ram_mb: number | null;
+  source: WorkflowHardwareWarningEstimateSource;
+  confidence: WorkflowHardwareWarningConfidence | null;
+}
+
+export interface WorkflowHardwareWarningMachineSignal {
+  backend: string;
+  memory_pressure: string;
+  total_vram_mb: number | null;
+  free_vram_mb: number | null;
+  total_ram_mb: number | null;
+  free_ram_mb: number | null;
+  signal_quality: string;
+}
+
+export interface WorkflowHardwareWarningEvidence {
+  local_successful_runs: number;
+  local_memory_error_runs: number;
+  local_input_profile_match: "matching" | "mismatched" | "none";
+  creator_observation_available: boolean;
+  model_size_heuristic_available: boolean;
+  required_model_size_mb: number | null;
+}
+
+export interface WorkflowHardwareWarning {
+  severity: WorkflowHardwareWarningSeverity;
+  confidence: WorkflowHardwareWarningConfidence;
+  reason_codes: WorkflowHardwareWarningReasonCode[];
+  estimate: WorkflowHardwareWarningEstimate;
+  machine_signal: WorkflowHardwareWarningMachineSignal | null;
+  evidence: WorkflowHardwareWarningEvidence;
+  developer_details: Record<string, unknown>;
+}
+
 export interface WorkflowSummary {
   id: string;
   name: string;
@@ -44,6 +101,7 @@ export interface WorkflowSummary {
   unresolved_input_count?: number;
   custom_node_count?: number;
   required_model_count?: number;
+  hardware_warning?: WorkflowHardwareWarning | null;
 }
 
 export interface WorkflowDetailsModel {

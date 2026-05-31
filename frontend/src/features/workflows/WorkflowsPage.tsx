@@ -43,6 +43,14 @@ import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
 import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
+import {
+  hardwareWarningBasis,
+  hardwareWarningDeveloperDetailsText,
+  hardwareWarningEstimateText,
+  hardwareWarningExplanation,
+  hardwareWarningMachineText,
+  hardwareWarningPillView,
+} from "./hardwareWarning";
 import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS, workflowCategoryOption } from "./workflowMetadataOptions";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
@@ -860,9 +868,12 @@ function WorkflowRow({
         {workflow.description || "No description yet"}
       </div>
       <div className="workflow-col workflow-col-status">
-        <span className={`workflow-status workflow-status--${readiness}`}>
-          {workflowReadinessLabel(workflow)}
-        </span>
+        <div className="workflow-status-stack">
+          <span className={`workflow-status workflow-status--${readiness}`}>
+            {workflowReadinessLabel(workflow)}
+          </span>
+          {workflow.hardware_warning ? <HardwareWarningPill warning={workflow.hardware_warning} /> : null}
+        </div>
       </div>
       <div className="workflow-col workflow-col-source" title={workflowSourceLabel(workflow)}>
         {workflowSourceLabel(workflow)}
@@ -1107,6 +1118,12 @@ function WorkflowDetailsDrawer({
         </dl>
       </DetailSection>
 
+      {workflow.hardware_warning ? (
+        <DetailSection title="Hardware compatibility">
+          <HardwareWarningDetails warning={workflow.hardware_warning} />
+        </DetailSection>
+      ) : null}
+
       <DetailSection title="Organization">
         <EditableSelectField
           label="Category"
@@ -1162,6 +1179,35 @@ function WorkflowDetailsDrawer({
         </button>
       </div>
     </>
+  );
+}
+
+function HardwareWarningPill({ warning }: { warning: NonNullable<WorkflowSummary["hardware_warning"]> }) {
+  const view = hardwareWarningPillView(warning);
+  return (
+    <span
+      className={`hardware-warning-pill hardware-warning-pill--${view.tone}`}
+      title={view.tooltip}
+    >
+      {view.label}
+    </span>
+  );
+}
+
+function HardwareWarningDetails({ warning }: { warning: NonNullable<WorkflowSummary["hardware_warning"]> }) {
+  return (
+    <div className="hardware-warning-detail">
+      <p>{hardwareWarningExplanation(warning)}</p>
+      <dl className="detail-list detail-list--compact">
+        <div><dt>Estimated need</dt><dd>{hardwareWarningEstimateText(warning)}</dd></div>
+        <div><dt>Current machine</dt><dd>{hardwareWarningMachineText(warning)}</dd></div>
+        <div><dt>Based on</dt><dd>{hardwareWarningBasis(warning)}</dd></div>
+      </dl>
+      <details className="hardware-warning-developer-details">
+        <summary>Developer details</summary>
+        <pre>{hardwareWarningDeveloperDetailsText(warning)}</pre>
+      </details>
+    </div>
   );
 }
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,39 @@ function jsonResponse(data: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+const highHardwareWarning = {
+  severity: "high",
+  confidence: "medium",
+  reason_codes: ["model_size_heuristic", "estimated_vram_capacity_risk"],
+  estimate: {
+    estimated_peak_vram_mb: 12_000,
+    estimated_peak_ram_mb: null,
+    source: "heuristic",
+    confidence: "low",
+  },
+  machine_signal: {
+    backend: "cuda",
+    memory_pressure: "low",
+    total_vram_mb: 8_000,
+    free_vram_mb: 7_000,
+    total_ram_mb: 32_000,
+    free_ram_mb: 22_000,
+    signal_quality: "backend_api",
+  },
+  evidence: {
+    local_successful_runs: 0,
+    local_memory_error_runs: 0,
+    local_input_profile_match: "none",
+    creator_observation_available: false,
+    model_size_heuristic_available: true,
+    required_model_size_mb: 12_000,
+  },
+  developer_details: {
+    reason_codes: ["model_size_heuristic", "estimated_vram_capacity_risk"],
+    estimate_source: "heuristic",
+  },
+};
 
 const workflows = [
   {
@@ -56,6 +89,7 @@ const workflows = [
     can_export_comfyui_json: true,
     status: "imported",
     status_label: "Imported",
+    hardware_warning: highHardwareWarning,
   },
 ];
 
@@ -353,6 +387,25 @@ describe("WorkflowsPage", () => {
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
   });
 
+  it("shows advisory hardware warning pills without disabling Open", async () => {
+    renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    const row = rowTitle.closest("article")!;
+    const pill = within(row).getByText("Likely too heavy");
+    const openButton = within(row).getByRole("button", { name: "Open" });
+
+    expect(pill).toHaveAttribute(
+      "title",
+      "This workflow will probably need more memory than this machine can comfortably provide. You can still try it.",
+    );
+    expect(openButton).not.toBeDisabled();
+
+    fireEvent.click(openButton);
+
+    expect(onOpenWorkflow).toHaveBeenCalledWith("imported_cleanup");
+  });
+
   it("sorts workflows by sortable headers without clearing the current search", async () => {
     renderPage();
 
@@ -467,6 +520,20 @@ describe("WorkflowsPage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("complementary", { name: "Details for Cleanup Flow" })).not.toBeInTheDocument();
     });
+  });
+
+  it("shows beginner hardware compatibility details in the drawer", async () => {
+    renderPage();
+
+    const rowTitle = await screen.findByText("Cleanup Flow");
+    fireEvent.click(rowTitle.closest("article")!);
+
+    expect(await screen.findByText("Hardware compatibility")).toBeInTheDocument();
+    expect(screen.getByText("This workflow will probably need more memory than this machine can comfortably provide. You can still try it.")).toBeInTheDocument();
+    expect(screen.getByText("11.7 GB VRAM")).toBeInTheDocument();
+    expect(screen.getByText("6.8 GB VRAM free of 7.8 GB")).toBeInTheDocument();
+    expect(screen.getByText("Model size estimate and current machine")).toBeInTheDocument();
+    expect(screen.getByText("Developer details")).toBeInTheDocument();
   });
 
   it("keeps the drawer-open workflow list responsive with long row content", async () => {

@@ -35,6 +35,7 @@ import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/Workfl
 import { useWorkflowImportFlow } from "../workflows/useWorkflowImportFlow";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
+import { hardwareWarningPillView } from "../workflows/hardwareWarning";
 import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
 import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
 import {
@@ -97,6 +98,7 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       canRemove: Boolean(workflow.can_remove),
       canExportNoofy: Boolean(workflow.can_export_noofy),
       canExportComfyJson: workflow.can_export_comfyui_json !== false,
+      hardwareWarning: workflow.hardware_warning ?? null,
       icon: workflow.icon,
       Icon: WORKFLOW_ICONS[(workflow.icon as keyof typeof WORKFLOW_ICONS) ?? "sparkles"] ?? fallbackWorkflow.Icon,
       source: "backend",
@@ -963,6 +965,7 @@ function WorkflowCardView({
                 {workflow.trustLabel}
               </span>
             ) : null}
+            {workflow.hardwareWarning ? <HardwareWarningPill warning={workflow.hardwareWarning} /> : null}
           </div>
           {canShowActions ? (
             <WorkflowActionMenu
@@ -1016,6 +1019,18 @@ function WorkflowCardView({
         </button>
       </div>
     </article>
+  );
+}
+
+function HardwareWarningPill({ warning }: { warning: NonNullable<WorkflowCard["hardwareWarning"]> }) {
+  const view = hardwareWarningPillView(warning);
+  return (
+    <span
+      className={`hardware-warning-pill hardware-warning-pill--${view.tone}`}
+      title={view.tooltip}
+    >
+      {view.label}
+    </span>
   );
 }
 

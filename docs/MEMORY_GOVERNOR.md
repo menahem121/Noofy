@@ -84,6 +84,25 @@ If a submitted job fails with a likely memory error, Noofy may stop idle
 isolated runners, wait for bounded memory release, and retry the same workflow
 once. It does not retry non-memory failures or repeat memory retries forever.
 
+## Library Advisory Warnings
+
+Workflow summaries and details may include a lightweight `hardware_warning`
+advisory for the current machine. The warning evaluator reads existing package
+metadata, required model sizes, local memory-learning summaries, and a
+best-effort memory snapshot. It does not start runners, contact ComfyUI, or run
+full workflow validation while rendering library cards.
+
+These yellow or red warnings are separate from run-time admission. They never
+disable opening, editing, importing, exporting, customizing, or attempting to
+run a workflow. The Memory Governor still applies its normal admission policy
+when the user actually presses Run.
+
+Local observations stay in local app data and are not written into `.noofy`
+packages, package metadata, capsule locks, or exports. Creator/export-time
+observations remain advisory hints and never override evidence learned on the
+current machine. Card warnings use recent local memory failures so stale errors
+do not keep a workflow flagged indefinitely.
+
 ## Core Runner Policy
 
 Core/default/trusted runner admission is Memory-Governor-aware. This is not to

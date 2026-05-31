@@ -54,6 +54,36 @@ const cachedImportedWorkflow = {
   status_label: "Imported",
 };
 
+const mediumHardwareWarning = {
+  severity: "medium",
+  confidence: "low",
+  reason_codes: ["temporary_low_free_memory"],
+  estimate: {
+    estimated_peak_vram_mb: null,
+    estimated_peak_ram_mb: null,
+    source: "unknown",
+    confidence: null,
+  },
+  machine_signal: {
+    backend: "cuda",
+    memory_pressure: "low",
+    total_vram_mb: 12_000,
+    free_vram_mb: 1_500,
+    total_ram_mb: 64_000,
+    free_ram_mb: 48_000,
+    signal_quality: "backend_api",
+  },
+  evidence: {
+    local_successful_runs: 0,
+    local_memory_error_runs: 0,
+    local_input_profile_match: "none",
+    creator_observation_available: false,
+    model_size_heuristic_available: false,
+    required_model_size_mb: null,
+  },
+  developer_details: {},
+};
+
 const searchableWorkflows = [
   {
     id: "native_text",
@@ -166,6 +196,7 @@ describe("HomePage", () => {
               version: "0.1.0",
               description: "Milestone 1 text-to-image workflow package.",
               trust_level: "noofy_verified",
+              hardware_warning: mediumHardwareWarning,
               trust: {
                 level: "noofy_verified",
                 label: "Noofy Verified",
@@ -191,6 +222,10 @@ describe("HomePage", () => {
     expect(screen.getByText("1 built-in workflow available.")).toBeInTheDocument();
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
     expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
+    expect(screen.getByText("May be heavy")).toHaveAttribute(
+      "title",
+      "This workflow may run slowly or fail on this machine, depending on settings and available memory. You can still try it.",
+    );
   });
 
   it("shows matching Home search results while typing", async () => {

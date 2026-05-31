@@ -170,6 +170,8 @@ class EngineService:
             workflow_library_store=self.workflow_library_store,
             imported_package_store=self.imported_package_store,
             history_service=self.history_service,
+            memory_observer=memory_observer,
+            memory_learning_store=memory_learning_store,
         )
         if self.imported_package_store is not None:
             self.workflow_import_orchestrator: WorkflowImportOrchestrator | None = (
@@ -293,6 +295,9 @@ class EngineService:
         memory_service = getattr(self, "memory_service", None)
         if memory_service is not None:
             memory_service.memory_observer = value
+        workflow_library_service = getattr(self, "workflow_library_service", None)
+        if workflow_library_service is not None:
+            workflow_library_service.memory_observer = value
 
     # Temporary migration proxies while tests move to WorkflowImportOrchestrator.
     @property
