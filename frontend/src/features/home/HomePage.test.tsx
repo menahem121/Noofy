@@ -1400,7 +1400,7 @@ describe("HomePage", () => {
     );
   });
 
-  it("shows a single open action after downloaded models make the import ready", async () => {
+  it("opens the workflow after downloaded models make the import ready", async () => {
     const missingModel = {
       requirement_id: "checkpoint",
       node_id: "1",
@@ -1567,15 +1567,6 @@ describe("HomePage", () => {
     expect(await screen.findByRole("dialog", { name: "Core SD15 Text to Image" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
 
-    expect(await screen.findByRole("button", { name: "Open Workflow" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Download Missing Models" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel Import" })).not.toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalledWith("/api/workflows/import/import-session-download/commit", expect.anything());
-    expect(statusCalls).toBe(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Workflow" }));
-
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-download/commit", {
         method: "POST",
@@ -1589,11 +1580,12 @@ describe("HomePage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
     });
+    expect(statusCalls).toBe(1);
     expect(onOpenWorkflow).toHaveBeenCalledWith("core_sd15_txt2img");
     expect(screen.queryByRole("heading", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
   });
 
-  it("shows a single configure action after downloaded models leave input setup remaining", async () => {
+  it("continues to workflow configuration after downloaded models leave input setup remaining", async () => {
     const model = {
       requirement_id: "checkpoint",
       node_id: "1",
@@ -1708,10 +1700,19 @@ describe("HomePage", () => {
     expect(await screen.findByRole("dialog", { name: "Setup Workflow" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
 
-    expect(await screen.findByRole("button", { name: "Configure Workflow" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Configure Workflow" }));
-
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-configure/commit", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: undefined,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Setup Workflow" })).not.toBeInTheDocument();
+    });
     await waitFor(() => {
       expect(onConfigureDashboard).toHaveBeenCalledWith("setup_workflow", "Setup Workflow");
     });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelImportModelDownload,
@@ -49,6 +49,7 @@ export function useWorkflowImportFlow({
 }) {
   const workflowLibrary = useWorkflowLibrary();
   const [state, setState] = useState<WorkflowImportFlowState>(initialWorkflowImportFlowState);
+  const autoCommittedDownloadJobs = useRef(new Set<string>());
 
   const failImport = useCallback((message: string) => {
     setState((current) => ({
@@ -64,6 +65,7 @@ export function useWorkflowImportFlow({
   }, []);
 
   const startWorkflowImport = useCallback(async (file: File) => {
+    autoCommittedDownloadJobs.current.clear();
     setState((current) => ({
       ...current,
       importing: true,
@@ -364,6 +366,33 @@ export function useWorkflowImportFlow({
     state.pendingImport?.import_session_id,
     state.downloadJob?.job_id,
     state.downloadJob?.status,
+  ]);
+
+  useEffect(() => {
+    const sessionId = state.pendingImport?.import_session_id;
+    const jobId = state.downloadJob?.job_id;
+    if (!sessionId || !jobId) return;
+    if (state.importing || state.downloadingModels) return;
+    if (state.pendingImport?.duplicate_identity) return;
+    if (state.downloadJob?.status !== "completed") return;
+
+    const summary = state.downloadJob.model_summary ?? state.pendingImport?.model_summary;
+    if (!summary?.ready_to_run) return;
+    const jobKey = `${sessionId}:${jobId}`;
+    if (autoCommittedDownloadJobs.current.has(jobKey)) return;
+
+    autoCommittedDownloadJobs.current.add(jobKey);
+    void readyImportAction();
+  }, [
+    readyImportAction,
+    state.downloadJob?.job_id,
+    state.downloadJob?.model_summary,
+    state.downloadJob?.status,
+    state.downloadingModels,
+    state.importing,
+    state.pendingImport?.duplicate_identity,
+    state.pendingImport?.import_session_id,
+    state.pendingImport?.model_summary,
   ]);
 
   return {
