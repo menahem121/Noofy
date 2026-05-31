@@ -20,9 +20,8 @@ import {
   X,
 } from "lucide-react";
 
-import { fetchBindableInputs, fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
+import { fetchBindableInputs } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 import {
   WIDGET_TYPE_LABELS,
   MOCK_WORKFLOW,
@@ -57,11 +56,6 @@ interface DashboardBuilderPageProps {
   onBack: () => void;
   onContinue: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
-}
-
-interface RuntimeState {
-  loading: boolean;
-  runtime: RuntimeStatus | null;
 }
 
 interface WorkflowAuthoringState {
@@ -120,7 +114,6 @@ export function DashboardBuilderPage({
   const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
   const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
   const loadSequenceRef = useRef(0);
-  const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
   const [workflowState, setWorkflowState] = useState<WorkflowAuthoringState>(() => {
     if (workflowId) return { loading: true, workflow: null, error: null };
     return {
@@ -148,20 +141,6 @@ export function DashboardBuilderPage({
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    fetchRuntimeStatus()
-      .then((runtime) => {
-        if (mounted) setRuntimeState({ loading: false, runtime });
-      })
-      .catch(() => {
-        if (mounted) setRuntimeState({ loading: false, runtime: null });
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!workflowId) {
@@ -192,8 +171,6 @@ export function DashboardBuilderPage({
       loadSequenceRef.current += 1;
     };
   }, [workflowId, activeWorkflowId, activeWorkflowName]);
-
-  const appStatus = runtimeStatusCopy(runtimeState);
 
   useLayoutEffect(() => {
     setSchema(
@@ -445,7 +422,7 @@ export function DashboardBuilderPage({
   }
 
   return (
-    <AppLayout activeRoute="workflows" status={appStatus} onNavigate={onNavigate}>
+    <AppLayout activeRoute="workflows" onNavigate={onNavigate}>
       <div className="builder-page">
         <section className="builder-heading" aria-labelledby="builder-title">
           <div className="builder-heading__text">

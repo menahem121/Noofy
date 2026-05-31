@@ -18,17 +18,14 @@ import {
 import {
   fetchHistory,
   fetchHistoryEvent,
-  fetchRuntimeStatus,
   HISTORY_EVENT_STATUS_LABELS,
   HISTORY_EVENT_TYPE_LABELS,
   type HistoryEvent,
   type HistoryEventDetail,
   type HistoryEventStatus,
   type HistoryEventType,
-  type RuntimeStatus,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 
 type EventTypeFilter = HistoryEventType | "all";
 type StatusFilter = HistoryEventStatus | "all";
@@ -141,10 +138,6 @@ const STATUS_TONES: Record<HistoryEventStatus, string> = {
 };
 
 export function HistoryPage({ onNavigate }: HistoryPageProps) {
-  const [runtimeState, setRuntimeState] = useState<{ loading: boolean; runtime: RuntimeStatus | null }>({
-    loading: true,
-    runtime: null,
-  });
   const [pageState, setPageState] = useState<PageState>({
     loading: true,
     loadingMore: false,
@@ -163,20 +156,6 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ loading: false, event: null, error: null });
   const historyRequestId = useRef(0);
-
-  useEffect(() => {
-    let mounted = true;
-    fetchRuntimeStatus()
-      .then((runtime) => {
-        if (mounted) setRuntimeState({ loading: false, runtime });
-      })
-      .catch(() => {
-        if (mounted) setRuntimeState({ loading: false, runtime: null });
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 220);
@@ -260,8 +239,6 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     };
   }, [selectedEventId]);
 
-  const appStatus = runtimeStatusCopy(runtimeState);
-
   const selectedListEvent = selectedEventId
     ? (pageState.events.find((e) => e.id === selectedEventId) ?? null)
     : null;
@@ -300,7 +277,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
   }
 
   return (
-    <AppLayout activeRoute="history" status={appStatus} onNavigate={onNavigate}>
+    <AppLayout activeRoute="history" onNavigate={onNavigate}>
       <section className="page-heading page-heading--compact" aria-labelledby="history-title">
         <div>
           <p className="eyebrow">Activity log</p>

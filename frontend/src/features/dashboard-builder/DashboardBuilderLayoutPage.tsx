@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -17,7 +17,7 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { fetchRuntimeStatus, saveDashboard, type RuntimeStatus } from "../../lib/api/noofyApi";
+import { saveDashboard } from "../../lib/api/noofyApi";
 import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
 import {
@@ -34,7 +34,6 @@ import {
   sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 import {
   MOCK_WORKFLOW,
   WIDGET_TYPE_LABELS,
@@ -60,11 +59,6 @@ interface DashboardBuilderLayoutPageProps {
   onBackToWidgets: (schema: DashboardSchema) => void;
   onSaveComplete: (workflowId: string) => void;
   onNavigate: (route: AppRouteId) => void;
-}
-
-interface RuntimeState {
-  loading: boolean;
-  runtime: RuntimeStatus | null;
 }
 
 interface PointerEventLocation {
@@ -99,21 +93,6 @@ export function DashboardBuilderLayoutPage({
   const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
   const saveSequenceRef = useRef(0);
   const activeWorkflowIdRef = useRef(activeWorkflowId);
-  const [runtimeState, setRuntimeState] = useState<RuntimeState>({ loading: true, runtime: null });
-
-  useEffect(() => {
-    let mounted = true;
-    fetchRuntimeStatus()
-      .then((runtime) => {
-        if (mounted) setRuntimeState({ loading: false, runtime });
-      })
-      .catch(() => {
-        if (mounted) setRuntimeState({ loading: false, runtime: null });
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const workflow: MockWorkflow = useMemo(() => {
     return {
@@ -176,7 +155,6 @@ export function DashboardBuilderLayoutPage({
     schemaRef.current = schema;
   }, [schema]);
 
-  const appStatus = runtimeStatusCopy(runtimeState);
   const schemaReady = schema.workflowId === activeWorkflowId;
   const topLevelItems = schemaReady ? topLevelDashboardItems(schema) : [];
   const unplacedItems = topLevelItems.filter((item) => !dashboardItemLayout(item));
@@ -486,7 +464,6 @@ export function DashboardBuilderLayoutPage({
   return (
     <AppLayout
       activeRoute="workflows"
-      status={appStatus}
       onNavigate={onNavigate}
       mainClassName="main-workspace--builder-layout"
       contentClassName="workspace-content--builder-layout"

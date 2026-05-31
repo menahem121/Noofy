@@ -489,7 +489,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
     void refresh();
   }, []);
 
-  const status = runtimeStatus.statusView;
+  const runtimeStatusView = runtimeStatus.statusView;
   const environment = state.runtime?.environment;
   const environmentPrepared = Boolean(
     environment?.prepared || state.runtime?.managed_process_running || state.runtime?.reachable,
@@ -524,7 +524,7 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
   const modelFolderBusy = state.action === "model-folder";
 
   return (
-    <AppLayout activeRoute="settings" status={status} onNavigate={onNavigate}>
+    <AppLayout activeRoute="settings" onNavigate={onNavigate}>
       <section className="page-heading page-heading--compact" aria-labelledby="engine-settings-title">
         <div>
           <p className="eyebrow">ComfyUI engine</p>
@@ -571,9 +571,9 @@ export function EngineSettingsPage({ onNavigate }: { onNavigate: (route: AppRout
                 <p className="engine-status-card__subtitle">Noofy runs AI workflows privately on your computer — nothing is sent to the cloud.</p>
               </div>
             </div>
-            <span className={`status-pill status-pill--${status.tone}`}>
-              {status.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
-              <span>{status.label}</span>
+            <span className={`status-pill status-pill--${runtimeStatusView.tone}`}>
+              {runtimeStatusView.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
+              <span>{runtimeStatusView.label}</span>
             </span>
           </div>
 

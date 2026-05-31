@@ -311,7 +311,6 @@ export function WorkflowsPage({
   return (
     <AppLayout
       activeRoute="workflows"
-      status={runtimeStatus.statusView}
       onNavigate={onNavigate}
       mainClassName="main-workspace--workflows"
       contentClassName="workspace-content--workflows"

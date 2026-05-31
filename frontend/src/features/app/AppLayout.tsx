@@ -39,7 +39,6 @@ export interface AppTopBarProgress {
 
 interface AppLayoutProps {
   activeRoute: AppRouteId;
-  status?: AppStatusView;
   children: ReactNode;
   onNavigate: (route: AppRouteId, options?: AppNavigateOptions) => void;
   mainClassName?: string;
@@ -74,7 +73,6 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
 
 export function AppLayout({
   activeRoute,
-  status,
   children,
   onNavigate,
   mainClassName = "",
@@ -83,7 +81,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const runtimeStatus = useOptionalRuntimeStatus();
-  const effectiveStatus = status ?? runtimeStatus?.statusView ?? {
+  const effectiveStatus = runtimeStatus?.statusView ?? {
     label: "Checking Noofy",
     description: "Looking for the local app service",
     tone: "info",

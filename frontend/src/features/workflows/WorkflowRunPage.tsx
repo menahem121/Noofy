@@ -209,8 +209,6 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const isRunning = isSubmittingRun || isActiveWorkflowProgress(displayedProgress);
   const isWaitingForMemory = state.job?.status === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
-  const status = runtimeStatus.statusView;
-
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
 
   useEffect(() => {
@@ -1176,7 +1174,6 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     return (
       <AppLayout
         activeRoute="workflows"
-        status={status}
         onNavigate={onNavigate}
         mainClassName="main-workspace--canvas-run"
         contentClassName="workspace-content--canvas-run"
@@ -1239,7 +1236,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   }
 
   return (
-    <AppLayout activeRoute="workflows" status={status} onNavigate={onNavigate} progress={topBarProgress}>
+    <AppLayout activeRoute="workflows" onNavigate={onNavigate} progress={topBarProgress}>
       {pageHeader}
       {notices}
 

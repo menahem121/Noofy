@@ -209,6 +209,38 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.statusView.label).toBe("Ready");
   });
 
+  it("continues polling runtime status and updates when the engine becomes ready", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(startingRuntime))
+      .mockResolvedValueOnce(jsonResponse(readyRuntime));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: ({ children }) => (
+        <RuntimeStatusProvider
+          initialRuntimeState={{
+            backendStatus: "reachable",
+            engineStatus: "starting",
+            runtime: startingRuntime as RuntimeHealthState["runtime"],
+            hasKnownState: true,
+            lastCheckedAt: Date.now(),
+          }}
+        >
+          {children}
+        </RuntimeStatusProvider>
+      ),
+    });
+
+    await act(async () => {});
+    expect(result.current.statusView.label).toBe("Starting");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/runtime", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.statusView.label).toBe("Ready");
+  });
+
   it("distinguishes backend reachability from engine readiness", () => {
     expect(runtimeStatusView({
       ...readyRuntimeState,

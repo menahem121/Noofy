@@ -33,6 +33,8 @@ export interface RefreshRuntimeOptions {
 const DEFAULT_MAX_AGE_MS = 10_000;
 const SILENT_FAILURE_THRESHOLD = 2;
 const RUNTIME_REFRESH_TIMEOUT_MS = 8_000;
+const ACTIVE_RUNTIME_POLL_INTERVAL_MS = 2_000;
+const IDLE_RUNTIME_POLL_INTERVAL_MS = 10_000;
 
 const RuntimeStatusContext = createContext<RuntimeStatusContextValue | null>(null);
 
@@ -137,6 +139,21 @@ export function RuntimeStatusProvider({
     if (skipInitialRefresh) return;
     void refreshRuntime({ force: true, silent: false });
   }, [refreshRuntime, skipInitialRefresh]);
+
+  useEffect(() => {
+    if (skipInitialRefresh) return;
+    const pollIntervalMs = runtimePollIntervalMs(state);
+    const timer = window.setTimeout(() => {
+      void refreshRuntime({ maxAgeMs: 0, silent: true });
+    }, pollIntervalMs);
+    return () => window.clearTimeout(timer);
+  }, [
+    refreshRuntime,
+    state.backendStatus,
+    state.engineStatus,
+    state.lastCheckedAt,
+    skipInitialRefresh,
+  ]);
 
   const value = useMemo<RuntimeStatusContextValue>(
     () => ({
@@ -247,6 +264,13 @@ function engineStatusFromRuntime(runtime: RuntimeStatus): EngineStatus {
   if (runtime.reachable) return "ready";
   if (runtime.sidecar_starting || runtime.managed_process_running) return "starting";
   return "offline";
+}
+
+function runtimePollIntervalMs(state: RuntimeHealthState) {
+  if (state.backendStatus === "reachable" && state.engineStatus === "ready") {
+    return IDLE_RUNTIME_POLL_INTERVAL_MS;
+  }
+  return ACTIVE_RUNTIME_POLL_INTERVAL_MS;
 }
 
 function errorMessage(error: unknown) {

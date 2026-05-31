@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,6 +63,17 @@ const engineOfflineRuntimeState: Partial<RuntimeHealthState> = {
     ...readyRuntime,
     reachable: false,
     managed_process_running: false,
+  } as RuntimeHealthState["runtime"],
+};
+
+const engineStartingRuntimeState: Partial<RuntimeHealthState> = {
+  ...readyRuntimeState,
+  engineStatus: "starting",
+  runtime: {
+    ...readyRuntime,
+    reachable: false,
+    managed_process_running: true,
+    sidecar_starting: true,
   } as RuntimeHealthState["runtime"],
 };
 
@@ -333,12 +344,15 @@ const loraPackageWithMissingRequiredModel = {
 
 function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
-  runtimeResponse = readyRuntime,
+  runtimeResponse: unknown | (() => unknown) = readyRuntime,
 ) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
-    if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtimeResponse));
+    if (url.endsWith("/api/runtime")) {
+      const response = typeof runtimeResponse === "function" ? runtimeResponse() : runtimeResponse;
+      return Promise.resolve(jsonResponse(response));
+    }
     if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
     if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
@@ -509,6 +523,7 @@ describe("WorkflowRunPage", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     window.localStorage.clear();
@@ -1151,6 +1166,35 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText("The local ComfyUI engine is not reachable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+  });
+
+  it("updates engine status and run gating while the workflow page stays open", async () => {
+    vi.useFakeTimers();
+    let runtimeCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, () => {
+      runtimeCalls += 1;
+      return runtimeCalls === 1 ? engineStartingRuntimeState.runtime : readyRuntime;
+    });
+
+    render(
+      <RuntimeStatusProvider initialRuntimeState={engineStartingRuntimeState}>
+        <WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />
+      </RuntimeStatusProvider>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getAllByText("Starting").length).toBeGreaterThan(0);
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    expect(runButton).toBeDisabled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(runButton).toBeEnabled();
+    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
   it("shows a failed run state", async () => {

@@ -26,7 +26,6 @@ import {
   type GalleryResponse,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -314,10 +313,8 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     setShowFilterPanel(false);
   }
 
-  const status = runtimeStatusCopy({ loading: galleryState.phase === "loading", runtime: null });
-
   return (
-    <AppLayout activeRoute="gallery" status={status} onNavigate={onNavigate}>
+    <AppLayout activeRoute="gallery" onNavigate={onNavigate}>
       {/* ── Header ── */}
       <section className="page-heading page-heading--compact" aria-labelledby="gallery-title">
         <div>

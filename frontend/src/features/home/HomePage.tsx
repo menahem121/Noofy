@@ -358,8 +358,6 @@ export function HomePage({
     void refreshWorkflows();
   }, [refreshRuntime, refreshWorkflows]);
 
-  const status = runtimeStatus.statusView;
-
   const workflowCards = useMemo(() => {
     const backendCards = homeWorkflowCardsFromBackend(workflowLibrary.workflows, selectedNativeVariants);
     const fallbackCards = backendCards.length > 0 ? backendCards : [fallbackWorkflow];
@@ -502,7 +500,7 @@ export function HomePage({
   }
 
   return (
-    <AppLayout activeRoute="home" status={status} onNavigate={onNavigate}>
+    <AppLayout activeRoute="home" onNavigate={onNavigate}>
           <section className="page-heading" aria-labelledby="home-title">
             <div>
               <p className="eyebrow">PRIVATE LOCAL AI STUDIO</p>

@@ -18,7 +18,6 @@ import {
 
 import {
   createModelTag,
-  fetchRuntimeStatus,
   importModelFiles,
   deleteModelFile,
   updateModelTags,
@@ -28,12 +27,10 @@ import {
   type ModelInventorySource,
   type ModelInventoryStatus,
   type ModelTag,
-  type RuntimeStatus,
 } from "../../lib/api/noofyApi";
 import { openFolder } from "../../lib/folderDialogs";
 import { failedModelMessage, isModelDownloadActive, isModelDownloadFailure } from "../../lib/modelDownloadProgress";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
-import { runtimeStatusCopy } from "../app/status";
 import { ModelImportPanel } from "./ModelImportPanel";
 import { DetailPanel, ModelRow } from "./ModelRows";
 import { uniqueDownloadSelections } from "./modelDownloads";
@@ -73,10 +70,6 @@ const modelStatusSortOrder: Record<string, number> = {
 };
 
 export function ModelsPage({ onNavigate }: ModelsPageProps) {
-  const [runtimeState, setRuntimeState] = useState<{ loading: boolean; runtime: RuntimeStatus | null }>({
-    loading: true,
-    runtime: null,
-  });
   const { inventoryState, refreshInventory: loadInventory } = useModelInventory();
 
   const [activeType, setActiveType] = useState<ModelTypeFilter>("all");
@@ -123,23 +116,11 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   });
 
   useEffect(() => {
-    let mounted = true;
-    fetchRuntimeStatus()
-      .then((runtime) => {
-        if (mounted) setRuntimeState({ loading: false, runtime });
-      })
-      .catch(() => {
-        if (mounted) setRuntimeState({ loading: false, runtime: null });
-      });
     void refreshInventory();
-    return () => {
-      mounted = false;
-    };
     // Initial page load only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const appStatus = runtimeStatusCopy(runtimeState);
   const inventory = inventoryState.inventory;
   const models = inventory?.models ?? [];
   const tags = inventory?.tags ?? [];
@@ -378,7 +359,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const panelOpen = selectedModel !== null;
 
   return (
-    <AppLayout activeRoute="models" status={appStatus} onNavigate={onNavigate}>
+    <AppLayout activeRoute="models" onNavigate={onNavigate}>
       <section className="page-heading page-heading--compact" aria-labelledby="models-title">
         <div>
           <p className="eyebrow">Local model files</p>
