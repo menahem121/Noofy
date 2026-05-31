@@ -37,6 +37,12 @@ from app.workflows.model_availability import (
     ModelAvailabilityService,
     VerifyHashMetrics,
 )
+from app.workflows.model_grouping import (
+    ModelGroup,
+    apply_group_metadata,
+    group_required_models,
+    unique_required_models,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.verification_dispatch import (
     log_verification_concurrency,
@@ -128,6 +134,7 @@ class WorkflowLibraryService:
 
     def workflow_details(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)
+        models_used = unique_required_models(package.required_models)
         summary = self.workflow_summary(package)
         model_summary = None
         try:
@@ -165,7 +172,7 @@ class WorkflowLibraryService:
                     "folder": model.folder,
                     "source_path": None,
                 }
-                for model in package.required_models
+                for model in models_used
             ]
 
         metadata = self._library_metadata(package)
@@ -304,7 +311,7 @@ class WorkflowLibraryService:
             user_facing_message="Model verification is queued.",
             started_at=now,
             updated_at=now,
-            total_models=len(package.required_models),
+            total_models=len(group_required_models(package.required_models)),
             model_summary=checking_summary,
             models={item.requirement_id: item for item in checking_summary.models},
         )
@@ -400,7 +407,7 @@ class WorkflowLibraryService:
             "dashboard_ready": not _dashboard_needs_setup(package),
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
             "custom_node_count": len(package.custom_nodes),
-            "required_model_count": len(package.required_models),
+            "required_model_count": len(unique_required_models(package.required_models)),
             "hardware_warning": self._hardware_warning(
                 package,
                 machine_snapshot=hardware_warning_snapshot,
@@ -515,24 +522,25 @@ class WorkflowLibraryService:
         return "Native Noofy"
 
     def _main_model_summary(self, package: WorkflowPackage) -> dict[str, object] | None:
-        if not package.required_models:
+        models = unique_required_models(package.required_models)
+        if not models:
             return {"name": "No model detected", "type": None, "size_bytes": None}
-        if len(package.required_models) > 1:
+        if len(models) > 1:
             checkpoint = next(
                 (
-                    model for model in package.required_models
+                    model for model in models
                     if _is_primary_model_type(model.model_type, model.folder)
                 ),
                 None,
             )
             selected = checkpoint or max(
-                package.required_models,
+                models,
                 key=lambda model: model.size_bytes or 0,
             )
             if selected.size_bytes is None and checkpoint is None:
                 return {"name": "Multiple models", "type": None, "size_bytes": None}
         else:
-            selected = package.required_models[0]
+            selected = models[0]
         return {
             "name": selected.filename,
             "type": selected.model_type or selected.folder,
@@ -553,7 +561,7 @@ class WorkflowLibraryService:
                 details={"error": str(exc)},
             )
             return {
-                "missing_model_count": len(package.required_models),
+                "missing_model_count": len(unique_required_models(package.required_models)),
                 "ready_to_run": False,
             }
         return {
@@ -588,24 +596,25 @@ class WorkflowLibraryService:
         package = self.workflow_loader.get_package(job.workflow_id)
         self._begin_model_verification_job(job)
         metrics = VerifyHashMetrics()
-        models = list(package.required_models)
+        # Verify each unique physical file once even when several nodes reference it.
+        groups = group_required_models(package.required_models)
         concurrency, downgrade_reason = (
-            self.model_availability_service.select_verification_concurrency(len(models))
+            self.model_availability_service.select_verification_concurrency(len(groups))
         )
         log_verification_concurrency(
             self.log_store,
             workflow_id=job.workflow_id,
-            model_count=len(models),
+            model_count=len(groups),
             selected_concurrency=concurrency,
             downgrade_reason=downgrade_reason,
         )
         started_at = time.monotonic()
         try:
             await run_parallel_model_verification(
-                models,
-                verify=lambda model: self._verify_workflow_model(package, model, metrics),
-                on_start=lambda index, model: self._record_model_verification_progress(
-                    job, index, model
+                groups,
+                verify=lambda group: self._verify_workflow_group(package, group, metrics),
+                on_start=lambda index, group: self._record_model_verification_progress(
+                    job, index, group.representative
                 ),
                 on_result=lambda availability: self._record_verified_model(
                     job, package, availability
@@ -617,7 +626,7 @@ class WorkflowLibraryService:
                 self.log_store,
                 workflow_id=job.workflow_id,
                 duration_ms=int((time.monotonic() - started_at) * 1000),
-                model_count=len(models),
+                model_count=len(groups),
                 metrics=metrics,
                 selected_concurrency=concurrency,
                 downgrade_reason=downgrade_reason,
@@ -630,9 +639,12 @@ class WorkflowLibraryService:
         package = self.workflow_loader.get_package(job.workflow_id)
         self._begin_model_verification_job(job)
         try:
-            for index, model in enumerate(package.required_models, start=1):
-                self._record_model_verification_progress(job, index, model)
-                availability = self._verify_workflow_model(package, model)
+            groups = group_required_models(package.required_models)
+            for index, group in enumerate(groups, start=1):
+                self._record_model_verification_progress(
+                    job, index, group.representative
+                )
+                availability = self._verify_workflow_group(package, group)
                 self._record_verified_model(job, package, availability)
             self._finish_model_verification_job(job)
         except Exception as exc:
@@ -713,6 +725,17 @@ class WorkflowLibraryService:
             workflow_id=job.workflow_id,
             details={"job_id": job.job_id, "error": str(exc)},
         )
+
+    def _verify_workflow_group(
+        self,
+        package: WorkflowPackage,
+        group: ModelGroup,
+        metrics: VerifyHashMetrics | None = None,
+    ) -> RequiredModelAvailability:
+        availability = self._verify_workflow_model(
+            package, group.representative, metrics
+        )
+        return apply_group_metadata(availability, group)
 
     def _verify_workflow_model(
         self,

@@ -31,7 +31,7 @@ from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate, workflow_package_display_name
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.package import WorkflowMetadata, WorkflowPackage, WorkflowPackageIdentity
+from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage, WorkflowPackageIdentity
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -613,6 +613,31 @@ def test_near_capacity_model_size_heuristic_stays_yellow(tmp_path: Path) -> None
     assert warning["confidence"] == "low"
     assert warning["estimate"]["source"] == "heuristic"
     assert HardwareWarningReasonCode.ESTIMATED_VRAM_CAPACITY_RISK.value in warning["reason_codes"]
+
+
+def test_hardware_warning_counts_shared_model_file_once() -> None:
+    def _node(node_id: str) -> RequiredModel:
+        return RequiredModel(
+            folder="checkpoints",
+            filename="heavy.safetensors",
+            node_id=node_id,
+            input_name="ckpt_name",
+            size_bytes=5_500 * 1024 * 1024,
+            verification_level=ModelVerificationLevel.FILENAME_SIZE,
+        )
+
+    warning = evaluate_workflow_hardware_warning(
+        WorkflowPackage(
+            metadata=WorkflowMetadata(id="shared-model", name="Shared Model", version="0.1.0"),
+            engine="comfyui",
+            required_models=[_node("1"), _node("2")],
+            comfyui_graph={},
+        ),
+        machine_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=8_000),
+    )
+
+    assert warning is not None
+    assert warning.evidence.required_model_size_mb == 5_500
 
 
 def test_hardware_warning_developer_details_are_diagnostic_safe(tmp_path: Path) -> None:

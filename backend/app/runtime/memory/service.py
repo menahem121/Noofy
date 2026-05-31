@@ -47,6 +47,7 @@ from app.runtime.runners.supervisor import (
     RunnerStatus,
     RunnerSupervisor,
 )
+from app.workflows.model_grouping import total_required_model_size_bytes
 from app.workflows.package import WorkflowPackage
 
 RunWorkflow = Callable[..., Awaitable[Any]]
@@ -600,7 +601,7 @@ def _installed_model_size_mb(install_state: InstallState) -> int | None:
 
 
 def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None:
-    total_size_bytes = sum(model.size_bytes or 0 for model in package.required_models)
+    total_size_bytes = total_required_model_size_bytes(package.required_models)
     if total_size_bytes <= 0:
         return None
     return max(1, total_size_bytes // (1024 * 1024))

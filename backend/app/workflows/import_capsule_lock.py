@@ -32,6 +32,7 @@ from app.workflows.import_runtime_profile import (
     RuntimeProfileSelectionError,
     select_import_runtime_profile,
 )
+from app.workflows.model_grouping import unique_required_models
 from app.workflows.package import RequiredModel, WorkflowPackage
 
 NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
@@ -172,7 +173,7 @@ def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
 
 def model_locks_from_package(package: WorkflowPackage) -> list[ModelLock]:
     models: list[ModelLock] = []
-    for model in package.required_models:
+    for model in unique_required_models(package.required_models):
         if model.checksum is None or model.size_bytes is None:
             continue
         models.append(

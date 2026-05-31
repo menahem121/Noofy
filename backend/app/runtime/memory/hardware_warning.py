@@ -23,6 +23,7 @@ from app.runtime.runners.supervisor import (
     RunnerMemoryEstimateConfidence,
     RunnerMemoryEstimateSource,
 )
+from app.workflows.model_grouping import total_required_model_size_bytes
 from app.workflows.package import WorkflowPackage
 
 LOCAL_MEMORY_ERROR_MAX_AGE = timedelta(days=30)
@@ -468,7 +469,7 @@ def _free_ratio_at_or_below(free_mb: int | None, total_mb: int | None, threshold
 
 
 def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None:
-    total_size_bytes = sum(model.size_bytes or 0 for model in package.required_models)
+    total_size_bytes = total_required_model_size_bytes(package.required_models)
     if total_size_bytes <= 0:
         return None
     return max(1, total_size_bytes // (1024 * 1024))

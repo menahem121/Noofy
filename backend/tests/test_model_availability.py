@@ -128,6 +128,51 @@ def test_model_summary_reuses_external_model_as_user_local(tmp_path: Path) -> No
     assert summary.models[0].source_path == str(model_path)
 
 
+def test_model_summary_collapses_same_file_used_by_many_nodes(tmp_path: Path) -> None:
+    payload = b"shared-checkpoint"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "ltx.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    service = _service(noofy_root=noofy_root)
+
+    def _node(node_id: str, node_type: str) -> RequiredModel:
+        return RequiredModel(
+            folder="checkpoints",
+            filename="ltx.safetensors",
+            node_id=node_id,
+            node_type=node_type,
+            input_name="ckpt_name",
+            checksum=f"sha256:{sha}",
+            size_bytes=len(payload),
+            verification_level="sha256_size",
+        )
+
+    summary = service.summarize(
+        _package(
+            [
+                _node("221", "LTXVAudioVAELoader"),
+                _node("236", "CheckpointLoaderSimple"),
+                _node("243", "LTXAVTextEncoderLoader"),
+            ]
+        )
+    )
+
+    # Three graph nodes, one physical file -> one card.
+    assert summary.total_count == 1
+    assert len(summary.models) == 1
+    card = summary.models[0]
+    assert card.status == "available"
+    assert card.reference_count == 3
+    assert [reference.node_type for reference in card.references] == [
+        "LTXVAudioVAELoader",
+        "CheckpointLoaderSimple",
+        "LTXAVTextEncoderLoader",
+    ]
+    assert card.dedup_uncertain is False
+
+
 def test_fast_model_summary_skips_recursive_filename_search(tmp_path: Path) -> None:
     payload = b"nested-model"
     noofy_root = tmp_path / "Noofy Models"
@@ -522,6 +567,55 @@ async def test_download_uses_part_file_then_atomic_final_path(
     assert not seen_part_paths[0].parent.exists()
     assert not list((noofy_root / ".downloads").glob("**/*"))
     assert result.model_summary.models[0].status == "available"
+
+
+@pytest.mark.anyio
+async def test_download_missing_fetches_shared_file_once_for_many_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"shared-download"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root)
+    stream_calls: list[Path] = []
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        stream_calls.append(part_path)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    def _node(node_id: str, node_type: str) -> RequiredModel:
+        return RequiredModel(
+            folder="checkpoints",
+            filename="ltx.safetensors",
+            node_id=node_id,
+            node_type=node_type,
+            input_name="ckpt_name",
+            checksum=f"sha256:{sha}",
+            size_bytes=len(payload),
+            verification_level="sha256_size",
+            source_urls=["https://huggingface.co/example/ltx.safetensors"],
+        )
+
+    result = await service.download_missing(
+        _package(
+            [
+                _node("221", "LTXVAudioVAELoader"),
+                _node("236", "CheckpointLoaderSimple"),
+                _node("243", "LTXAVTextEncoderLoader"),
+            ]
+        )
+    )
+
+    # One physical file -> one stream, one download, one card with three references.
+    assert len(stream_calls) == 1
+    assert result.downloaded_count == 1
+    assert len(result.model_summary.models) == 1
+    assert result.model_summary.models[0].status == "available"
+    assert result.model_summary.models[0].reference_count == 3
 
 
 @pytest.mark.anyio

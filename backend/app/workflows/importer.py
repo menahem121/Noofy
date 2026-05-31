@@ -52,6 +52,7 @@ from app.workflows.archive_validation import (
     validate_archive_members,
     zip_member_is_symlink,
 )
+from app.workflows.model_grouping import unique_required_models
 from app.workflows.package_persistence import write_imported_package_transaction
 from app.workflows.import_runtime_profile import (
     RuntimeProfileSelectionError,
@@ -248,7 +249,7 @@ class ImportedWorkflowPackageStore:
                 "package_id": package.identity.package_id if package.identity else None,
                 "version": package.identity.version if package.identity else None,
                 "custom_node_count": len(package.custom_nodes),
-                "required_model_count": len(package.required_models),
+                "required_model_count": len(unique_required_models(package.required_models)),
                 "unresolved_input_count": len(package.unresolved_runtime_inputs),
             },
         )

@@ -430,6 +430,79 @@ def test_preview_workflow_import_verifies_exact_local_model_before_prompting(tmp
     assert verification.model_summary.models[0].matched_sha256 == sha
 
 
+def test_preview_workflow_import_groups_shared_model_references(tmp_path) -> None:
+    payload = b"shared-local-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "model.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+
+    def _node(node_id: str, node_type: str) -> RequiredModel:
+        return RequiredModel(
+            node_id=node_id,
+            node_type=node_type,
+            input_name="ckpt_name",
+            folder="checkpoints",
+            filename="model.safetensors",
+            checksum=f"sha256:{sha}",
+            size_bytes=len(payload),
+            verification_level="sha256_size",
+        )
+
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="shared_model_workflow",
+            name="Shared Model Workflow",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        required_models=[
+            _node("loader-1", "FirstLoader"),
+            _node("loader-2", "SecondLoader"),
+            _node("loader-3", "ThirdLoader"),
+        ],
+        comfyui_graph={},
+    )
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=FakePackageStore(package),
+        model_availability_service=ModelAvailabilityService(
+            model_roots=[noofy_root],
+            noofy_models_dir=noofy_root,
+            log_store=LogStore(),
+        ),
+    )
+
+    preview = service.preview_workflow_import(b"archive")
+
+    assert preview.import_session_id is not None
+    assert preview.model_summary is not None
+    assert preview.required_model_count == 1
+    assert preview.model_summary.total_count == 1
+    assert preview.model_summary.models[0].status == "checking"
+    assert preview.model_summary.models[0].reference_count == 3
+    verification = service.workflow_import_orchestrator.import_model_verification_status(
+        preview.import_session_id
+    )
+    assert verification.status == "completed"
+    assert verification.total_models == 1
+    assert verification.verified_models == 1
+    assert verification.model_summary is not None
+    assert verification.model_summary.ready_to_run is True
+    assert len(verification.model_summary.models) == 1
+    assert verification.model_summary.models[0].reference_count == 3
+    assert [reference.node_id for reference in verification.model_summary.models[0].references] == [
+        "loader-1",
+        "loader-2",
+        "loader-3",
+    ]
+
+
 def test_import_model_verification_status_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()

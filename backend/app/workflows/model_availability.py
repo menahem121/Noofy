@@ -29,6 +29,12 @@ from app.settings.api_keys import (
     CredentialStoreUnavailable,
     KeyringCredentialStore,
 )
+from app.workflows.model_grouping import (
+    ModelGroup,
+    apply_group_metadata,
+    group_required_models,
+    required_model_reference_id,
+)
 from app.workflows.model_identity_store import (
     LocalModelIdentityContext,
     LocalModelIdentityStore,
@@ -643,13 +649,13 @@ class ModelAvailabilityService:
         metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelSummary:
         models = [
-            self._availability_for(
-                model,
+            self._availability_for_group(
+                group,
                 deep_search=deep_search,
                 verify_hashes=verify_hashes,
                 metrics=metrics,
             )
-            for model in package.required_models
+            for group in group_required_models(package.required_models)
         ]
         available_count = sum(model.status == "available" for model in models)
         possible_count = sum(model.status == "possible_match" for model in models)
@@ -673,22 +679,26 @@ class ModelAvailabilityService:
         progress_callback: ModelDownloadProgressCallback | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> ModelDownloadSummary:
+        # Group by physical file so the same blob is checked, resolved, and downloaded
+        # once even when several graph nodes reference it. ``summarize`` groups in the
+        # same order, so the grouped availabilities line up with these groups.
+        groups = group_required_models(package.required_models)
         before = self.summarize(package)
         downloaded_count = 0
         failed_count = 0
         failures: dict[str, ModelDownloadFailure] = {}
         canceled = False
-        missing_models = [
-            model
-            for model, availability in zip(package.required_models, before.models, strict=True)
+        missing_groups = [
+            group
+            for group, availability in zip(groups, before.models, strict=True)
             if availability.status == "missing"
         ]
         downloadable_models = [
             _PendingModelDownload(
-                model=model,
+                model=group.representative,
                 model_index=model_index,
             )
-            for model_index, model in enumerate(missing_models, start=1)
+            for model_index, group in enumerate(missing_groups, start=1)
         ]
         total_models = len(downloadable_models)
 
@@ -1101,6 +1111,27 @@ class ModelAvailabilityService:
             failure=failure,
             canceled=True,
         )
+
+    def _availability_for_group(
+        self,
+        group: ModelGroup,
+        *,
+        deep_search: bool,
+        verify_hashes: bool,
+        metrics: VerifyHashMetrics | None = None,
+    ) -> RequiredModelAvailability:
+        """Check one physical file (via the group's representative) and tag references.
+
+        Availability is identical for every node that loads the same file, so it is
+        computed once and the full node-reference list is overlaid for the UI.
+        """
+        availability = self._availability_for(
+            group.representative,
+            deep_search=deep_search,
+            verify_hashes=verify_hashes,
+            metrics=metrics,
+        )
+        return apply_group_metadata(availability, group)
 
     def _availability_for(
         self,
@@ -2194,9 +2225,7 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _requirement_id(model: RequiredModel) -> str:
-    if model.node_id and model.input_name:
-        return f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}"
-    return f"{model.folder}/{model.filename}"
+    return required_model_reference_id(model)
 
 
 def requirement_id_for(model: RequiredModel) -> str:

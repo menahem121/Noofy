@@ -25,6 +25,12 @@ from app.workflows.model_availability import (
     ModelAvailabilityService,
     VerifyHashMetrics,
 )
+from app.workflows.model_grouping import (
+    ModelGroup,
+    apply_group_metadata,
+    group_required_models,
+    required_model_reference_id,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.user_state import UserStateService
 from app.workflows.verification_dispatch import (
@@ -120,9 +126,7 @@ def _download_progress_status_label(status: str) -> str:
 
 
 def _requirement_id(model: RequiredModel) -> str:
-    if model.node_id and model.input_name:
-        return f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}"
-    return f"{model.folder}/{model.filename}"
+    return required_model_reference_id(model)
 
 
 class WorkflowImportOrchestrator:
@@ -172,12 +176,13 @@ class WorkflowImportOrchestrator:
             self.user_state_service.delete(package.metadata.id)
         status = package.import_metadata.status if package.import_metadata else "imported"
         message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
+        required_model_count = len(group_required_models(package.required_models))
         response = {
             "workflow_id": package.metadata.id,
             "status": status,
             "user_facing_message": message,
             "workflow": self.workflow_library_service.workflow_summary(package),
-            "required_model_count": len(package.required_models),
+            "required_model_count": required_model_count,
             "custom_node_count": len(package.custom_nodes),
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
         }
@@ -198,6 +203,7 @@ class WorkflowImportOrchestrator:
             original_filename=original_filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
+        required_model_count = len(group_required_models(package.required_models))
         duplicate_identity = self._duplicate_identity_payload(package)
         if not package.required_models and duplicate_identity is None:
             committed = self.import_workflow_archive(
@@ -236,7 +242,7 @@ class WorkflowImportOrchestrator:
             workflow_id=package.metadata.id,
             details={
                 "import_session_id": session_id,
-                "required_model_count": len(package.required_models),
+                "required_model_count": required_model_count,
                 "duplicate_identity": duplicate_identity is not None,
             },
         )
@@ -246,7 +252,7 @@ class WorkflowImportOrchestrator:
             status=status,
             user_facing_message=message,
             workflow=self.workflow_library_service.workflow_summary(package),
-            required_model_count=len(package.required_models),
+            required_model_count=required_model_count,
             custom_node_count=len(package.custom_nodes),
             unresolved_input_count=len(package.unresolved_runtime_inputs),
             model_summary=model_summary,
@@ -420,6 +426,7 @@ class WorkflowImportOrchestrator:
         pending = self._pending_import_or_raise(import_session_id)
         job_id = f"model-verification-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
+        checking_summary = self._checking_model_summary(pending.package)
         job = _ImportModelVerificationJob(
             job_id=job_id,
             import_session_id=import_session_id,
@@ -429,11 +436,11 @@ class WorkflowImportOrchestrator:
             user_facing_message="Model verification is queued.",
             started_at=now,
             updated_at=now,
-            total_models=len(pending.package.required_models),
-            model_summary=self._checking_model_summary(pending.package),
+            total_models=len(group_required_models(pending.package.required_models)),
+            model_summary=checking_summary,
             models={
                 item.requirement_id: item
-                for item in self._checking_model_summary(pending.package).models
+                for item in checking_summary.models
             },
         )
         self._import_model_verification_jobs[job_id] = job
@@ -456,26 +463,28 @@ class WorkflowImportOrchestrator:
             return
         self._begin_model_verification_job(job, pending)
         metrics = VerifyHashMetrics()
-        models = list(pending.package.required_models)
+        # Verify each unique physical file once; the same blob loaded by several nodes
+        # is hashed a single time and its node references are reattached afterward.
+        groups = group_required_models(pending.package.required_models)
         concurrency, downgrade_reason = (
-            self.model_availability_service.select_verification_concurrency(len(models))
+            self.model_availability_service.select_verification_concurrency(len(groups))
         )
         log_verification_concurrency(
             self.log_store,
             workflow_id=pending.package.metadata.id,
-            model_count=len(models),
+            model_count=len(groups),
             selected_concurrency=concurrency,
             downgrade_reason=downgrade_reason,
         )
         started_at = time.monotonic()
         try:
             await run_parallel_model_verification(
-                models,
-                verify=lambda model: self._verify_import_model(
-                    pending.package, model, metrics
+                groups,
+                verify=lambda group: self._verify_import_group(
+                    pending.package, group, metrics
                 ),
-                on_start=lambda index, model: self._record_model_verification_progress(
-                    job, pending, index, model
+                on_start=lambda index, group: self._record_model_verification_progress(
+                    job, pending, index, group.representative
                 ),
                 on_result=lambda availability: self._record_verified_import_model(
                     job, pending, availability
@@ -487,7 +496,7 @@ class WorkflowImportOrchestrator:
                 self.log_store,
                 workflow_id=pending.package.metadata.id,
                 duration_ms=int((time.monotonic() - started_at) * 1000),
-                model_count=len(models),
+                model_count=len(groups),
                 metrics=metrics,
                 selected_concurrency=concurrency,
                 downgrade_reason=downgrade_reason,
@@ -505,9 +514,12 @@ class WorkflowImportOrchestrator:
             return
         self._begin_model_verification_job(job, pending)
         try:
-            for index, model in enumerate(pending.package.required_models, start=1):
-                self._record_model_verification_progress(job, pending, index, model)
-                availability = self._verify_import_model(pending.package, model)
+            groups = group_required_models(pending.package.required_models)
+            for index, group in enumerate(groups, start=1):
+                self._record_model_verification_progress(
+                    job, pending, index, group.representative
+                )
+                availability = self._verify_import_group(pending.package, group)
                 self._record_verified_import_model(job, pending, availability)
             self._finish_model_verification_job(job, pending)
         except Exception as exc:
@@ -595,6 +607,17 @@ class WorkflowImportOrchestrator:
             workflow_id=pending.package.metadata.id,
             details={"job_id": job.job_id, "error": str(exc)},
         )
+
+    def _verify_import_group(
+        self,
+        package: WorkflowPackage,
+        group: ModelGroup,
+        metrics: VerifyHashMetrics | None = None,
+    ) -> RequiredModelAvailability:
+        availability = self._verify_import_model(
+            package, group.representative, metrics
+        )
+        return apply_group_metadata(availability, group)
 
     def _verify_import_model(
         self,
@@ -802,7 +825,12 @@ class WorkflowImportOrchestrator:
     def _checking_model_summary(self, package: WorkflowPackage) -> RequiredModelSummary:
         return self._model_summary_from_availability(
             package,
-            [self._checking_model_availability(model) for model in package.required_models],
+            [
+                apply_group_metadata(
+                    self._checking_model_availability(group.representative), group
+                )
+                for group in group_required_models(package.required_models)
+            ],
         )
 
     def _duplicate_identity_payload(self, package: WorkflowPackage) -> dict[str, object] | None:

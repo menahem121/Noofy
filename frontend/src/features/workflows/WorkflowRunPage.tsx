@@ -97,6 +97,7 @@ import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashb
 import { GallerySaveAction } from "./GallerySaveAction";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
+import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
@@ -2499,7 +2500,13 @@ function WorkflowRequiredModelRow({
       <div className="required-model-row__main">
         <h3>{model.filename}</h3>
         <p>{[friendlyRequiredModelType(model.model_type), formatRequiredModelSize(model.size_bytes)].filter(Boolean).join(" · ")}</p>
+        {model.reference_count > 1 ? (
+          <span className="required-model-row__usage">
+            Used in {model.reference_count} places in this workflow
+          </span>
+        ) : null}
         {message ? <span className="required-model-row__message">{message}</span> : null}
+        <ModelReferenceDetails references={model.references} dedupUncertain={model.dedup_uncertain} />
       </div>
       <div className="required-model-row__meta">
         <span className="model-identity">{requiredModelVerificationLabel(model.verification_level)}</span>

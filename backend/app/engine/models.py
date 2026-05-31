@@ -53,6 +53,21 @@ class MissingModel(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
 
 
+class RequiredModelReference(BaseModel):
+    """A single ComfyUI graph node reference to a required model file.
+
+    Several nodes can load the same physical file, so the user-facing model
+    summary groups by file identity and keeps every node reference here for
+    developer details. The package retains the original records for runtime
+    input binding.
+    """
+
+    requirement_id: str
+    node_id: str | None = None
+    node_type: str | None = None
+    input_name: str | None = None
+
+
 class RequiredModelAvailability(BaseModel):
     requirement_id: str
     node_id: str | None = None
@@ -87,6 +102,13 @@ class RequiredModelAvailability(BaseModel):
     matched_sha256: str | None = None
     matched_size_bytes: int | None = None
     message: str | None = None
+    # File-identity grouping. ``references`` lists every graph node that loads this
+    # physical file; ``reference_count`` mirrors its length for UI copy ("used by N
+    # workflow nodes"). ``dedup_uncertain`` is set when multiple nodes were merged
+    # using only folder + filename (no hash or size), so the grouping is best-effort.
+    references: list[RequiredModelReference] = Field(default_factory=list)
+    reference_count: int = 1
+    dedup_uncertain: bool = False
 
 
 class RequiredModelSummary(BaseModel):

@@ -284,6 +284,13 @@ export type RequiredModelStatus =
   | "not_enough_disk_space"
   | "canceled";
 
+export interface RequiredModelReference {
+  requirement_id: string;
+  node_id: string | null;
+  node_type: string | null;
+  input_name: string | null;
+}
+
 export interface RequiredModelAvailability {
   requirement_id: string;
   node_id: string | null;
@@ -304,6 +311,9 @@ export interface RequiredModelAvailability {
   matched_sha256: string | null;
   matched_size_bytes: number | null;
   message: string | null;
+  references: RequiredModelReference[];
+  reference_count: number;
+  dedup_uncertain: boolean;
 }
 
 export interface RequiredModelSummary {

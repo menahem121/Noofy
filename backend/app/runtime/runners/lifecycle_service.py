@@ -48,6 +48,7 @@ from app.trust import capsule_source_policy, workflow_source_policy
 from app.workflows.capsule import CapsuleLockLoader
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.model_grouping import unique_required_models
 from app.workflows.package import WorkflowPackage
 from app.workflows.store_paths import imported_workflow_id
 
@@ -1065,7 +1066,7 @@ def _unresolved_model_requirement_message(
         for model in capsule_lock.models
     }
     unresolved: list[str] = []
-    for model in package.required_models:
+    for model in unique_required_models(package.required_models):
         target = (model.folder.casefold(), model.filename.casefold())
         if target in locked_targets:
             continue
@@ -1098,7 +1099,7 @@ def _local_model_requirements(
         for model in capsule_lock.models
     }
     requirements: list[LocalModelRequirement] = []
-    for model in package.required_models:
+    for model in unique_required_models(package.required_models):
         target = (model.folder.casefold(), model.filename.casefold())
         if target in locked_targets:
             continue

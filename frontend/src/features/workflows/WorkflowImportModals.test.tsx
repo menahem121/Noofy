@@ -24,6 +24,11 @@ const missingModel = {
   matched_sha256: null,
   matched_size_bytes: null,
   message: "Noofy can try to resolve and download this model before the workflow runs.",
+  references: [
+    { requirement_id: "vae/flux2-vae.safetensors", node_id: "1", node_type: "VAELoader", input_name: "vae_name" },
+  ],
+  reference_count: 1,
+  dedup_uncertain: false,
 } satisfies RequiredModelAvailability;
 
 const importResult = {
@@ -116,5 +121,48 @@ describe("RequiredModelsModal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry Download" }));
     expect(onDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows one card with a node-usage summary when a file is loaded by several nodes", () => {
+    const sharedModel = {
+      ...missingModel,
+      requirement_id: "221:ckpt_name:checkpoints/ltx.safetensors",
+      filename: "ltx-2.3-22b-dev-fp8.safetensors",
+      folder: "checkpoints",
+      model_type: "checkpoint",
+      reference_count: 3,
+      references: [
+        { requirement_id: "221:ckpt_name:checkpoints/ltx.safetensors", node_id: "221", node_type: "LTXVAudioVAELoader", input_name: "ckpt_name" },
+        { requirement_id: "236:ckpt_name:checkpoints/ltx.safetensors", node_id: "236", node_type: "CheckpointLoaderSimple", input_name: "ckpt_name" },
+        { requirement_id: "243:ckpt_name:checkpoints/ltx.safetensors", node_id: "243", node_type: "LTXAVTextEncoderLoader", input_name: "ckpt_name" },
+      ],
+    } satisfies RequiredModelAvailability;
+    const result = {
+      ...importResult,
+      model_summary: { ...importResult.model_summary, models: [sharedModel] },
+    } satisfies WorkflowImportResponse;
+
+    render(
+      <RequiredModelsModal
+        importResult={result}
+        busy={false}
+        importing={false}
+        downloadJob={null}
+        verificationJob={null}
+        onDownload={vi.fn()}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByRole("heading", { name: "ltx-2.3-22b-dev-fp8.safetensors" })).toHaveLength(1);
+    expect(screen.getByText("Used in 3 places in this workflow")).toBeInTheDocument();
+    expect(screen.getByText("Show technical details")).toBeInTheDocument();
+    expect(screen.getByText("Workflow nodes (3)")).toBeInTheDocument();
+    expect(screen.getByText(/CheckpointLoaderSimple/)).toBeInTheDocument();
   });
 });

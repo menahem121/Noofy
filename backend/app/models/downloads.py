@@ -20,6 +20,7 @@ from app.models.ownership import ModelOwnershipStore
 from app.models.paths import ensure_inside, model_key
 from app.models.folders import ModelFolderSettingsService
 from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.model_grouping import required_model_reference_id
 from app.workflows.package import RequiredModel, WorkflowPackage
 
 JOB_TTL = timedelta(hours=6)
@@ -388,9 +389,7 @@ class ModelDownloadJobService:
 
 
 def _requirement_id(model: RequiredModel) -> str:
-    if model.node_id and model.input_name:
-        return f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}"
-    return f"{model.folder}/{model.filename}"
+    return required_model_reference_id(model)
 
 
 def _progress_key(workflow_id: str, model: RequiredModel) -> str:

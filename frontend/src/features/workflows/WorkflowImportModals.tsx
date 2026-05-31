@@ -20,6 +20,7 @@ import {
   modelDownloadPercentLabel,
 } from "../../lib/modelDownloadProgress";
 import { workflowDisplayName } from "../../lib/workflowNames";
+import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -259,7 +260,13 @@ function RequiredModelRow({
             .filter(Boolean)
             .join(" · ")}
         </p>
+        {model.reference_count > 1 ? (
+          <span className="required-model-row__usage">
+            Used in {model.reference_count} places in this workflow
+          </span>
+        ) : null}
         {message ? <span className="required-model-row__message">{message}</span> : null}
+        <ModelReferenceDetails references={model.references} dedupUncertain={model.dedup_uncertain} />
       </div>
       <div className="required-model-row__meta">
         <span className="model-identity">{verificationLabel(model.verification_level)}</span>
