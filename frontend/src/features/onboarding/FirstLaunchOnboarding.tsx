@@ -534,7 +534,7 @@ function ExistingComfyUIModelsStep({
         If you already have models in ComfyUI, Noofy can reuse them instead of downloading duplicate copies.
       </p>
       <p className="onboarding-step__privacy">
-        This folder is read/reuse-only. Noofy will not download new models into your existing ComfyUI folder.
+        Noofy will not download new models into your existing ComfyUI folder.
       </p>
       <div className="onboarding-choice-row" role="group" aria-label="Existing ComfyUI models folder">
         <button
