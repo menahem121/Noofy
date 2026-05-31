@@ -40,7 +40,7 @@ Exporting creates a new portable archive. Re-exported user packages strip origin
 
 Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `load_audio`, `load_video`, `load_file`, `display_image`, `display_audio`, `display_video`, `display_file`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
 
-Media output records include a media `kind` such as `image`, `audio`, `video`, or `file` and keep the legacy `type` field for compatibility. Result renderers should read `kind` first and fall back to `type` for older packages.
+Media output records include a media `kind`: `image`, `audio`, `video`, `3d`, `text`, or `file`, and keep the legacy `type` field for compatibility. Result renderers should read `kind` first and fall back to `type` for older packages. The schema intentionally accepts declared non-image output kinds even before every kind has a dedicated dashboard widget; widget validation must still reject non-image outputs for `display_image` and `result_image`.
 
 Each input control binds to a workflow input ID, which maps to an engine graph node ID and input name. Each output control uses `output_id`, which maps to a `WorkflowOutput` and then to result entries from the job. Informational `note` controls may be dashboard-only: they store creator-authored multi-line text without an executable workflow binding.
 
@@ -59,6 +59,8 @@ Routing rules:
 - Unresolved runtime inputs: require widget/binding setup before the workflow can be considered ready.
 
 Import and setup inspect workflow files as data. Community custom-node imports, compatibility checks, and smoke tests happen only inside isolated runner processes.
+
+Exported packages may declare unresolved runtime inputs for creator-local image, audio, video, 3D, text, and generic file loader values. Import normalizes those records as setup prompts, retaining only safe metadata such as node ID, node type, input name, expected kind, required flag, and extension/MIME hints. Private filenames, absolute paths, temp/output paths, file bytes, base64 media, generated output filenames, and ComfyUI runtime bucket identities must not be persisted.
 
 Duplicate package identity is an explicit user decision. If an imported
 archive has the same publisher/package/version identity as an existing local

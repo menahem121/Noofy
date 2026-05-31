@@ -35,7 +35,7 @@ to make editable, such as:
 - width and height
 - style or LoRA choice
 - seed / variation ID
-- output image
+- generated outputs
 
 Noofy is not trying to replace ComfyUI as a workflow authoring tool. It exists
 to make finished ComfyUI workflows feel like clean local apps.
@@ -75,6 +75,7 @@ A `.noofy` package is richer than a raw ComfyUI JSON file. It can include:
 - package metadata
 - model references and identity hints
 - custom-node information
+- declared output kinds for generated image, audio, video, 3D, text, and generic file outputs
 - export diagnostics
 - creator-side hardware observations
 - an initial dashboard schema

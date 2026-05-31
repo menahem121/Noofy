@@ -13,7 +13,7 @@ A package should contain:
 - ComfyUI API graph used for execution
 - required models with folder/type, filename, size, source URL, checksum when available, and identity verification level
 - exposed inputs mapped to ComfyUI node ids and input names
-- output mapping for generated images, audio, video, or files
+- output mapping for generated images, audio, video, 3D assets, text, or files
 - dashboard schema for the end-user interface
 
 ## Hardware And Memory Observations
@@ -95,13 +95,30 @@ target input name: text
 
 The backend applies input bindings before submitting the graph to the active `EngineAdapter`.
 
-Media outputs declare an app-owned `kind` such as `image`, `audio`, `video`, or `file`.
-The compatibility `type` field mirrors that media kind, while engine retrieval
-details remain separate. Uploaded dashboard media and generic files are
-user-local app data and must not be embedded in portable `.noofy` archives.
+Media outputs declare an app-owned `kind`: `image`, `audio`, `video`, `3d`, `text`,
+or `file`. The compatibility `type` field mirrors that media kind, while engine
+retrieval details remain separate. Package and dashboard validation accepts
+these declared output kinds as first-class outputs, but output widgets remain
+strict: image widgets bind only to `image`, audio widgets only to `audio`, video
+widgets only to `video`, and generic file widgets only to `file` until dedicated
+widgets exist for additional kinds.
+
+Portable `.noofy` archives must not contain creator-local input media, generated
+output media, generated filenames, output subfolders, temp/output paths, creator
+machine paths, runtime file bucket identity, file bytes, or base64 media content.
+Exporter-generated dashboards should persist only stable output records: stable
+ID, generic or stable label, node ID, source node type when useful, `type`, and
+`kind`. Uploaded dashboard media and generic files are user-local app data and
+must not be embedded in portable `.noofy` archives.
 Generic `load_file` inputs must declare `validation.accepted_extensions` and/or
 `validation.accepted_mime_types`; those fields are allow-list checks for that
 dashboard input, not a trust signal for backend parsing or execution.
+
+When an exporter redacts a local file input, it may preserve setup metadata under
+`unresolved_runtime_inputs`: node ID, node type, input name, expected kind,
+required flag, and safe extension/MIME hints. It must not preserve private
+filenames, absolute paths, temp paths, file bytes, base64 content, or generated
+media references.
 
 ## Smoke Tests
 

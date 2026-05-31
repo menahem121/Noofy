@@ -12,11 +12,12 @@ The package is designed for Noofy’s runtime isolation model: Noofy treats the 
 - Converts the current canvas to ComfyUI API prompt format.
 - Runs the workflow once before export.
 - Fails the export if the test run fails.
-- Uses the images already selected in `LoadImage` / `LoadImageMask` nodes for the export test.
-- Does not bundle the source images loaded into `LoadImage` / `LoadImageMask` nodes.
+- Uses the local media already selected in loader nodes for the export test.
+- Does not bundle creator-local image, audio, video, 3D, text, or generic file inputs.
 - Forces detected `batch_size` inputs to `1` for the export test.
 - Records ComfyUI, Python, platform, GPU backend, and PyTorch metadata.
 - Samples RAM and VRAM usage while the test run is active.
+- Detects stable output categories for generated image, audio, video, 3D, text, and generic file outputs.
 - Detects model references from common ComfyUI loader nodes.
 - Hashes model files and records file size when ComfyUI can resolve them locally.
 - Reuses cached model hashes on later exports when the resolved file identity still matches.
@@ -50,9 +51,9 @@ Export is intentionally blocking. If the workflow takes 20 minutes to run, the e
 
 ## Export Flow
 
-When **Export to Noofy** is clicked, the frontend asks ComfyUI to convert the current graph to API prompt format. The extension backend then prepares an export graph, queues the graph in ComfyUI using the current `LoadImage` / `LoadImageMask` selections, and waits for the prompt history result.
+When **Export to Noofy** is clicked, the frontend asks ComfyUI to convert the current graph to API prompt format. The extension backend then prepares an export graph, queues the graph in ComfyUI using the current loader selections, and waits for the prompt history result.
 
-During the run, the extension samples memory usage and keeps the workflow’s selected models and image inputs intact except for the export-test batch-size normalization described above. If execution succeeds, the extension collects metadata and writes the `.noofy` archive with creator-local `LoadImage` / `LoadImageMask` filenames redacted to a runtime-input placeholder. If execution fails, the response contains an error and no package is created.
+During the run, the extension samples memory usage and keeps the workflow’s selected models and local input media intact except for the export-test batch-size normalization described above. If execution succeeds, the extension uses prompt history only as temporary evidence for app-owned output categories, then writes the `.noofy` archive with creator-local input file values redacted to runtime-input placeholders. If execution fails, the response contains an error and no package is created.
 
 ## Package Contents
 
@@ -101,7 +102,8 @@ Example shape:
     "graph_format": "comfyui_api_prompt",
     "comfyui_version": "0.0.0",
     "version_lock": true
-  }
+  },
+  "unresolved_runtime_inputs": []
 }
 ```
 
@@ -109,7 +111,7 @@ All workflows exported by this extension use `public_unverified`. A successful e
 
 ## comfyui_graph.json
 
-`comfyui_graph.json` contains the execution-ready ComfyUI API prompt graph, with creator-local `LoadImage` / `LoadImageMask` image filenames replaced by a runtime-input placeholder before packaging.
+`comfyui_graph.json` contains the execution-ready ComfyUI API prompt graph, with creator-local image, audio, video, 3D, text, and generic file loader values replaced by runtime-input placeholders before packaging.
 
 Noofy treats this graph as engine-specific execution data. Noofy uses package metadata, model records, custom-node records, dashboard schema, and runtime locks as the app-owned contract around the graph.
 
@@ -119,14 +121,27 @@ Noofy treats this graph as engine-specific execution data. Noofy uses package me
 
 ```json
 {
+  "version": "0.1.0",
   "schema_version": "0.1.0",
   "status": "not_configured",
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "audio-8",
+      "label": "Audio Output",
+      "node_id": "8",
+      "node_type": "SaveAudio",
+      "type": "audio",
+      "kind": "audio"
+    }
+  ],
+  "sections": [],
   "controls": [],
   "notes": "Dashboard layout is configured inside Noofy creator mode."
 }
 ```
 
-The extension does not add Noofy marker nodes to the ComfyUI canvas. Dashboard configuration belongs to Noofy creator-mode tooling, not to the exported ComfyUI graph.
+The extension does not add Noofy marker nodes to the ComfyUI canvas. Dashboard configuration belongs to Noofy creator-mode tooling, not to the exported ComfyUI graph. Exported dashboard outputs are declaration records only: they contain stable IDs, generic labels, node IDs, source node types, `type`, and `kind`. They must not contain generated filenames, subfolders, ComfyUI temp/output paths, runtime bucket `type` values, or generated media bytes.
 
 ## capsule.lock.json
 
@@ -150,11 +165,24 @@ It is not local install state. Noofy keeps machine-specific preparation state se
 
 This file is useful for diagnostics and for explaining what the exporter observed on the creator’s machine.
 
+## Output Metadata
+
+Generated output files are never copied into the package. The exporter inspects ComfyUI prompt history only long enough to classify each output as one of the app-owned media kinds:
+
+- `image`
+- `audio`
+- `video`
+- `3d`
+- `text`
+- `file`
+
+Persisted output labels are generic or derived from stable node metadata, never from generated filenames. Runtime file identity such as generated filename, subfolder, temp/output directory, creator machine path, or ComfyUI runtime file `type` remains outside the package.
+
 ## Assets
 
-`assets/thumbnail.png` is generated from the first exported output image when available. If no output image can be resolved, or if the workflow uses `LoadImage` / `LoadImageMask` inputs, a generic placeholder thumbnail is used.
+`assets/thumbnail.png` is a generic placeholder by default. The exporter does not use generated workflow outputs as thumbnails by default, even when the workflow generates images.
 
-The source images selected in `LoadImage` / `LoadImageMask` nodes are not copied into the `.noofy` archive, and their creator-local filenames are not preserved in the packaged graph. Imported workflows should receive image inputs through Noofy dashboard controls or user-supplied runtime inputs.
+The source files selected in loader nodes are not copied into the `.noofy` archive, and their creator-local filenames are not preserved in the packaged graph. Imported workflows should receive image, audio, video, 3D, text, or generic file inputs through Noofy dashboard controls or user-supplied runtime inputs.
 
 ## Model Records
 

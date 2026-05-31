@@ -46,6 +46,7 @@ Widget groups are visual containers around existing controls. A group owns one d
 - `display_video` is the frontend builder/run widget type for video outputs.
 - `display_file` is the frontend builder/run widget type for generic file outputs.
 - `result_image` is also accepted by the package schema for output image controls.
+- Workflow output declarations may also use `kind: "3d"` or `kind: "text"` before dedicated dashboard widgets exist. They are valid package outputs, but they must not be bound to image, audio, video, or generic file display widgets unless a future widget explicitly supports that kind.
 - `load_image_mask` follows the same minimum as `load_image` because it needs room for upload and mask affordances.
 - Audio-specific media widgets are limited to `load_audio` and `display_audio`; duration, speaker, voice, lyric, and similar simple parameters should use generic controls such as `int_field`, `slider`, `select`, `textarea`, or `toggle`.
 - Video-specific media widgets are limited to `load_video` and `display_video`; FPS, frame count, duration, resolution, strength, and similar simple parameters should use generic controls such as `int_field`, `slider`, `select`, or `toggle`.
