@@ -94,6 +94,9 @@ MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
     "StyleModelLoader": {"style_model_name": ("style_models", "style_model")},
     "GLIGENLoader": {"gligen_name": ("gligen", "gligen")},
     "UpscaleModelLoader": {"model_name": ("upscale_models", "upscale_model")},
+    "LatentUpscaleModelLoader": {
+        "model_name": ("latent_upscale_models", "upscale_model")
+    },
 }
 
 

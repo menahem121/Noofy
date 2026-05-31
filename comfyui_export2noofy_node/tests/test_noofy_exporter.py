@@ -119,6 +119,34 @@ def test_detect_model_references_hashes_existing_models(tmp_path: Path) -> None:
     ]
 
 
+def test_detect_model_references_resolves_latent_upscale_model_folder(tmp_path: Path) -> None:
+    model = tmp_path / "latent_upscale_models" / "ltx-spatial-upscaler.safetensors"
+    model.parent.mkdir()
+    model.write_bytes(b"latent upscale model")
+
+    def resolve(folder: str, filename: str) -> str | None:
+        path = tmp_path / folder / filename
+        return str(path) if path.exists() else None
+
+    records = exporter.detect_model_references(
+        {
+            "12": {
+                "class_type": "LatentUpscaleModelLoader",
+                "inputs": {"model_name": model.name},
+            }
+        },
+        resolve,
+    )
+
+    assert len(records) == 1
+    assert records[0]["comfyui_folder"] == "latent_upscale_models"
+    assert records[0]["sha256"] == hashlib.sha256(b"latent upscale model").hexdigest()
+    assert records[0]["size_bytes"] == len(b"latent upscale model")
+    assert records[0]["verification_level"] == "sha256_size"
+    assert records[0]["identity_verified_by_exporter"] is True
+    assert records[0]["local_file_available_at_export"] is True
+
+
 def test_detect_model_references_reuses_cached_hash_for_same_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
