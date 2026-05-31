@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
+  type SyntheticEvent,
 } from "react";
 
 const DEFAULT_COMPARISON_POSITION = 0;
@@ -16,6 +17,7 @@ interface ImageComparisonSliderProps {
   afterSrc: string;
   alt: string;
   onOpen?: () => void;
+  onAfterImageLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
 }
 
 export function ImageComparisonSlider({
@@ -23,6 +25,7 @@ export function ImageComparisonSlider({
   afterSrc,
   alt,
   onOpen,
+  onAfterImageLoad,
 }: ImageComparisonSliderProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragPointerIdRef = useRef<number | null>(null);
@@ -95,6 +98,7 @@ export function ImageComparisonSlider({
             className="image-comparison-slider__image"
             src={afterSrc}
             alt={alt}
+            onLoad={onAfterImageLoad}
           />
         </OutputImageStage>
       </div>
@@ -112,6 +116,7 @@ export function ImageComparisonSlider({
           className="image-comparison-slider__image image-comparison-slider__image--after"
           src={afterSrc}
           alt={alt}
+          onLoad={onAfterImageLoad}
           onError={() => setLoadFailed(true)}
         />
         <span className="image-comparison-slider__before" aria-hidden="true">

@@ -956,7 +956,7 @@ function OutputWidgetContent({
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
   const imageUrls = output ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
   const firstImageUrl = imageUrls[0];
-  const [previewImage, setPreviewImage] = useState<{ url: string; alt: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ url: string; alt: string; beforeImageUrl?: string } | null>(null);
 
   useEffect(() => {
     if (previewImage && !imageUrls.includes(previewImage.url)) {
@@ -988,7 +988,7 @@ function OutputWidgetContent({
                     beforeSrc={comparisonBeforeImageUrl}
                     afterSrc={imageUrl}
                     alt={alt}
-                    onOpen={() => setPreviewImage({ url: imageUrl, alt })}
+                    onOpen={() => setPreviewImage({ url: imageUrl, alt, beforeImageUrl: comparisonBeforeImageUrl })}
                   />
                 </div>
               );
@@ -1029,6 +1029,7 @@ function OutputWidgetContent({
         {previewImage ? (
           <ImagePreviewViewer
             imageUrl={previewImage.url}
+            beforeImageUrl={previewImage.beforeImageUrl}
             alt={previewImage.alt}
             label={control.label}
             onClose={() => setPreviewImage(null)}
@@ -1048,11 +1049,13 @@ function OutputWidgetContent({
 
 function ImagePreviewViewer({
   imageUrl,
+  beforeImageUrl,
   alt,
   label,
   onClose,
 }: {
   imageUrl: string;
+  beforeImageUrl?: string;
   alt: string;
   label: string;
   onClose: () => void;
@@ -1211,7 +1214,7 @@ function ImagePreviewViewer({
     measureImageStage();
   }
 
-  function handleImageDoubleClick(event: MouseEvent<HTMLImageElement>) {
+  function handleImageDoubleClick(event: MouseEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     const stage = stageRef.current;
@@ -1219,7 +1222,7 @@ function ImagePreviewViewer({
     zoomAtPoint(isZoomed ? 1.6 : 2.5, point);
   }
 
-  function handleImagePointerDown(event: PointerEvent<HTMLImageElement>) {
+  function handleImagePointerDown(event: PointerEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
 
@@ -1249,7 +1252,7 @@ function ImagePreviewViewer({
     };
   }
 
-  function handleImagePointerMove(event: PointerEvent<HTMLImageElement>) {
+  function handleImagePointerMove(event: PointerEvent<HTMLElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
@@ -1261,7 +1264,7 @@ function ImagePreviewViewer({
     }));
   }
 
-  function finishImageDrag(event: PointerEvent<HTMLImageElement>) {
+  function finishImageDrag(event: PointerEvent<HTMLElement>) {
     if (dragRef.current?.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1286,24 +1289,48 @@ function ImagePreviewViewer({
         </button>
       </div>
       <div ref={stageRef} className="widget-image-viewer__stage" role="presentation" onClick={onClose}>
-        <img
-          src={imageUrl}
-          alt={`${alt} full-screen preview`}
-          className={`widget-image-viewer__image${isZoomed ? " widget-image-viewer__image--zoomed" : ""}`}
-          draggable={false}
-          style={{
-            width: fittedImageSize ? `${fittedImageSize.width}px` : undefined,
-            height: fittedImageSize ? `${fittedImageSize.height}px` : undefined,
-            transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          }}
-          onLoad={handleImageLoad}
-          onClick={(event) => event.stopPropagation()}
-          onDoubleClick={handleImageDoubleClick}
-          onPointerDown={handleImagePointerDown}
-          onPointerMove={handleImagePointerMove}
-          onPointerUp={finishImageDrag}
-          onPointerCancel={finishImageDrag}
-        />
+        {beforeImageUrl ? (
+          <div
+            className={`widget-image-viewer__comparison${isZoomed ? " widget-image-viewer__comparison--zoomed" : ""}`}
+            style={{
+              width: fittedImageSize ? `${fittedImageSize.width}px` : undefined,
+              height: fittedImageSize ? `${fittedImageSize.height}px` : undefined,
+              transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={handleImageDoubleClick}
+            onPointerDown={handleImagePointerDown}
+            onPointerMove={handleImagePointerMove}
+            onPointerUp={finishImageDrag}
+            onPointerCancel={finishImageDrag}
+          >
+            <ImageComparisonSlider
+              beforeSrc={beforeImageUrl}
+              afterSrc={imageUrl}
+              alt={`${alt} full-screen preview`}
+              onAfterImageLoad={handleImageLoad}
+            />
+          </div>
+        ) : (
+          <img
+            src={imageUrl}
+            alt={`${alt} full-screen preview`}
+            className={`widget-image-viewer__image${isZoomed ? " widget-image-viewer__image--zoomed" : ""}`}
+            draggable={false}
+            style={{
+              width: fittedImageSize ? `${fittedImageSize.width}px` : undefined,
+              height: fittedImageSize ? `${fittedImageSize.height}px` : undefined,
+              transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+            }}
+            onLoad={handleImageLoad}
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={handleImageDoubleClick}
+            onPointerDown={handleImagePointerDown}
+            onPointerMove={handleImagePointerMove}
+            onPointerUp={finishImageDrag}
+            onPointerCancel={finishImageDrag}
+          />
+        )}
       </div>
     </div>,
     document.body,

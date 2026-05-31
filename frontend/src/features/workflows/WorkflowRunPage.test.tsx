@@ -2990,5 +2990,60 @@ describe("WorkflowRunPage", () => {
 
     fireEvent.keyDown(slider, { key: "ArrowRight" });
     await waitFor(() => expect(slider).toHaveAttribute("aria-valuenow", "5"));
+
+    fireEvent.click(screen.getByRole("button", { name: /open generated workflow output full-screen/i }));
+
+    expect(screen.getByRole("dialog", { name: /result full-screen preview/i })).toBeInTheDocument();
+    const fullScreenSlider = screen.getAllByRole("slider", { name: /compare original image/i })[1];
+    const viewerComparison = fullScreenSlider.closest(".widget-image-viewer__comparison") as HTMLElement;
+    const viewerStage = viewerComparison.parentElement as HTMLElement;
+    const fullScreenImage = screen.getByAltText("Generated workflow output full-screen preview");
+    vi.spyOn(viewerStage, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 800,
+      width: 1000,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(fullScreenSlider.parentElement as HTMLElement, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 500,
+      width: 1000,
+      height: 500,
+      toJSON: () => ({}),
+    } as DOMRect);
+    Object.defineProperty(fullScreenImage, "naturalWidth", { configurable: true, value: 4096 });
+    Object.defineProperty(fullScreenImage, "naturalHeight", { configurable: true, value: 2048 });
+
+    fireEvent.load(fullScreenImage);
+
+    await waitFor(() => {
+      expect(viewerComparison).toHaveStyle({ width: "1000px", height: "500px" });
+    });
+
+    expect(fullScreenSlider).toHaveAttribute("aria-valuenow", "0");
+
+    fireEvent.pointerDown(fullScreenSlider, { pointerId: 1, clientX: 500 });
+    fireEvent.pointerUp(fullScreenSlider, { pointerId: 1, clientX: 500 });
+    await waitFor(() => expect(fullScreenSlider).toHaveAttribute("aria-valuenow", "50"));
+    expect(slider).toHaveAttribute("aria-valuenow", "5");
+
+    fireEvent.doubleClick(viewerComparison, { clientX: 750, clientY: 600 });
+    await waitFor(() => {
+      expect(viewerComparison).toHaveStyle({ transform: "translate(-375px, -300px) scale(2.5)" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /reset view/i }));
+    await waitFor(() => {
+      expect(viewerComparison).toHaveStyle({ transform: "translate(0px, 0px) scale(1)" });
+    });
   });
 });
