@@ -38,9 +38,9 @@ Exporting creates a new portable archive. Re-exported user packages strip origin
 - `sections[].controls[]`: renderable controls with type, title, optional binding, default value, validation/display metadata, standalone layout, and optional output metadata.
 - `sections[].groups[]`: visual containers with group title, helper description, ordered control IDs, and group layout. Groups do not merge control values or bindings; each child control remains independently bound.
 
-Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `load_audio`, `load_video`, `display_image`, `display_audio`, `display_video`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
+Common control types include `slider`, `int_field`, `string_field`, `textarea`, `note`, `toggle`, `load_image`, `load_audio`, `load_video`, `load_file`, `display_image`, `display_audio`, `display_video`, `display_file`, `result_image`, `seed_widget`, `lora_loader`, and `select`.
 
-Media output records include a media `kind` such as `image`, `audio`, or `video` and keep the legacy `type` field for compatibility. Result renderers should read `kind` first and fall back to `type` for older packages.
+Media output records include a media `kind` such as `image`, `audio`, `video`, or `file` and keep the legacy `type` field for compatibility. Result renderers should read `kind` first and fall back to `type` for older packages.
 
 Each input control binds to a workflow input ID, which maps to an engine graph node ID and input name. Each output control uses `output_id`, which maps to a `WorkflowOutput` and then to result entries from the job. Informational `note` controls may be dashboard-only: they store creator-authored multi-line text without an executable workflow binding.
 
@@ -107,8 +107,9 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 - Image inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/image`.
 - Audio inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/audio`, form field `audio`. Supported dashboard audio assets are streamed to temporary files first, validated as wav, mp3, flac, ogg, or m4a, capped at 100 GB per file, and moved atomically into place. Audio dashboard assets are local app data and are not stored inside portable `.noofy` packages.
 - Video inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/video`, form field `video`. Supported dashboard video assets are streamed to temporary files first, validated as mp4, mov, webm, or mkv, capped at 100 GB per file, and moved atomically into place. Video dashboard assets are local app data and are not stored inside portable `.noofy` packages.
+- Generic file inputs upload to `{data_dir}/dashboard-assets/{asset_id}` through `POST /api/workflows/{id}/assets/file`, form fields `input_id` and `file`. The saved workflow input binding supplies the accepted extension and MIME allow-list. These uploads are streamed with the same 100 GB cap and temporary-file cleanup as audio/video, but Noofy does not execute, import, unzip, deeply parse, or preview arbitrary uploaded files.
 - ComfyUI `input/` is staging-only. The backend stages dashboard assets into the runner-visible input directory immediately before execution.
-- Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs. Audio and video widgets render backend media URLs directly in native media elements so large files are not blob-fetched into memory.
+- Asset serving is behind the same local API token policy as other `/api/*` routes. Frontend image widgets fetch asset bytes through the API helper and render Blob URLs. Audio and video widgets render backend media URLs directly in native media elements so large files are not blob-fetched into memory. Generic file widgets fetch only metadata and use backend-owned URLs for open/download actions.
 - Generated result media is also served through the backend API. Job results contain app-owned output URLs such as `/api/jobs/{job_id}/outputs/view?...`, while the selected `EngineAdapter` performs any engine-specific file retrieval.
 
 `WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back. Native workflow dashboard overrides are reset by deleting the override file, which restores the bundled dashboard schema on the next package load.
@@ -136,6 +137,8 @@ Important dashboard APIs:
 - `DELETE /api/workflows/{id}/dashboard`: remove a user-owned native dashboard override and fall back to the bundled dashboard.
 - `POST /api/workflows/{id}/assets/image`: store a Noofy dashboard image asset.
 - `POST /api/workflows/{id}/assets/audio`: store a Noofy dashboard audio asset.
+- `POST /api/workflows/{id}/assets/video`: store a Noofy dashboard video asset.
+- `POST /api/workflows/{id}/assets/file`: store a Noofy dashboard file asset for the declared `load_file` input.
 - `POST /api/workflows/{id}/uploads/image`: upload or stage a workflow image input through the workflow-selected engine adapter.
 - `GET /api/assets/{asset_id}`: serve a dashboard asset.
 - `GET /api/jobs/{job_id}/outputs/view`: serve generated job output media through the job-bound engine adapter.

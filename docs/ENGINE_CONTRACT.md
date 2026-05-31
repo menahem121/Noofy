@@ -67,9 +67,9 @@ For the first adapter:
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
 - Read queue and job state through `/queue` and `/history`.
 - Retrieve generated files through ComfyUI `/view` inside the adapter, while returning backend-owned media URLs such as `/api/jobs/{job_id}/outputs/view?...` to the frontend. Player-facing reads stream through the backend and forward byte ranges so large audio and video files do not need to be buffered in memory before playback.
-- Normalize media outputs with app-owned `kind` and compatibility `type` fields so image, audio, and video outputs can share the result contract. Keep the engine retrieval bucket separate as `output_type`.
+- Normalize media outputs with app-owned `kind` and compatibility `type` fields so image, audio, video, and generic file outputs can share the result contract. Keep the engine retrieval bucket separate as `output_type`.
 - Upload image inputs through ComfyUI `/upload/image` inside the adapter, selected by workflow runner.
-- Stage dashboard-owned media assets into ComfyUI `input/staging/` according to saved dashboard input bindings. Staging must replace only the bound graph input value and must not mutate the source graph.
+- Stage dashboard-owned media and file assets into ComfyUI `input/staging/` according to saved dashboard input bindings. Staging must replace only the bound graph input value and must not mutate the source graph.
 - Inspect models and node information through `/models` and `/object_info`.
 
 ## Diagnostics

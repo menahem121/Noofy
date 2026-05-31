@@ -1893,6 +1893,100 @@
   transition: width 120ms ease;
 }
 
+.dashboard-file-input {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+}
+
+.dashboard-file-input--canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+.dashboard-file-input__empty,
+.dashboard-file-input__selected {
+  width: 100%;
+  min-width: 0;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(46, 45, 49, 0.72);
+  color: var(--text-secondary);
+}
+
+.dashboard-file-input__empty {
+  display: flex;
+  min-height: 118px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.dashboard-file-input__empty:hover,
+.dashboard-file-input__empty:focus-visible {
+  border-color: rgba(139, 92, 246, 0.72);
+  background: rgba(55, 54, 59, 0.82);
+  outline: none;
+}
+
+.dashboard-file-input__selected {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-style: solid;
+}
+
+.dashboard-file-input__meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dashboard-file-input__meta strong,
+.preview-file-output strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-file-input__meta span,
+.preview-file-output span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-file-input__actions,
+.dashboard-file-input__progress-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dashboard-file-input__progress {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dashboard-file-input__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary-hover);
+  transition: width 120ms ease;
+}
+
 .field-group input[type="range"]::-webkit-slider-runnable-track {
   height: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2092,6 +2186,24 @@
 .preview-video-output video {
   width: 100%;
   max-height: 520px;
+}
+
+.preview-file-output {
+  display: grid;
+  width: min(520px, calc(100% - 32px));
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 8px;
+  background: rgba(28, 27, 29, 0.74);
+  text-align: center;
+}
+
+.preview-file-output__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
 }
 
 .image-comparison-slider {

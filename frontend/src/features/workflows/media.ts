@@ -19,6 +19,14 @@ export interface OutputVideoMedia {
   size?: number | null;
 }
 
+export interface OutputFileMedia {
+  url: string;
+  filename: string;
+  mimeType?: string | null;
+  extension?: string | null;
+  size?: number | null;
+}
+
 export function audioMetadataLabel(
   format: string | null | undefined,
   mimeType: string | null | undefined,
@@ -54,6 +62,19 @@ export function videoMetadataLabel(
   return parts.length > 0 ? parts.join(" · ") : fallback;
 }
 
+export function fileMetadataLabel(
+  extension: string | null | undefined,
+  mimeType: string | null | undefined,
+  size: number | null | undefined,
+  fallback: string,
+): string {
+  const parts = [
+    extension ? extension.replace(/^\./, "").toUpperCase() : fileFormatFromMime(mimeType),
+    typeof size === "number" ? formatMediaBytes(size) : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" · ") : fallback;
+}
+
 function audioFormatFromMime(mimeType: string | null | undefined): string | null {
   if (!mimeType) return null;
   if (mimeType.includes("mpeg")) return "MP3";
@@ -71,6 +92,12 @@ function videoFormatFromMime(mimeType: string | null | undefined): string | null
   if (mimeType.includes("matroska")) return "MKV";
   if (mimeType.includes("mp4")) return "MP4";
   return mimeType.replace(/^video\//, "").toUpperCase();
+}
+
+function fileFormatFromMime(mimeType: string | null | undefined): string | null {
+  if (!mimeType || mimeType === "application/octet-stream") return null;
+  const subtype = mimeType.split("/")[1] ?? mimeType;
+  return subtype.replace(/^x-/, "").toUpperCase();
 }
 
 export function formatMediaBytes(bytes: number): string | null {

@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { DownloadCloud, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
+import { DownloadCloud, File as FileIcon, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
 
 import {
   dashboardAssetMediaUrl,
@@ -20,7 +20,7 @@ import {
   type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
-import { audioMetadataLabel, videoMetadataLabel } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel } from "./media";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
@@ -43,6 +43,7 @@ interface DashboardInputControlProps {
   onImageUpload: (file: File) => Promise<void>;
   onAudioUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onFileUpload?: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }
 
 export function DashboardInputControl({
@@ -57,6 +58,7 @@ export function DashboardInputControl({
   onImageUpload,
   onAudioUpload = async () => undefined,
   onVideoUpload = async () => undefined,
+  onFileUpload = async () => undefined,
 }: DashboardInputControlProps) {
   const label = control.label || input.label;
   const description = control.description;
@@ -67,7 +69,7 @@ export function DashboardInputControl({
       return (
         <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
           {description ? <small>{description}</small> : null}
-          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, loraBrowser)}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
         </label>
       );
     }
@@ -76,7 +78,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -84,14 +86,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}</>;
 }
 
 function renderControl(
@@ -105,6 +107,7 @@ function renderControl(
   onImageUpload: (file: File) => Promise<void>,
   onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onVideoUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
+  onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   loraBrowser?: LoraBrowserControlProps,
 ) {
   const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
@@ -216,6 +219,19 @@ function renderControl(
           variant={variant}
           onChange={onChange}
           onVideoUpload={onVideoUpload}
+        />
+      );
+
+    case "load_file":
+      return (
+        <AssetFileInput
+          inputId={input.id}
+          value={value}
+          validation={validation}
+          disabled={disabled}
+          variant={variant}
+          onChange={onChange}
+          onFileUpload={onFileUpload}
         />
       );
 
@@ -994,4 +1010,152 @@ function AssetVideoInput({
       {error ? <small className="field-error">{error}</small> : null}
     </div>
   );
+}
+
+function AssetFileInput({
+  inputId,
+  value,
+  validation,
+  disabled,
+  variant,
+  onChange,
+  onFileUpload,
+}: {
+  inputId: string;
+  value: unknown;
+  validation: Record<string, unknown>;
+  disabled: boolean;
+  variant: DashboardInputControlVariant;
+  onChange: (value: unknown) => void;
+  onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const assetId = typeof value === "string" ? value : null;
+  const accept = fileAcceptString(validation);
+
+  useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    setMetadata(null);
+    setError(null);
+    if (!assetId) return;
+
+    let canceled = false;
+    fetchAssetMetadata(assetId)
+      .then((result) => {
+        if (!canceled) setMetadata(result);
+      })
+      .catch(() => {
+        if (!canceled) setError("File metadata could not be loaded. Choose another file if needed.");
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [assetId]);
+
+  function openFilePicker() {
+    if (!disabled && !uploading) inputRef.current?.click();
+  }
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    setUploadProgress({ loaded: 0, total: file.size || null, percent: 0 });
+    setError(null);
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+    try {
+      await onFileUpload(inputId, file, setUploadProgress, abortController.signal);
+      setUploadProgress(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (uploadAbortRef.current === abortController) uploadAbortRef.current = null;
+      setUploading(false);
+    }
+  }
+
+  function removeFile() {
+    if (disabled || uploading) return;
+    onChange(null);
+    setMetadata(null);
+    setError(null);
+  }
+
+  const extension = metadata?.extension ?? extensionFromFilename(metadata?.original_filename ?? assetId ?? "");
+
+  return (
+    <div className={`dashboard-file-input dashboard-file-input--${variant}${assetId ? " dashboard-file-input--selected" : ""}`}>
+      <input
+        ref={inputRef}
+        className="dashboard-image-input__file"
+        type="file"
+        accept={accept}
+        disabled={disabled || uploading}
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => void handleFileChange(event)}
+      />
+      {assetId ? (
+        <div className="dashboard-file-input__selected">
+          <FileIcon size={24} aria-hidden="true" />
+          <div className="dashboard-file-input__meta">
+            <strong>{metadata?.original_filename ?? assetId}</strong>
+            <span>{fileMetadataLabel(extension, metadata?.content_type, metadata?.size, "File")}</span>
+          </div>
+          <div className="dashboard-file-input__actions">
+            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
+              <RefreshCw size={14} aria-hidden="true" />
+              Replace
+            </button>
+            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={removeFile}>
+              <Trash2 size={14} aria-hidden="true" />
+              Remove
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="dashboard-file-input__empty" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
+          <FileIcon size={22} aria-hidden="true" />
+          <span>{uploading ? "Uploading file..." : "Click here to upload file"}</span>
+          {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
+        </button>
+      )}
+      {uploading && uploadProgress ? (
+        <div className="dashboard-file-input__progress-row">
+          <div className="dashboard-file-input__progress" aria-label="File upload progress">
+            <span style={{ width: `${uploadProgress.percent ?? 0}%` }} />
+          </div>
+          <button className="secondary-button secondary-button--small" type="button" onClick={() => uploadAbortRef.current?.abort()}>
+            <X size={14} aria-hidden="true" />
+            Cancel upload
+          </button>
+        </div>
+      ) : null}
+      {error ? <small className="field-error">{error}</small> : null}
+    </div>
+  );
+}
+
+function fileAcceptString(validation: Record<string, unknown>): string {
+  const extensions = Array.isArray(validation.accepted_extensions)
+    ? validation.accepted_extensions.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : [];
+  const mimeTypes = Array.isArray(validation.accepted_mime_types)
+    ? validation.accepted_mime_types.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : [];
+  return [...extensions, ...mimeTypes].join(",");
+}
+
+function extensionFromFilename(filename: string): string | null {
+  const parts = filename.split(".");
+  return parts.length > 1 ? `.${parts[parts.length - 1].toLowerCase()}` : null;
 }

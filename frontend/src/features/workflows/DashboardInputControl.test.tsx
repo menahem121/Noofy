@@ -432,4 +432,39 @@ describe("DashboardInputControl", () => {
     const select = screen.getByDisplayValue("existing.safetensors") as HTMLSelectElement;
     expect(Array.from(select.options).map((option) => option.value)).toEqual(["None", "existing.safetensors"]);
   });
+
+  it("renders selected generic file metadata and supports remove", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      asset_id: "asset.json",
+      original_filename: "settings.json",
+      content_type: "application/json",
+      kind: "file",
+      extension: ".json",
+      size: 128,
+    }));
+    const onChange = vi.fn();
+
+    render(
+      <DashboardInputControl
+        control={{ id: "source-file", type: "load_file", label: "Source file", input_id: "source-file" }}
+        input={{
+          id: "source-file",
+          label: "Source file",
+          control: "load_file",
+          binding: { node_id: "10", input_name: "file_path" },
+          default: null,
+          validation: { accepted_extensions: [".json"], accepted_mime_types: ["application/json"] },
+        }}
+        value="asset.json"
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("settings.json")).toBeInTheDocument();
+    expect(screen.getByText("JSON · 128 B")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove/i }));
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
 });

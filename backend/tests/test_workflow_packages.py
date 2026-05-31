@@ -402,6 +402,72 @@ def test_validator_rejects_video_widget_bound_to_image_output() -> None:
     assert "type 'display_video' but output 'image' is 'image'" in result.errors[0]
 
 
+def test_validator_accepts_file_widget_with_accept_rules() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "file_widget", "name": "File Widget", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"1": {"class_type": "LoadFile", "inputs": {"file_path": ""}}, "2": {"class_type": "SaveFile", "inputs": {}}},
+            "inputs": [
+                {
+                    "id": "source-file",
+                    "label": "Source file",
+                    "control": "load_file",
+                    "binding": {"node_id": "1", "input_name": "file_path"},
+                    "validation": {"accepted_extensions": [".json"]},
+                }
+            ],
+            "outputs": [{"id": "file", "label": "File", "node_id": "2", "type": "file", "kind": "file"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "source-file", "type": "load_file", "label": "Source", "input_id": "source-file"},
+                            {"id": "file", "type": "display_file", "label": "File", "output_id": "file"},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert result.valid
+
+
+def test_validator_rejects_file_widget_without_accept_rules() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "file_widget", "name": "File Widget", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"1": {"class_type": "LoadFile", "inputs": {"file_path": ""}}},
+            "inputs": [
+                {
+                    "id": "source-file",
+                    "label": "Source file",
+                    "control": "load_file",
+                    "binding": {"node_id": "1", "input_name": "file_path"},
+                }
+            ],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [{"id": "main", "title": "Main", "controls": [{"id": "source-file", "type": "load_file", "label": "Source", "input_id": "source-file"}]}],
+            },
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert not result.valid
+    assert "has no accepted_extensions or accepted_mime_types" in result.errors[0]
+
+
 def test_input_bindings_are_applied() -> None:
     package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
     service = EngineService(

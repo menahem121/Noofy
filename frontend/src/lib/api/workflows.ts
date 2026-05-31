@@ -572,6 +572,7 @@ export interface DashboardAssetMetadata {
   kind?: string;
   size?: number;
   format?: string;
+  extension?: string;
   duration_seconds?: number;
   width?: number;
   height?: number;
@@ -822,18 +823,30 @@ export async function uploadDashboardVideoAsset(
   return uploadDashboardLargeMediaAsset("video", workflowId, file, onProgress, signal);
 }
 
-async function uploadDashboardLargeMediaAsset(
-  kind: "audio" | "video",
+export async function uploadDashboardFileAsset(
   workflowId: string,
+  inputId: string,
   file: File,
   onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<DashboardAssetUploadResponse> {
+  return uploadDashboardLargeMediaAsset("file", workflowId, file, onProgress, signal, inputId);
+}
+
+async function uploadDashboardLargeMediaAsset(
+  kind: "audio" | "video" | "file",
+  workflowId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+  inputId?: string,
+): Promise<DashboardAssetUploadResponse> {
   const formData = new FormData();
   formData.append(kind, file);
+  if (inputId) formData.append("input_id", inputId);
   const token = getApiToken();
   const url = `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/${kind}`;
-  const label = kind === "audio" ? "Audio" : "Video";
+  const label = kind === "audio" ? "Audio" : kind === "video" ? "Video" : "File";
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();

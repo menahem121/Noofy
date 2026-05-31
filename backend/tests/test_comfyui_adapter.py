@@ -153,6 +153,33 @@ def test_result_from_history_recognizes_video_inside_images_bucket(tmp_path: Pat
     assert video["url"].startswith("/api/jobs/job-video/outputs/view?")
 
 
+def test_result_from_history_normalizes_generic_file_output(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-file",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "20": {
+                    "files": [
+                        {"filename": "summary.json", "subfolder": "", "type": "output", "size": 18}
+                    ]
+                }
+            },
+        },
+    )
+
+    file_output = result.outputs[0]["output"]["files"][0]
+    assert file_output["kind"] == "file"
+    assert file_output["type"] == "file"
+    assert file_output["extension"] == ".json"
+    assert file_output["mime_type"] == "application/json"
+    assert file_output["url"].startswith("/api/jobs/job-file/outputs/view?")
+
+
 def test_result_from_history_prefers_declared_output_kind(tmp_path: Path) -> None:
     adapter = ComfyUIEngineAdapter(
         "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
@@ -881,6 +908,37 @@ def test_stage_assets_uses_saved_video_dashboard_binding(tmp_path: Path) -> None
     assert new_graph["custom"]["inputs"]["video_path"].startswith("staging/")
     assert new_graph["custom"]["inputs"]["other"] == asset_id
     assert graph["custom"]["inputs"]["video_path"] == asset_id
+
+
+def test_stage_assets_uses_saved_file_dashboard_binding(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.workflow.config.json"
+    (assets_dir / asset_id).write_bytes(b"{}")
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+    graph = {
+        "custom": {
+            "class_type": "CustomFileNode",
+            "inputs": {"file_path": asset_id, "other": asset_id},
+        }
+    }
+
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_file", node_id="custom", input_name="file_path"),
+        graph,
+        "job-file",
+    )
+
+    assert len(staged) == 1
+    assert new_graph["custom"]["inputs"]["file_path"].startswith("staging/")
+    assert new_graph["custom"]["inputs"]["other"] == asset_id
+    assert graph["custom"]["inputs"]["file_path"] == asset_id
 
 
 def test_stage_assets_reuses_one_file_for_multiple_saved_bindings(tmp_path: Path) -> None:

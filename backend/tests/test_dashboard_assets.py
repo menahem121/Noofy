@@ -10,14 +10,22 @@ import app.workflows.assets as assets_module
 from app.diagnostics import LogStore
 from app.main import create_app
 from app.workflows.assets import AssetUploadError, DashboardAssetService
+from app.workflows.package import WorkflowPackage
 
 
 class FakeEngineService:
-    def __init__(self) -> None:
+    def __init__(self, package: WorkflowPackage | None = None) -> None:
         self.workflow_library_service = self
+        self.workflow_loader = self
+        self.package = package
 
     def list_workflows(self):
         return []
+
+    def get_package(self, workflow_id: str) -> WorkflowPackage:
+        if self.package is not None and self.package.metadata.id == workflow_id:
+            return self.package
+        raise KeyError(f"Workflow '{workflow_id}' was not found.")
 
     async def shutdown(self) -> None:
         return None
@@ -313,6 +321,65 @@ def test_store_video_stream_rejects_declared_file_over_cap(tmp_path: Path) -> No
         )
 
 
+def test_store_file_stream_accepts_declared_extension_and_mime(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_file_stream(
+        BytesIO(b'{"ok": true}'),
+        "application/json",
+        "settings.json",
+        accepted_extensions=[".json"],
+        accepted_mime_types=["application/json"],
+        declared_size=12,
+    )
+
+    assert result["kind"] == "file"
+    assert result["asset_id"].endswith(".json")
+    assert result["extension"] == ".json"
+    assert result["content_type"] == "application/json"
+    assert svc.metadata(result["asset_id"])["extension"] == ".json"
+
+
+def test_store_file_stream_allows_octet_stream_only_with_allowed_extension(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_file_stream(
+        BytesIO(b"tensor"),
+        "application/octet-stream",
+        "weights.pt",
+        accepted_extensions=[".pt"],
+        accepted_mime_types=["application/pytorch"],
+    )
+
+    assert result["asset_id"].endswith(".pt")
+
+
+def test_store_file_stream_rejects_octet_stream_for_mime_only_rule(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="not allowed"):
+        svc.store_file_stream(
+            BytesIO(b"{}"),
+            "application/octet-stream",
+            "data.json",
+            accepted_extensions=[],
+            accepted_mime_types=["application/json"],
+        )
+
+
+def test_store_file_stream_rejects_unaccepted_extension(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="extension"):
+        svc.store_file_stream(
+            BytesIO(b"bad"),
+            "application/pdf",
+            "report.pdf",
+            accepted_extensions=[".txt"],
+            accepted_mime_types=[],
+        )
+
+
 def test_workflow_icon_upload_is_resized_and_listed(tmp_path: Path) -> None:
     from PIL import Image
 
@@ -412,6 +479,46 @@ def test_upload_dashboard_video_asset_route_streams_file(tmp_path: Path) -> None
     assert body["asset_id"].endswith(".mp4")
     assert body["kind"] == "video"
     assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
+def test_upload_dashboard_file_asset_route_uses_input_validation(tmp_path: Path) -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "wf-file", "name": "File Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "comfyui_graph": {"1": {"class_type": "LoadFile", "inputs": {"file_path": ""}}},
+            "inputs": [
+                {
+                    "id": "source-file",
+                    "label": "Source file",
+                    "control": "load_file",
+                    "binding": {"node_id": "1", "input_name": "file_path"},
+                    "validation": {"accepted_extensions": [".json"], "accepted_mime_types": ["application/json"]},
+                }
+            ],
+        }
+    )
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(package), asset_service=asset_service)
+    ) as client:
+        accepted = client.post(
+            "/api/workflows/wf-file/assets/file",
+            data={"input_id": "source-file"},
+            files={"file": ("settings.json", b"{}", "application/json")},
+        )
+        rejected = client.post(
+            "/api/workflows/wf-file/assets/file",
+            data={"input_id": "source-file"},
+            files={"file": ("settings.pdf", b"%PDF", "application/pdf")},
+        )
+
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["kind"] == "file"
+    assert body["asset_id"].endswith(".json")
+    assert body["extension"] == ".json"
+    assert rejected.status_code == 422
 
 
 def test_serve_dashboard_asset_route_returns_file_and_metadata(tmp_path: Path) -> None:

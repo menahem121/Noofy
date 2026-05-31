@@ -17,10 +17,12 @@ describe("defaultLayoutForWidgetType", () => {
     ["load_image_mask", 10, 10],
     ["load_audio", 10, 4],
     ["load_video", 14, 12],
+    ["load_file", 10, 6],
     ["display_mask", 10, 10],
     ["display_image", 14, 14],
     ["display_audio", 12, 6],
     ["display_video", 16, 14],
+    ["display_file", 10, 6],
     ["result_image", 14, 14],
   ])("uses the requested default and minimum size for %s", (widgetType, w, h) => {
     expect(defaultLayoutForWidgetType(widgetType)).toEqual({

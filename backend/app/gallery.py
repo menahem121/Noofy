@@ -514,7 +514,7 @@ def build_run_submission_snapshot(
     valid_output_control_ids: set[str] = set()
     for section in package.dashboard.sections:
         for control in section.controls:
-            if control.type not in {"display_image", "display_audio", "display_video", "result_image"} or not control.output_id:
+            if control.type not in {"display_image", "display_audio", "display_video", "display_file", "result_image"} or not control.output_id:
                 continue
             output = outputs_by_id.get(control.output_id)
             if output is None:

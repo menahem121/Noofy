@@ -455,6 +455,54 @@ describe("workflowFromBindableInputs", () => {
     ]);
   });
 
+  it("auto-creates generic file widgets with accepted extension validation", () => {
+    const workflow = workflowFromBindableInputs("wf-file", "File Workflow", [
+      {
+        node_id: "10",
+        node_type: "LoadFile",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "file_path",
+            current_value: "",
+            kind: "file_input",
+            suggested_widget_type: "load_file",
+            widget_types: ["load_file"],
+            hint: "Workflow input file.",
+          },
+        ],
+      },
+      {
+        node_id: "20",
+        node_type: "SaveFile",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_file",
+            current_value: null,
+            kind: "file_output",
+            suggested_widget_type: "display_file",
+            widget_types: ["display_file"],
+          },
+        ],
+      },
+    ]);
+
+    const schema = buildInitialDashboard(workflow);
+
+    expect(schema.widgets.map((widget) => widget.widgetType)).toEqual(["load_file", "display_file"]);
+    expect(toBackendPayload(schema).inputs[0]).toMatchObject({
+      id: "ctrl-node-10-file_path",
+      control: "load_file",
+      validation: { accepted_extensions: [".txt", ".json", ".csv", ".srt", ".pdf", ".zip", ".npy", ".pt"] },
+    });
+    expect(toBackendPayload(schema).dashboard.outputs).toEqual([
+      { id: "file", label: "Result", node_id: "20", type: "file", kind: "file" },
+    ]);
+  });
+
   it("adds missing LoadImage widgets to an existing builder schema without duplicating widgets", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

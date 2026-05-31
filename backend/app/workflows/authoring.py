@@ -287,6 +287,8 @@ _AUDIO_NODE_TYPES = frozenset({"LoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
 _VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
 _VIDEO_OUTPUT_NODE_TYPES = frozenset({"PreviewVideo", "SaveVideo", "SaveWEBM", "VHS_VideoCombine"})
+_FILE_OUTPUT_NODE_TYPES = frozenset({"SaveFile", "SaveText", "SaveJSON", "SaveCSV", "SaveDocument"})
+_FILE_INPUT_NAMES = frozenset({"file", "filename", "path", "file_path", "filepath", "json", "csv", "srt", "subtitle", "subtitles", "zip", "npy", "pt"})
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 _NOTE_NODE_TYPES = frozenset({"Note"})
@@ -338,6 +340,17 @@ def _classify_graph_inputs(
                     "auto_select": node_id_str == default_video_output_node_id,
                 }
             )
+        if _is_file_output_node_type(node_type):
+            scalar_inputs.append(
+                {
+                    "input_name": "output_file",
+                    "current_value": None,
+                    "kind": "file_output",
+                    "suggested_widget_type": "display_file",
+                    "widget_types": ["display_file"],
+                    "auto_select": False,
+                }
+            )
         if node_type in _AUDIO_OUTPUT_NODE_TYPES:
             scalar_inputs.append(
                 {
@@ -358,7 +371,7 @@ def _classify_graph_inputs(
                 continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
             kind = _value_kind(input_name, value, node_type)
-            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "lora"}:
+            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "file_input", "lora"}:
                 kind = "select"
             if kind is None:
                 continue
@@ -628,6 +641,8 @@ def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
         return "audio_input"
     if _is_video_input_node_type(node_type) and input_name in {"video", "file", "filename", "path", "video_path"}:
         return "video_input"
+    if _is_file_input(node_type, input_name, value):
+        return "file_input"
     if node_type in _LORA_NODE_TYPES and input_name in ("lora_name",):
         return "lora"
     if input_name in _SEED_INPUT_NAMES and isinstance(value, (int, float)):
@@ -652,6 +667,8 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "audio_output": ["display_audio"],
         "video_input": ["load_video"],
         "video_output": ["display_video"],
+        "file_input": ["load_file"],
+        "file_output": ["display_file"],
         "lora": ["lora_loader"],
         "select": ["select", "string_field"],
     }
@@ -670,6 +687,35 @@ def _is_video_output_node_type(node_type: str) -> bool:
         return True
     normalized = node_type.lower()
     return "video" in normalized and any(token in normalized for token in ("preview", "save", "combine", "output", "export"))
+
+
+def _is_file_input(node_type: str, input_name: str, value: Any) -> bool:
+    normalized_node = node_type.lower()
+    normalized_input = input_name.lower()
+    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+        return False
+    if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
+        return False
+    strong_node_signal = any(token in normalized_node for token in ("file", "document", "archive", "json", "csv", "subtitle", "text"))
+    strong_input_signal = normalized_input in _FILE_INPUT_NAMES or any(token in normalized_input for token in ("file", "filepath", "file_path", "document", "archive", "subtitle"))
+    extension_signal = isinstance(value, str) and _looks_like_generic_file_path(value)
+    return strong_input_signal and (strong_node_signal or extension_signal)
+
+
+def _looks_like_generic_file_path(value: str) -> bool:
+    suffix = Path(value).suffix.lower()
+    return suffix in {".txt", ".json", ".csv", ".srt", ".pdf", ".zip", ".npy", ".pt", ".yaml", ".yml", ".xml"}
+
+
+def _is_file_output_node_type(node_type: str) -> bool:
+    if node_type in _FILE_OUTPUT_NODE_TYPES:
+        return True
+    normalized = node_type.lower()
+    if any(media in normalized for media in ("image", "audio", "video")):
+        return False
+    return any(token in normalized for token in ("file", "document", "archive", "json", "csv", "text", "subtitle")) and any(
+        token in normalized for token in ("save", "write", "export", "output")
+    )
 
 
 class _ComfyInputOptionSpec:

@@ -36,7 +36,7 @@ The dashboard schema describes what the end user sees. It should support:
 - text inputs
 - number inputs and sliders
 - selects
-- image, audio, and video upload controls
+- image, audio, video, and generic file upload controls
 - toggles
 - run and cancel actions
 - default values and presets
@@ -95,10 +95,13 @@ target input name: text
 
 The backend applies input bindings before submitting the graph to the active `EngineAdapter`.
 
-Media outputs declare an app-owned `kind` such as `image`, `audio`, or `video`.
+Media outputs declare an app-owned `kind` such as `image`, `audio`, `video`, or `file`.
 The compatibility `type` field mirrors that media kind, while engine retrieval
-details remain separate. Uploaded dashboard media is user-local app data and
-must not be embedded in portable `.noofy` archives.
+details remain separate. Uploaded dashboard media and generic files are
+user-local app data and must not be embedded in portable `.noofy` archives.
+Generic `load_file` inputs must declare `validation.accepted_extensions` and/or
+`validation.accepted_mime_types`; those fields are allow-list checks for that
+dashboard input, not a trust signal for backend parsing or execution.
 
 ## Smoke Tests
 

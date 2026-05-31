@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   ChevronDown,
+  File,
   FileAudio,
   GripVertical,
   ImagePlus,
@@ -80,9 +81,11 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   load_image_mask: UploadCloud,
   load_audio: FileAudio,
   load_video: Video,
+  load_file: File,
   display_image: Sparkles,
   display_audio: FileAudio,
   display_video: Video,
+  display_file: File,
   seed_widget: Shuffle,
   lora_loader: Sparkles,
   select: ChevronDown,
@@ -966,6 +969,33 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
       <div className="layout-preview-image-input">
         <ImagePlus size={22} aria-hidden="true" />
         <span>Click here to upload an image</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "load_audio" || widget.widgetType === "display_audio") {
+    return (
+      <div className="layout-preview-output">
+        <FileAudio size={22} aria-hidden="true" />
+        <span>{widget.widgetType === "load_audio" ? "Click here to upload audio" : "Generated audio will appear here"}</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "load_video" || widget.widgetType === "display_video") {
+    return (
+      <div className="layout-preview-output">
+        <Video size={22} aria-hidden="true" />
+        <span>{widget.widgetType === "load_video" ? "Click here to upload video" : "Generated video will appear here"}</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "load_file" || widget.widgetType === "display_file") {
+    return (
+      <div className="layout-preview-output">
+        <File size={22} aria-hidden="true" />
+        <span>{widget.widgetType === "load_file" ? "Click here to upload a file" : "Generated file will appear here"}</span>
       </div>
     );
   }

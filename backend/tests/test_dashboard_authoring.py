@@ -827,6 +827,27 @@ def test_get_bindable_inputs_uses_object_info_options_for_dropdowns(tmp_path: Pa
     assert inputs_by_name["scheduler"]["options"] == ["normal", "karras"]
 
 
+def test_get_bindable_inputs_suggests_generic_file_only_for_strong_file_signals() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "DocumentLoader",
+                "inputs": {"file_path": "notes.json"},
+            },
+            "2": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"filename": "model.safetensors"},
+            },
+        }
+    )
+
+    by_node = {node["node_id"]: node for node in nodes}
+    assert by_node["1"]["inputs"][0]["kind"] == "file_input"
+    assert by_node["1"]["inputs"][0]["suggested_widget_type"] == "load_file"
+    assert by_node["2"]["inputs"][0]["kind"] == "string"
+    assert by_node["2"]["inputs"][0]["suggested_widget_type"] != "load_file"
+
+
 @pytest.mark.parametrize("node_type", ["LoraLoader", "LoraLoaderModelOnly"])
 def test_get_bindable_inputs_keeps_comfyui_lora_nodes_as_lora_loader_when_options_exist(
     node_type: str,

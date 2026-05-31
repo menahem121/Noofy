@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  File,
   FileAudio,
   GripVertical,
   ImagePlus,
@@ -26,6 +27,7 @@ import { fetchBindableInputs } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import {
   WIDGET_TYPE_LABELS,
+  DEFAULT_FILE_ACCEPTED_EXTENSIONS,
   MOCK_WORKFLOW,
   NODE_ICONS,
   VALUE_KIND_ICONS,
@@ -1119,6 +1121,7 @@ function WidgetBehaviorFields({
   const showNumberRange = widget.widgetType === "int_field";
   const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
   const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
+  const showFileOptions = widget.widgetType === "load_file";
   const sliderErrors = validateSliderWidget(widget);
   const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
   const defaultRange = defaultNumericRangeForValue(value);
@@ -1131,7 +1134,13 @@ function WidgetBehaviorFields({
           value={widget.widgetType}
           onChange={(event) => {
             const widgetType = event.target.value as WidgetType;
-            onPatch(widgetType === "slider" ? { widgetType, ...sliderDefaultsForValue(value, widget) } : { widgetType });
+            if (widgetType === "slider") {
+              onPatch({ widgetType, ...sliderDefaultsForValue(value, widget) });
+            } else if (widgetType === "load_file") {
+              onPatch({ widgetType, acceptedExtensions: widget.acceptedExtensions ?? DEFAULT_FILE_ACCEPTED_EXTENSIONS });
+            } else {
+              onPatch({ widgetType });
+            }
           }}
         >
           {allowedTypes.map((type) => (
@@ -1240,6 +1249,27 @@ function WidgetBehaviorFields({
           label="Allow drawing a mask"
           hint="Adds a mask brush over the uploaded image."
         />
+      ) : null}
+
+      {showFileOptions ? (
+        <div className="builder-config__grid">
+          <FieldRow label="Accepted extensions" hint="Comma-separated, for example .txt, .json, .zip">
+            <input
+              className="builder-input"
+              type="text"
+              value={(widget.acceptedExtensions ?? []).join(", ")}
+              onChange={(event) => onPatch({ acceptedExtensions: splitCsvList(event.target.value) })}
+            />
+          </FieldRow>
+          <FieldRow label="Accepted MIME types" hint="Optional comma-separated MIME allow-list.">
+            <input
+              className="builder-input"
+              type="text"
+              value={(widget.acceptedMimeTypes ?? []).join(", ")}
+              onChange={(event) => onPatch({ acceptedMimeTypes: splitCsvList(event.target.value) })}
+            />
+          </FieldRow>
+        </div>
       ) : null}
 
       {widget.widgetType !== "display_image" && widget.widgetType !== "slider" ? (
@@ -1522,7 +1552,23 @@ function DefaultValueEditor({
     );
   }
 
+  if (widget.widgetType === "load_audio" || widget.widgetType === "load_video" || widget.widgetType === "load_file") {
+    const mediaName = widget.widgetType === "load_audio" ? "audio" : widget.widgetType === "load_video" ? "video" : "file";
+    return (
+      <p className="builder-config__hint">
+        End-users will pick a {mediaName} from their computer when they open the dashboard.
+      </p>
+    );
+  }
+
   return null;
+}
+
+function splitCsvList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function FormCard({ title, children }: { title: string; children: ReactNode }) {
@@ -1953,6 +1999,14 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       </div>
     );
   }
+  if (widget.widgetType === "load_file") {
+    return (
+      <div className="preview-image-input">
+        <File size={24} aria-hidden="true" />
+        <span>File upload</span>
+      </div>
+    );
+  }
 
   if (widget.widgetType === "display_image") {
     return (
@@ -1977,6 +2031,14 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       <div className="preview-image-output">
         <Video size={22} aria-hidden="true" />
         <span>Generated video will appear here</span>
+      </div>
+    );
+  }
+  if (widget.widgetType === "display_file") {
+    return (
+      <div className="preview-image-output">
+        <File size={24} aria-hidden="true" />
+        <span>File output</span>
       </div>
     );
   }

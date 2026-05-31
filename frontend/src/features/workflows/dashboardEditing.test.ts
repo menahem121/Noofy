@@ -116,4 +116,37 @@ describe("buildDashboardSchemaForEditing", () => {
     expect(schema.widgets.map((widget) => widget.widgetType)).toEqual(["load_video", "display_video"]);
     expect(schema.widgets[0].binding).toEqual({ nodeId: "30", inputName: "video_path" });
   });
+
+  it("round-trips generic file accept rules and output widgets", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-file", name: "File Workflow", version: "1.0.0", description: "" },
+      inputs: [{
+        id: "source-file",
+        label: "Source file",
+        control: "load_file",
+        binding: { node_id: "10", input_name: "file_path" },
+        default: null,
+        validation: { accepted_extensions: [".json", ".csv"], accepted_mime_types: ["application/json"] },
+      }],
+      outputs: [{ id: "result-file", label: "File", node_id: "20", type: "file", kind: "file" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [
+            { id: "source", type: "load_file", label: "Source file", input_id: "source-file" },
+            { id: "result", type: "display_file", label: "Result file", output_id: "result-file" },
+          ],
+        }],
+      },
+    });
+
+    expect(schema.widgets.map((widget) => widget.widgetType)).toEqual(["load_file", "display_file"]);
+    expect(schema.widgets[0]).toMatchObject({
+      acceptedExtensions: [".json", ".csv"],
+      acceptedMimeTypes: ["application/json"],
+    });
+  });
 });

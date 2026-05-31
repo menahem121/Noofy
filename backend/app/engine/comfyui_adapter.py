@@ -26,12 +26,12 @@ from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
 
 _ASSET_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif|wav|mp3|flac|ogg|m4a|mp4|mov|webm|mkv)$",
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9_-]+)+$",
     re.IGNORECASE,
 )
-_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video"})
-_MEDIA_OUTPUT_BUCKETS = ("images", "audio", "video", "videos", "gifs")
-_MEDIA_KINDS = frozenset({"image", "audio", "video"})
+_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video", "load_file"})
+_MEDIA_OUTPUT_BUCKETS = ("images", "audio", "video", "videos", "gifs", "files", "text")
+_MEDIA_KINDS = frozenset({"image", "audio", "video", "file"})
 
 
 class ComfyUIEngineAdapter:
@@ -853,6 +853,9 @@ class ComfyUIEngineAdapter:
             or mimetypes.guess_type(str(item.get("filename") or ""))[0]
             or ("audio/mpeg" if kind == "audio" else "application/octet-stream"),
         }
+        suffix = Path(str(item.get("filename") or "")).suffix.lower()
+        if suffix and "extension" not in enriched:
+            enriched["extension"] = suffix
         thumbnail_url = _backend_owned_thumbnail_url(item.get("thumbnail_url"))
         if thumbnail_url is None:
             enriched.pop("thumbnail_url", None)
@@ -1012,6 +1015,8 @@ def _classify_media_kind(
         return "audio"
     if mime_type.startswith("video/"):
         return "video"
+    if mime_type and mime_type != "application/octet-stream":
+        return "file"
 
     suffix = Path(str(item.get("filename") or "")).suffix.lower()
     if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
@@ -1020,6 +1025,8 @@ def _classify_media_kind(
         return "audio"
     if suffix in {".mp4", ".mov", ".webm", ".mkv"}:
         return "video"
+    if suffix:
+        return "file"
 
     weak_fallbacks = {
         "images": "image",
@@ -1027,6 +1034,8 @@ def _classify_media_kind(
         "audio": "audio",
         "video": "video",
         "videos": "video",
+        "files": "file",
+        "text": "file",
     }
     return weak_fallbacks.get(bucket_name, "image")
 

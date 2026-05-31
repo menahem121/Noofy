@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
@@ -24,6 +24,7 @@ from app.workflows.import_orchestrator import (
 from app.workflows.assets import (
     AssetUploadError,
     MAX_AUDIO_ASSET_BYTES,
+    MAX_FILE_ASSET_BYTES,
     MAX_VIDEO_ASSET_BYTES,
 )
 from app.workflows.authoring import DashboardAuthoringError
@@ -641,16 +642,7 @@ async def upload_dashboard_audio_asset(
 ):
     content_type = audio.content_type or "application/octet-stream"
     original_filename = audio.filename or "upload"
-    content_length = request.headers.get("content-length")
-    request_size = int(content_length) if content_length and content_length.isdigit() else None
-    upload_size = audio.size if isinstance(audio.size, int) and audio.size >= 0 else None
-    declared_size = upload_size if upload_size is not None else request_size
-    if upload_size is None and declared_size is not None and declared_size > MAX_AUDIO_ASSET_BYTES:
-        # Multipart framing makes Content-Length slightly larger than the file.
-        # Preserve exact 100 GB uploads while still rejecting obviously oversized
-        # requests before copying the parsed upload into dashboard storage.
-        multipart_allowance = 1024 * 1024
-        declared_size = None if declared_size <= MAX_AUDIO_ASSET_BYTES + multipart_allowance else MAX_AUDIO_ASSET_BYTES + 1
+    declared_size = _declared_upload_size(request, audio, MAX_AUDIO_ASSET_BYTES)
     try:
         await audio.seek(0)
         return await asyncio.to_thread(
@@ -673,13 +665,7 @@ async def upload_dashboard_video_asset(
 ):
     content_type = video.content_type or "application/octet-stream"
     original_filename = video.filename or "upload"
-    content_length = request.headers.get("content-length")
-    request_size = int(content_length) if content_length and content_length.isdigit() else None
-    upload_size = video.size if isinstance(video.size, int) and video.size >= 0 else None
-    declared_size = upload_size if upload_size is not None else request_size
-    if upload_size is None and declared_size is not None and declared_size > MAX_VIDEO_ASSET_BYTES:
-        multipart_allowance = 1024 * 1024
-        declared_size = None if declared_size <= MAX_VIDEO_ASSET_BYTES + multipart_allowance else MAX_VIDEO_ASSET_BYTES + 1
+    declared_size = _declared_upload_size(request, video, MAX_VIDEO_ASSET_BYTES)
     try:
         await video.seek(0)
         return await asyncio.to_thread(
@@ -691,3 +677,60 @@ async def upload_dashboard_video_asset(
         )
     except AssetUploadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/assets/file")
+async def upload_dashboard_file_asset(
+    workflow_id: str,
+    request: Request,
+    asset_service: DashboardAssetServiceDep,
+    library: WorkflowLibraryServiceDep,
+    input_id: str = Form(...),
+    file: UploadFile = File(...),
+):
+    try:
+        package = library.workflow_loader.get_package(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    workflow_input = next((candidate for candidate in package.inputs if candidate.id == input_id), None)
+    if workflow_input is None:
+        raise HTTPException(status_code=422, detail=f"Workflow input '{input_id}' does not exist.")
+    if workflow_input.control != "load_file":
+        raise HTTPException(status_code=422, detail=f"Workflow input '{input_id}' is not a file input.")
+
+    content_type = file.content_type or "application/octet-stream"
+    original_filename = file.filename or "upload"
+    declared_size = _declared_upload_size(request, file, MAX_FILE_ASSET_BYTES)
+    accepted_extensions = workflow_input.validation.get("accepted_extensions")
+    accepted_mime_types = workflow_input.validation.get("accepted_mime_types")
+    try:
+        await file.seek(0)
+        return await asyncio.to_thread(
+            asset_service.store_file_stream,
+            file.file,
+            content_type,
+            original_filename,
+            accepted_extensions=accepted_extensions if isinstance(accepted_extensions, list) else [],
+            accepted_mime_types=accepted_mime_types if isinstance(accepted_mime_types, list) else [],
+            declared_size=declared_size,
+        )
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _declared_upload_size(
+    request: Request,
+    upload: UploadFile,
+    max_bytes: int,
+) -> int | None:
+    content_length = request.headers.get("content-length")
+    request_size = int(content_length) if content_length and content_length.isdigit() else None
+    upload_size = upload.size if isinstance(upload.size, int) and upload.size >= 0 else None
+    declared_size = upload_size if upload_size is not None else request_size
+    if upload_size is None and declared_size is not None and declared_size > max_bytes:
+        # Multipart framing makes Content-Length slightly larger than the file.
+        # Preserve exact max-size uploads while still rejecting obviously
+        # oversized requests before copying the parsed upload into asset storage.
+        multipart_allowance = 1024 * 1024
+        declared_size = None if declared_size <= max_bytes + multipart_allowance else max_bytes + 1
+    return declared_size

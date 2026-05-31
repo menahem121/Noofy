@@ -50,6 +50,7 @@ ALLOWED_VIDEO_MIME_TYPES = frozenset(
 MAX_ASSET_BYTES = 25 * 1024 * 1024  # 25 MB
 MAX_AUDIO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 MAX_VIDEO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
+MAX_FILE_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 MAX_WORKFLOW_ICON_SIZE = 256
 _STREAM_CHUNK_BYTES = 1024 * 1024
 
@@ -137,6 +138,40 @@ class DashboardAssetService:
             canonical_content_type=_canonical_video_content_type,
         )
 
+    def store_file_stream(
+        self,
+        source: BinaryIO,
+        content_type: str,
+        original_filename: str,
+        *,
+        accepted_extensions: list[str],
+        accepted_mime_types: list[str],
+        declared_size: int | None = None,
+    ) -> dict[str, Any]:
+        rules = _normalize_file_accept_rules(accepted_extensions, accepted_mime_types)
+        normalized_content_type = _normalized_file_content_type(content_type)
+        selected_extension = _file_extension_for(original_filename, normalized_content_type, rules)
+
+        def extension_for(filename: str, _detected: str, declared: str) -> str:
+            return selected_extension
+
+        return self._store_large_media_stream(
+            source,
+            content_type,
+            original_filename,
+            kind="file",
+            declared_size=declared_size,
+            max_bytes=MAX_FILE_ASSET_BYTES,
+            allowed_mime_types=None,
+            normalize_content_type=lambda declared, _filename: _normalized_file_content_type(declared),
+            detect_content_type=lambda _data: "file",
+            content_type_matches=lambda _declared, _detected: True,
+            extension_for=extension_for,
+            validate_filename_extension=lambda _filename, _ext: None,
+            canonical_content_type=lambda _filename, _detected: normalized_content_type,
+            extra_metadata=lambda _path, _detected: {"extension": selected_extension},
+        )
+
     def _store_large_media_stream(
         self,
         source: BinaryIO,
@@ -146,7 +181,7 @@ class DashboardAssetService:
         kind: str,
         declared_size: int | None,
         max_bytes: int,
-        allowed_mime_types: frozenset[str],
+        allowed_mime_types: frozenset[str] | None,
         normalize_content_type,
         detect_content_type,
         content_type_matches,
@@ -161,7 +196,7 @@ class DashboardAssetService:
             raise AssetUploadError("File exceeds the 100 GB size limit.")
 
         normalized_content_type = normalize_content_type(content_type, original_filename)
-        if normalized_content_type not in allowed_mime_types:
+        if allowed_mime_types is not None and normalized_content_type not in allowed_mime_types:
             self._log_media_upload_failure(kind, f"File type '{content_type}' is not allowed.")
             raise AssetUploadError(f"File type '{content_type}' is not allowed.")
 
@@ -372,6 +407,14 @@ class DashboardAssetService:
                     metadata["height"] = raw["height"]
                 if isinstance(raw.get("fps"), (int, float)):
                     metadata["fps"] = raw["fps"]
+            elif raw.get("kind") == "file":
+                metadata["kind"] = "file"
+                if isinstance(raw.get("size"), int):
+                    metadata["size"] = raw["size"]
+                if isinstance(raw.get("format"), str):
+                    metadata["format"] = raw["format"]
+                if isinstance(raw.get("extension"), str):
+                    metadata["extension"] = raw["extension"]
         return metadata
 
     def asset_path(self, asset_id: str) -> Path:
@@ -437,6 +480,88 @@ def _validate_audio_filename_extension(original_filename: str, detected_ext: str
 
 def _safe_original_filename(original_filename: str) -> str:
     return Path(original_filename.replace("\\", "/")).name.strip() or "upload"
+
+
+def _normalized_file_content_type(content_type: str) -> str:
+    return (content_type or "application/octet-stream").split(";")[0].strip().lower() or "application/octet-stream"
+
+
+def _normalize_file_accept_rules(
+    accepted_extensions: list[str],
+    accepted_mime_types: list[str],
+) -> tuple[set[str], set[str]]:
+    extensions: set[str] = set()
+    for raw in accepted_extensions:
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip().lower()
+        if not value:
+            continue
+        if not value.startswith("."):
+            value = f".{value}"
+        if "/" in value or "\\" in value or ".." in value or not value[1:]:
+            raise AssetUploadError(f"Accepted file extension '{raw}' is invalid.")
+        if not all(part and part.replace("-", "").replace("_", "").isalnum() for part in value.split(".")[1:]):
+            raise AssetUploadError(f"Accepted file extension '{raw}' is invalid.")
+        extensions.add(value)
+
+    mime_types: set[str] = set()
+    for raw in accepted_mime_types:
+        if not isinstance(raw, str):
+            continue
+        value = raw.split(";")[0].strip().lower()
+        if not value:
+            continue
+        if "/" not in value or any(char.isspace() for char in value):
+            raise AssetUploadError(f"Accepted MIME type '{raw}' is invalid.")
+        mime_types.add(value)
+
+    if not extensions and not mime_types:
+        raise AssetUploadError("This file input does not declare accepted file types.")
+    return extensions, mime_types
+
+
+def _file_extension_for(
+    original_filename: str,
+    declared_content_type: str,
+    rules: tuple[set[str], set[str]],
+) -> str:
+    accepted_extensions, accepted_mime_types = rules
+    filename = _safe_original_filename(original_filename).lower()
+    matched_extension = _matched_file_extension(filename, accepted_extensions)
+
+    if accepted_extensions and matched_extension is None:
+        raise AssetUploadError("File extension is not allowed for this input.")
+
+    normalized_content_type = _normalized_file_content_type(declared_content_type)
+    if accepted_mime_types:
+        if normalized_content_type == "application/octet-stream":
+            if matched_extension is None:
+                raise AssetUploadError("File type is not allowed for this input.")
+        elif normalized_content_type not in accepted_mime_types:
+            raise AssetUploadError(f"File type '{declared_content_type}' is not allowed for this input.")
+
+    extension = matched_extension or _safe_file_suffix(filename)
+    return extension or ".bin"
+
+
+def _matched_file_extension(filename: str, accepted_extensions: set[str]) -> str | None:
+    for extension in sorted(accepted_extensions, key=len, reverse=True):
+        if filename.endswith(extension):
+            return extension
+    return None
+
+
+def _safe_file_suffix(filename: str) -> str:
+    suffixes = Path(filename).suffixes
+    if not suffixes:
+        return ""
+    suffix = "".join(suffixes).lower()
+    if "/" in suffix or "\\" in suffix or ".." in suffix:
+        return ""
+    if not all(part and part.replace("-", "").replace("_", "").isalnum() for part in suffix.split(".")[1:]):
+        return ""
+    return suffix[:64]
 
 
 def _canonical_audio_content_type(content_type: str) -> str:
@@ -618,9 +743,16 @@ def _validate_asset_id(asset_id: str) -> str:
     # Must be UUID + known extension; no path separators allowed.
     if "/" in asset_id or "\\" in asset_id or ".." in asset_id:
         raise ValueError(f"Invalid asset_id: {asset_id!r}")
-    # Must end with a known extension.
-    if not any(asset_id.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".mov", ".webm", ".mkv")):
+    stem, *suffix_parts = asset_id.split(".")
+    try:
+        uuid.UUID(stem)
+    except ValueError as exc:
+        raise ValueError(f"Invalid asset_id: {asset_id!r}") from exc
+    if not suffix_parts or len(".".join(suffix_parts)) > 96:
         raise ValueError(f"Invalid asset_id: {asset_id!r}")
+    for part in suffix_parts:
+        if not part or not part.replace("-", "").replace("_", "").isalnum():
+            raise ValueError(f"Invalid asset_id: {asset_id!r}")
     return asset_id
 
 
