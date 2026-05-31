@@ -6,7 +6,7 @@ from fastapi import Depends, Request
 
 from app.composition import ApiServices
 from app.engine.service import EngineService
-from app.gallery import GalleryStore
+from app.gallery import GalleryCaptureService, GalleryStore
 from app.history import HistoryService
 from app.models.civitai_loras import CivitaiLoraBrowserService
 from app.models.downloads import ModelDownloadJobService
@@ -125,6 +125,18 @@ ModelTagStoreDep = Annotated[ModelTagStore, Depends(get_model_tag_store)]
 ModelDownloadServiceDep = Annotated[ModelDownloadJobService, Depends(get_model_download_service)]
 ModelInventoryServiceDep = Annotated[ModelInventoryService, Depends(get_model_inventory_service)]
 CivitaiLoraServiceDep = Annotated[CivitaiLoraBrowserService, Depends(get_civitai_lora_service)]
+
+
+def get_gallery_capture_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> GalleryCaptureService:
+    capture = getattr(services.engine_service, "gallery_capture_service", None)
+    if capture is None:
+        raise RuntimeError("Gallery capture is not configured.")
+    return capture
+
+
+GalleryCaptureServiceDep = Annotated[GalleryCaptureService, Depends(get_gallery_capture_service)]
 
 
 def get_workflow_library_service(

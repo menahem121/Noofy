@@ -26,6 +26,7 @@ import {
   fetchModelDownloadStatus,
   fetchApiKeySettings,
   fetchJobLogs,
+  fetchJobGalleryStatus,
   fetchJobProgress,
   fetchJobResult,
   fetchLogs,
@@ -34,6 +35,8 @@ import {
   fetchWorkflowPackage,
   fetchWorkflowStatus,
   isEngineJob,
+  saveJobOutputToGallery,
+  cancelJobOutputGallerySave,
   closeWorkflowRunnerLease,
   openWorkflowRunnerLease,
   resetDashboardCustomization,
@@ -55,6 +58,7 @@ import {
   type ApiKeySettingsResponse,
   type JobProgress,
   type JobResult,
+  type GallerySaveRequest,
   type MemoryStatus,
   type ModelDownloadJobStatus,
   type ModelDownloadSelection,
@@ -90,6 +94,7 @@ import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
+import { GallerySaveAction } from "./GallerySaveAction";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
@@ -200,6 +205,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const [draftActionBarPosition, setDraftActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
   const [draftActionBarTouched, setDraftActionBarTouched] = useState(false);
   const [runComparisonInputAssetId, setRunComparisonInputAssetId] = useState<string | null>(null);
+  const [gallerySaveByControlId, setGallerySaveByControlId] = useState<Record<string, GallerySaveRequest>>({});
   const [comparisonInputImageUrl, setComparisonInputImageUrl] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -377,6 +383,65 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputFiles),
     [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
   );
+  const hasActiveGallerySave = Object.values(gallerySaveByControlId).some(
+    (item) => item.status === "queued" || item.status === "saving",
+  );
+
+  useEffect(() => {
+    const jobId = state.result?.status === "completed" ? state.result.job_id : null;
+    if (!jobId) {
+      setGallerySaveByControlId({});
+      return;
+    }
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const response = await fetchJobGalleryStatus(jobId);
+        if (stopped) return;
+        setGallerySaveByControlId(Object.fromEntries(response.outputs.map((item) => [item.control_id, item])));
+      } catch {
+        // Saving remains optional to the completed workflow result.
+      }
+    };
+    void refresh();
+    return () => {
+      stopped = true;
+    };
+  }, [state.result?.job_id, state.result?.status]);
+
+  useEffect(() => {
+    const jobId = state.result?.status === "completed" ? state.result.job_id : null;
+    if (!jobId || !hasActiveGallerySave) return undefined;
+    const interval = window.setInterval(() => {
+      fetchJobGalleryStatus(jobId)
+        .then((response) => setGallerySaveByControlId(Object.fromEntries(response.outputs.map((item) => [item.control_id, item]))))
+        .catch(() => undefined);
+    }, 700);
+    return () => window.clearInterval(interval);
+  }, [hasActiveGallerySave, state.result?.job_id, state.result?.status]);
+
+  async function handleSaveOutputToGallery(controlId: string) {
+    if (state.result?.status !== "completed") return;
+    try {
+      const request = await saveJobOutputToGallery(state.result.job_id, controlId);
+      setGallerySaveByControlId((current) => ({ ...current, [controlId]: request }));
+    } catch (error) {
+      setGallerySaveByControlId((current) => ({
+        ...current,
+        [controlId]: failedGallerySaveRequest(state.result!.job_id, controlId, error),
+      }));
+    }
+  }
+
+  async function handleCancelOutputGallerySave(controlId: string) {
+    if (state.result?.status !== "completed") return;
+    try {
+      const request = await cancelJobOutputGallerySave(state.result.job_id, controlId);
+      setGallerySaveByControlId((current) => ({ ...current, [controlId]: request }));
+    } catch {
+      // Keep polling: the background save may still complete or accept a later cancel.
+    }
+  }
 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -1247,6 +1312,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
           outputPreferences={outputPreferences}
+          gallerySaveByControlId={gallerySaveByControlId}
           layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
           actionBarPosition={canvasActionBarPosition}
           isEditingLayout={isEditingLayout}
@@ -1268,6 +1334,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onFileUpload={handleFileUpload}
           loraBrowserFor={loraBrowserFor}
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
+          onSaveOutputToGallery={state.result?.status === "completed" ? (controlId) => void handleSaveOutputToGallery(controlId) : undefined}
+          onCancelOutputGallerySave={state.result?.status === "completed" ? (controlId) => void handleCancelOutputGallerySave(controlId) : undefined}
           onRun={() => void handleRun()}
           onCancel={() => void handleCancel()}
           onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
@@ -1414,6 +1482,16 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
               </div>
             )}
           </div>
+
+          {state.result?.status === "completed" && classicPreviewMedia?.controlId ? (
+            <div className="preview-gallery-action">
+              <GallerySaveAction
+                status={gallerySaveByControlId[classicPreviewMedia.controlId]}
+                onSave={() => void handleSaveOutputToGallery(classicPreviewMedia.controlId!)}
+                onCancel={() => void handleCancelOutputGallerySave(classicPreviewMedia.controlId!)}
+              />
+            </div>
+          ) : null}
 
           {state.result?.status === "failed" ? (
             <div className="notice notice--error notice--compact" role="status">
@@ -2690,9 +2768,16 @@ function selectClassicPreviewMedia(
   const outputsById = new Map(outputs.map((output) => [output.id, output]));
   const declaredOutputs = controls
     .filter((control) => control.output_id)
-    .map((control) => outputsById.get(control.output_id!))
-    .filter((output): output is WorkflowOutputDef => Boolean(output));
-  for (const output of [...declaredOutputs, ...outputs]) {
+    .map((control) => ({ controlId: control.id, output: outputsById.get(control.output_id!) }))
+    .filter((item): item is { controlId: string; output: WorkflowOutputDef } => Boolean(item.output));
+  for (const { controlId, output } of declaredOutputs) {
+    const kind = output.kind ?? output.type;
+    if (kind === "video" && videosByNodeId.get(output.node_id)?.[0]) return { kind: "video" as const, media: videosByNodeId.get(output.node_id)![0], controlId };
+    if (kind === "image" && imagesByNodeId.get(output.node_id)?.[0]) return { kind: "image" as const, url: imagesByNodeId.get(output.node_id)![0], controlId };
+    if (kind === "audio" && audiosByNodeId.get(output.node_id)?.[0]) return { kind: "audio" as const, media: audiosByNodeId.get(output.node_id)![0], controlId };
+    if (kind === "file" && filesByNodeId.get(output.node_id)?.[0]) return { kind: "file" as const, media: filesByNodeId.get(output.node_id)![0], controlId };
+  }
+  for (const output of outputs) {
     const kind = output.kind ?? output.type;
     if (kind === "video" && videosByNodeId.get(output.node_id)?.[0]) return { kind: "video" as const, media: videosByNodeId.get(output.node_id)![0] };
     if (kind === "image" && imagesByNodeId.get(output.node_id)?.[0]) return { kind: "image" as const, url: imagesByNodeId.get(output.node_id)![0] };
@@ -2751,6 +2836,21 @@ function downloadMediaDirect(mediaUrl: string, filename: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+function failedGallerySaveRequest(jobId: string, controlId: string, error: unknown): GallerySaveRequest {
+  const message = error instanceof Error ? error.message : "Gallery save failed. Retry this output.";
+  const unavailable = /(?:not|no longer) available|unavailable/i.test(message);
+  return {
+    job_id: jobId,
+    control_id: controlId,
+    status: unavailable ? "unavailable" : "failed",
+    message,
+    bytes_copied: 0,
+    total_bytes: null,
+    item_ids: [],
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function extensionFromFilename(filename: string): string | null {

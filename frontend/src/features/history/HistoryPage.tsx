@@ -20,6 +20,7 @@ import {
   fetchHistoryEvent,
   HISTORY_EVENT_STATUS_LABELS,
   HISTORY_EVENT_TYPE_LABELS,
+  historyMediaUrl,
   type HistoryEvent,
   type HistoryEventDetail,
   type HistoryEventStatus,
@@ -489,7 +490,7 @@ function HistoryEventRow({
 
       {event.thumbnailUrl && !panelOpen && (
         <div className="history-event-thumb" aria-hidden="true">
-          <img src={event.thumbnailUrl} alt="" loading="lazy" />
+          <img src={historyMediaUrl(event.thumbnailUrl)} alt="" loading="lazy" />
         </div>
       )}
 
@@ -573,7 +574,7 @@ function EventDetailPanel({
       {event.thumbnailUrl && (
         <div className="detail-panel__section">
           <div className="history-detail-thumb">
-            <img src={event.thumbnailUrl} alt="Generated output" />
+            <img src={historyMediaUrl(event.thumbnailUrl)} alt="Generated output" />
           </div>
         </div>
       )}
@@ -667,7 +668,7 @@ function EventDetailPanel({
         <div className="detail-panel__section-label">Actions</div>
         <div className="detail-panel__actions">
           {event.outputUrl && (
-            <a className="secondary-button secondary-button--full" href={event.outputUrl} target="_blank" rel="noreferrer">
+            <a className="secondary-button secondary-button--full" href={historyMediaUrl(event.outputUrl)} target="_blank" rel="noreferrer">
               <ExternalLink size={14} aria-hidden="true" />
               Open result
             </a>

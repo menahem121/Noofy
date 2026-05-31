@@ -29,6 +29,7 @@ export interface HistoryEvent {
   thumbnailUrl?: string | null;
   outputUrl?: string | null;
   galleryItemId?: string | null;
+  galleryItemIds: string[];
   source?: string | null;
   trustLevel?: string | null;
   errorSummary?: string | null;
@@ -102,6 +103,10 @@ export async function fetchHistoryEvent(eventId: string): Promise<HistoryEventDe
   return normalizeHistoryEventDetail(await getJson<unknown>(`/history/${encodeURIComponent(eventId)}`));
 }
 
+export function historyMediaUrl(value: string | null | undefined): string {
+  return value ? resolveBackendUrl(value, { includeToken: true }) : "";
+}
+
 function normalizeHistoryEvent(raw: unknown): HistoryEvent {
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const thumbnailUrl = typeof item.thumbnail_url === "string" ? item.thumbnail_url : null;
@@ -117,9 +122,10 @@ function normalizeHistoryEvent(raw: unknown): HistoryEvent {
     startedAt: typeof item.started_at === "string" ? item.started_at : null,
     completedAt: typeof item.completed_at === "string" ? item.completed_at : null,
     durationSeconds: typeof item.duration_seconds === "number" ? item.duration_seconds : null,
-    thumbnailUrl: thumbnailUrl ? resolveBackendUrl(thumbnailUrl, { includeToken: true }) : null,
-    outputUrl: outputUrl ? resolveBackendUrl(outputUrl, { includeToken: true }) : null,
+    thumbnailUrl,
+    outputUrl,
     galleryItemId: typeof item.gallery_item_id === "string" ? item.gallery_item_id : null,
+    galleryItemIds: Array.isArray(item.gallery_item_ids) ? item.gallery_item_ids.filter((value): value is string => typeof value === "string") : [],
     source: typeof item.source === "string" ? item.source : null,
     trustLevel: typeof item.trust_level === "string" ? item.trust_level : null,
     errorSummary: typeof item.error_summary === "string" ? item.error_summary : null,

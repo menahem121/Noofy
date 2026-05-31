@@ -195,6 +195,7 @@ class RunnerMemorySnapshot(BaseModel):
     status: RunnerStatus = RunnerStatus.UNKNOWN
     current_job_id: str | None = None
     open_workflow_lease_count: int = Field(default=0, ge=0)
+    output_stream_lease_count: int = Field(default=0, ge=0)
     observed_idle_vram_mb: int | None = Field(default=None, ge=0)
     observed_idle_ram_mb: int | None = Field(default=None, ge=0)
     observed_load_peak_vram_mb: int | None = Field(default=None, ge=0)
@@ -215,6 +216,7 @@ class RunnerMemorySnapshot(BaseModel):
             status=descriptor.status,
             current_job_id=descriptor.current_job_id,
             open_workflow_lease_count=descriptor.open_workflow_lease_count,
+            output_stream_lease_count=descriptor.output_stream_lease_count,
             observed_idle_vram_mb=descriptor.observed_idle_vram_mb,
             observed_idle_ram_mb=descriptor.observed_idle_ram_mb,
             observed_load_peak_vram_mb=descriptor.observed_load_peak_vram_mb,
@@ -2130,7 +2132,7 @@ def _request_is_cpu_only(estimate: WorkflowMemoryEstimate) -> bool:
 
 
 def _runner_snapshot_is_active(runner: RunnerMemorySnapshot) -> bool:
-    return runner.current_job_id is not None or runner.status in {
+    return runner.current_job_id is not None or runner.output_stream_lease_count > 0 or runner.status in {
         RunnerStatus.RUNNING,
         RunnerStatus.LOADING_MODEL,
         RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,

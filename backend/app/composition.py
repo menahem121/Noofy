@@ -97,7 +97,10 @@ def create_api_services(
                 extra_model_paths_config=extra_model_paths_config,
             )
 
-    gallery = gallery_store or GalleryStore(settings.paths.gallery_outputs_dir)
+    gallery = gallery_store or GalleryStore(
+        settings.paths.gallery_outputs_dir,
+        log_store=getattr(engine_service, "log_store", None),
+    )
     history = history_service or getattr(engine_service, "history_service", None)
     if history is None:
         history = HistoryService(
@@ -111,7 +114,9 @@ def create_api_services(
         )
         setattr(engine_service, "history_service", history)
     if getattr(engine_service, "gallery_capture_service", None) is None:
-        engine_service.gallery_capture_service = GalleryCaptureService(gallery)
+        engine_service.gallery_capture_service = GalleryCaptureService(
+            gallery, log_store=getattr(engine_service, "log_store", None)
+        )
     run_result_service = getattr(engine_service, "run_result_service", None)
     if run_result_service is not None:
         run_result_service.gallery_capture_service = getattr(
@@ -120,6 +125,17 @@ def create_api_services(
             None,
         )
         run_result_service.history_service = history
+    capture_service = getattr(engine_service, "gallery_capture_service", None)
+    run_job_service = getattr(engine_service, "run_job_service", None)
+    if capture_service is not None and run_job_service is not None:
+        async def _resolve_gallery_result(job_id: str):
+            return await run_job_service.adapter_for_job(job_id).get_result(job_id)
+
+        capture_service.configure(
+            resolve_result=_resolve_gallery_result,
+            stream_output=run_job_service.stream_output,
+            on_items_changed=history.attach_gallery_items,
+        )
     run_orchestrator = getattr(engine_service, "run_orchestrator", None)
     if run_orchestrator is not None:
         run_orchestrator.history_service = history

@@ -43,6 +43,7 @@ import {
   type UploadProgress,
   type WorkflowInputDef,
   type WorkflowOutputDef,
+  type GallerySaveRequest,
 } from "../../lib/api/noofyApi";
 import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
 import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
@@ -65,6 +66,7 @@ import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputVideoMedia } from "./media";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
+import { GallerySaveAction } from "./GallerySaveAction";
 import { topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 
 export interface CanvasRunState {
@@ -94,6 +96,7 @@ interface CanvasDashboardViewProps {
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
+  gallerySaveByControlId?: Record<string, GallerySaveRequest>;
   layoutOverrides: Record<string, GridItemLayout>;
   actionBarPosition?: CanvasActionBarPosition | null;
   isEditingLayout: boolean;
@@ -109,6 +112,8 @@ interface CanvasDashboardViewProps {
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
+  onSaveOutputToGallery?: (controlId: string) => void;
+  onCancelOutputGallerySave?: (controlId: string) => void;
   onRun: () => void;
   onCancel: () => void;
   onDisabledRunAction?: () => void;
@@ -133,6 +138,7 @@ export function CanvasDashboardView({
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
+  gallerySaveByControlId,
   layoutOverrides,
   actionBarPosition,
   isEditingLayout,
@@ -148,6 +154,8 @@ export function CanvasDashboardView({
   onFileUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
+  onSaveOutputToGallery,
+  onCancelOutputGallerySave,
   onRun,
   onCancel,
   onDisabledRunAction,
@@ -671,6 +679,7 @@ export function CanvasDashboardView({
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
+                gallerySaveByControlId={gallerySaveByControlId}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
                 onAudioUpload={onAudioUpload}
@@ -678,6 +687,8 @@ export function CanvasDashboardView({
                 onFileUpload={onFileUpload}
                 loraBrowserFor={loraBrowserFor}
                 onOutputPreferenceChange={onOutputPreferenceChange}
+                onSaveOutputToGallery={onSaveOutputToGallery}
+                onCancelOutputGallerySave={onCancelOutputGallerySave}
                 onMoveStart={(event) => handleMoveStart(event, item.id, displayLayout)}
                 onResizeStart={(event, handle) => handleResizeStart(event, item.id, displayLayout, handle)}
               />
@@ -749,6 +760,7 @@ function CanvasWidgetCell({
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
+  gallerySaveByControlId,
   onChange,
   onImageUpload,
   onAudioUpload,
@@ -756,6 +768,8 @@ function CanvasWidgetCell({
   onFileUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
+  onSaveOutputToGallery,
+  onCancelOutputGallerySave,
   onMoveStart,
   onResizeStart,
 }: {
@@ -772,6 +786,7 @@ function CanvasWidgetCell({
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
+  gallerySaveByControlId?: Record<string, GallerySaveRequest>;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -779,6 +794,8 @@ function CanvasWidgetCell({
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
+  onSaveOutputToGallery?: (controlId: string) => void;
+  onCancelOutputGallerySave?: (controlId: string) => void;
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
@@ -848,20 +865,30 @@ function CanvasWidgetCell({
             onFileUpload={onFileUpload}
             loraBrowserFor={loraBrowserFor}
             onOutputPreferenceChange={onOutputPreferenceChange}
+            gallerySaveByControlId={gallerySaveByControlId}
+            onSaveOutputToGallery={onSaveOutputToGallery}
+            onCancelOutputGallerySave={onCancelOutputGallerySave}
           />
         ) : control!.type === "note" ? (
           <DashboardNoteBody body={control!.description} />
         ) : isOutput ? (
-          <OutputWidgetContent
-            control={control!}
-            outputIndex={outputIndex}
-            outputImagesByNodeId={outputImagesByNodeId}
-            outputAudiosByNodeId={outputAudiosByNodeId}
-            outputVideosByNodeId={outputVideosByNodeId}
-            outputFilesByNodeId={outputFilesByNodeId}
-            comparisonBeforeImageUrl={comparisonBeforeImageUrl}
-            imagePreviewEnabled={!isEditingLayout}
-          />
+          <>
+            <OutputWidgetContent
+              control={control!}
+              outputIndex={outputIndex}
+              outputImagesByNodeId={outputImagesByNodeId}
+              outputAudiosByNodeId={outputAudiosByNodeId}
+              outputVideosByNodeId={outputVideosByNodeId}
+              outputFilesByNodeId={outputFilesByNodeId}
+              comparisonBeforeImageUrl={comparisonBeforeImageUrl}
+              imagePreviewEnabled={!isEditingLayout}
+            />
+            {onSaveOutputToGallery && onCancelOutputGallerySave ? (
+              <div className="widget-output-gallery-action">
+                <GallerySaveAction status={gallerySaveByControlId?.[control!.id]} onSave={() => onSaveOutputToGallery(control!.id)} onCancel={() => onCancelOutputGallerySave(control!.id)} />
+              </div>
+            ) : null}
+          </>
         ) : (
           <InputWidgetContent
             control={control!}
@@ -893,6 +920,7 @@ function GroupedCanvasControls({
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
+  gallerySaveByControlId,
   disabled,
   onChange,
   onImageUpload,
@@ -901,6 +929,8 @@ function GroupedCanvasControls({
   onFileUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
+  onSaveOutputToGallery,
+  onCancelOutputGallerySave,
 }: {
   item: Extract<DashboardTopLevelControlItem, { kind: "group" }>;
   inputIndex: Map<string, WorkflowInputDef>;
@@ -912,6 +942,7 @@ function GroupedCanvasControls({
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
+  gallerySaveByControlId?: Record<string, GallerySaveRequest>;
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
@@ -920,6 +951,8 @@ function GroupedCanvasControls({
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
+  onSaveOutputToGallery?: (controlId: string) => void;
+  onCancelOutputGallerySave?: (controlId: string) => void;
 }) {
   return (
     <div className="canvas-widget-group">
@@ -942,6 +975,11 @@ function GroupedCanvasControls({
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
+                {onSaveOutputToGallery && onCancelOutputGallerySave ? (
+                  <div className="widget-output-gallery-action">
+                    <GallerySaveAction status={gallerySaveByControlId?.[control.id]} onSave={() => onSaveOutputToGallery(control.id)} onCancel={() => onCancelOutputGallerySave(control.id)} />
+                  </div>
+                ) : null}
                 <button
                   className={`auto-save-toggle canvas-widget-group__auto-save${
                     outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""

@@ -61,7 +61,7 @@ api/
   jobs.ts         Job progress, logs, events, result, cancel
   models.ts       Model inventory, downloads, imports, tags
   settings.ts     API key settings, model folder settings
-  gallery.ts      Gallery CRUD and image serving
+  gallery.ts      Mixed-media Gallery CRUD and render-time media URLs
   assets.ts       Dashboard asset management
   types/          Shared API type definitions
 ```

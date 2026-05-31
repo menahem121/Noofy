@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
   Calendar,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Copy,
   Download,
+  ExternalLink,
+  FileAudio,
+  FileText,
+  Film,
   Heart,
   Image as ImageIcon,
   Loader2,
   RefreshCw,
   Search,
-  SlidersHorizontal,
   Trash2,
   X,
 } from "lucide-react";
@@ -21,847 +22,326 @@ import {
 import {
   deleteGalleryItem,
   fetchGallery,
+  galleryContentUrl,
+  galleryPreviewUrl,
   updateGalleryFavorite,
-  type GalleryImage,
-  type GalleryResponse,
+  type GalleryItem,
+  type GalleryKind,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
+type KindFilter = "all" | GalleryKind;
 type SortOrder = "newest" | "oldest";
-
-interface GalleryState {
-  phase: "loading" | "ready" | "error";
-  images: GalleryImage[];
-  total: number;
-  error: string | null;
-}
-
-interface FilterState {
-  query: string;
-  sortOrder: SortOrder;
-  filterFavorites: boolean;
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatSettingValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function uniqueWorkflows(images: GalleryImage[]) {
-  const seen = new Map<string, string>();
-  for (const img of images) {
-    seen.set(img.workflowId, img.workflowName);
-  }
-  return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
-}
-
-function applyFilters(images: GalleryImage[], filters: FilterState & { workflowId: string }): GalleryImage[] {
-  let result = [...images];
-
-  if (filters.query.trim()) {
-    const q = filters.query.trim().toLowerCase();
-    result = result.filter(
-      (img) =>
-        img.prompt.toLowerCase().includes(q) ||
-        img.workflowName.toLowerCase().includes(q) ||
-        (img.widgetTitle ?? "").toLowerCase().includes(q) ||
-        Object.values(img.usedSettings).some((v) => String(v).toLowerCase().includes(q)),
-    );
-  }
-
-  if (filters.filterFavorites) {
-    result = result.filter((img) => img.favorite);
-  }
-
-  if (filters.workflowId) {
-    result = result.filter((img) => img.workflowId === filters.workflowId);
-  }
-
-  result.sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    return filters.sortOrder === "newest" ? tb - ta : ta - tb;
-  });
-
-  return result;
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
 
 interface GalleryPageProps {
   onNavigate: (route: AppRouteId) => void;
 }
 
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) return "Unknown";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatDuration(value: number | null): string | null {
+  if (value === null) return null;
+  const total = Math.max(0, Math.round(value));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes ? `${minutes}:${String(seconds).padStart(2, "0")}` : `0:${String(seconds).padStart(2, "0")}`;
+}
+
+function dimensions(item: GalleryItem): string | null {
+  return item.width && item.height ? `${item.width} x ${item.height}` : null;
+}
+
+function kindLabel(kind: GalleryKind): string {
+  return kind === "image" ? "Image" : kind === "video" ? "Video" : kind === "audio" ? "Audio" : "File";
+}
+
+function itemLabel(item: GalleryItem): string {
+  return item.filename || item.widgetTitle || `${kindLabel(item.kind)} output`;
+}
+
+function directDownload(item: GalleryItem) {
+  if (item.fileState === "missing") return;
+  const anchor = document.createElement("a");
+  anchor.href = galleryContentUrl(item, { download: true });
+  anchor.download = item.filename;
+  anchor.click();
+}
+
 export function GalleryPage({ onNavigate }: GalleryPageProps) {
-  const [galleryState, setGalleryState] = useState<GalleryState>({
-    phase: "loading",
-    images: [],
-    total: 0,
-    error: null,
-  });
-
-  const [filters, setFilters] = useState<FilterState>({
-    query: "",
-    sortOrder: "newest",
-    filterFavorites: false,
-  });
-  const [filterWorkflowId, setFilterWorkflowId] = useState("");
-  const [showFilterPanel, setShowFilterPanel] = useState(false);
-  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [bulkActionBusy, setBulkActionBusy] = useState(false);
-  const [bulkActionError, setBulkActionError] = useState<string | null>(null);
-
-  const filterPanelRef = useRef<HTMLDivElement>(null);
-  const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [items, setItems] = useState<GalleryItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [query, setQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const loadGallery = useCallback(async () => {
-    setGalleryState({ phase: "loading", images: [], total: 0, error: null });
+    setPhase("loading");
+    setError(null);
     try {
-      const data: GalleryResponse = await fetchGallery();
-      setGalleryState({ phase: "ready", images: data.images, total: data.total, error: null });
-    } catch (error) {
-      setGalleryState({
-        phase: "error",
-        images: [],
-        total: 0,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const response = await fetchGallery();
+      setItems(response.items);
+      setPhase("ready");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setPhase("error");
     }
   }, []);
 
-  useEffect(() => {
-    void loadGallery();
-  }, [loadGallery]);
+  useEffect(() => { void loadGallery(); }, [loadGallery]);
 
-  useEffect(() => {
-    if (galleryState.phase === "ready") {
-      setFavorites(new Set(galleryState.images.filter((img) => img.favorite).map((img) => img.id)));
-    }
-  }, [galleryState.phase, galleryState.images]);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (
-        showFilterPanel &&
-        filterPanelRef.current &&
-        !filterPanelRef.current.contains(e.target as Node) &&
-        !filterButtonRef.current?.contains(e.target as Node)
-      ) {
-        setShowFilterPanel(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showFilterPanel]);
-
-  const displayedImages = useMemo(
-    () => applyFilters(galleryState.images, { ...filters, workflowId: filterWorkflowId }),
-    [galleryState.images, filters, filterWorkflowId],
-  );
-
-  useEffect(() => {
-    const visibleIds = new Set(displayedImages.map((img) => img.id));
-    setSelectedImageIds((prev) => {
-      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [displayedImages]);
-
-  const workflows = useMemo(() => uniqueWorkflows(galleryState.images), [galleryState.images]);
-
-  const sortedWorkflows = useMemo(
-    () => [...workflows].sort((a, b) => a.name.localeCompare(b.name)),
-    [workflows],
-  );
-
-  const hasActiveFilters =
-    filters.query.trim() !== "" || filters.filterFavorites || filterWorkflowId !== "";
-
-  const selectedImageIndex = useMemo(
-    () => (selectedImageId ? displayedImages.findIndex((img) => img.id === selectedImageId) : -1),
-    [selectedImageId, displayedImages],
-  );
-
-  const selectedImage = useMemo(
-    () => (selectedImageIndex >= 0 ? displayedImages[selectedImageIndex] : null),
-    [selectedImageIndex, displayedImages],
-  );
-
-  const selectedImages = useMemo(
-    () => displayedImages.filter((img) => selectedImageIds.has(img.id)),
-    [displayedImages, selectedImageIds],
-  );
-
-  const downloadableSelectedImages = useMemo(
-    () => selectedImages.filter((img) => img.fileState !== "missing" && Boolean(img.imageUrl)),
-    [selectedImages],
-  );
-
-  function toggleImageSelection(id: string) {
-    setBulkActionError(null);
-    setSelectedImageIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleFavorite(id: string) {
-    const nextFavorite = !favorites.has(id);
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    void updateGalleryFavorite(id, nextFavorite).then((updated) => {
-      setGalleryState((prev) => ({
-        ...prev,
-        images: prev.images.map((image) => image.id === id ? updated : image),
-      }));
-    }).catch(() => {
-      setFavorites((prev) => {
-        const next = new Set(prev);
-        if (nextFavorite) next.delete(id);
-        else next.add(id);
-        return next;
+  const displayedItems = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return items
+      .filter((item) => kindFilter === "all" || item.kind === kindFilter)
+      .filter((item) => !favoritesOnly || item.favorite)
+      .filter((item) => !search || [
+        item.filename,
+        item.workflowName,
+        item.widgetTitle,
+        item.prompt,
+        ...Object.values(item.usedSettings).map(String),
+      ].some((value) => value.toLowerCase().includes(search)))
+      .sort((left, right) => {
+        const delta = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+        return sortOrder === "newest" ? delta : -delta;
       });
-    });
-  }
+  }, [favoritesOnly, items, kindFilter, query, sortOrder]);
 
-  function handleDelete(id: string) {
-    void deleteGalleryItem(id).then(() => {
-      setGalleryState((prev) => ({
-        ...prev,
-        images: prev.images.filter((img) => img.id !== id),
-        total: Math.max(0, prev.total - 1),
-      }));
-      setSelectedImageIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      if (selectedImageId === id) setSelectedImageId(null);
-    });
-  }
+  const checkedItems = useMemo(
+    () => displayedItems.filter((item) => checkedIds.has(item.id)),
+    [checkedIds, displayedItems],
+  );
+  const downloadableCheckedItems = useMemo(
+    () => checkedItems.filter((item) => item.fileState !== "missing" && Boolean(item.contentUrl)),
+    [checkedItems],
+  );
+  const selectedIndex = selectedId ? displayedItems.findIndex((item) => item.id === selectedId) : -1;
+  const selected = selectedIndex >= 0 ? displayedItems[selectedIndex] : null;
 
-  function handleDownloadSelected() {
-    for (const image of downloadableSelectedImages) {
-      downloadGalleryImage(image);
+  useEffect(() => {
+    const visible = new Set(displayedItems.map((item) => item.id));
+    setCheckedIds((current) => new Set([...current].filter((id) => visible.has(id))));
+  }, [displayedItems]);
+
+  async function toggleFavorite(item: GalleryItem) {
+    const next = !item.favorite;
+    setItems((current) => current.map((value) => value.id === item.id ? { ...value, favorite: next } : value));
+    try {
+      const saved = await updateGalleryFavorite(item.id, next);
+      setItems((current) => current.map((value) => value.id === item.id ? saved : value));
+    } catch {
+      setItems((current) => current.map((value) => value.id === item.id ? { ...value, favorite: item.favorite } : value));
     }
   }
 
-  async function handleDeleteSelected() {
-    if (selectedImages.length === 0) return;
-    setBulkActionBusy(true);
-    setBulkActionError(null);
-    const idsToDelete = selectedImages.map((img) => img.id);
-    const results = await Promise.allSettled(idsToDelete.map((id) => deleteGalleryItem(id)));
-    const deletedIds = new Set(
-      idsToDelete.filter((_, index) => results[index].status === "fulfilled"),
-    );
-
-    if (deletedIds.size > 0) {
-      setGalleryState((prev) => ({
-        ...prev,
-        images: prev.images.filter((img) => !deletedIds.has(img.id)),
-        total: Math.max(0, prev.total - deletedIds.size),
-      }));
-      setSelectedImageIds((prev) => new Set([...prev].filter((id) => !deletedIds.has(id))));
-      if (selectedImageId && deletedIds.has(selectedImageId)) {
-        setSelectedImageId(null);
-      }
-    }
-
-    if (deletedIds.size !== idsToDelete.length) {
-      setBulkActionError("Some selected images could not be deleted. Try again.");
-    }
-    setBulkActionBusy(false);
-  }
-
-  function handleClearFilters() {
-    setFilters((prev) => ({ ...prev, query: "", filterFavorites: false }));
-    setFilterWorkflowId("");
-    setShowFilterPanel(false);
+  async function deleteItems(ids: string[]) {
+    setBulkBusy(true);
+    setBulkError(null);
+    const results = await Promise.allSettled(ids.map(deleteGalleryItem));
+    const removed = new Set(ids.filter((_, index) => results[index].status === "fulfilled"));
+    setItems((current) => current.filter((item) => !removed.has(item.id)));
+    setCheckedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
+    if (selectedId && removed.has(selectedId)) setSelectedId(null);
+    if (removed.size !== ids.length) setBulkError("Some selected items could not be deleted. Try again.");
+    setBulkBusy(false);
   }
 
   return (
     <AppLayout activeRoute="gallery" onNavigate={onNavigate}>
-      {/* ── Header ── */}
       <section className="page-heading page-heading--compact" aria-labelledby="gallery-title">
         <div>
           <p className="eyebrow">Your creations</p>
           <h1 id="gallery-title">Gallery</h1>
-          <p>
-            Browse and manage your generated images.
-            {galleryState.phase === "ready" && galleryState.total > 0 && (
-              <span className="gallery-count-badge">{galleryState.total} image{galleryState.total !== 1 ? "s" : ""}</span>
-            )}
-          </p>
+          <p>Browse and manage your generated media.<span className="gallery-count-badge">{items.length} item{items.length === 1 ? "" : "s"}</span></p>
         </div>
       </section>
 
-      {/* ── Toolbar ── */}
+      <nav className="gallery-kind-tabs" aria-label="Gallery media types">
+        {([
+          ["all", "All"], ["image", "Images"], ["video", "Videos"], ["audio", "Audio"], ["file", "Files"],
+        ] as Array<[KindFilter, string]>).map(([value, label]) => (
+          <button key={value} className={kindFilter === value ? "gallery-kind-tab gallery-kind-tab--active" : "gallery-kind-tab"} type="button" onClick={() => setKindFilter(value)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
       <div className="gallery-toolbar">
         <label className="search-field gallery-search">
           <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Search images</span>
-          <input
-            id="gallery-search-input"
-            type="search"
-            placeholder="Search images, prompts, or workflows..."
-            value={filters.query}
-            onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
-          />
+          <span className="sr-only">Search generated media</span>
+          <input type="search" placeholder="Search items, prompts, or workflows..." value={query} onChange={(event) => setQuery(event.target.value)} />
         </label>
-
         <div className="gallery-toolbar__right">
-          <div className="gallery-filter-wrap">
-            <button
-              ref={filterButtonRef}
-              id="gallery-sort-filter-btn"
-              className={`secondary-button gallery-filter-btn${showFilterPanel ? " gallery-filter-btn--active" : ""}`}
-              type="button"
-              aria-expanded={showFilterPanel}
-              aria-controls="gallery-filter-panel"
-              onClick={() => setShowFilterPanel((v) => !v)}
-            >
-              <SlidersHorizontal size={15} aria-hidden="true" />
-              Sort &amp; Filter
-              <ChevronDown
-                size={14}
-                aria-hidden="true"
-                style={{ transform: showFilterPanel ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 160ms ease" }}
-              />
-            </button>
-
-            {/* Sort & Filter Panel — anchored to button via gallery-filter-wrap */}
-            {showFilterPanel && (
-              <div
-                ref={filterPanelRef}
-                id="gallery-filter-panel"
-                className="sort-filter-panel"
-                role="dialog"
-                aria-label="Sort and filter options"
-              >
-                <div className="sort-filter-panel__section">
-                  <span className="sort-filter-panel__label">Sort by</span>
-                  <div className="sort-filter-panel__options">
-                    {(["newest", "oldest"] as SortOrder[]).map((order) => (
-                      <button
-                        key={order}
-                        className={`sort-filter-option${filters.sortOrder === order ? " sort-filter-option--active" : ""}`}
-                        type="button"
-                        onClick={() => {
-                          setFilters((f) => ({ ...f, sortOrder: order }));
-                          setShowFilterPanel(false);
-                        }}
-                      >
-                        <Calendar size={14} aria-hidden="true" />
-                        {order === "newest" ? "Newest first" : "Oldest first"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="sort-filter-panel__section">
-                  <span className="sort-filter-panel__label">Workflow</span>
-                  <div className="sort-filter-panel__select-row">
-                    <div className="filter-select-wrap">
-                      <select
-                        className="filter-select"
-                        value={filterWorkflowId}
-                        onChange={(e) => setFilterWorkflowId(e.target.value)}
-                      >
-                        <option value="">All workflows</option>
-                        {sortedWorkflows.map((wf) => (
-                          <option key={wf.id} value={wf.id}>{wf.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="sort-filter-panel__section sort-filter-panel__section--last">
-                  <span className="sort-filter-panel__label">Filter by</span>
-                  <div className="sort-filter-panel__options">
-                    <button
-                      className={`sort-filter-option${filters.filterFavorites ? " sort-filter-option--active" : ""}`}
-                      type="button"
-                      onClick={() => setFilters((f) => ({ ...f, filterFavorites: !f.filterFavorites }))}
-                    >
-                      <Heart size={13} aria-hidden="true" />
-                      Favorites only
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {hasActiveFilters && (
-            <button
-              className="secondary-button secondary-button--danger gallery-clear-filter-btn"
-              type="button"
-              aria-label="Clear gallery filters"
-              onClick={handleClearFilters}
-            >
-              <X size={14} aria-hidden="true" />
-              Clear
-            </button>
-          )}
+          <select className="filter-select" aria-label="Sort Gallery items" value={sortOrder} onChange={(event) => setSortOrder(event.target.value as SortOrder)}>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+          <button className={favoritesOnly ? "secondary-button gallery-filter-btn--active" : "secondary-button"} type="button" onClick={() => setFavoritesOnly((value) => !value)}>
+            <Heart size={14} aria-hidden="true" /> Favorites
+          </button>
         </div>
       </div>
 
-      {/* ── Active filter chips ── */}
-      {(filters.filterFavorites || filterWorkflowId) && (
-        <div className="gallery-active-filters">
-          {filters.filterFavorites && (
-            <button
-              className="filter-chip"
-              type="button"
-              onClick={() => setFilters((f) => ({ ...f, filterFavorites: false }))}
-            >
-              <Heart size={11} aria-hidden="true" /> Favorites
-              <X size={11} aria-hidden="true" />
-            </button>
-          )}
-          {filterWorkflowId && (
-            <button className="filter-chip" type="button" onClick={() => setFilterWorkflowId("")}>
-              {workflows.find((w) => w.id === filterWorkflowId)?.name ?? filterWorkflowId}
-              <X size={11} aria-hidden="true" />
-            </button>
-          )}
-        </div>
-      )}
-
-      {selectedImages.length > 0 && (
-        <div className="gallery-bulk-bar" role="region" aria-label="Selected image actions">
+      {checkedItems.length > 0 && (
+        <div className="gallery-bulk-bar" role="region" aria-label="Selected item actions">
           <div className="gallery-bulk-bar__summary">
-            <strong>{selectedImages.length} selected</strong>
-            <span>
-              {downloadableSelectedImages.length === selectedImages.length
-                ? "Ready for bulk actions"
-                : `${downloadableSelectedImages.length} available to download`}
-            </span>
+            <strong>{checkedItems.length} selected</strong>
+            <span>{downloadableCheckedItems.length === checkedItems.length ? "Ready for bulk actions" : `${downloadableCheckedItems.length} available to download`}</span>
           </div>
           <div className="gallery-bulk-bar__actions">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={handleDownloadSelected}
-              disabled={downloadableSelectedImages.length === 0 || bulkActionBusy}
-            >
-              <Download size={14} aria-hidden="true" />
-              Download selected
+            <button className="secondary-button" type="button" onClick={() => downloadableCheckedItems.forEach(directDownload)} disabled={downloadableCheckedItems.length === 0 || bulkBusy}><Download size={14} /> Download selected</button>
+            <button className="secondary-button secondary-button--danger" type="button" onClick={() => void deleteItems(checkedItems.map((item) => item.id))} disabled={bulkBusy}>
+              {bulkBusy ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Delete selected
             </button>
-            <button
-              className="secondary-button secondary-button--danger"
-              type="button"
-              onClick={() => void handleDeleteSelected()}
-              disabled={bulkActionBusy}
-            >
-              {bulkActionBusy ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
-              Delete selected
-            </button>
-            <button
-              className="ghost-button"
-              type="button"
-              onClick={() => setSelectedImageIds(new Set())}
-              disabled={bulkActionBusy}
-            >
-              Clear selection
-            </button>
+            <button className="ghost-button" type="button" onClick={() => setCheckedIds(new Set())}>Clear selection</button>
           </div>
-          {bulkActionError ? <p className="gallery-bulk-bar__error">{bulkActionError}</p> : null}
+          {bulkError ? <p className="gallery-bulk-bar__error">{bulkError}</p> : null}
         </div>
       )}
 
-      {/* ── States ── */}
-      {galleryState.phase === "loading" && <GalleryLoadingState />}
-
-      {galleryState.phase === "error" && (
-        <GalleryErrorState error={galleryState.error} onRetry={() => void loadGallery()} />
-      )}
-
-      {galleryState.phase === "ready" && displayedImages.length === 0 && galleryState.images.length === 0 && (
-        <GalleryEmptyState onNavigate={onNavigate} />
-      )}
-
-      {galleryState.phase === "ready" && displayedImages.length === 0 && galleryState.images.length > 0 && (
-        <div className="gallery-no-results">
-          <ImageIcon size={36} aria-hidden="true" />
-          <p>No images match your search.</p>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={handleClearFilters}
-          >
-            Clear filters
-          </button>
-        </div>
-      )}
-
-      {galleryState.phase === "ready" && displayedImages.length > 0 && (
-        <section className="gallery-grid" aria-label="Generated images">
-          {displayedImages.map((img) => (
-            <GalleryThumbnail
-              key={img.id}
-              image={img}
-              isFavorite={favorites.has(img.id)}
-              isSelected={selectedImageIds.has(img.id)}
-              onOpen={() => setSelectedImageId(img.id)}
-              onToggleSelected={() => toggleImageSelection(img.id)}
-              onToggleFavorite={() => toggleFavorite(img.id)}
+      {phase === "loading" ? <GalleryLoadingState /> : null}
+      {phase === "error" ? <GalleryErrorState error={error} onRetry={() => void loadGallery()} /> : null}
+      {phase === "ready" && items.length === 0 ? <GalleryEmptyState onNavigate={onNavigate} /> : null}
+      {phase === "ready" && items.length > 0 && displayedItems.length === 0 ? (
+        <div className="gallery-no-results"><Search size={34} /><p>No generated media matches these filters.</p></div>
+      ) : null}
+      {phase === "ready" && displayedItems.length > 0 ? (
+        <section className="gallery-grid" aria-label="Generated media">
+          {displayedItems.map((item) => (
+            <GalleryCard
+              key={item.id}
+              item={item}
+              checked={checkedIds.has(item.id)}
+              onOpen={() => setSelectedId(item.id)}
+              onCheck={() => setCheckedIds((current) => {
+                const next = new Set(current);
+                if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                return next;
+              })}
+              onFavorite={() => void toggleFavorite(item)}
             />
           ))}
         </section>
-      )}
+      ) : null}
 
-      {/* ── Image detail modal ── */}
-      {selectedImage && (
-        <ImageDetailModal
-          image={selectedImage}
-          isFavorite={favorites.has(selectedImage.id)}
-          imageIndex={selectedImageIndex}
-          total={displayedImages.length}
-          onClose={() => setSelectedImageId(null)}
-          onToggleFavorite={() => toggleFavorite(selectedImage.id)}
-          onDelete={() => handleDelete(selectedImage.id)}
-          onPrev={
-            selectedImageIndex > 0
-              ? () => setSelectedImageId(displayedImages[selectedImageIndex - 1].id)
-              : null
-          }
-          onNext={
-            selectedImageIndex < displayedImages.length - 1
-              ? () => setSelectedImageId(displayedImages[selectedImageIndex + 1].id)
-              : null
-          }
+      {selected ? (
+        <MediaDetail
+          item={selected}
+          index={selectedIndex}
+          total={displayedItems.length}
+          onClose={() => setSelectedId(null)}
+          onFavorite={() => void toggleFavorite(selected)}
+          onDelete={() => void deleteItems([selected.id])}
+          onPrev={selectedIndex > 0 ? () => setSelectedId(displayedItems[selectedIndex - 1].id) : null}
+          onNext={selectedIndex < displayedItems.length - 1 ? () => setSelectedId(displayedItems[selectedIndex + 1].id) : null}
         />
-      )}
+      ) : null}
     </AppLayout>
   );
 }
 
-// ─── Thumbnail ────────────────────────────────────────────────────────────────
-
-function downloadGalleryImage(image: GalleryImage) {
-  const a = document.createElement("a");
-  a.href = image.imageUrl;
-  a.download = `noofy-${image.id}.png`;
-  a.click();
-}
-
-function GalleryThumbnail({
-  image,
-  isFavorite,
-  isSelected,
-  onOpen,
-  onToggleSelected,
-  onToggleFavorite,
-}: {
-  image: GalleryImage;
-  isFavorite: boolean;
-  isSelected: boolean;
-  onOpen: () => void;
-  onToggleSelected: () => void;
-  onToggleFavorite: () => void;
-}) {
+function GalleryCard({ item, checked, onOpen, onCheck, onFavorite }: { item: GalleryItem; checked: boolean; onOpen: () => void; onCheck: () => void; onFavorite: () => void }) {
   return (
-    <article
-      className={`gallery-thumb${isSelected ? " gallery-thumb--selected" : ""}`}
-      aria-label={image.prompt || image.widgetTitle || image.workflowName}
-    >
-      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open image: ${image.prompt || image.widgetTitle || image.workflowName}`}>
-        {image.fileState === "missing" || !image.thumbnailUrl ? (
-          <div className="gallery-thumb__missing">
-            <ImageIcon size={30} aria-hidden="true" />
-            <span>Image unavailable</span>
-          </div>
-        ) : (
-          <img
-            className="gallery-thumb__img"
-            src={image.thumbnailUrl}
-            alt={image.prompt || image.widgetTitle || "Saved gallery image"}
-            loading="lazy"
-            draggable={false}
-          />
-        )}
-        <div className="gallery-thumb__overlay" aria-hidden="true">
-          <span className="gallery-thumb__open-hint">View image</span>
-        </div>
+    <article className={checked ? "gallery-thumb gallery-thumb--selected" : "gallery-thumb"} aria-label={itemLabel(item)}>
+      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open ${kindLabel(item.kind).toLowerCase()}: ${itemLabel(item)}`}>
+        <CardVisual item={item} />
+        <div className="gallery-thumb__overlay"><span className="gallery-thumb__open-hint">Open {kindLabel(item.kind).toLowerCase()}</span></div>
       </button>
-
-      <label className="gallery-thumb__select" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          checked={isSelected}
-          aria-label={`Select image: ${image.prompt || image.widgetTitle || image.workflowName}`}
-          onChange={onToggleSelected}
-        />
-        <span className="gallery-thumb__checkbox" aria-hidden="true" />
-      </label>
-
-      <button
-        className={`gallery-thumb__fav${isFavorite ? " gallery-thumb__fav--active" : ""}`}
-        type="button"
-        aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-        onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-      >
-        <Heart size={13} aria-hidden="true" />
-      </button>
-
-      <div className="gallery-thumb__meta">
-        <span className="gallery-thumb__workflow">{image.widgetTitle || image.workflowName}</span>
-        <span className="gallery-thumb__date">{formatDate(image.createdAt)}</span>
-      </div>
+      <label className="gallery-thumb__select"><input type="checkbox" checked={checked} aria-label={`Select ${itemLabel(item)}`} onChange={onCheck} /><span className="gallery-thumb__checkbox" /></label>
+      <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--active" : "gallery-thumb__fav"} type="button" aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={13} /></button>
+      <div className="gallery-thumb__meta"><span className="gallery-thumb__workflow">{item.filename}</span><span className="gallery-thumb__date">{formatDate(item.createdAt)}</span></div>
     </article>
   );
 }
 
-// ─── Detail Modal ─────────────────────────────────────────────────────────────
+function CardVisual({ item }: { item: GalleryItem }) {
+  if (item.fileState === "missing") {
+    return <div className="gallery-thumb__missing"><AlertCircle size={34} /><span>Output unavailable</span></div>;
+  }
+  const badge = formatDuration(item.durationSeconds) ?? (item.kind === "file" ? item.extension?.replace(".", "").toUpperCase() : dimensions(item));
+  const previewUrl = galleryPreviewUrl(item);
+  if (item.kind === "image" && previewUrl) {
+    return <img className="gallery-thumb__img" src={previewUrl} alt={item.prompt || item.filename} loading="lazy" draggable={false} />;
+  }
+  const Icon = item.kind === "video" ? Film : item.kind === "audio" ? FileAudio : item.kind === "file" ? FileText : ImageIcon;
+  return (
+    <div className={`gallery-media-placeholder gallery-media-placeholder--${item.kind}`}>
+      <Icon size={38} aria-hidden="true" />
+      <strong>{item.kind === "file" ? (item.extension?.replace(".", "").toUpperCase() || "FILE") : kindLabel(item.kind)}</strong>
+      {item.kind === "audio" ? <div className="gallery-waveform" aria-hidden="true">{[12, 24, 18, 32, 22, 28, 16, 26, 14].map((height, index) => <span key={index} style={{ height }} />)}</div> : null}
+      {badge ? <span className="gallery-media-badge">{badge}</span> : null}
+    </div>
+  );
+}
 
-function ImageDetailModal({
-  image,
-  isFavorite,
-  imageIndex,
-  total,
-  onClose,
-  onToggleFavorite,
-  onDelete,
-  onPrev,
-  onNext,
-}: {
-  image: GalleryImage;
-  isFavorite: boolean;
-  imageIndex: number;
-  total: number;
-  onClose: () => void;
-  onToggleFavorite: () => void;
-  onDelete: () => void;
-  onPrev: (() => void) | null;
-  onNext: (() => void) | null;
-}) {
+function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev, onNext }: { item: GalleryItem; index: number; total: number; onClose: () => void; onFavorite: () => void; onDelete: () => void; onPrev: (() => void) | null; onNext: (() => void) | null }) {
+  const [details, setDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [copied, setCopied] = useState(false);
-
+  const contentUrl = galleryContentUrl(item);
+  const isMissing = item.fileState === "missing";
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowLeft") onPrev?.();
-      if (e.key === "ArrowRight") onNext?.();
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowLeft") onPrev?.();
+      if (event.key === "ArrowRight") onNext?.();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, onPrev, onNext]);
-
-  // Reset delete confirm when image changes
-  useEffect(() => {
-    setConfirmDelete(false);
-  }, [image.id]);
-
-  function handleDownload() {
-    downloadGalleryImage(image);
-  }
-
-  async function handleCopyPrompt() {
-    await navigator.clipboard.writeText(image.prompt);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  }
+  }, [onClose, onNext, onPrev]);
+  useEffect(() => { setConfirmDelete(false); setDetails(false); }, [item.id]);
 
   return (
-    <div
-      className="img-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Image details"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+    <div className="img-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${kindLabel(item.kind)} details`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="img-modal">
-        {/* Close */}
-        <button className="img-modal__close icon-button" type="button" aria-label="Close" onClick={onClose}>
-          <X size={18} aria-hidden="true" />
-        </button>
-
-        {/* Left: image preview with nav arrows */}
+        <button className="img-modal__close icon-button" type="button" aria-label="Close" onClick={onClose}><X size={18} /></button>
         <div className="img-modal__preview-area">
-          {image.fileState === "missing" || !image.imageUrl ? (
-            <div className="img-modal__missing">
-              <ImageIcon size={44} aria-hidden="true" />
-              <span>Image file unavailable</span>
-            </div>
-          ) : (
-            <img
-              className="img-modal__img"
-              src={image.imageUrl}
-              alt={image.prompt || image.widgetTitle || "Saved gallery image"}
-              draggable={false}
-            />
-          )}
-
-          {onPrev && (
-            <button
-              className="img-modal__nav img-modal__nav--prev"
-              type="button"
-              aria-label="Previous image"
-              onClick={onPrev}
-            >
-              <ChevronLeft size={22} aria-hidden="true" />
-            </button>
-          )}
-          {onNext && (
-            <button
-              className="img-modal__nav img-modal__nav--next"
-              type="button"
-              aria-label="Next image"
-              onClick={onNext}
-            >
-              <ChevronRight size={22} aria-hidden="true" />
-            </button>
-          )}
-
-          {total > 1 && (
-            <div className="img-modal__counter" aria-label={`Image ${imageIndex + 1} of ${total}`}>
-              {imageIndex + 1} / {total}
-            </div>
-          )}
+          {isMissing ? <div className="img-modal__missing"><AlertCircle size={42} /><span>Output file unavailable</span></div> : <DetailPreview item={item} contentUrl={contentUrl} />}
+          {onPrev ? <button className="img-modal__nav img-modal__nav--prev" type="button" aria-label="Previous item" onClick={onPrev}><ChevronLeft size={22} /></button> : null}
+          {onNext ? <button className="img-modal__nav img-modal__nav--next" type="button" aria-label="Next item" onClick={onNext}><ChevronRight size={22} /></button> : null}
+          {total > 1 ? <div className="img-modal__counter">{index + 1} / {total}</div> : null}
         </div>
-
-        {/* Right: metadata + actions */}
         <aside className="img-modal__body">
-          {/* Header */}
           <div className="img-modal__header">
-            <div className="img-modal__header-meta">
-              <span className="img-modal__workflow-badge">{image.workflowName}</span>
-              <p className="img-modal__date">
-                <Calendar size={12} aria-hidden="true" />
-                {formatDateTime(image.createdAt)}
-              </p>
-            </div>
-            <button
-              className={`gallery-thumb__fav gallery-thumb__fav--modal${isFavorite ? " gallery-thumb__fav--active" : ""}`}
-              type="button"
-              aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-              onClick={onToggleFavorite}
-            >
-              <Heart size={15} aria-hidden="true" />
-            </button>
+            <div className="img-modal__header-meta"><span className="img-modal__workflow-badge">{kindLabel(item.kind)}</span><strong className="gallery-detail-title">{item.filename}</strong><p className="img-modal__date"><Calendar size={12} />{formatDateTime(item.createdAt)}</p></div>
+            <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--modal gallery-thumb__fav--active" : "gallery-thumb__fav gallery-thumb__fav--modal"} type="button" aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={15} /></button>
           </div>
-
-          {/* Scrollable content */}
           <div className="img-modal__scroll">
-            {/* Prompt */}
-            <div className="img-modal__section">
-              <div className="img-modal__section-header">
-                <span className="img-modal__section-label">Prompt</span>
-                <button
-                  className="ghost-button img-modal__copy-btn"
-                  type="button"
-                  aria-label="Copy prompt to clipboard"
-                  onClick={() => void handleCopyPrompt()}
-                >
-                  <Copy size={12} aria-hidden="true" />
-                  {copied ? "Copied!" : "Copy"}
-                </button>
-              </div>
-              <p className="img-modal__prompt">{image.prompt || "No prompt was saved for this image."}</p>
-            </div>
-
-            {/* Settings */}
-            <div className="img-modal__section">
-              <div className="img-modal__section-header">
-                <span className="img-modal__section-label">Generation settings</span>
-              </div>
-              <dl className="img-modal__settings">
-                {Object.entries(image.usedSettings)
-                  .filter(([key]) => key.toLowerCase() !== "prompt")
-                  .map(([key, value]) => (
-                    <div key={key} className="img-modal__setting-row">
-                      <dt>{key}</dt>
-                      <dd>{formatSettingValue(value)}</dd>
-                    </div>
-                  ))}
-                <div className="img-modal__setting-row">
-                  <dt>Dimensions</dt>
-                  <dd>{image.width && image.height ? `${image.width} x ${image.height}` : "Unknown"}</dd>
-                </div>
-                {image.fileState !== "available" ? (
-                  <div className="img-modal__setting-row">
-                    <dt>File status</dt>
-                    <dd>{image.fileState === "missing" ? "Image file is missing" : "Thumbnail unavailable"}</dd>
-                  </div>
-                ) : null}
-              </dl>
-            </div>
+            <div className="img-modal__section"><span className="img-modal__section-label">Generated with</span><p className="img-modal__prompt">{item.widgetTitle || item.workflowName}</p></div>
+            {item.prompt ? <div className="img-modal__section"><span className="img-modal__section-label">Prompt</span><p className="img-modal__prompt">{item.prompt}</p></div> : null}
+            <button className="ghost-button gallery-details-toggle" type="button" onClick={() => setDetails((value) => !value)}>{details ? "Hide details" : "Show details"}</button>
+            {details ? <Metadata item={item} /> : null}
           </div>
-
-          {/* Footer actions */}
           <div className="img-modal__footer">
             <div className="img-modal__actions">
-              <button className="primary-button primary-button--compact" type="button" onClick={handleDownload}>
-                <Download size={15} aria-hidden="true" />
-                Download
-              </button>
+              <button className="primary-button primary-button--compact" type="button" disabled={isMissing} onClick={() => directDownload(item)}><Download size={15} />Download</button>
+              <button className="secondary-button" type="button" disabled={isMissing} onClick={() => window.open(contentUrl, "_blank", "noopener,noreferrer")}><ExternalLink size={14} />Open</button>
             </div>
-
-            <div className="img-modal__actions img-modal__actions--danger">
-              {!confirmDelete ? (
-                <button
-                  className="secondary-button secondary-button--danger"
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <Trash2 size={14} aria-hidden="true" />
-                  Delete image
-                </button>
-              ) : (
-                <div className="img-modal__delete-confirm">
-                  <span>Delete this image permanently?</span>
-                  <div className="img-modal__delete-confirm-btns">
-                    <button
-                      className="secondary-button secondary-button--danger secondary-button--small"
-                      type="button"
-                      onClick={onDelete}
-                    >
-                      Yes, delete
-                    </button>
-                    <button className="ghost-button" type="button" onClick={() => setConfirmDelete(false)}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {!confirmDelete ? <button className="secondary-button secondary-button--danger" type="button" onClick={() => setConfirmDelete(true)}><Trash2 size={14} />Delete item</button> : (
+              <div className="img-modal__delete-confirm"><span>Delete this Gallery item permanently?</span><div className="img-modal__delete-confirm-btns"><button className="secondary-button secondary-button--danger" type="button" onClick={onDelete}>Yes, delete</button><button className="ghost-button" type="button" onClick={() => setConfirmDelete(false)}>Cancel</button></div></div>
+            )}
           </div>
         </aside>
       </div>
@@ -869,59 +349,32 @@ function ImageDetailModal({
   );
 }
 
-// ─── State screens ────────────────────────────────────────────────────────────
+function DetailPreview({ item, contentUrl }: { item: GalleryItem; contentUrl: string }) {
+  if (item.kind === "image") return <img className="img-modal__img" src={contentUrl} alt={item.prompt || item.filename} />;
+  if (item.kind === "video") return <video className="gallery-detail-video" src={contentUrl} controls preload="metadata" />;
+  if (item.kind === "audio") return <div className="gallery-detail-audio"><FileAudio size={64} /><strong>{item.filename}</strong><audio src={contentUrl} controls preload="metadata" /></div>;
+  return <div className="gallery-detail-file"><FileText size={72} /><strong>{item.extension?.replace(".", "").toUpperCase() || "FILE"}</strong><span>{item.filename}</span></div>;
+}
+
+function Metadata({ item }: { item: GalleryItem }) {
+  return <dl className="img-modal__settings">
+    <div className="img-modal__setting-row"><dt>Workflow</dt><dd>{item.workflowName}</dd></div>
+    <div className="img-modal__setting-row"><dt>Type</dt><dd>{item.mimeType || item.extension || kindLabel(item.kind)}</dd></div>
+    <div className="img-modal__setting-row"><dt>Size</dt><dd>{formatBytes(item.sizeBytes)}</dd></div>
+    {dimensions(item) ? <div className="img-modal__setting-row"><dt>Dimensions</dt><dd>{dimensions(item)}</dd></div> : null}
+    {formatDuration(item.durationSeconds) ? <div className="img-modal__setting-row"><dt>Duration</dt><dd>{formatDuration(item.durationSeconds)}</dd></div> : null}
+    {item.fps !== null ? <div className="img-modal__setting-row"><dt>Frame rate</dt><dd>{item.fps} fps</dd></div> : null}
+  </dl>;
+}
 
 function GalleryLoadingState() {
-  return (
-    <div className="gallery-loading" aria-label="Loading gallery" aria-busy="true">
-      {Array.from({ length: 12 }).map((_, i) => (
-        <div key={i} className="gallery-skeleton" aria-hidden="true" />
-      ))}
-    </div>
-  );
+  return <div className="gallery-loading" aria-label="Loading gallery" aria-busy="true">{Array.from({ length: 12 }).map((_, index) => <div key={index} className="gallery-skeleton" />)}</div>;
 }
 
 function GalleryEmptyState({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
-  return (
-    <div className="gallery-empty">
-      <div className="gallery-empty__icon" aria-hidden="true">
-        <ImageIcon size={44} />
-      </div>
-      <h2>No images yet</h2>
-      <p>No saved images yet. Turn on Auto Save on an image result widget to save future generations.</p>
-      <button
-        className="primary-button"
-        type="button"
-        onClick={() => onNavigate("home")}
-      >
-        Open Workflows
-        <ArrowRight size={16} aria-hidden="true" />
-      </button>
-    </div>
-  );
+  return <div className="gallery-empty"><div className="gallery-empty__icon"><Film size={42} /></div><h2>No saved media yet</h2><p>Generated images, videos, audio, and files you save will appear here.</p><button className="primary-button" type="button" onClick={() => onNavigate("home")}>Open Workflows<ArrowRight size={16} /></button></div>;
 }
 
 function GalleryErrorState({ error, onRetry }: { error: string | null; onRetry: () => void }) {
-  const [showDetails, setShowDetails] = useState(false);
-  return (
-    <div className="gallery-error">
-      <AlertCircle size={40} aria-hidden="true" />
-      <h2>The gallery could not be loaded</h2>
-      <p>Try again, or open details if the problem continues.</p>
-      <div className="gallery-error__actions">
-        <button className="primary-button primary-button--compact" type="button" onClick={onRetry}>
-          <RefreshCw size={15} aria-hidden="true" />
-          Retry
-        </button>
-        {error && (
-          <button className="ghost-button" type="button" onClick={() => setShowDetails((v) => !v)}>
-            {showDetails ? "Hide details" : "Show details"}
-          </button>
-        )}
-      </div>
-      {showDetails && error && (
-        <pre className="gallery-error__detail">{error}</pre>
-      )}
-    </div>
-  );
+  return <div className="gallery-error"><AlertCircle size={40} /><h2>The Gallery could not be loaded</h2><p>{error || "Try again in a moment."}</p><button className="primary-button primary-button--compact" type="button" onClick={onRetry}><RefreshCw size={15} />Retry</button></div>;
 }

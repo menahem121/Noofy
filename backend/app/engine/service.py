@@ -837,6 +837,8 @@ class EngineService:
         return self.comfyui_sidecar_service.update_status()
 
     async def shutdown(self) -> None:
+        if self.gallery_capture_service is not None:
+            await self.gallery_capture_service.shutdown()
         if self.runner_process_coordinator is not None:
             await self.runner_process_coordinator.stop_all_runners()
         await self.comfyui_sidecar_service.shutdown()

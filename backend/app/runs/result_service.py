@@ -63,8 +63,9 @@ class RunResultService:
             retry_job = await self.maybe_retry_after_memory_cleanup(result)
             if retry_job is not None:
                 return retry_job
-            gallery_items = await self._capture_gallery_outputs(result)
-            self._record_run_history_and_activity(result, gallery_items)
+            self._register_gallery_run(result)
+            self._record_run_history_and_activity(result, [])
+            self._schedule_gallery_auto_saves(result)
         return result
 
     async def stream_progress_events(self, job_id: str):
@@ -79,25 +80,39 @@ class RunResultService:
 
             await asyncio.sleep(1)
 
-    async def _capture_gallery_outputs(self, result: JobResult) -> list[GalleryItem]:
+    def _register_gallery_run(self, result: JobResult) -> None:
         if self.gallery_capture_service is None:
-            return []
+            return
         try:
-            return await self.gallery_capture_service.save_completed_job_outputs(
-                result=result,
-                snapshot=self.job_run_snapshots.get(result.job_id),
-                fetch_output=self.job_service.fetch_output,
+            self.gallery_capture_service.register_completed_run(
+                result, self.job_run_snapshots.get(result.job_id)
             )
         except Exception as exc:
             self.log_store.add(
                 "error",
-                "Gallery capture failed after workflow completion",
+                "Gallery run manifest could not be stored",
                 "runs.result_service",
                 job_id=result.job_id,
                 workflow_id=self.job_workflows.get(result.job_id),
                 details={"error": str(exc)},
             )
-            return []
+
+    def _schedule_gallery_auto_saves(self, result: JobResult) -> None:
+        if self.gallery_capture_service is None:
+            return
+        try:
+            self.gallery_capture_service.schedule_auto_saves(
+                result, self.job_run_snapshots.get(result.job_id)
+            )
+        except Exception as exc:
+            self.log_store.add(
+                "error",
+                "Gallery Auto Save could not be scheduled",
+                "runs.result_service",
+                job_id=result.job_id,
+                workflow_id=self.job_workflows.get(result.job_id),
+                details={"error": str(exc)},
+            )
 
     def _record_run_history_and_activity(self, result: JobResult, gallery_items: list[GalleryItem]) -> None:
         if result.status not in {"completed", "failed", "canceled"}:

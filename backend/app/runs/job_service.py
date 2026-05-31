@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from typing import cast
 
 from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
@@ -66,13 +67,32 @@ class RunJobService:
         output_type: str,
         range_header: str | None = None,
     ) -> EngineOutputStream:
-        adapter = self._adapter_for_job(job_id)
-        return await adapter.stream_output(
-            job_id,
-            filename,
-            subfolder,
-            output_type,
-            range_header,
+        try:
+            runner = self.runner_supervisor.runner_for_job(job_id)
+        except JobRunnerNotFoundError:
+            runner = self.runner_supervisor.core_runner()
+        adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+        self.runner_supervisor.acquire_output_stream_lease(runner.runner_id)
+        try:
+            streamed = await adapter.stream_output(
+                job_id,
+                filename,
+                subfolder,
+                output_type,
+                range_header,
+            )
+        except Exception:
+            self.runner_supervisor.release_output_stream_lease(runner.runner_id)
+            raise
+
+        return EngineOutputStream(
+            body=_RunnerLeasedOutputBody(
+                streamed.body,
+                release=lambda: self.runner_supervisor.release_output_stream_lease(runner.runner_id),
+            ),
+            media_type=streamed.media_type,
+            status_code=streamed.status_code,
+            headers=streamed.headers,
         )
 
     async def upload_workflow_image(
@@ -122,3 +142,33 @@ class RunJobService:
     def _core_adapter(self) -> EngineAdapter:
         descriptor = self.runner_supervisor.core_runner()
         return self.runner_supervisor.get_adapter(descriptor.runner_id)
+
+
+class _RunnerLeasedOutputBody:
+    def __init__(self, body: AsyncIterator[bytes], *, release: Callable[[], None]) -> None:
+        self.body = body
+        self.release = release
+        self.released = False
+
+    def __aiter__(self) -> "_RunnerLeasedOutputBody":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return await self.body.__anext__()
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        try:
+            if hasattr(self.body, "aclose"):
+                try:
+                    await cast(AsyncGenerator[bytes, None], self.body).aclose()
+                except Exception:
+                    pass
+        finally:
+            self.release()

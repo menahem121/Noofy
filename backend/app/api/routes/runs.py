@@ -4,9 +4,34 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import RunJobServiceDep, RunResultServiceDep
+from app.api.deps import GalleryCaptureServiceDep, RunJobServiceDep, RunResultServiceDep
 
 router = APIRouter()
+
+
+@router.get("/jobs/{job_id}/gallery")
+async def get_job_gallery_status(job_id: str, gallery_capture: GalleryCaptureServiceDep):
+    return gallery_capture.job_status(job_id)
+
+
+@router.post("/jobs/{job_id}/gallery/{control_id}")
+async def save_job_output_to_gallery(
+    job_id: str, control_id: str, gallery_capture: GalleryCaptureServiceDep
+):
+    try:
+        return gallery_capture.schedule_output_save(job_id, control_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/gallery/{control_id}/cancel")
+async def cancel_job_output_gallery_save(
+    job_id: str, control_id: str, gallery_capture: GalleryCaptureServiceDep
+):
+    try:
+        return gallery_capture.cancel_output_save(job_id, control_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}/progress")

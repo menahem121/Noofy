@@ -259,6 +259,8 @@ def workflow_package_display_name(
     package_name = _clean_display_name(package.metadata.name)
     if package_name:
         if _matches_package_identity(package_name, package):
+            if any(character.isspace() for character in package_name):
+                return package_name
             return _humanize_workflow_identifier(package_name)
         return package_name
 

@@ -139,6 +139,7 @@ class RunnerDescriptor(BaseModel):
     last_used_at: str | None = None
     open_workflow_lease_count: int = 0
     open_workflow_lease_ids: list[str] = Field(default_factory=list)
+    output_stream_lease_count: int = Field(default=0, ge=0)
     closed_view_cooldown_expires_at: str | None = None
 
 
@@ -410,6 +411,20 @@ class RunnerSupervisor:
     def forget_job(self, job_id: str) -> None:
         self._registry.unregister(job_id)
 
+    def acquire_output_stream_lease(self, runner_id: str) -> None:
+        descriptor = self.get_runner(runner_id)
+        with self._lock:
+            self._descriptors[runner_id] = descriptor.model_copy(
+                update={"output_stream_lease_count": descriptor.output_stream_lease_count + 1}
+            )
+
+    def release_output_stream_lease(self, runner_id: str) -> None:
+        descriptor = self.get_runner(runner_id)
+        with self._lock:
+            self._descriptors[runner_id] = descriptor.model_copy(
+                update={"output_stream_lease_count": max(0, descriptor.output_stream_lease_count - 1)}
+            )
+
     # ------------------------------------------------------------------
     # Phase 5f lifecycle policy
     # ------------------------------------------------------------------
@@ -457,7 +472,11 @@ class RunnerSupervisor:
             and runner.kind is RunnerKind.ISOLATED_COMFYUI
             and _effective_memory_class(runner.memory_class) is RunnerMemoryClass.GPU_HEAVY
         ]
-        running = [runner for runner in incompatible_gpu if runner.status is RunnerStatus.RUNNING or runner.current_job_id]
+        running = [
+            runner
+            for runner in incompatible_gpu
+            if runner.status is RunnerStatus.RUNNING or runner.current_job_id or runner.output_stream_lease_count
+        ]
         if running:
             runner = _preferred_runner(running)
             return RunnerSelectionDecision(

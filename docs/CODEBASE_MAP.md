@@ -33,7 +33,7 @@ Entry: [backend/app/AGENTS.md](../backend/app/AGENTS.md)
 | `workflows/` | Workflow packages, import, authoring, library, user state, assets, exporting | `workflows/AGENTS.md` |
 | `models/` | App model inventory, downloads, imports, tags, ownership, model folders | `models/AGENTS.md`, `models/inventory.py`, `models/downloads.py`, `models/folders.py` |
 | `settings/` | User settings and API keys | `settings/api_keys.py` |
-| `gallery.py` | Gallery persistence | `gallery.py` |
+| `gallery.py` | Mixed-media Gallery persistence, migration, and background save coordination | `gallery.py` |
 | `core/` | Config loading, auth middleware, logging, path resolution | `core/config.py`, `core/paths.py` |
 | `trust.py` / `source_policy.py` | Trust roots, source policy | `trust.py` |
 | `composition.py` | App-wide wiring/DI | `composition.py` |

@@ -482,7 +482,7 @@ def test_civitai_lora_download_disk_space_failure_stops_before_streaming(tmp_pat
         status = _wait_for_download(client, start.json()["job_id"])
 
     assert status["status"] == "failed"
-    assert "not enough disk space" in str(status["models"][0]["message"]).casefold()
+    assert "not enough free disk space" in str(status["models"][0]["message"]).casefold()
 
 
 def _wait_for_download(client: TestClient, job_id: str) -> dict[str, object]:

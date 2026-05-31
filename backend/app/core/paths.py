@@ -254,6 +254,7 @@ class NoofyPaths:
             self.dashboard_assets_dir,
             self.gallery_outputs_dir,
             self.gallery_outputs_dir / "images",
+            self.gallery_outputs_dir / "media",
             self.gallery_outputs_dir / "thumbnails",
         ):
             directory.mkdir(parents=True, exist_ok=True)

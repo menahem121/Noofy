@@ -41,7 +41,7 @@ HistoryEventStatus = Literal[
     "removed",
 ]
 
-HISTORY_SCHEMA_VERSION = 1
+HISTORY_SCHEMA_VERSION = 2
 DEFAULT_HISTORY_RETENTION = 5_000
 
 
@@ -59,6 +59,7 @@ class HistoryEventListItem(BaseModel):
     thumbnail_url: str | None = None
     output_url: str | None = None
     gallery_item_id: str | None = None
+    gallery_item_ids: list[str] = Field(default_factory=list)
     source: str | None = None
     trust_level: str | None = None
     error_summary: str | None = None
@@ -103,6 +104,7 @@ class ActivityEventCreate:
     thumbnail_url: str | None = None
     output_url: str | None = None
     gallery_item_id: str | None = None
+    gallery_item_ids: list[str] | None = None
     source: str | None = None
     trust_level: str | None = None
     error_summary: str | None = None
@@ -136,13 +138,13 @@ class ActivityLogStore:
                 INSERT OR IGNORE INTO activity_events (
                     id, type, status, title, workflow_id, workflow_name,
                     created_at, started_at, completed_at, duration_seconds,
-                    thumbnail_url, output_url, gallery_item_id, source,
+                    thumbnail_url, output_url, gallery_item_id, gallery_item_ids_json, source,
                     trust_level, error_summary, can_open_workflow, prompt,
                     used_settings_json, search_text, schema_version
                 ) VALUES (
                     :id, :type, :status, :title, :workflow_id, :workflow_name,
                     :created_at, :started_at, :completed_at, :duration_seconds,
-                    :thumbnail_url, :output_url, :gallery_item_id, :source,
+                    :thumbnail_url, :output_url, :gallery_item_id, :gallery_item_ids_json, :source,
                     :trust_level, :error_summary, :can_open_workflow, :prompt,
                     :used_settings_json, :search_text, :schema_version
                 )
@@ -189,6 +191,26 @@ class ActivityLogStore:
         if row is None:
             return None
         return _detail_from_row(row)
+
+    def attach_gallery_items(
+        self,
+        *,
+        event_id: str,
+        gallery_item_ids: list[str],
+        thumbnail_url: str | None,
+        output_url: str | None,
+        gallery_item_id: str | None,
+    ) -> None:
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE activity_events
+                SET thumbnail_url = ?, output_url = ?, gallery_item_id = ?, gallery_item_ids_json = ?
+                WHERE id = ?
+                """,
+                (thumbnail_url, output_url, gallery_item_id, json.dumps(gallery_item_ids), event_id),
+            )
+            conn.commit()
 
     def clear(self) -> None:
         with self._lock, closing(self._connect()) as conn:
@@ -248,6 +270,7 @@ class ActivityLogStore:
                     thumbnail_url TEXT,
                     output_url TEXT,
                     gallery_item_id TEXT,
+                    gallery_item_ids_json TEXT NOT NULL DEFAULT '[]',
                     source TEXT,
                     trust_level TEXT,
                     error_summary TEXT,
@@ -263,6 +286,14 @@ class ActivityLogStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_history_type ON activity_events(type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_history_status ON activity_events(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_history_workflow ON activity_events(workflow_id)")
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_events)").fetchall()}
+            if "gallery_item_ids_json" not in columns:
+                conn.execute("ALTER TABLE activity_events ADD COLUMN gallery_item_ids_json TEXT NOT NULL DEFAULT '[]'")
+                conn.execute(
+                    "UPDATE activity_events SET gallery_item_ids_json = '[\"' || gallery_item_id || '\"]' "
+                    "WHERE gallery_item_id IS NOT NULL"
+                )
+            conn.execute("UPDATE schema_version SET version = ?", (HISTORY_SCHEMA_VERSION,))
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -411,8 +442,9 @@ class HistoryService:
                 completed_at=completed_at,
                 duration_seconds=max((completed_at - started_at).total_seconds(), 0),
                 thumbnail_url=primary_gallery_item.thumbnail_url if primary_gallery_item else None,
-                output_url=primary_gallery_item.image_url if primary_gallery_item else None,
+                output_url=primary_gallery_item.content_url if primary_gallery_item else None,
                 gallery_item_id=primary_gallery_item.id if primary_gallery_item else None,
+                gallery_item_ids=[item.id for item in gallery_items],
                 error_summary=_redact_text(error) if error else None,
                 can_open_workflow=True,
                 prompt=_prompt_from_settings(used_settings),
@@ -420,6 +452,34 @@ class HistoryService:
                 source_event_id=f"run:{job_id}",
             )
         )
+
+    def attach_gallery_items(self, job_id: str, gallery_items: list[GalleryItem]) -> None:
+        primary = gallery_items[0] if gallery_items else None
+        try:
+            self.store.attach_gallery_items(
+                event_id=f"run:{job_id}",
+                gallery_item_ids=[item.id for item in gallery_items],
+                thumbnail_url=primary.thumbnail_url if primary else None,
+                output_url=primary.content_url if primary else None,
+                gallery_item_id=primary.id if primary else None,
+            )
+            if self.log_store is not None:
+                self.log_store.add(
+                    "info",
+                    "History Gallery attachments updated",
+                    "history.service",
+                    job_id=job_id,
+                    details={"item_count": len(gallery_items), "primary_item_id": primary.id if primary else None},
+                )
+        except Exception as exc:
+            if self.log_store is not None:
+                self.log_store.add(
+                    "error",
+                    "History Gallery attachments could not be updated",
+                    "history.service",
+                    job_id=job_id,
+                    details={"error": _redact_text(str(exc))},
+                )
 
     def import_existing_run_history(self) -> None:
         if self.workflow_library_store is None:
@@ -514,6 +574,7 @@ def _event_create_payload(event_id: str, event: ActivityEventCreate) -> dict[str
         "thumbnail_url": event.thumbnail_url,
         "output_url": event.output_url,
         "gallery_item_id": event.gallery_item_id,
+        "gallery_item_ids_json": json.dumps(event.gallery_item_ids or []),
         "source": _redact_text(event.source) if event.source else None,
         "trust_level": event.trust_level,
         "error_summary": _redact_text(event.error_summary) if event.error_summary else None,
@@ -584,6 +645,7 @@ def _list_item_from_row(row: sqlite3.Row) -> HistoryEventListItem:
         thumbnail_url=row["thumbnail_url"],
         output_url=row["output_url"],
         gallery_item_id=row["gallery_item_id"],
+        gallery_item_ids=_loads_string_list(row["gallery_item_ids_json"]),
         source=row["source"],
         trust_level=row["trust_level"],
         error_summary=row["error_summary"],
@@ -619,6 +681,7 @@ def _detail_from_payload(payload: dict[str, object | None]) -> HistoryEventDetai
         thumbnail_url=payload["thumbnail_url"] if isinstance(payload["thumbnail_url"], str) else None,
         output_url=payload["output_url"] if isinstance(payload["output_url"], str) else None,
         gallery_item_id=payload["gallery_item_id"] if isinstance(payload["gallery_item_id"], str) else None,
+        gallery_item_ids=_loads_string_list(payload["gallery_item_ids_json"]),
         source=payload["source"] if isinstance(payload["source"], str) else None,
         trust_level=payload["trust_level"] if isinstance(payload["trust_level"], str) else None,
         error_summary=payload["error_summary"] if isinstance(payload["error_summary"], str) else None,
@@ -730,3 +793,11 @@ def _string_or_none(value: object | None) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+def _loads_string_list(value: object | None) -> list[str]:
+    try:
+        loaded = json.loads(value) if isinstance(value, str) else value
+    except json.JSONDecodeError:
+        return []
+    return [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []

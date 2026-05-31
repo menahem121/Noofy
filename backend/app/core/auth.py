@@ -27,7 +27,7 @@ def is_job_query_token_request(request: Request) -> bool:
     if path.startswith("/api/assets/"):
         return True
     return path.startswith("/api/gallery/") and (
-        path.endswith("/image") or path.endswith("/thumbnail")
+        path.endswith("/image") or path.endswith("/thumbnail") or path.endswith("/content")
     )
 
 

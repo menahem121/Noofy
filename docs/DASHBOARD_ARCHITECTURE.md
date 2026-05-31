@@ -114,11 +114,13 @@ Creator defaults stay in `dashboard.json`. User-specific state is separate:
 
 `WorkflowUserState.dashboard_version` is compared with the active dashboard schema version. When the schema changes, stale values, layout overrides, and removed-control output preferences are pruned, new controls use creator defaults, and the cleaned state is saved back. Native workflow dashboard overrides are reset by deleting the override file, which restores the bundled dashboard schema on the next package load.
 
-## Auto Save Gallery
+## Multimedia Gallery
 
-Auto Save is decided at run submission. The frontend sends the current output preference snapshot with `POST /api/workflows/{id}/run`; the backend validates it against the active dashboard schema and stores it with the job context. Later toggle changes affect future runs only.
+Gallery treats generated `image`, `video`, `audio`, and generic `file` outputs as first-class saved media. Auto Save is decided at run submission. The frontend sends the current output preference snapshot with `POST /api/workflows/{id}/run`; the backend validates it against the active dashboard schema and stores a sanitized run manifest with the job context. Later toggle changes affect future runs only. A completed declared output can also be saved manually while the job-bound adapter can still resolve its source.
 
-Completed jobs save only final media whose `control_id -> output_id -> node_id` mapping matches an Auto Save-enabled output widget from the stored run snapshot and the current Gallery media support. Output preferences are keyed by output control ID and must not assume every output is an image. Gallery metadata and idempotency state live in `{data_dir}/outputs/gallery/gallery.db`; full images and thumbnails are stored in flat `images/` and `thumbnails/` folders. `GalleryStore` uses SQLite `BEGIN IMMEDIATE` write transactions as the cross-process serialization point for Gallery metadata and file allocation, so correctness does not depend on an undocumented single-backend-process guarantee for a data directory.
+Completed jobs save only final media whose `control_id -> output_id -> node_id` mapping matches a declared output widget. Uploaded dashboard inputs are never Gallery results. The background save coordinator streams each output through the backend-owned adapter path, stages it to a temporary file with disk checks, atomically finalizes it, and records per-control states such as `queued`, `saving`, `saved`, `failed`, `canceled`, `interrupted`, and `unavailable`. Concurrent Auto Save and manual Save requests reuse the same idempotent item.
+
+Output preferences are keyed by output control ID and must not assume every output is an image. Gallery metadata, sanitized manifests, and save state live in `{data_dir}/outputs/gallery/gallery.db`; full saved media lives in flat `media/` storage, and image thumbnails live in `thumbnails/`. Legacy image rows and files under `images/` migrate transactionally and remain readable. Only images are inspected with Pillow. Videos use placeholders in this pass, and generic files are never executed, imported, unpacked, deeply parsed, or previewed.
 
 ## Backend API Surface
 
@@ -145,7 +147,8 @@ Important dashboard APIs:
 - `GET/PUT /api/workflows/{id}/user-state`: read/write values and layout overrides.
 - `DELETE /api/workflows/{id}/user-state/values`: restore creator defaults.
 - `DELETE /api/workflows/{id}/user-state/layout`: reset user layout overrides.
-- `GET /api/gallery`, `GET /api/gallery/{item_id}`, `GET /api/gallery/{item_id}/image`, `GET /api/gallery/{item_id}/thumbnail`, `DELETE /api/gallery/{item_id}`, `PUT /api/gallery/{item_id}/favorite`: manage saved Gallery records and media.
+- `GET /api/gallery`, `GET /api/gallery/{item_id}`, `GET /api/gallery/{item_id}/content`, `GET /api/gallery/{item_id}/thumbnail`, `DELETE /api/gallery/{item_id}`, `PUT /api/gallery/{item_id}/favorite`: manage saved Gallery records and backend-owned media. `GET /api/gallery/{item_id}/image` remains a compatibility alias for older History links.
+- `GET /api/jobs/{job_id}/gallery`, `POST /api/jobs/{job_id}/gallery/{control_id}`, `POST /api/jobs/{job_id}/gallery/{control_id}/cancel`: read per-output Gallery save state, manually save a declared completed output, or cancel an active background copy.
 
 ## Code Map
 

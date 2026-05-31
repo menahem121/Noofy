@@ -133,7 +133,10 @@ class MemoryRetryAdapter(RecordingAdapter):
 
 
 class FailingGalleryCapture:
-    async def save_completed_job_outputs(self, **kwargs) -> None:
+    def register_completed_run(self, *args, **kwargs) -> None:
+        return None
+
+    def schedule_auto_saves(self, *args, **kwargs) -> None:
         raise RuntimeError("gallery disk unavailable")
 
 
@@ -1854,7 +1857,7 @@ async def test_gallery_capture_failure_does_not_break_completed_result() -> None
     assert isinstance(result, JobResult)
     assert result.status == "completed"
     logs = service.list_logs(level="error").events
-    assert any(event.message == "Gallery capture failed after workflow completion" for event in logs)
+    assert any(event.message == "Gallery Auto Save could not be scheduled" for event in logs)
 
 
 @pytest.mark.anyio

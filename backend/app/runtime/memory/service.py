@@ -310,6 +310,8 @@ class MemoryGovernorService:
         if self.runner_process_coordinator is None:
             return None
         for evict_runner_id in decision.evict_runner_ids:
+            if self.runner_supervisor.get_runner(evict_runner_id).output_stream_lease_count:
+                continue
             stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
             self.record_metric("idle_runner_evicted_for_workflow_run")
             self.log_store.add(
@@ -357,6 +359,8 @@ class MemoryGovernorService:
             if runner.current_job_id in {current_job_id}:
                 continue
             if runner.current_job_id is not None or runner.status is RunnerStatus.RUNNING:
+                continue
+            if runner.output_stream_lease_count:
                 continue
             if runner.status not in {
                 RunnerStatus.READY,

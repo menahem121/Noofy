@@ -62,6 +62,24 @@ export interface DiagnosticLogResponse {
   events: DiagnosticEvent[];
 }
 
+export type GallerySaveState = "queued" | "saving" | "saved" | "saved_with_errors" | "failed" | "canceled" | "interrupted" | "unavailable";
+
+export interface GallerySaveRequest {
+  job_id: string;
+  control_id: string;
+  status: GallerySaveState;
+  message: string | null;
+  bytes_copied: number;
+  total_bytes: number | null;
+  item_ids: string[];
+  updated_at: string;
+}
+
+export interface GalleryJobSaveStatus {
+  job_id: string;
+  outputs: GallerySaveRequest[];
+}
+
 export function isEngineJob(response: unknown): response is EngineJob {
   return Boolean(response && typeof response === "object" && "job_id" in response && "engine" in response);
 }
@@ -90,4 +108,16 @@ export function fetchLogs(options: { limit?: number } = {}) {
 
 export function cancelJob(jobId: string) {
   return postJson<JobProgress>(`/jobs/${jobId}/cancel`);
+}
+
+export function fetchJobGalleryStatus(jobId: string) {
+  return getJson<GalleryJobSaveStatus>(`/jobs/${encodeURIComponent(jobId)}/gallery`);
+}
+
+export function saveJobOutputToGallery(jobId: string, controlId: string) {
+  return postJson<GallerySaveRequest>(`/jobs/${encodeURIComponent(jobId)}/gallery/${encodeURIComponent(controlId)}`);
+}
+
+export function cancelJobOutputGallerySave(jobId: string, controlId: string) {
+  return postJson<GallerySaveRequest>(`/jobs/${encodeURIComponent(jobId)}/gallery/${encodeURIComponent(controlId)}/cancel`);
 }
