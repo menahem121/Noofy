@@ -7,6 +7,7 @@ import { SidebarProvider } from "../app/AppLayout";
 import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
 import { WorkflowsPage } from "./WorkflowsPage";
+import { WORKFLOW_CATEGORY_OPTIONS } from "./workflowMetadataOptions";
 
 const globalCss = readFileSync(resolve(process.cwd(), "src/styles/workflows.css"), "utf8");
 
@@ -517,11 +518,14 @@ describe("WorkflowsPage", () => {
     const modelCell = screen.getByTitle(longWorkflow.main_model.name);
     const descriptionCell = screen.getByTitle(longWorkflow.description);
     const categoryBadge = screen.getByTitle(longWorkflow.category);
+    const categorySelect = screen.getByRole("combobox", { name: "Category" }) as HTMLSelectElement;
 
     expect(layout).toHaveClass("workflows-layout--drawer-open");
     expect(modelCell).toHaveClass("workflow-col-model");
     expect(descriptionCell).toHaveClass("workflow-col-description");
     expect(categoryBadge).toHaveClass("workflow-category-badge");
+    expect(Array.from(categorySelect.options).map((option) => option.value)).toEqual([...WORKFLOW_CATEGORY_OPTIONS]);
+    expect(categorySelect).toHaveValue(WORKFLOW_CATEGORY_OPTIONS[0]);
     expect(listArea).toHaveClass("workflows-list-area");
     expect(row).toHaveClass("workflow-row");
     expect(globalCss).toContain("container: workflows-list / inline-size;");
@@ -563,6 +567,23 @@ describe("WorkflowsPage", () => {
         expect.objectContaining({
           method: "PUT",
           body: expect.stringContaining("Updated cleanup description."),
+        }),
+      );
+    });
+
+    const category = await screen.findByRole("combobox", { name: "Category" }) as HTMLSelectElement;
+    expect(Array.from(category.options).map((option) => option.value)).toEqual([...WORKFLOW_CATEGORY_OPTIONS]);
+    expect(category).toHaveValue("Inpainting");
+
+    fireEvent.change(category, { target: { value: "Restoration" } });
+    fireEvent.blur(category);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup/metadata",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"category":"Restoration"'),
         }),
       );
     });

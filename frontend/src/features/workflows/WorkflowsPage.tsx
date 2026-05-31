@@ -43,7 +43,7 @@ import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
 import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
-import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS } from "./workflowMetadataOptions";
+import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, WORKFLOW_ICONS, workflowCategoryOption } from "./workflowMetadataOptions";
 import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflowSearch";
 
 interface WorkflowsPageProps {
@@ -927,7 +927,7 @@ function WorkflowDetailsDrawer({
     description: workflow.overview.description,
     author: workflow.overview.author,
     website: workflow.overview.website,
-    category: workflow.organization.category,
+    category: workflowCategoryOption(workflow.organization.category),
     tags: workflow.organization.tags,
     icon: workflow.organization.icon,
   }), [workflow]);
@@ -1109,9 +1109,10 @@ function WorkflowDetailsDrawer({
       </DetailSection>
 
       <DetailSection title="Organization">
-        <EditableField
+        <EditableSelectField
           label="Category"
-          value={draft.category ?? ""}
+          value={workflowCategoryOption(draft.category)}
+          options={WORKFLOW_CATEGORY_OPTIONS}
           onBlur={() => void saveDraft()}
           onChange={(category) => setDraft((current) => ({ ...current, category }))}
         />
@@ -1297,6 +1298,33 @@ function EditableField({
       ) : (
         <input value={value} onBlur={onBlur} onChange={(event) => onChange(event.target.value)} />
       )}
+    </label>
+  );
+}
+
+function EditableSelectField({
+  label,
+  value,
+  options,
+  onBlur,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onBlur?: () => void;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="workflow-edit-field">
+      <span>{label}</span>
+      <select value={value} onBlur={onBlur} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

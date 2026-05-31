@@ -706,7 +706,8 @@
 }
 
 .workflow-edit-field input:focus,
-.workflow-edit-field textarea:focus {
+.workflow-edit-field textarea:focus,
+.workflow-edit-field select:focus {
   border-color: rgba(139, 92, 246, 0.75);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
 }

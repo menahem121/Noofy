@@ -27,6 +27,12 @@ export const WORKFLOW_CATEGORY_OPTIONS = [
 
 export type WorkflowCategoryOption = (typeof WORKFLOW_CATEGORY_OPTIONS)[number];
 
+export function workflowCategoryOption(value: string | null | undefined): WorkflowCategoryOption {
+  return (WORKFLOW_CATEGORY_OPTIONS as readonly string[]).includes(value ?? "")
+    ? value as WorkflowCategoryOption
+    : WORKFLOW_CATEGORY_OPTIONS[0];
+}
+
 export const WORKFLOW_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   image: Image,

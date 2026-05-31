@@ -16,7 +16,7 @@ import {
   type WorkflowExportMetadata,
   type WorkflowExportReviewModel,
 } from "../../lib/workflowExport";
-import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS } from "./workflowMetadataOptions";
+import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS, workflowCategoryOption } from "./workflowMetadataOptions";
 
 interface WorkflowExportDialogProps {
   workflowName: string | null | undefined;
@@ -135,9 +135,7 @@ export function WorkflowExportDialog({
     : validation.message;
   const requiredModels = review?.requiredModels ?? [];
   const primaryLabel = isNoofyExport ? "Export .noofy" : "Export";
-  const selectedCategory = (WORKFLOW_CATEGORY_OPTIONS as readonly string[]).includes(metadataDraft.category ?? "")
-    ? metadataDraft.category ?? "Txt2img"
-    : "Txt2img";
+  const selectedCategory = workflowCategoryOption(metadataDraft.category);
   const selectedIcon = metadataDraft.icon || "sparkles";
 
   return (
