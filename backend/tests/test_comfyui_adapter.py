@@ -126,6 +126,110 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
     assert audio["url"].startswith("/api/jobs/job-1/outputs/view?")
 
 
+def test_result_from_history_recognizes_video_inside_images_bucket(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-video",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "15": {
+                    "images": [
+                        {"filename": "generated.webm", "subfolder": "", "type": "output"}
+                    ]
+                }
+            },
+        },
+    )
+
+    video = result.outputs[0]["output"]["images"][0]
+    assert video["kind"] == "video"
+    assert video["type"] == "video"
+    assert video["output_type"] == "output"
+    assert video["mime_type"] == "video/webm"
+    assert video["url"].startswith("/api/jobs/job-video/outputs/view?")
+
+
+def test_result_from_history_prefers_declared_output_kind(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+    adapter._output_kinds_by_job["job-video"] = {"15": "video"}
+
+    result = adapter._result_from_history(
+        "job-video",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {"15": {"images": [{"filename": "result.bin", "type": "output"}]}},
+        },
+    )
+
+    assert result.outputs[0]["output"]["images"][0]["kind"] == "video"
+
+
+def test_result_from_history_accepts_compatibility_media_hints(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-video",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "15": {
+                    "images": [
+                        {
+                            "filename": "result.bin",
+                            "subfolder": "",
+                            "type": "output",
+                            "content_type": "video/mp4",
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    video = result.outputs[0]["output"]["images"][0]
+    assert video["kind"] == "video"
+    assert video["mime_type"] == "video/mp4"
+
+
+def test_result_from_history_keeps_media_type_separate_from_output_type(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-video",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "15": {
+                    "images": [
+                        {
+                            "filename": "result.mp4",
+                            "subfolder": "",
+                            "type": "video",
+                            "mime_type": "video/mp4",
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    video = result.outputs[0]["output"]["images"][0]
+    assert video["kind"] == "video"
+    assert video["type"] == "video"
+    assert video["output_type"] == "output"
+    assert "type=output" in video["url"]
+
+
 @pytest.mark.anyio
 async def test_upload_workflow_image_posts_to_configured_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -746,6 +850,37 @@ def test_stage_assets_uses_audio_dashboard_binding(tmp_path: Path) -> None:
     assert new_graph["custom"]["inputs"]["audio_path"].startswith("staging/")
     assert new_graph["custom"]["inputs"]["other"] == asset_id
     assert graph["custom"]["inputs"]["audio_path"] == asset_id
+
+
+def test_stage_assets_uses_saved_video_dashboard_binding(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.mp4"
+    (assets_dir / asset_id).write_bytes(b"\x00\x00\x00\x18ftypisom")
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+    graph = {
+        "custom": {
+            "class_type": "CustomVideoNode",
+            "inputs": {"video_path": asset_id, "other": asset_id},
+        }
+    }
+
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_video", node_id="custom", input_name="video_path"),
+        graph,
+        "job-video",
+    )
+
+    assert len(staged) == 1
+    assert new_graph["custom"]["inputs"]["video_path"].startswith("staging/")
+    assert new_graph["custom"]["inputs"]["other"] == asset_id
+    assert graph["custom"]["inputs"]["video_path"] == asset_id
 
 
 def test_stage_assets_reuses_one_file_for_multiple_saved_bindings(tmp_path: Path) -> None:

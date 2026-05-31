@@ -26,10 +26,12 @@ from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
 
 _ASSET_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif|wav|mp3|flac|ogg|m4a)$",
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|gif|wav|mp3|flac|ogg|m4a|mp4|mov|webm|mkv)$",
     re.IGNORECASE,
 )
-_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio"})
+_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video"})
+_MEDIA_OUTPUT_BUCKETS = ("images", "audio", "video", "videos", "gifs")
+_MEDIA_KINDS = frozenset({"image", "audio", "video"})
 
 
 class ComfyUIEngineAdapter:
@@ -56,6 +58,7 @@ class ComfyUIEngineAdapter:
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
         self._terminal_log_job_ids: set[str] = set()
         self._staged_files: dict[str, list[Path]] = {}
+        self._output_kinds_by_job: dict[str, dict[str, str]] = {}
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
@@ -81,6 +84,7 @@ class ComfyUIEngineAdapter:
             status="queued",
         )
         self.job_store.add_job(job)
+        self._output_kinds_by_job[job_id] = _unambiguous_output_kinds_by_node(workflow_package)
         self.log_store.add(
             "info",
             "Created ComfyUI job",
@@ -383,7 +387,7 @@ class ComfyUIEngineAdapter:
             payload = output.get("output")
             if not isinstance(payload, dict):
                 continue
-            for media_kind in ("images", "audio", "video"):
+            for media_kind in _MEDIA_OUTPUT_BUCKETS:
                 items = payload.get(media_kind)
                 if not isinstance(items, list):
                     continue
@@ -393,7 +397,7 @@ class ComfyUIEngineAdapter:
                     if (
                         str(item.get("filename") or "") == filename
                         and str(item.get("subfolder") or "") == subfolder
-                        and str(item.get("output_type") or item.get("type") or "output") == output_type
+                        and _engine_output_type_from_item(item) == output_type
                     ):
                         return True
         return False
@@ -669,7 +673,7 @@ class ComfyUIEngineAdapter:
             outputs=[
                 {
                     "node_id": str(node),
-                    "output": self._add_view_urls(job_id, output),
+                    "output": self._add_view_urls(job_id, str(node), output),
                 }
             ],
         )
@@ -793,7 +797,7 @@ class ComfyUIEngineAdapter:
                 outputs.append(
                     {
                         "node_id": node_id,
-                        "output": self._add_view_urls(job_id, node_output),
+                        "output": self._add_view_urls(job_id, str(node_id), node_output),
                     }
                 )
 
@@ -803,16 +807,25 @@ class ComfyUIEngineAdapter:
             outputs=outputs,
         )
 
-    def _add_view_urls(self, job_id: str, node_output: dict[str, Any]) -> dict[str, Any]:
+    def _add_view_urls(
+        self,
+        job_id: str,
+        node_id: str,
+        node_output: dict[str, Any],
+    ) -> dict[str, Any]:
         enriched = dict(node_output)
-        for output_type in ("images", "audio", "video"):
-            items = enriched.get(output_type)
+        declared_kind = self._output_kinds_by_job.get(job_id, {}).get(node_id)
+        for bucket_name in _MEDIA_OUTPUT_BUCKETS:
+            items = enriched.get(bucket_name)
             if not isinstance(items, list):
                 continue
-            kind = output_type[:-1] if output_type.endswith("s") else output_type
-            enriched[output_type] = [
+            enriched[bucket_name] = [
                 (
-                    self._enrich_media_output(job_id, item, kind)
+                    self._enrich_media_output(
+                        job_id,
+                        item,
+                        _classify_media_kind(item, bucket_name, declared_kind),
+                    )
                     if isinstance(item, dict)
                     else item
                 )
@@ -826,9 +839,9 @@ class ComfyUIEngineAdapter:
         item: dict[str, Any],
         kind: str,
     ) -> dict[str, Any]:
-        output_type = str(item.get("output_type") or item.get("type") or "output")
+        output_type = _engine_output_type_from_item(item)
         view_url = self._build_view_url(job_id, item)
-        return {
+        enriched = {
             **item,
             "kind": kind,
             "type": kind,
@@ -836,16 +849,23 @@ class ComfyUIEngineAdapter:
             "url": view_url,
             "view_url": view_url,
             "mime_type": item.get("mime_type")
+            or item.get("content_type")
             or mimetypes.guess_type(str(item.get("filename") or ""))[0]
             or ("audio/mpeg" if kind == "audio" else "application/octet-stream"),
         }
+        thumbnail_url = _backend_owned_thumbnail_url(item.get("thumbnail_url"))
+        if thumbnail_url is None:
+            enriched.pop("thumbnail_url", None)
+        else:
+            enriched["thumbnail_url"] = thumbnail_url
+        return enriched
 
     def _build_view_url(self, job_id: str, item: dict[str, Any]) -> str:
         query = urlencode(
             {
                 "filename": item.get("filename", ""),
                 "subfolder": item.get("subfolder", ""),
-                "type": item.get("output_type") or item.get("type", "output"),
+                "type": _engine_output_type_from_item(item),
             }
         )
         return f"/api/jobs/{job_id}/outputs/view?{query}"
@@ -958,3 +978,70 @@ def _stage_asset_file(source: Path, target: Path) -> None:
         os.link(source, target)
     except OSError:
         shutil.copy2(source, target)
+
+
+def _unambiguous_output_kinds_by_node(workflow_package: WorkflowPackage) -> dict[str, str]:
+    kinds_by_node: dict[str, set[str]] = {}
+    for output in workflow_package.outputs:
+        kind = output.kind or output.type
+        if kind in _MEDIA_KINDS:
+            kinds_by_node.setdefault(output.node_id, set()).add(kind)
+    return {
+        node_id: next(iter(kinds))
+        for node_id, kinds in kinds_by_node.items()
+        if len(kinds) == 1
+    }
+
+
+def _classify_media_kind(
+    item: dict[str, Any],
+    bucket_name: str,
+    declared_kind: str | None,
+) -> str:
+    if declared_kind in _MEDIA_KINDS:
+        return declared_kind
+
+    item_kind = item.get("kind") or item.get("type")
+    if item_kind in _MEDIA_KINDS:
+        return str(item_kind)
+
+    mime_type = str(item.get("mime_type") or item.get("content_type") or "").lower()
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+
+    suffix = Path(str(item.get("filename") or "")).suffix.lower()
+    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        return "image"
+    if suffix in {".wav", ".mp3", ".flac", ".ogg", ".m4a"}:
+        return "audio"
+    if suffix in {".mp4", ".mov", ".webm", ".mkv"}:
+        return "video"
+
+    weak_fallbacks = {
+        "images": "image",
+        "gifs": "image",
+        "audio": "audio",
+        "video": "video",
+        "videos": "video",
+    }
+    return weak_fallbacks.get(bucket_name, "image")
+
+
+def _engine_output_type_from_item(item: dict[str, Any]) -> str:
+    output_type = item.get("output_type")
+    if isinstance(output_type, str) and output_type:
+        return output_type
+    legacy_type = item.get("type")
+    if isinstance(legacy_type, str) and legacy_type and legacy_type not in _MEDIA_KINDS:
+        return legacy_type
+    return "output"
+
+
+def _backend_owned_thumbnail_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if value.startswith("/api/") else None

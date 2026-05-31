@@ -447,6 +447,8 @@ class GalleryCaptureService:
                 for index, image in enumerate(images):
                     if not isinstance(image, dict):
                         continue
+                    if image.get("kind") not in {None, "image"}:
+                        continue
                     filename = _safe_basename(str(image.get("filename") or f"image-{index}.png"))
                     subfolder = str(image.get("subfolder") or "")
                     output_type = str(image.get("output_type") or image.get("type") or "output")
@@ -512,7 +514,7 @@ def build_run_submission_snapshot(
     valid_output_control_ids: set[str] = set()
     for section in package.dashboard.sections:
         for control in section.controls:
-            if control.type not in {"display_image", "display_audio", "result_image"} or not control.output_id:
+            if control.type not in {"display_image", "display_audio", "display_video", "result_image"} or not control.output_id:
                 continue
             output = outputs_by_id.get(control.output_id)
             if output is None:

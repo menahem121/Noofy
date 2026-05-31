@@ -373,6 +373,35 @@ def test_validator_rejects_audio_widget_bound_to_image_output() -> None:
     assert "type 'display_audio' but output 'image' is 'image'" in result.errors[0]
 
 
+def test_validator_rejects_video_widget_bound_to_image_output() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "invalid_video", "name": "Invalid Video", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"9": {"class_type": "SaveImage", "inputs": {}}},
+            "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image", "kind": "image"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "video", "type": "display_video", "label": "Video", "output_id": "image"},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert not result.valid
+    assert "type 'display_video' but output 'image' is 'image'" in result.errors[0]
+
+
 def test_input_bindings_are_applied() -> None:
     package = WorkflowPackageLoader(Path("app/workflows/packages")).get_package("text_to_image_v0")
     service = EngineService(

@@ -92,13 +92,13 @@ class WorkflowPackageValidator:
                         )
                     else:
                         input_ids_referenced.add(control.input_id)
-                elif control.type not in {"display_image", "display_audio", "result_image", "note"}:
+                elif control.type not in {"display_image", "display_audio", "display_video", "result_image", "note"}:
                     errors.append(
                         f"Dashboard control '{control.id}' has no input_id."
                     )
 
                 # Output media controls must reference a known output.
-                if control.type in {"display_image", "display_audio", "result_image"}:
+                if control.type in {"display_image", "display_audio", "display_video", "result_image"}:
                     if not control.output_id:
                         errors.append(
                             f"Dashboard control '{control.id}' is type '{control.type}' but has no output_id."
@@ -113,6 +113,10 @@ class WorkflowPackageValidator:
                         if control.type == "display_audio" and output_kind != "audio":
                             errors.append(
                                 f"Dashboard control '{control.id}' is type 'display_audio' but output '{output.id}' is '{output_kind}'."
+                            )
+                        if control.type == "display_video" and output_kind != "video":
+                            errors.append(
+                                f"Dashboard control '{control.id}' is type 'display_video' but output '{output.id}' is '{output_kind}'."
                             )
                         if control.type in {"display_image", "result_image"} and output_kind != "image":
                             errors.append(

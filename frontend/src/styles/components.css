@@ -1796,6 +1796,103 @@
   transition: width 120ms ease;
 }
 
+.dashboard-video-input {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+}
+
+.dashboard-video-input--canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+.dashboard-video-input__empty,
+.dashboard-video-input__selected {
+  width: 100%;
+  min-width: 0;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(46, 45, 49, 0.72);
+  color: var(--text-secondary);
+}
+
+.dashboard-video-input__empty {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.dashboard-video-input__empty:hover,
+.dashboard-video-input__empty:focus-visible {
+  border-color: rgba(139, 92, 246, 0.72);
+  background: rgba(55, 54, 59, 0.82);
+  outline: none;
+}
+
+.dashboard-video-input__selected {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-style: solid;
+}
+
+.dashboard-video-input__player {
+  width: 100%;
+  max-height: 280px;
+  background: rgba(20, 19, 22, 0.72);
+}
+
+.dashboard-video-input__meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dashboard-video-input__meta strong,
+.preview-video-output strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-video-input__meta span,
+.preview-video-output span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-video-input__actions,
+.dashboard-video-input__progress-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dashboard-video-input__progress {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dashboard-video-input__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary-hover);
+  transition: width 120ms ease;
+}
+
 .field-group input[type="range"]::-webkit-slider-runnable-track {
   height: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1981,6 +2078,20 @@
 
 .preview-audio-output audio {
   width: 100%;
+}
+
+.preview-video-output {
+  display: grid;
+  width: min(720px, calc(100% - 32px));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(28, 27, 29, 0.74);
+}
+
+.preview-video-output video {
+  width: 100%;
+  max-height: 520px;
 }
 
 .image-comparison-slider {

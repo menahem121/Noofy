@@ -231,6 +231,37 @@ def test_build_run_submission_snapshot_preserves_audio_output_preferences() -> N
     assert snapshot.output_widgets[0].media_kind == "audio"
 
 
+def test_build_run_submission_snapshot_preserves_video_output_preferences() -> None:
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(id="wf-video", name="Video Workflow", version="1"),
+        engine="comfyui",
+        comfyui_graph={"15": {"class_type": "SaveVideo", "inputs": {}}},
+        outputs=[WorkflowOutput(id="video", label="Video", node_id="15", type="video", kind="video")],
+        dashboard=DashboardSchema(
+            version="1",
+            status="configured",
+            sections=[
+                DashboardSection(
+                    id="main",
+                    title="Main",
+                    controls=[
+                        DashboardControl(id="result-video", type="display_video", label="Video", output_id="video"),
+                    ],
+                )
+            ],
+        ),
+    )
+
+    snapshot = build_run_submission_snapshot(
+        package=package,
+        inputs={},
+        output_preferences_snapshot={"result-video": OutputPreference(auto_save=True)},
+    )
+
+    assert snapshot.output_preferences["result-video"].auto_save is True
+    assert snapshot.output_widgets[0].media_kind == "video"
+
+
 @pytest.mark.anyio
 async def test_gallery_capture_leaves_audio_outputs_for_future_media_gallery_support(tmp_path: Path) -> None:
     capture = GalleryCaptureService(GalleryStore(tmp_path / "gallery"))

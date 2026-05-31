@@ -1643,6 +1643,76 @@ describe("WorkflowRunPage", () => {
     );
   });
 
+  it("renders generated video with backend-owned player, metadata, and Auto Save actions", async () => {
+    const videoPackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "video", label: "Video", node_id: "15", type: "video", kind: "video" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [{
+            id: "result-video",
+            type: "display_video",
+            label: "Video result",
+            output_id: "video",
+            layout: { x: 0, y: 0, w: 16, h: 14 },
+          }],
+        }],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, videoPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-video", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
+      }
+      if (url.endsWith("/api/jobs/job-video/progress")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-video", status: "completed", value: 1, max: 1, message: "Execution completed" }));
+      }
+      if (url.endsWith("/api/jobs/job-video/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-video",
+          status: "completed",
+          outputs: [{
+            node_id: "15",
+            output: {
+              images: [{
+                filename: "clip.mp4",
+                kind: "video",
+                type: "video",
+                output_type: "output",
+                mime_type: "video/mp4",
+                size: 4096,
+                duration_seconds: 3,
+                width: 1280,
+                height: 720,
+                fps: 24,
+                url: "/api/jobs/job-video/outputs/view?filename=clip.mp4&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByRole("button", { name: /enable auto save for video result/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByText("clip.mp4")).toBeInTheDocument();
+    expect(document.querySelector("video")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-video/outputs/view?filename=clip.mp4&subfolder=&type=output",
+    );
+    expect(screen.getByText("MP4 · 1280 × 720 · 24 fps · 4 KB · 0:03")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+  });
+
   it("renders dashboard-only notes as read-only canvas cards", async () => {
     mockConfiguredDashboardFetch(fetchMock, readyRuntime, dashboardOnlyNotePackageData());
 

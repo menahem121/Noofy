@@ -1725,6 +1725,8 @@
   .widget-output-placeholder *,
   .widget-output-audio,
   .widget-output-audio *,
+  .widget-output-video,
+  .widget-output-video *,
   .widget-output-image__download,
   .canvas-widget-slider,
   .canvas-widget-slider *,
@@ -1734,6 +1736,8 @@
   .dashboard-image-input *,
   .dashboard-audio-input,
   .dashboard-audio-input *,
+  .dashboard-video-input,
+  .dashboard-video-input *,
   .layout-canvas-resize-handles,
   .layout-canvas-resize-handles *
 ) {

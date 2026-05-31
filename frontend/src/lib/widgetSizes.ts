@@ -26,9 +26,11 @@ export type WidgetTypeKey =
   | "load_image"
   | "load_image_mask"
   | "load_audio"
+  | "load_video"
   | "display_mask"
   | "display_image"
   | "display_audio"
+  | "display_video"
   | "result_image"
   | "seed_widget"
   | "lora_loader"
@@ -45,17 +47,21 @@ const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
   load_image: "media",
   load_image_mask: "media",
   load_audio: "wide",
+  load_video: "media-large",
   display_mask: "media",
   lora_loader: "standard",
   textarea: "standard",
   display_image: "media-large",
   display_audio: "standard",
+  display_video: "media-large",
   result_image: "media-large",
 };
 
 export function defaultLayoutForWidgetType(widgetType: string): GridItemLayout {
   if (widgetType === "load_audio") return { x: 0, y: 0, w: 10, h: 4, minW: 10, minH: 4 };
   if (widgetType === "display_audio") return { x: 0, y: 0, w: 12, h: 6, minW: 12, minH: 6 };
+  if (widgetType === "load_video") return { x: 0, y: 0, w: 14, h: 12, minW: 14, minH: 12 };
+  if (widgetType === "display_video") return { x: 0, y: 0, w: 16, h: 14, minW: 16, minH: 14 };
   const preset = DEFAULT_PRESETS[widgetType as WidgetTypeKey] ?? "standard";
   const def = WIDGET_SIZE_PRESETS[preset];
   return { x: 0, y: 0, w: def.w, h: def.h, minW: def.w, minH: def.h };

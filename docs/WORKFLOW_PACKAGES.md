@@ -13,7 +13,7 @@ A package should contain:
 - ComfyUI API graph used for execution
 - required models with folder/type, filename, size, source URL, checksum when available, and identity verification level
 - exposed inputs mapped to ComfyUI node ids and input names
-- output mapping for generated images or files
+- output mapping for generated images, audio, video, or files
 - dashboard schema for the end-user interface
 
 ## Hardware And Memory Observations
@@ -36,7 +36,7 @@ The dashboard schema describes what the end user sees. It should support:
 - text inputs
 - number inputs and sliders
 - selects
-- image upload controls
+- image, audio, and video upload controls
 - toggles
 - run and cancel actions
 - default values and presets
@@ -94,6 +94,11 @@ target input name: text
 ```
 
 The backend applies input bindings before submitting the graph to the active `EngineAdapter`.
+
+Media outputs declare an app-owned `kind` such as `image`, `audio`, or `video`.
+The compatibility `type` field mirrors that media kind, while engine retrieval
+details remain separate. Uploaded dashboard media is user-local app data and
+must not be embedded in portable `.noofy` archives.
 
 ## Smoke Tests
 

@@ -16,6 +16,7 @@ import {
   Trash2,
   Type,
   UploadCloud,
+  Video,
   Wand2,
 } from "lucide-react";
 
@@ -78,8 +79,10 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   load_image: ImagePlus,
   load_image_mask: UploadCloud,
   load_audio: FileAudio,
+  load_video: Video,
   display_image: Sparkles,
   display_audio: FileAudio,
+  display_video: Video,
   seed_widget: Shuffle,
   lora_loader: Sparkles,
   select: ChevronDown,

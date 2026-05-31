@@ -11,6 +11,7 @@ import {
   Sparkles,
   StickyNote,
   Type,
+  Video,
 } from "lucide-react";
 
 export type WidgetType =
@@ -23,8 +24,10 @@ export type WidgetType =
   | "load_image"
   | "load_image_mask"
   | "load_audio"
+  | "load_video"
   | "display_image"
   | "display_audio"
+  | "display_video"
   | "seed_widget"
   | "lora_loader"
   | "select";
@@ -38,6 +41,8 @@ export type WorkflowValueKind =
   | "image_output"
   | "audio_input"
   | "audio_output"
+  | "video_input"
+  | "video_output"
   | "seed"
   | "lora"
   | "select";
@@ -56,7 +61,7 @@ export interface WorkflowNodeValue {
   technical?: boolean;
 }
 
-export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "lora" | "tune" | "output" | "save";
+export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "video" | "lora" | "tune" | "output" | "save";
 
 export interface WorkflowNode {
   id: string;
@@ -178,6 +183,7 @@ export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
   image: ImageIcon,
   "image-input": ImagePlus,
   audio: FileAudio,
+  video: Video,
   lora: Sparkles,
   tune: SlidersHorizontal,
   output: ImageIcon,
@@ -193,6 +199,8 @@ export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   image_output: ImageIcon,
   audio_input: FileAudio,
   audio_output: FileAudio,
+  video_input: Video,
+  video_output: Video,
   seed: Shuffle,
   lora: Sparkles,
   select: Layers,
@@ -208,8 +216,10 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   load_image: "Load image",
   load_image_mask: "Load image with mask",
   load_audio: "Load audio",
+  load_video: "Load video",
   display_image: "Display image",
   display_audio: "Display audio",
+  display_video: "Display video",
   seed_widget: "Variation ID (seed)",
   lora_loader: "LoRA loader",
   select: "Dropdown",
@@ -224,13 +234,14 @@ const INPUT_WIDGET_TYPES: WidgetType[] = [
   "load_image",
   "load_image_mask",
   "load_audio",
+  "load_video",
   "seed_widget",
   "lora_loader",
   "select",
 ];
 
 export function isOutputWidgetType(widgetType: string): boolean {
-  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "result_image";
+  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "display_video" || widgetType === "result_image";
 }
 
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
@@ -245,6 +256,9 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   if (kind === "audio_output") {
     return ["display_audio"];
   }
+  if (kind === "video_output") {
+    return ["display_video"];
+  }
 
   if (kind === "image_input") {
     return ["load_image", "load_image_mask"];
@@ -252,6 +266,9 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
 
   if (kind === "audio_input") {
     return ["load_audio"];
+  }
+  if (kind === "video_input") {
+    return ["load_video"];
   }
 
   if (kind === "seed") {
@@ -287,6 +304,8 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "image_input") return "load_image";
   if (value.valueKind === "audio_output") return "display_audio";
   if (value.valueKind === "audio_input") return "load_audio";
+  if (value.valueKind === "video_output") return "display_video";
+  if (value.valueKind === "video_input") return "load_video";
   if (value.valueKind === "seed") return "seed_widget";
   if (value.valueKind === "lora") return "lora_loader";
   if (value.valueKind === "boolean") return "toggle";
@@ -704,6 +723,7 @@ export function workflowFromBindableInputs(
     if (isLoraNode) return "lora";
     const t = nodeType.toLowerCase();
     if (t.includes("audio")) return "audio";
+    if (t.includes("video")) return "video";
     if (t === "note") return "note";
     if (t.includes("clip") || t.includes("text")) return "text";
     if (t.includes("ksampler") || t.includes("sampler")) return "sampler";
@@ -718,6 +738,8 @@ export function workflowFromBindableInputs(
     if (kind === "image_output") return "image_output";
     if (kind === "audio_input") return "audio_input";
     if (kind === "audio_output") return "audio_output";
+    if (kind === "video_input") return "video_input";
+    if (kind === "video_output") return "video_output";
     if (kind === "note") return "note";
     if (kind === "seed") return "seed";
     if (kind === "lora") return "lora";
@@ -842,8 +864,10 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   return { inputs, dashboard };
 }
 
-function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" {
-  return widgetType === "display_audio" ? "audio" : "image";
+function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "video" {
+  if (widgetType === "display_audio") return "audio";
+  if (widgetType === "display_video") return "video";
+  return "image";
 }
 
 function hasExecutableWorkflowBinding(widget: DashboardWidget): boolean {
@@ -889,16 +913,41 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
 }
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
-  return addAutomaticAudioOutputWidget(
-    addAutomaticImageOutputWidget(
-      addAutomaticAudioInputWidgets(
-        addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow),
+  return addAutomaticVideoOutputWidget(
+    addAutomaticAudioOutputWidget(
+      addAutomaticImageOutputWidget(
+        addAutomaticVideoInputWidgets(
+          addAutomaticAudioInputWidgets(
+            addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow),
+            workflow,
+          ),
+          workflow,
+        ),
         workflow,
       ),
       workflow,
     ),
     workflow,
   );
+}
+
+export function addAutomaticVideoInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingBindings = new Set(schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`));
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (value.valueKind !== "video_input" || existingValueIds.has(value.id)) continue;
+      const bindingKey = `${value.nodeId}:${value.inputName}`;
+      if (existingBindings.has(bindingKey)) continue;
+      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_video", defaultValue: null });
+      existingValueIds.add(value.id);
+      existingBindings.add(bindingKey);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
 export function addAutomaticNoteWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
@@ -1048,6 +1097,26 @@ export function addAutomaticAudioOutputWidget(schema: DashboardSchema, workflow:
         defaultValue: null,
       },
     ],
+  };
+}
+
+export function addAutomaticVideoOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const outputRecords = workflow.nodes.flatMap((node) =>
+    node.values.filter((value) => value.valueKind === "video_output").map((value) => ({ node, value })),
+  );
+  const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
+  if (!selected) return schema;
+  const valueIds = new Set(outputRecords.map((record) => record.value.id));
+  const bindings = new Set(outputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
+  const hasOutputWidget = schema.widgets.some((widget) =>
+    widget.widgetType === "display_video" &&
+    (valueIds.has(widget.valueId) || bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
+  );
+  if (hasOutputWidget) return schema;
+
+  return {
+    ...schema,
+    widgets: [...schema.widgets, { ...createDashboardWidgetForValue(selected.value, selected.node), widgetType: "display_video", defaultValue: null }],
   };
 }
 

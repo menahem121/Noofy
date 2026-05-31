@@ -33,8 +33,23 @@ ALLOWED_AUDIO_MIME_TYPES = frozenset(
         "application/octet-stream",
     }
 )
+ALLOWED_VIDEO_MIME_TYPES = frozenset(
+    {
+        "video/mp4",
+        "application/mp4",
+        "video/quicktime",
+        "video/x-quicktime",
+        "video/webm",
+        "application/webm",
+        "video/x-matroska",
+        "video/matroska",
+        "application/x-matroska",
+        "application/octet-stream",
+    }
+)
 MAX_ASSET_BYTES = 25 * 1024 * 1024  # 25 MB
 MAX_AUDIO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
+MAX_VIDEO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 MAX_WORKFLOW_ICON_SIZE = 256
 _STREAM_CHUNK_BYTES = 1024 * 1024
 
@@ -81,32 +96,88 @@ class DashboardAssetService:
         *,
         declared_size: int | None = None,
     ) -> dict[str, Any]:
-        original_filename = _safe_original_filename(original_filename)
-        if declared_size is not None and declared_size > MAX_AUDIO_ASSET_BYTES:
-            self._log_audio_upload_failure("File exceeds the 100 GB size limit.")
-            raise AssetUploadError("File exceeds the 100 GB size limit.")
-
-        guessed_content_type = _normalized_audio_content_type(
+        return self._store_large_media_stream(
+            source,
             content_type,
             original_filename,
+            kind="audio",
+            declared_size=declared_size,
+            max_bytes=MAX_AUDIO_ASSET_BYTES,
+            allowed_mime_types=ALLOWED_AUDIO_MIME_TYPES,
+            normalize_content_type=_normalized_audio_content_type,
+            detect_content_type=_detect_audio_content_type,
+            content_type_matches=_audio_content_type_matches,
+            extension_for=lambda filename, detected, declared: _safe_audio_ext(detected),
+            validate_filename_extension=_validate_audio_filename_extension,
+            canonical_content_type=lambda filename, detected: _canonical_audio_content_type(detected),
+            extra_metadata=lambda path, detected: _audio_metadata(path, detected),
         )
-        if guessed_content_type not in ALLOWED_AUDIO_MIME_TYPES:
-            self._log_audio_upload_failure(f"File type '{content_type}' is not allowed.")
+
+    def store_video_stream(
+        self,
+        source: BinaryIO,
+        content_type: str,
+        original_filename: str,
+        *,
+        declared_size: int | None = None,
+    ) -> dict[str, Any]:
+        return self._store_large_media_stream(
+            source,
+            content_type,
+            original_filename,
+            kind="video",
+            declared_size=declared_size,
+            max_bytes=MAX_VIDEO_ASSET_BYTES,
+            allowed_mime_types=ALLOWED_VIDEO_MIME_TYPES,
+            normalize_content_type=_normalized_video_content_type,
+            detect_content_type=_detect_video_container_family,
+            content_type_matches=_video_content_type_matches,
+            extension_for=_video_extension_for,
+            validate_filename_extension=_validate_video_filename_extension,
+            canonical_content_type=_canonical_video_content_type,
+        )
+
+    def _store_large_media_stream(
+        self,
+        source: BinaryIO,
+        content_type: str,
+        original_filename: str,
+        *,
+        kind: str,
+        declared_size: int | None,
+        max_bytes: int,
+        allowed_mime_types: frozenset[str],
+        normalize_content_type,
+        detect_content_type,
+        content_type_matches,
+        extension_for,
+        validate_filename_extension,
+        canonical_content_type,
+        extra_metadata=None,
+    ) -> dict[str, Any]:
+        original_filename = _safe_original_filename(original_filename)
+        if declared_size is not None and declared_size > max_bytes:
+            self._log_media_upload_failure(kind, "File exceeds the 100 GB size limit.")
+            raise AssetUploadError("File exceeds the 100 GB size limit.")
+
+        normalized_content_type = normalize_content_type(content_type, original_filename)
+        if normalized_content_type not in allowed_mime_types:
+            self._log_media_upload_failure(kind, f"File type '{content_type}' is not allowed.")
             raise AssetUploadError(f"File type '{content_type}' is not allowed.")
 
         self._dir.mkdir(parents=True, exist_ok=True)
         if declared_size is not None:
             try:
-                _ensure_disk_space(self._dir, declared_size)
+                _ensure_disk_space(self._dir, declared_size, kind)
             except AssetUploadError as exc:
-                self._log_audio_upload_failure(str(exc))
+                self._log_media_upload_failure(kind, str(exc))
                 raise
 
         asset_id: str | None = None
         tmp_path: str | None = None
         total = 0
         first_bytes = b""
-        fd, tmp_path = tempfile.mkstemp(dir=self._dir, suffix=".audio-upload.tmp")
+        fd, tmp_path = tempfile.mkstemp(dir=self._dir, suffix=f".{kind}-upload.tmp")
         try:
             with os.fdopen(fd, "wb") as f:
                 while True:
@@ -115,45 +186,44 @@ class DashboardAssetService:
                         break
                     if isinstance(chunk, str):
                         chunk = chunk.encode()
-                    if not first_bytes:
-                        first_bytes = bytes(chunk[:4096])
+                    if len(first_bytes) < 4096:
+                        first_bytes += bytes(chunk[: 4096 - len(first_bytes)])
                     total += len(chunk)
-                    if total > MAX_AUDIO_ASSET_BYTES:
+                    if total > max_bytes:
                         raise AssetUploadError("File exceeds the 100 GB size limit.")
                     if total % (64 * 1024 * 1024) < len(chunk):
-                        _ensure_disk_space(self._dir, len(chunk))
+                        _ensure_disk_space(self._dir, len(chunk), kind)
                     f.write(chunk)
 
-            detected = _detect_audio_content_type(first_bytes)
+            detected = detect_content_type(first_bytes)
             if detected is None:
-                raise AssetUploadError("File does not appear to be a valid audio file.")
-            if not _audio_content_type_matches(guessed_content_type, detected):
+                raise AssetUploadError(f"File does not appear to be a valid {kind} file.")
+            if not content_type_matches(normalized_content_type, detected):
                 raise AssetUploadError(f"File content does not match '{content_type}'.")
 
-            ext = _safe_audio_ext(detected)
-            _validate_audio_filename_extension(original_filename, ext)
+            ext = extension_for(original_filename, detected, normalized_content_type)
+            validate_filename_extension(original_filename, ext)
             asset_id = f"{uuid.uuid4()}{ext}"
             asset_path = self._dir / asset_id
             meta_path = self._dir / f"{asset_id}.meta.json"
-            duration_seconds = _audio_duration_seconds(Path(tmp_path), detected)
-
-            os.replace(tmp_path, asset_path)
-            tmp_path = None
             metadata = {
                 "asset_id": asset_id,
-                "kind": "audio",
+                "kind": kind,
                 "original_filename": original_filename,
-                "content_type": _canonical_audio_content_type(detected),
+                "content_type": canonical_content_type(original_filename, detected),
                 "size": total,
                 "format": ext.removeprefix("."),
             }
-            if duration_seconds is not None:
-                metadata["duration_seconds"] = duration_seconds
+            if extra_metadata is not None:
+                metadata.update(extra_metadata(Path(tmp_path), detected))
+
+            os.replace(tmp_path, asset_path)
+            tmp_path = None
             _atomic_write_json(meta_path, metadata)
             if self.log_store is not None:
                 self.log_store.add(
                     "info",
-                    "Stored dashboard audio asset",
+                    f"Stored dashboard {kind} asset",
                     "workflow.assets",
                     details={
                         "asset_id": asset_id,
@@ -172,14 +242,14 @@ class DashboardAssetService:
                     (self._dir / asset_id).unlink()
                 with contextlib.suppress(FileNotFoundError):
                     (self._dir / f"{asset_id}.meta.json").unlink()
-            self._log_audio_upload_failure(str(exc))
+            self._log_media_upload_failure(kind, str(exc))
             raise
 
-    def _log_audio_upload_failure(self, error: str) -> None:
+    def _log_media_upload_failure(self, kind: str, error: str) -> None:
         if self.log_store is not None:
             self.log_store.add(
                 "warning",
-                "Dashboard audio asset upload failed",
+                f"Dashboard {kind} asset upload failed",
                 "workflow.assets",
                 details={"error": error},
             )
@@ -288,14 +358,20 @@ class DashboardAssetService:
             content_type = raw.get("content_type")
             if isinstance(content_type, str) and content_type.strip():
                 metadata["content_type"] = content_type
-            if raw.get("kind") == "audio":
-                metadata["kind"] = "audio"
+            if raw.get("kind") in {"audio", "video"}:
+                metadata["kind"] = raw["kind"]
                 if isinstance(raw.get("size"), int):
                     metadata["size"] = raw["size"]
                 if isinstance(raw.get("format"), str):
                     metadata["format"] = raw["format"]
                 if isinstance(raw.get("duration_seconds"), (int, float)):
                     metadata["duration_seconds"] = raw["duration_seconds"]
+                if isinstance(raw.get("width"), int):
+                    metadata["width"] = raw["width"]
+                if isinstance(raw.get("height"), int):
+                    metadata["height"] = raw["height"]
+                if isinstance(raw.get("fps"), (int, float)):
+                    metadata["fps"] = raw["fps"]
         return metadata
 
     def asset_path(self, asset_id: str) -> Path:
@@ -406,14 +482,98 @@ def _audio_duration_seconds(path: Path, detected_content_type: str) -> float | N
         return None
 
 
-def _ensure_disk_space(directory: Path, required_bytes: int) -> None:
+def _audio_metadata(path: Path, detected_content_type: str) -> dict[str, float]:
+    duration_seconds = _audio_duration_seconds(path, detected_content_type)
+    return {"duration_seconds": duration_seconds} if duration_seconds is not None else {}
+
+
+def _normalized_video_content_type(content_type: str, original_filename: str) -> str:
+    normalized = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    aliases = {
+        "application/mp4": "video/mp4",
+        "video/x-quicktime": "video/quicktime",
+        "application/webm": "video/webm",
+        "video/matroska": "video/x-matroska",
+        "application/x-matroska": "video/x-matroska",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    if normalized != "application/octet-stream":
+        return normalized
+    return {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+    }.get(Path(original_filename).suffix.lower(), normalized)
+
+
+def _detect_video_container_family(data: bytes) -> str | None:
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "iso-bmff"
+    if data.startswith(b"\x1aE\xdf\xa3"):
+        return "ebml"
+    return None
+
+
+def _video_content_type_matches(declared: str, detected_family: str) -> bool:
+    if declared == "application/octet-stream":
+        return True
+    allowed_by_family = {
+        "iso-bmff": {"video/mp4", "video/quicktime"},
+        "ebml": {"video/webm", "video/x-matroska"},
+    }
+    return declared in allowed_by_family.get(detected_family, set())
+
+
+def _video_extension_for(original_filename: str, detected_family: str, declared_content_type: str) -> str:
+    suffix = Path(original_filename).suffix.lower()
+    allowed_by_family = {
+        "iso-bmff": {".mp4", ".mov"},
+        "ebml": {".webm", ".mkv"},
+    }
+    if suffix not in allowed_by_family.get(detected_family, set()):
+        raise AssetUploadError(f"File extension '{suffix or '<missing>'}' does not match the video content.")
+    expected_content_type = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+    }[suffix]
+    if declared_content_type != expected_content_type:
+        raise AssetUploadError(f"File extension '{suffix}' does not match '{declared_content_type}'.")
+    return suffix
+
+
+def _validate_video_filename_extension(original_filename: str, detected_ext: str) -> None:
+    suffix = Path(original_filename).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm", ".mkv"}:
+        raise AssetUploadError(f"File extension '{suffix or '<missing>'}' is not allowed.")
+    if suffix != detected_ext:
+        raise AssetUploadError(f"File extension '{suffix}' does not match the video content.")
+
+
+def _canonical_video_content_type(original_filename: str, detected_family: str) -> str:
+    suffix = Path(original_filename).suffix.lower()
+    mapping = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+    }
+    if suffix not in mapping:
+        raise AssetUploadError(f"File extension '{suffix or '<missing>'}' is not allowed.")
+    return mapping[suffix]
+
+
+def _ensure_disk_space(directory: Path, required_bytes: int, kind: str) -> None:
     try:
         usage = shutil.disk_usage(directory)
     except OSError:
         return
     reserve = 256 * 1024 * 1024
     if usage.free < required_bytes + reserve:
-        raise AssetUploadError("Not enough free disk space to store this audio file.")
+        raise AssetUploadError(f"Not enough free disk space to store this {kind} file.")
 
 
 def _optimized_icon_png(data: bytes) -> bytes:
@@ -459,7 +619,7 @@ def _validate_asset_id(asset_id: str) -> str:
     if "/" in asset_id or "\\" in asset_id or ".." in asset_id:
         raise ValueError(f"Invalid asset_id: {asset_id!r}")
     # Must end with a known extension.
-    if not any(asset_id.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".wav", ".mp3", ".flac", ".ogg", ".m4a")):
+    if not any(asset_id.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4", ".mov", ".webm", ".mkv")):
         raise ValueError(f"Invalid asset_id: {asset_id!r}")
     return asset_id
 

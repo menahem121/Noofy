@@ -24,8 +24,10 @@ Widget groups are visual containers around existing controls. A group owns one d
 | `load_image` | 10 | 10 | Image upload/input controls. |
 | `load_image_mask` | 10 | 10 | Image upload controls with mask drawing enabled. |
 | `load_audio` | 10 | 4 | Audio upload/input controls. |
+| `load_video` | 14 | 12 | Video upload/input controls. |
 | `display_mask` | 10 | 10 | Mask display or preview widgets. |
 | `display_audio` | 12 | 6 | Audio output playback widgets. |
+| `display_video` | 16 | 14 | Video output playback widgets. |
 | `display_image` | 14 | 14 | Large image output preview widgets. |
 | `result_image` | 14 | 14 | Result image widgets bound to workflow outputs. |
 
@@ -39,6 +41,8 @@ Widget groups are visual containers around existing controls. A group owns one d
 - If automatic option extraction is unavailable or incomplete for a node, the Dashboard Builder still lets the creator/importer choose the Dropdown widget and enter choices manually, one per line.
 - `display_image` is the frontend builder/run widget type for image outputs.
 - `display_audio` is the frontend builder/run widget type for audio outputs.
+- `display_video` is the frontend builder/run widget type for video outputs.
 - `result_image` is also accepted by the package schema for output image controls.
 - `load_image_mask` follows the same minimum as `load_image` because it needs room for upload and mask affordances.
 - Audio-specific media widgets are limited to `load_audio` and `display_audio`; duration, speaker, voice, lyric, and similar simple parameters should use generic controls such as `int_field`, `slider`, `select`, `textarea`, or `toggle`.
+- Video-specific media widgets are limited to `load_video` and `display_video`; FPS, frame count, duration, resolution, strength, and similar simple parameters should use generic controls such as `int_field`, `slider`, `select`, or `toggle`.

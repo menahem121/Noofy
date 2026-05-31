@@ -54,6 +54,8 @@ def _make_png(width: int = 1, height: int = 1) -> bytes:
 
 PNG_BYTES = _make_png()
 WAV_BYTES = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt " + b"\x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp41"
+WEBM_BYTES = b"\x1aE\xdf\xa3\x9fB\x86\x81\x01"
 
 
 def test_store_png_returns_asset_id(tmp_path: Path) -> None:
@@ -250,6 +252,67 @@ def test_store_audio_stream_cleans_failed_upload(tmp_path: Path) -> None:
     assert not list((tmp_path / "assets").glob("*.wav"))
 
 
+@pytest.mark.parametrize(
+    ("filename", "content_type", "data"),
+    [
+        ("clip.mp4", "video/mp4", MP4_BYTES),
+        ("clip.mp4", "application/mp4", MP4_BYTES),
+        ("clip.mov", "video/quicktime", MP4_BYTES),
+        ("clip.mov", "video/x-quicktime", MP4_BYTES),
+        ("clip.webm", "video/webm", WEBM_BYTES),
+        ("clip.webm", "application/webm", WEBM_BYTES),
+        ("clip.mkv", "video/x-matroska", WEBM_BYTES),
+        ("clip.mkv", "video/matroska", WEBM_BYTES),
+        ("clip.mkv", "application/x-matroska", WEBM_BYTES),
+    ],
+)
+def test_store_video_stream_accepts_supported_containers(
+    tmp_path: Path,
+    filename: str,
+    content_type: str,
+    data: bytes,
+) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_video_stream(BytesIO(data), content_type, filename)
+
+    assert result["asset_id"].endswith(Path(filename).suffix)
+    assert result["kind"] == "video"
+    assert result["format"] == Path(filename).suffix.removeprefix(".")
+    assert result["size"] == len(data)
+    assert svc.metadata(result["asset_id"])["kind"] == "video"
+
+
+def test_store_video_stream_rejects_mismatched_container(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="does not match"):
+        svc.store_video_stream(BytesIO(WEBM_BYTES), "video/mp4", "clip.mp4")
+
+    assert not list((tmp_path / "assets").glob("*.tmp"))
+
+
+def test_store_video_stream_accepts_octet_stream_using_filename(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_video_stream(BytesIO(WEBM_BYTES), "application/octet-stream", "clip.mkv")
+
+    assert result["asset_id"].endswith(".mkv")
+    assert result["content_type"] == "video/x-matroska"
+
+
+def test_store_video_stream_rejects_declared_file_over_cap(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    with pytest.raises(AssetUploadError, match="100 GB"):
+        svc.store_video_stream(
+            BytesIO(MP4_BYTES),
+            "video/mp4",
+            "clip.mp4",
+            declared_size=assets_module.MAX_VIDEO_ASSET_BYTES + 1,
+        )
+
+
 def test_workflow_icon_upload_is_resized_and_listed(tmp_path: Path) -> None:
     from PIL import Image
 
@@ -334,6 +397,23 @@ def test_upload_dashboard_audio_asset_route_streams_file(tmp_path: Path) -> None
     assert (tmp_path / "assets" / body["asset_id"]).exists()
 
 
+def test_upload_dashboard_video_asset_route_streams_file(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf-1/assets/video",
+            files={"video": ("clip.mp4", MP4_BYTES, "video/mp4")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"].endswith(".mp4")
+    assert body["kind"] == "video"
+    assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
 def test_serve_dashboard_asset_route_returns_file_and_metadata(tmp_path: Path) -> None:
     asset_service = DashboardAssetService(tmp_path / "assets")
     stored = asset_service.store(PNG_BYTES, "image/png", "input.png")
@@ -348,6 +428,22 @@ def test_serve_dashboard_asset_route_returns_file_and_metadata(tmp_path: Path) -
     assert image_response.content == PNG_BYTES
     assert metadata_response.status_code == 200
     assert metadata_response.json()["original_filename"] == "input.png"
+
+
+def test_serve_dashboard_video_asset_route_supports_range_requests(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    stored = asset_service.store_video_stream(BytesIO(MP4_BYTES), "video/mp4", "clip.mp4")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.get(
+            f"/api/assets/{stored['asset_id']}",
+            headers={"Range": "bytes=0-3"},
+        )
+
+    assert response.status_code == 206
+    assert response.headers["content-range"] == f"bytes 0-3/{len(MP4_BYTES)}"
+    assert response.content == MP4_BYTES[:4]
 
 
 def test_serve_dashboard_asset_route_rejects_bad_asset_id(tmp_path: Path) -> None:

@@ -43,6 +43,7 @@ import {
   startModelDownload,
   uploadDashboardAsset,
   uploadDashboardAudioAsset,
+  uploadDashboardVideoAsset,
   validateWorkflow,
   type DashboardSavePayload,
   type DashboardControlDef,
@@ -75,7 +76,7 @@ import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../l
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { workflowDisplayName } from "../../lib/workflowNames";
-import { audioMetadataLabel, type OutputAudioMedia } from "./audioMedia";
+import { audioMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputVideoMedia } from "./media";
 import {
   failedModelMessage,
   isModelDownloadActive,
@@ -214,6 +215,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const isBlockedByMemory = state.job?.status === "blocked_by_memory";
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
   const outputAudios = useMemo(() => extractAudioOutputs(state.result), [state.result]);
+  const outputVideos = useMemo(() => extractVideoOutputs(state.result), [state.result]);
 
   useEffect(() => {
     setComparisonInputImageUrl(null);
@@ -330,7 +332,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       if (!Array.isArray(images)) continue;
       const imageUrls: string[] = [];
       for (const image of images) {
-        if (image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
+        if (mediaOutputKind(image, "image") === "image" && image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
           imageUrls.push(resolveBackendUrl(image.view_url, { includeToken: true }));
         }
       }
@@ -359,6 +361,15 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     }
     return map;
   }, [state.result]);
+
+  const outputVideosByNodeId = useMemo<Map<string, OutputVideoMedia[]>>(
+    () => extractVideoOutputsByNodeId(state.result),
+    [state.result],
+  );
+  const classicPreviewMedia = useMemo(
+    () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputImages, outputAudios, outputVideos),
+    [allControls, outputAudios, outputAudiosByNodeId, outputImages, outputImagesByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
+  );
 
   async function loadRequirements() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -648,6 +659,11 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     setInputValue(inputId, asset_id);
   }
 
+  async function handleVideoUpload(inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) {
+    const { asset_id } = await uploadDashboardVideoAsset(workflowId, file, onProgress, signal);
+    setInputValue(inputId, asset_id);
+  }
+
   function loraBrowserFor(control: DashboardControlDef, input: WorkflowInputDef) {
     if (control.type !== "lora_loader") return undefined;
     const civitaiConfigured = Boolean(state.apiKeySettings?.providers?.civitai?.configured);
@@ -925,7 +941,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const topBarProgress = isRunning ? { percent: progressPercent } : null;
 
   const inputControls = allControls.filter(
-    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.input_id),
+    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_video" && c.input_id),
   );
   const inputControlIds = useMemo(() => new Set(inputControls.map((control) => control.id)), [inputControls]);
   const inputTopLevelItems = useMemo(
@@ -1214,6 +1230,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
           outputAudiosByNodeId={outputAudiosByNodeId}
+          outputVideosByNodeId={outputVideosByNodeId}
           comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
           outputPreferences={outputPreferences}
@@ -1234,6 +1251,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
           onAudioUpload={handleAudioUpload}
+          onVideoUpload={handleVideoUpload}
           loraBrowserFor={loraBrowserFor}
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
           onRun={() => void handleRun()}
@@ -1291,6 +1309,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
               onChange={(id, value) => setInputValue(id, value)}
               onImageUpload={handleImageUpload}
               onAudioUpload={handleAudioUpload}
+              onVideoUpload={handleVideoUpload}
               loraBrowserFor={loraBrowserFor}
             />
           ) : (
@@ -1328,21 +1347,27 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           </div>
 
           <div className="preview-stage">
-            {outputImages[0] ? (
+            {classicPreviewMedia?.kind === "image" ? (
               comparisonInputImageUrl ? (
                 <ImageComparisonSlider
                   beforeSrc={comparisonInputImageUrl}
-                  afterSrc={outputImages[0]}
+                  afterSrc={classicPreviewMedia.url}
                   alt="Generated workflow output"
                 />
               ) : (
-                <img src={outputImages[0]} alt="Generated workflow output" />
+                <img src={classicPreviewMedia.url} alt="Generated workflow output" />
               )
-            ) : outputAudios[0] ? (
+            ) : classicPreviewMedia?.kind === "video" ? (
+              <div className="preview-video-output">
+                <video controls src={classicPreviewMedia.media.url} poster={classicPreviewMedia.media.thumbnailUrl ?? undefined} preload="metadata" />
+                <strong>{classicPreviewMedia.media.filename}</strong>
+                <span>{videoOutputMetaLabel(classicPreviewMedia.media)}</span>
+              </div>
+            ) : classicPreviewMedia?.kind === "audio" ? (
               <div className="preview-audio-output">
-                <audio controls src={outputAudios[0].url} preload="metadata" />
-                <strong>{outputAudios[0].filename}</strong>
-                <span>{audioOutputMetaLabel(outputAudios[0])}</span>
+                <audio controls src={classicPreviewMedia.media.url} preload="metadata" />
+                <strong>{classicPreviewMedia.media.filename}</strong>
+                <span>{audioOutputMetaLabel(classicPreviewMedia.media)}</span>
               </div>
             ) : (
               <div className="preview-empty">
@@ -1511,6 +1536,7 @@ function DashboardInputControls({
   onChange,
   onImageUpload,
   onAudioUpload,
+  onVideoUpload,
   loraBrowserFor,
 }: {
   items: DashboardTopLevelControlItem[];
@@ -1519,6 +1545,7 @@ function DashboardInputControls({
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   return (
@@ -1540,6 +1567,7 @@ function DashboardInputControls({
                     onChange={onChange}
                     onImageUpload={onImageUpload}
                     onAudioUpload={onAudioUpload}
+                    onVideoUpload={onVideoUpload}
                     loraBrowserFor={loraBrowserFor}
                   />
                 ))}
@@ -1556,6 +1584,7 @@ function DashboardInputControls({
             onChange={onChange}
             onImageUpload={onImageUpload}
             onAudioUpload={onAudioUpload}
+            onVideoUpload={onVideoUpload}
             loraBrowserFor={loraBrowserFor}
           />
         );
@@ -1572,6 +1601,7 @@ function ClassicDashboardInputControl({
   onChange,
   onImageUpload,
   onAudioUpload,
+  onVideoUpload,
   loraBrowserFor,
 }: {
   control: DashboardControlDef;
@@ -1581,6 +1611,7 @@ function ClassicDashboardInputControl({
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
         if (control.type === "note") {
@@ -1608,6 +1639,7 @@ function ClassicDashboardInputControl({
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
             onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
+            onVideoUpload={(file, onProgress, signal) => onVideoUpload(input.id, file, onProgress, signal)}
           />
         );
 }
@@ -2473,7 +2505,7 @@ function extractImageUrls(result: JobResult | null) {
     const images = outputPayload.images;
     if (!Array.isArray(images)) continue;
     for (const image of images) {
-      if (image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
+      if (mediaOutputKind(image, "image") === "image" && image && typeof image === "object" && "view_url" in image && typeof image.view_url === "string") {
         urls.push(resolveBackendUrl(image.view_url, { includeToken: true }));
       }
     }
@@ -2482,19 +2514,117 @@ function extractImageUrls(result: JobResult | null) {
 }
 
 function extractAudioOutputs(result: JobResult | null): OutputAudioMedia[] {
-  if (!result) return [];
-  const outputs: OutputAudioMedia[] = [];
+  return extractMediaItems(result, "audio")
+    .map(({ item }) => normalizeAudioOutput(item))
+    .filter((item): item is OutputAudioMedia => Boolean(item));
+}
+
+function extractVideoOutputs(result: JobResult | null): OutputVideoMedia[] {
+  return extractMediaItems(result, "video")
+    .map(({ item }) => normalizeVideoOutput(item))
+    .filter((item): item is OutputVideoMedia => Boolean(item));
+}
+
+function extractVideoOutputsByNodeId(result: JobResult | null): Map<string, OutputVideoMedia[]> {
+  const map = new Map<string, OutputVideoMedia[]>();
+  for (const { item, nodeId } of extractMediaItems(result, "video")) {
+    if (!nodeId) continue;
+    const normalized = normalizeVideoOutput(item);
+    if (normalized) map.set(nodeId, [...(map.get(nodeId) ?? []), normalized]);
+  }
+  return map;
+}
+
+function extractMediaItems(result: JobResult | null, kind: "audio" | "video") {
+  const outputs: Array<{ item: unknown; nodeId: string | null }> = [];
+  if (!result) return outputs;
   for (const output of result.outputs) {
     const outputPayload = output.output;
-    if (!outputPayload || typeof outputPayload !== "object" || !("audio" in outputPayload)) continue;
-    const audios = outputPayload.audio;
-    if (!Array.isArray(audios)) continue;
-    for (const audio of audios) {
-      const normalized = normalizeAudioOutput(audio);
-      if (normalized) outputs.push(normalized);
+    if (!outputPayload || typeof outputPayload !== "object") continue;
+    const nodeIdKey = Object.keys(output).find((key) => key !== "output");
+    const nodeId = typeof output.node_id === "string" ? output.node_id : nodeIdKey ?? null;
+    for (const bucketName of ["images", "audio", "video", "videos", "gifs"]) {
+      const items = (outputPayload as Record<string, unknown>)[bucketName];
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        if (mediaOutputKind(item, bucketName) === kind) outputs.push({ item, nodeId });
+      }
     }
   }
   return outputs;
+}
+
+function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" | "video" {
+  if (item && typeof item === "object") {
+    const record = item as Record<string, unknown>;
+    if (record.kind === "image" || record.kind === "audio" || record.kind === "video") return record.kind;
+    if (record.type === "image" || record.type === "audio" || record.type === "video") return record.type;
+    const mimeType =
+      typeof record.mime_type === "string"
+        ? record.mime_type.toLowerCase()
+        : typeof record.content_type === "string"
+          ? record.content_type.toLowerCase()
+          : "";
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType.startsWith("audio/")) return "audio";
+    if (mimeType.startsWith("video/")) return "video";
+    const filename = typeof record.filename === "string" ? record.filename.toLowerCase() : "";
+    if (/\.(mp4|mov|webm|mkv)$/.test(filename)) return "video";
+    if (/\.(wav|mp3|flac|ogg|m4a)$/.test(filename)) return "audio";
+  }
+  if (bucketName === "audio") return "audio";
+  if (bucketName === "video" || bucketName === "videos") return "video";
+  return "image";
+}
+
+function normalizeVideoOutput(video: unknown): OutputVideoMedia | null {
+  if (!video || typeof video !== "object") return null;
+  const item = video as Record<string, unknown>;
+  const rawUrl = typeof item.view_url === "string" ? item.view_url : typeof item.url === "string" ? item.url : null;
+  if (!rawUrl) return null;
+  const filename = typeof item.filename === "string" && item.filename ? item.filename : filenameFromMediaUrl(rawUrl, "noofy-video");
+  return {
+    url: resolveBackendUrl(rawUrl, { includeToken: true }),
+    filename,
+    thumbnailUrl: typeof item.thumbnail_url === "string" ? resolveBackendUrl(item.thumbnail_url, { includeToken: true }) : null,
+    mimeType: typeof item.mime_type === "string" ? item.mime_type : null,
+    durationSeconds: typeof item.duration_seconds === "number" ? item.duration_seconds : null,
+    width: typeof item.width === "number" ? item.width : null,
+    height: typeof item.height === "number" ? item.height : null,
+    fps: typeof item.fps === "number" ? item.fps : null,
+    size: typeof item.size === "number" ? item.size : null,
+  };
+}
+
+function selectClassicPreviewMedia(
+  controls: DashboardControlDef[],
+  outputs: WorkflowOutputDef[],
+  imagesByNodeId: Map<string, string[]>,
+  audiosByNodeId: Map<string, OutputAudioMedia[]>,
+  videosByNodeId: Map<string, OutputVideoMedia[]>,
+  fallbackImages: string[],
+  fallbackAudios: OutputAudioMedia[],
+  fallbackVideos: OutputVideoMedia[],
+) {
+  const outputsById = new Map(outputs.map((output) => [output.id, output]));
+  const declaredOutputs = controls
+    .filter((control) => control.output_id)
+    .map((control) => outputsById.get(control.output_id!))
+    .filter((output): output is WorkflowOutputDef => Boolean(output));
+  for (const output of [...declaredOutputs, ...outputs]) {
+    const kind = output.kind ?? output.type;
+    if (kind === "video" && videosByNodeId.get(output.node_id)?.[0]) return { kind: "video" as const, media: videosByNodeId.get(output.node_id)![0] };
+    if (kind === "image" && imagesByNodeId.get(output.node_id)?.[0]) return { kind: "image" as const, url: imagesByNodeId.get(output.node_id)![0] };
+    if (kind === "audio" && audiosByNodeId.get(output.node_id)?.[0]) return { kind: "audio" as const, media: audiosByNodeId.get(output.node_id)![0] };
+  }
+  if (fallbackVideos[0]) return { kind: "video" as const, media: fallbackVideos[0] };
+  if (fallbackImages[0]) return { kind: "image" as const, url: fallbackImages[0] };
+  if (fallbackAudios[0]) return { kind: "audio" as const, media: fallbackAudios[0] };
+  return null;
+}
+
+function videoOutputMetaLabel(video: OutputVideoMedia): string {
+  return videoMetadataLabel(null, video.mimeType, video.size, video.durationSeconds, video.width, video.height, video.fps, "Video output");
 }
 
 function normalizeAudioOutput(audio: unknown): OutputAudioMedia | null {
@@ -2731,7 +2861,7 @@ function buildDashboardSchemaForEditing(
         id: control.id,
         valueId: output.id,
         binding: { nodeId: output.node_id, inputName: "" },
-        widgetType: outputKind === "audio" ? "display_audio" : "display_image",
+        widgetType: outputKind === "audio" ? "display_audio" : outputKind === "video" ? "display_video" : "display_image",
         title: control.label,
         description: control.description ?? "",
         defaultValue: null,
@@ -2843,8 +2973,10 @@ function toBuilderWidgetType(type: string): WidgetType {
     "load_image",
     "load_image_mask",
     "load_audio",
+    "load_video",
     "display_image",
     "display_audio",
+    "display_video",
     "seed_widget",
     "lora_loader",
     "select",

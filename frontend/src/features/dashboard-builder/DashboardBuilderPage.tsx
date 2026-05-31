@@ -17,6 +17,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Video,
   Wand2,
   X,
 } from "lucide-react";
@@ -1944,6 +1945,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
     );
   }
 
+  if (widget.widgetType === "load_video") {
+    return (
+      <div className="preview-image-input">
+        <Video size={20} aria-hidden="true" />
+        <span>Click here to upload video</span>
+      </div>
+    );
+  }
+
   if (widget.widgetType === "display_image") {
     return (
       <div className="preview-image-output">
@@ -1958,6 +1968,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       <div className="preview-image-output">
         <FileAudio size={22} aria-hidden="true" />
         <span>Generated audio will appear here</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "display_video") {
+    return (
+      <div className="preview-image-output">
+        <Video size={22} aria-hidden="true" />
+        <span>Generated video will appear here</span>
       </div>
     );
   }

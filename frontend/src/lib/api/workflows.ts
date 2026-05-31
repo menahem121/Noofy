@@ -573,6 +573,9 @@ export interface DashboardAssetMetadata {
   size?: number;
   format?: string;
   duration_seconds?: number;
+  width?: number;
+  height?: number;
+  fps?: number;
 }
 
 // ─── Workflow functions ───────────────────────────────────────────────────────
@@ -807,10 +810,30 @@ export async function uploadDashboardAudioAsset(
   onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<DashboardAssetUploadResponse> {
+  return uploadDashboardLargeMediaAsset("audio", workflowId, file, onProgress, signal);
+}
+
+export async function uploadDashboardVideoAsset(
+  workflowId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<DashboardAssetUploadResponse> {
+  return uploadDashboardLargeMediaAsset("video", workflowId, file, onProgress, signal);
+}
+
+async function uploadDashboardLargeMediaAsset(
+  kind: "audio" | "video",
+  workflowId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<DashboardAssetUploadResponse> {
   const formData = new FormData();
-  formData.append("audio", file);
+  formData.append(kind, file);
   const token = getApiToken();
-  const url = `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/audio`;
+  const url = `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/${kind}`;
+  const label = kind === "audio" ? "Audio" : "Video";
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -820,7 +843,7 @@ export async function uploadDashboardAudioAsset(
     const abortRequest = () => request.abort();
     const cleanup = () => signal?.removeEventListener("abort", abortRequest);
     if (signal?.aborted) {
-      reject(new Error("Audio upload was canceled."));
+      reject(new Error(`${label} upload was canceled.`));
       return;
     }
     signal?.addEventListener("abort", abortRequest, { once: true });
@@ -838,7 +861,7 @@ export async function uploadDashboardAudioAsset(
         try {
           resolve(JSON.parse(request.responseText) as DashboardAssetUploadResponse);
         } catch {
-          reject(new Error("Noofy local app service returned an invalid audio upload response."));
+          reject(new Error(`Noofy local app service returned an invalid ${kind} upload response.`));
         }
         return;
       }
@@ -846,11 +869,11 @@ export async function uploadDashboardAudioAsset(
     };
     request.onerror = () => {
       cleanup();
-      reject(new Error("Audio upload failed."));
+      reject(new Error(`${label} upload failed.`));
     };
     request.onabort = () => {
       cleanup();
-      reject(new Error("Audio upload was canceled."));
+      reject(new Error(`${label} upload was canceled.`));
     };
     request.send(formData);
   });

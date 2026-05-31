@@ -285,6 +285,8 @@ _IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask"})
 _IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
 _AUDIO_NODE_TYPES = frozenset({"LoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
+_VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
+_VIDEO_OUTPUT_NODE_TYPES = frozenset({"PreviewVideo", "SaveVideo", "SaveWEBM", "VHS_VideoCombine"})
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 _NOTE_NODE_TYPES = frozenset({"Note"})
@@ -299,6 +301,7 @@ def _classify_graph_inputs(
     seen_note_node_ids: set[str] = set()
     default_image_output_node_id = _default_image_output_node_id(graph)
     default_audio_output_node_id = _default_audio_output_node_id(graph)
+    default_video_output_node_id = _default_video_output_node_id(graph)
     for node_id, node in graph.items():
         if not isinstance(node, dict):
             continue
@@ -324,6 +327,17 @@ def _classify_graph_inputs(
                     "auto_select": node_id_str == default_image_output_node_id,
                 }
             )
+        if _is_video_output_node_type(node_type):
+            scalar_inputs.append(
+                {
+                    "input_name": "output_video",
+                    "current_value": None,
+                    "kind": "video_output",
+                    "suggested_widget_type": "display_video",
+                    "widget_types": ["display_video"],
+                    "auto_select": node_id_str == default_video_output_node_id,
+                }
+            )
         if node_type in _AUDIO_OUTPUT_NODE_TYPES:
             scalar_inputs.append(
                 {
@@ -344,7 +358,7 @@ def _classify_graph_inputs(
                 continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
             kind = _value_kind(input_name, value, node_type)
-            if option_spec.options and kind not in {"image_input", "audio_input", "lora"}:
+            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "lora"}:
                 kind = "select"
             if kind is None:
                 continue
@@ -371,6 +385,7 @@ def _classify_graph_inputs(
                     "node_type": node_type,
                     "is_image_node": node_type in _IMAGE_NODE_TYPES,
                     "is_audio_node": node_type in _AUDIO_NODE_TYPES,
+                    "is_video_node": _is_video_input_node_type(node_type),
                     "is_lora_node": node_type in _LORA_NODE_TYPES,
                     "inputs": scalar_inputs,
                 }
@@ -556,6 +571,52 @@ def _default_audio_output_node_id(graph: dict[str, Any]) -> str | None:
     return max(candidate_ids, key=lambda node_id: (depth(node_id), node_order.get(node_id, -1)))
 
 
+def _default_video_output_node_id(graph: dict[str, Any]) -> str | None:
+    node_order: dict[str, int] = {}
+    candidate_ids: set[str] = set()
+    dependencies: dict[str, set[str]] = {}
+    known_node_ids = {str(node_id) for node_id in graph.keys()}
+
+    for index, (node_id, node) in enumerate(graph.items()):
+        if not isinstance(node, dict):
+            continue
+        node_id_str = str(node_id)
+        node_order[node_id_str] = index
+        if _is_video_output_node_type(str(node.get("class_type") or "")):
+            candidate_ids.add(node_id_str)
+        raw_inputs = node.get("inputs")
+        if not isinstance(raw_inputs, dict):
+            dependencies[node_id_str] = set()
+            continue
+        dependencies[node_id_str] = {
+            str(value[0])
+            for value in raw_inputs.values()
+            if isinstance(value, list)
+            and len(value) >= 2
+            and isinstance(value[1], int)
+            and str(value[0]) in known_node_ids
+        }
+
+    if not candidate_ids:
+        return None
+
+    visiting: set[str] = set()
+    memo: dict[str, int] = {}
+
+    def depth(node_id: str) -> int:
+        if node_id in memo:
+            return memo[node_id]
+        if node_id in visiting:
+            return 0
+        visiting.add(node_id)
+        dep_depths = [depth(dep_id) for dep_id in dependencies.get(node_id, set())]
+        visiting.remove(node_id)
+        memo[node_id] = 1 + max(dep_depths, default=0)
+        return memo[node_id]
+
+    return max(candidate_ids, key=lambda node_id: (depth(node_id), node_order.get(node_id, -1)))
+
+
 def _is_ignored_image_node_input(node_type: str, input_name: str) -> bool:
     return node_type in _IMAGE_NODE_TYPES and input_name == "upload"
 
@@ -565,6 +626,8 @@ def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
         return "image_input"
     if node_type in _AUDIO_NODE_TYPES and input_name in {"audio", "file", "filename", "path", "audio_path"}:
         return "audio_input"
+    if _is_video_input_node_type(node_type) and input_name in {"video", "file", "filename", "path", "video_path"}:
+        return "video_input"
     if node_type in _LORA_NODE_TYPES and input_name in ("lora_name",):
         return "lora"
     if input_name in _SEED_INPUT_NAMES and isinstance(value, (int, float)):
@@ -587,10 +650,26 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "image_input": ["load_image", "load_image_mask"],
         "audio_input": ["load_audio"],
         "audio_output": ["display_audio"],
+        "video_input": ["load_video"],
+        "video_output": ["display_video"],
         "lora": ["lora_loader"],
         "select": ["select", "string_field"],
     }
     return mapping.get(kind, ["string_field"])
+
+
+def _is_video_input_node_type(node_type: str) -> bool:
+    if node_type in _VIDEO_NODE_TYPES:
+        return True
+    normalized = node_type.lower()
+    return "video" in normalized and any(token in normalized for token in ("load", "input", "import"))
+
+
+def _is_video_output_node_type(node_type: str) -> bool:
+    if node_type in _VIDEO_OUTPUT_NODE_TYPES:
+        return True
+    normalized = node_type.lower()
+    return "video" in normalized and any(token in normalized for token in ("preview", "save", "combine", "output", "export"))
 
 
 class _ComfyInputOptionSpec:

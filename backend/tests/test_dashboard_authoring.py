@@ -655,6 +655,39 @@ def test_classify_graph_inputs_includes_audio_widgets() -> None:
     }
 
 
+def test_classify_graph_inputs_includes_video_widgets_and_custom_binding_hint() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "30": {
+                "class_type": "LoadVideo",
+                "inputs": {"file": "creator-local-video.mp4"},
+            },
+            "31": {
+                "class_type": "VHS_LoadVideoPath",
+                "inputs": {"video_path": "creator-local-video.mkv"},
+            },
+            "32": {
+                "class_type": "SaveVideo",
+                "inputs": {"video": ["30", 0], "filename_prefix": "clip"},
+            },
+        }
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["30"]["inputs"][0]["kind"] == "video_input"
+    assert input_nodes["30"]["inputs"][0]["widget_types"] == ["load_video"]
+    assert input_nodes["31"]["inputs"][0]["kind"] == "video_input"
+    assert input_nodes["31"]["inputs"][0]["input_name"] == "video_path"
+    assert input_nodes["32"]["inputs"][0] == {
+        "input_name": "output_video",
+        "current_value": None,
+        "kind": "video_output",
+        "suggested_widget_type": "display_video",
+        "widget_types": ["display_video"],
+        "auto_select": True,
+    }
+
+
 def test_classify_graph_inputs_auto_selects_deepest_image_output() -> None:
     nodes = _classify_graph_inputs(
         {

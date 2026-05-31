@@ -272,6 +272,49 @@ describe("DashboardInputControl", () => {
     expect(await screen.findByText("Audio upload was canceled.")).toBeInTheDocument();
   });
 
+  it("renders video assets through backend media URLs with metadata and remove controls", async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        asset_id: "12345678-1234-1234-1234-123456789abc.mp4",
+        kind: "video",
+        original_filename: "demo.mp4",
+        content_type: "video/mp4",
+        size: 4096,
+        format: "mp4",
+      }),
+    );
+
+    render(
+      <DashboardInputControl
+        control={{ id: "video", type: "load_video", label: "Input video", input_id: "video" }}
+        input={{
+          id: "video",
+          label: "Input video",
+          control: "load_video",
+          binding: { node_id: "10", input_name: "video_path" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.mp4"
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+        onVideoUpload={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("demo.mp4")).toBeInTheDocument();
+      expect(screen.getByText(/MP4/)).toBeInTheDocument();
+    });
+    const video = document.querySelector("video");
+    expect(video).toHaveAttribute("src", "/api/assets/12345678-1234-1234-1234-123456789abc.mp4");
+    fireEvent.loadedMetadata(video!);
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onChange).toHaveBeenCalledWith(null);
+    expect(createObjectUrlMock).not.toHaveBeenCalled();
+  });
+
   it("saves API credentials through settings and emits only a reference", async () => {
     const onChange = vi.fn();
     fetchMock.mockResolvedValue(
