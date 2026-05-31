@@ -89,6 +89,9 @@ class WorkflowOutput(BaseModel):
     kind: str | None = None
 
 
+WORKFLOW_OUTPUT_KINDS = frozenset({"image", "audio", "video", "3d", "text", "file"})
+
+
 DASHBOARD_CONTROL_TYPES = frozenset(
     {
         "slider",
@@ -200,6 +203,10 @@ class UnresolvedRuntimeInput(BaseModel):
     input_name: str
     current_value: Any = None
     reason: str
+    expected_kind: str | None = None
+    required: bool = True
+    extension_hint: str | None = None
+    mime_type_hint: str | None = None
 
 
 class WorkflowAssetMetadata(BaseModel):

@@ -84,6 +84,7 @@ from app.workflows.import_normalization import (
     normalize_dashboard,
     normalize_model_verification_level,
     normalize_models,
+    normalize_unresolved_runtime_inputs,
     normalize_signed_registry_metadata,
     normalize_signatures,
     normalize_trust_level,
@@ -490,7 +491,13 @@ class NoofyArchiveImporter:
             if isinstance(o, dict)
         ]
         unresolved_inputs = filter_resolved_runtime_inputs(
-            _detect_unresolved_runtime_inputs(graph), dashboard_inputs
+            merge_unresolved_runtime_inputs(
+                normalize_unresolved_runtime_inputs(
+                    package_json.get("unresolved_runtime_inputs")
+                ),
+                _detect_unresolved_runtime_inputs(graph),
+            ),
+            dashboard_inputs,
         )
         observed_hardware = _observed_hardware(capsule_json, export_report)
 
@@ -907,6 +914,27 @@ def _normalize_dashboard(
     dashboard_json: dict[str, Any],
 ) -> DashboardSchema:
     return normalize_dashboard(dashboard_json)
+
+
+def merge_unresolved_runtime_inputs(
+    exported_inputs: list[UnresolvedRuntimeInput],
+    detected_inputs: list[UnresolvedRuntimeInput],
+) -> list[UnresolvedRuntimeInput]:
+    merged: list[UnresolvedRuntimeInput] = []
+    seen: set[tuple[str, str]] = set()
+    for runtime_input in exported_inputs:
+        key = (runtime_input.node_id, runtime_input.input_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(runtime_input)
+    for runtime_input in detected_inputs:
+        key = (runtime_input.node_id, runtime_input.input_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(runtime_input)
+    return merged
 
 
 def _detect_unresolved_runtime_inputs(

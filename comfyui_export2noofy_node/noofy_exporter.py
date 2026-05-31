@@ -4,12 +4,15 @@ import copy
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import platform
 import re
 import sys
 import threading
+import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +27,37 @@ TEST_INPUT_MODE = "workflow_current_load_image_inputs"
 TEST_BATCH_SIZE = 1
 LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
 REDACTED_IMAGE_INPUT_VALUE = "__noofy_runtime_image_input_required__"
+MEDIA_KINDS = frozenset({"image", "audio", "video", "3d", "text", "file"})
+TEXT_EXTENSIONS = frozenset({".txt", ".md", ".json", ".csv", ".tsv", ".srt", ".vtt", ".yaml", ".yml"})
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"})
+AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac"})
+VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"})
+THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".usdz", ".ply", ".spz", ".splat", ".ksplat"})
+FILE_INPUT_NAMES = frozenset(
+    {
+        "audio",
+        "audio_path",
+        "file",
+        "file_path",
+        "filepath",
+        "filename",
+        "image",
+        "json",
+        "mask",
+        "model_file",
+        "path",
+        "recording",
+        "srt",
+        "subtitle",
+        "subtitles",
+        "video",
+        "video_path",
+        "zip",
+    }
+)
+LOCAL_AUDIO_NODE_TYPES = {"LoadAudio"}
+LOCAL_VIDEO_NODE_TYPES = {"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"}
+LOCAL_THREE_D_NODE_TYPES = {"Load3D"}
 MODEL_VERIFICATION_HASH_AND_SIZE = "sha256_size"
 MODEL_VERIFICATION_FILENAME_AND_SIZE = "filename_size"
 MODEL_VERIFICATION_FILENAME_ONLY = "filename_only"
@@ -31,6 +65,11 @@ MODEL_ASSET_OWNERSHIP_EXTERNAL = "external_reference"
 MODEL_HASH_CACHE_SCHEMA_VERSION = 1
 MODEL_HASH_CACHE_MAX_ENTRIES = 4096
 MODEL_HASH_CACHE_SAMPLE_BYTES = 1024 * 1024
+DEFAULT_MODEL_HASH_CONCURRENCY = 3
+MODEL_HASH_CONCURRENCY_ENV = "NOOFY_EXPORT_MODEL_HASH_CONCURRENCY"
+NETWORK_VERIFICATION_FILESYSTEM_TYPES = frozenset(
+    {"nfs", "nfs4", "cifs", "smbfs", "smb3", "afpfs", "ncpfs", "9p", "sshfs"}
+)
 
 
 MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
@@ -213,6 +252,49 @@ class MemorySampler:
         )
 
 
+@dataclass
+class VerifyHashMetrics:
+    cache_hits: int = 0
+    cache_misses: int = 0
+    bytes_hashed: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def record_cache_hit(self) -> None:
+        with self._lock:
+            self.cache_hits += 1
+
+    def record_cache_miss(self, *, bytes_hashed: int) -> None:
+        with self._lock:
+            self.cache_misses += 1
+            self.bytes_hashed += max(0, bytes_hashed)
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "bytes_hashed": self.bytes_hashed,
+        }
+
+
+@dataclass(frozen=True)
+class WorkflowOutputRecord:
+    id: str
+    label: str
+    node_id: str
+    node_type: str
+    kind: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "type": self.kind,
+            "kind": self.kind,
+        }
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
@@ -228,6 +310,10 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024 * 8) -> str:
+    if hasattr(hashlib, "file_digest"):
+        with path.open("rb") as file:
+            return hashlib.file_digest(file, "sha256").hexdigest()
+
     hasher = hashlib.sha256()
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(chunk_size), b""):
@@ -535,26 +621,185 @@ def prepare_graph_for_export(
     return graph, adjustments
 
 
-def redact_local_image_inputs_for_package(
+def redact_local_inputs_for_package(
     graph: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     package_graph = copy.deepcopy(graph)
-    adjustments = {"image_inputs_redacted": 0}
+    adjustments = {
+        "image_inputs_redacted": 0,
+        "audio_inputs_redacted": 0,
+        "video_inputs_redacted": 0,
+        "three_d_inputs_redacted": 0,
+        "text_inputs_redacted": 0,
+        "file_inputs_redacted": 0,
+    }
+    unresolved_inputs: list[dict[str, Any]] = []
 
-    for node in package_graph.values():
+    for node_id, node in package_graph.items():
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type")
         inputs = node.get("inputs")
-        if class_type not in LOCAL_IMAGE_NODE_TYPES or not isinstance(inputs, dict):
+        if not isinstance(class_type, str) or not isinstance(inputs, dict):
             continue
 
-        image_value = inputs.get("image")
-        if isinstance(image_value, str) and image_value:
-            inputs["image"] = REDACTED_IMAGE_INPUT_VALUE
-            adjustments["image_inputs_redacted"] += 1
+        for input_name, input_value in list(inputs.items()):
+            redaction = input_redaction_for(class_type, str(input_name), input_value)
+            if redaction is None:
+                continue
 
-    return package_graph, adjustments
+            expected_kind = redaction["expected_kind"]
+            placeholder = redacted_input_value(expected_kind)
+            inputs[input_name] = placeholder
+            adjustment_key = f"{'three_d' if expected_kind == '3d' else expected_kind}_inputs_redacted"
+            adjustments[adjustment_key] += 1
+            unresolved_inputs.append(
+                {
+                    "node_id": str(node_id),
+                    "node_type": class_type,
+                    "input_name": str(input_name),
+                    "current_value": placeholder,
+                    "reason": f"creator_local_{expected_kind}_not_bundled",
+                    "expected_kind": expected_kind,
+                    "required": redaction["required"],
+                    "extension_hint": redaction["extension_hint"],
+                    "mime_type_hint": redaction["mime_type_hint"],
+                }
+            )
+
+    return package_graph, adjustments, unresolved_inputs
+
+
+def input_redaction_for(
+    node_type: str,
+    input_name: str,
+    value: Any,
+) -> dict[str, Any] | None:
+    expected_kind = expected_input_kind(node_type, input_name, value)
+    if expected_kind is None or not value_contains_local_reference(value):
+        return None
+    extension_hint = safe_extension_hint(value)
+    return {
+        "expected_kind": expected_kind,
+        "required": True,
+        "extension_hint": extension_hint,
+        "mime_type_hint": safe_mime_type_hint(extension_hint, expected_kind),
+    }
+
+
+def expected_input_kind(node_type: str, input_name: str, value: Any) -> str | None:
+    normalized_node = node_type.lower()
+    normalized_input = input_name.lower()
+    if node_type in LOCAL_IMAGE_NODE_TYPES and normalized_input == "image":
+        return "image"
+    if node_type in LOCAL_AUDIO_NODE_TYPES and normalized_input in {"audio", "file", "filename", "path", "audio_path"}:
+        return "audio"
+    if is_video_input_node_type(node_type) and normalized_input in {"video", "file", "filename", "path", "video_path"}:
+        return "video"
+    if node_type in LOCAL_THREE_D_NODE_TYPES and normalized_input in {"model_file", "file", "filename", "path"}:
+        return "3d"
+    if is_generic_file_input(node_type, input_name, value):
+        return kind_from_path_like_value(value) or "file"
+    if "text" in normalized_node and normalized_input in FILE_INPUT_NAMES:
+        return "text"
+    return None
+
+
+def is_video_input_node_type(node_type: str) -> bool:
+    normalized = node_type.lower()
+    return node_type in LOCAL_VIDEO_NODE_TYPES or (
+        "video" in normalized and any(token in normalized for token in ("load", "input", "import"))
+    )
+
+
+def is_generic_file_input(node_type: str, input_name: str, value: Any) -> bool:
+    normalized_node = node_type.lower()
+    normalized_input = input_name.lower()
+    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+        return False
+    if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
+        return False
+    if normalized_input not in FILE_INPUT_NAMES and not any(
+        token in normalized_input for token in ("file", "filepath", "file_path", "document", "archive", "subtitle")
+    ):
+        return False
+    strong_node_signal = any(token in normalized_node for token in ("file", "load", "open", "import", "document", "archive", "json", "csv", "subtitle", "text"))
+    return strong_node_signal or kind_from_path_like_value(value) is not None
+
+
+def value_contains_local_reference(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip()) and not is_graph_link(value)
+    if isinstance(value, dict):
+        return any(value_contains_local_reference(item) for item in value.values())
+    if isinstance(value, list):
+        return any(value_contains_local_reference(item) for item in value)
+    return False
+
+
+def is_graph_link(value: str) -> bool:
+    return bool(re.fullmatch(r"\d+", value))
+
+
+def kind_from_path_like_value(value: Any) -> str | None:
+    suffix = safe_extension_hint(value)
+    if suffix is None:
+        return None
+    if suffix in IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+    if suffix in THREE_D_EXTENSIONS:
+        return "3d"
+    if suffix in TEXT_EXTENSIONS:
+        return "text"
+    return "file"
+
+
+def safe_extension_hint(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for nested in value.values():
+            suffix = safe_extension_hint(nested)
+            if suffix is not None:
+                return suffix
+        return None
+    if isinstance(value, list):
+        for nested in value:
+            suffix = safe_extension_hint(nested)
+            if suffix is not None:
+                return suffix
+        return None
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().lower()
+    suffix = candidate if candidate.startswith(".") else Path(candidate).suffix.lower()
+    if re.fullmatch(r"\.[a-z0-9][a-z0-9_-]{0,15}", suffix):
+        return suffix
+    return None
+
+
+def safe_mime_type_hint(extension: str | None, expected_kind: str) -> str | None:
+    if extension:
+        guessed = mimetypes.types_map.get(extension) or mimetypes.common_types.get(extension)
+        if guessed:
+            return guessed
+    fallback = {
+        "image": "image/*",
+        "audio": "audio/*",
+        "video": "video/*",
+        "3d": "model/*",
+        "text": "text/plain",
+    }
+    return fallback.get(expected_kind)
+
+
+def redacted_input_value(kind: str) -> str:
+    if kind == "image":
+        return REDACTED_IMAGE_INPUT_VALUE
+    safe_kind = "three_d" if kind == "3d" else kind
+    return f"__noofy_runtime_{safe_kind}_input_required__"
 
 
 def create_placeholder_thumbnail_bytes() -> bytes:
@@ -695,11 +940,14 @@ def detect_model_references(
     prompt: dict[str, Any],
     resolve_model_path: Callable[[str, str], str | None],
     hash_cache: ModelHashCache | None = None,
+    *,
+    metrics: VerifyHashMetrics | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    resolved_records: list[tuple[dict[str, Any], Path]] = []
     seen: set[tuple[str, str, str, str]] = set()
 
-    for node_id, node in sorted(prompt.items(), key=lambda item: str(item[0])):
+    for node_id, node in sorted(prompt.items(), key=lambda item: node_sort_key(item[0])):
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type")
@@ -747,14 +995,163 @@ def detect_model_references(
                 "source_urls": [],
             }
             if resolved_path:
-                annotate_model_identity(record, Path(resolved_path), hash_cache=hash_cache)
+                resolved_records.append((record, Path(resolved_path)))
             else:
                 record["identity_warnings"].append(
                     "ComfyUI did not resolve this model file at export time."
                 )
             records.append(record)
 
+    annotate_model_identities(resolved_records, hash_cache=hash_cache, metrics=metrics)
     return records
+
+
+def annotate_model_identities(
+    records: list[tuple[dict[str, Any], Path]],
+    *,
+    hash_cache: ModelHashCache | None = None,
+    metrics: VerifyHashMetrics | None = None,
+) -> None:
+    if not records:
+        return
+
+    concurrency, downgrade_reason = select_model_hash_concurrency([path for _record, path in records])
+    started = time.monotonic()
+    if concurrency <= 1:
+        for record, path in records:
+            annotate_model_identity(record, path, hash_cache=hash_cache, metrics=metrics)
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = [
+                executor.submit(
+                    annotate_model_identity,
+                    record,
+                    path,
+                    hash_cache=hash_cache,
+                    metrics=metrics,
+                )
+                for record, path in records
+            ]
+            for future in futures:
+                future.result()
+
+    if metrics is not None:
+        logging.info(
+            "[Noofy Export] model verification completed",
+            extra={
+                "noofy_export": {
+                    "model_count": len(records),
+                    "selected_concurrency": concurrency,
+                    "downgrade_reason": downgrade_reason,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                    **metrics.to_dict(),
+                }
+            },
+        )
+
+
+def select_model_hash_concurrency(paths: list[Path]) -> tuple[int, str]:
+    if len(paths) <= 1:
+        return 1, "single_model"
+    try:
+        configured = int(os.environ.get(MODEL_HASH_CONCURRENCY_ENV, DEFAULT_MODEL_HASH_CONCURRENCY))
+    except ValueError:
+        configured = DEFAULT_MODEL_HASH_CONCURRENCY
+    if configured <= 1:
+        return 1, "config_override"
+    downgrade_reason = verification_filesystem_downgrade_reason(paths)
+    if downgrade_reason is not None:
+        return 1, downgrade_reason
+    return max(1, min(configured, os.cpu_count() or 1, len(paths))), "none"
+
+
+def verification_filesystem_downgrade_reason(paths: list[Path]) -> str | None:
+    fallback: str | None = None
+    roots = sorted({path.expanduser().resolve(strict=False).parent for path in paths})
+    for root in roots:
+        try:
+            reason = filesystem_slow_reason(root)
+        except Exception:
+            reason = None
+        if reason == "network_fs":
+            return "network_fs"
+        if reason is not None and fallback is None:
+            fallback = reason
+    return fallback
+
+
+def filesystem_slow_reason(path: Path) -> str | None:
+    mounts = read_linux_mounts()
+    if not mounts:
+        return None
+    target = path.expanduser().resolve(strict=False)
+    device, fstype = mount_for_path(target, mounts)
+    if fstype is None:
+        return None
+    normalized_fstype = fstype.split(".", 1)[-1] if fstype.startswith("fuse.") else fstype
+    if normalized_fstype in NETWORK_VERIFICATION_FILESYSTEM_TYPES or fstype in NETWORK_VERIFICATION_FILESYSTEM_TYPES:
+        return "network_fs"
+    if device and device_is_rotational(device):
+        return "rotational"
+    return None
+
+
+def read_linux_mounts() -> list[tuple[str, str, str]]:
+    try:
+        raw = Path("/proc/mounts").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    entries: list[tuple[str, str, str]] = []
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            entries.append((unescape_mount_field(parts[0]), unescape_mount_field(parts[1]), parts[2]))
+    return entries
+
+
+def mount_for_path(target: Path, mounts: list[tuple[str, str, str]]) -> tuple[str | None, str | None]:
+    best_device: str | None = None
+    best_fstype: str | None = None
+    best_len = -1
+    for device, mount_point, fstype in mounts:
+        mount_path = Path(mount_point)
+        if (target == mount_path or is_relative_to(target, mount_path)) and len(mount_point) > best_len:
+            best_len = len(mount_point)
+            best_device = device
+            best_fstype = fstype
+    return best_device, best_fstype
+
+
+def unescape_mount_field(value: str) -> str:
+    if "\\" not in value:
+        return value
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), value)
+
+
+def device_is_rotational(device: str) -> bool:
+    if not device.startswith("/dev/"):
+        return False
+    name = os.path.basename(device)
+    candidates = [name]
+    stripped = re.sub(r"p?\d+$", "", name)
+    if stripped and stripped != name:
+        candidates.append(stripped)
+    for candidate in candidates:
+        rotational_path = Path("/sys/block") / candidate / "queue" / "rotational"
+        try:
+            if rotational_path.exists():
+                return rotational_path.read_text(encoding="utf-8").strip() == "1"
+        except OSError:
+            continue
+    return False
+
+
+def is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def annotate_model_identity(
@@ -762,6 +1159,7 @@ def annotate_model_identity(
     path: Path,
     *,
     hash_cache: ModelHashCache | None = None,
+    metrics: VerifyHashMetrics | None = None,
 ) -> None:
     if not path.is_file():
         record["identity_warnings"].append(
@@ -779,6 +1177,8 @@ def annotate_model_identity(
 
     cached_sha256 = hash_cache.get_valid_hash(path, stat) if hash_cache and stat else None
     if cached_sha256 is not None:
+        if metrics is not None:
+            metrics.record_cache_hit()
         record["sha256"] = cached_sha256
     else:
         try:
@@ -788,6 +1188,8 @@ def annotate_model_identity(
                 f"Could not hash model file at export time: {exc}"
             )
         else:
+            if metrics is not None and stat is not None:
+                metrics.record_cache_miss(bytes_hashed=stat.st_size)
             if hash_cache is not None and stat is not None:
                 hash_cache.remember_hash(path, stat, record["sha256"])
 
@@ -864,57 +1266,147 @@ def create_memory_sampler(model_management: Any | None = None) -> MemorySampler:
     return MemorySampler(read_ram_used, read_vram_used)
 
 
-def collect_history_output_paths(history: dict[str, Any], get_directory_by_type: Callable[[str], str | None]) -> list[Path]:
-    paths: list[Path] = []
-    seen: set[Path] = set()
+def collect_history_output_declarations(
+    history: dict[str, Any],
+    graph: dict[str, Any],
+) -> list[WorkflowOutputRecord]:
+    outputs: list[WorkflowOutputRecord] = []
+    seen: set[tuple[str, str]] = set()
+    graph_nodes = {str(node_id): node for node_id, node in graph.items() if isinstance(node, dict)}
 
     for prompt_history in history.values():
-        outputs = prompt_history.get("outputs", {})
-        if not isinstance(outputs, dict):
+        prompt_outputs = prompt_history.get("outputs", {})
+        if not isinstance(prompt_outputs, dict):
             continue
-        for node_output in outputs.values():
+        for node_id, node_output in sorted(prompt_outputs.items(), key=lambda item: node_sort_key(item[0])):
             if not isinstance(node_output, dict):
                 continue
-            for items in node_output.values():
-                if not isinstance(items, list):
+            node_id_str = str(node_id)
+            node_type = str(graph_nodes.get(node_id_str, {}).get("class_type") or "UnknownNode")
+            for kind in output_kinds_from_node_output(node_output):
+                key = (node_id_str, kind)
+                if key in seen:
                     continue
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    item_type = item.get("type")
-                    filename = item.get("filename")
-                    if item_type not in {"output", "temp"} or not filename:
-                        continue
-                    base = get_directory_by_type(item_type)
-                    if not base:
-                        continue
-                    base_path = Path(base).resolve()
-                    full_path = (base_path / item.get("subfolder", "") / filename).resolve()
-                    try:
-                        full_path.relative_to(base_path)
-                    except ValueError:
-                        continue
-                    if full_path.exists() and full_path not in seen:
-                        seen.add(full_path)
-                        paths.append(full_path)
+                seen.add(key)
+                outputs.append(
+                    WorkflowOutputRecord(
+                        id=stable_output_id(node_id_str, kind),
+                        label=generic_output_label(kind),
+                        node_id=node_id_str,
+                        node_type=node_type,
+                        kind=kind,
+                    )
+                )
 
-    return paths
+    return outputs
 
 
-def create_thumbnail_bytes(source: Path | None) -> bytes:
+def node_sort_key(node_id: Any) -> tuple[int, int | str]:
+    node_id_str = str(node_id)
+    return (0, int(node_id_str)) if node_id_str.isdigit() else (1, node_id_str)
+
+
+def output_kinds_from_node_output(node_output: dict[str, Any]) -> list[str]:
+    kinds: list[str] = []
+    for bucket_name, raw_items in node_output.items():
+        bucket_kind = kind_from_output_bucket(bucket_name)
+        if bucket_name == "text" and isinstance(raw_items, (str, list, tuple)):
+            kinds.append("text")
+            continue
+        if bucket_name == "result" and raw_items:
+            kinds.append("file")
+            continue
+        if not isinstance(raw_items, list):
+            continue
+        for item in raw_items:
+            if isinstance(item, dict):
+                kinds.append(classify_history_output_item(item, bucket_name))
+            elif bucket_kind is not None:
+                kinds.append(bucket_kind)
+    return [kind for kind in MEDIA_KINDS_IN_ORDER if kind in set(kinds)]
+
+
+MEDIA_KINDS_IN_ORDER = ("image", "audio", "video", "3d", "text", "file")
+
+
+def classify_history_output_item(item: dict[str, Any], bucket_name: str) -> str:
+    explicit_kind = item.get("kind")
+    if explicit_kind in MEDIA_KINDS:
+        return str(explicit_kind)
+
+    content_type = str(item.get("mime_type") or item.get("content_type") or "").lower()
+    if content_type.startswith("image/"):
+        return "image"
+    if content_type.startswith("audio/"):
+        return "audio"
+    if content_type.startswith("video/"):
+        return "video"
+    if content_type.startswith("model/"):
+        return "3d"
+    if content_type.startswith("text/"):
+        return "text"
+    if content_type and content_type != "application/octet-stream":
+        return "file"
+
+    filename = item.get("filename")
+    if isinstance(filename, str):
+        by_extension = kind_from_path_like_value(filename)
+        if by_extension is not None:
+            return by_extension
+
+    return kind_from_output_bucket(bucket_name) or "file"
+
+
+def kind_from_output_bucket(bucket_name: str) -> str | None:
+    normalized = bucket_name.lower()
+    if normalized in {"images", "image", "gifs"}:
+        return "image"
+    if normalized in {"audio", "audios"}:
+        return "audio"
+    if normalized in {"video", "videos", "animated"}:
+        return "video"
+    if normalized in {"3d", "model_3d", "models_3d", "mesh", "meshes"}:
+        return "3d"
+    if normalized == "text":
+        return "text"
+    if normalized in {"file", "files", "documents"}:
+        return "file"
+    return None
+
+
+def stable_output_id(node_id: str, kind: str) -> str:
+    return slugify(f"{kind}-{node_id}", fallback=f"{kind}-output")
+
+
+def generic_output_label(kind: str) -> str:
+    labels = {
+        "image": "Image Output",
+        "audio": "Audio Output",
+        "video": "Video Output",
+        "3d": "3D Output",
+        "text": "Text Output",
+        "file": "File Output",
+    }
+    return labels.get(kind, "Workflow Output")
+
+
+def create_thumbnail_bytes(source: Path | None = None, *, allow_generated_source: bool = False) -> bytes:
     from io import BytesIO
 
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
-    if source is None or not source.exists():
+    if source is None or not allow_generated_source or not source.exists() or kind_from_path_like_value(str(source)) != "image":
         return create_placeholder_thumbnail_bytes()
 
-    with Image.open(source) as image:
-        image = image.convert("RGB")
-        image.thumbnail((768, 768))
-        buffer = BytesIO()
-        image.save(buffer, "PNG", optimize=True)
-        return buffer.getvalue()
+    try:
+        with Image.open(source) as image:
+            image = image.convert("RGB")
+            image.thumbnail((768, 768))
+            buffer = BytesIO()
+            image.save(buffer, "PNG", optimize=True)
+            return buffer.getvalue()
+    except (OSError, UnidentifiedImageError):
+        return create_placeholder_thumbnail_bytes()
 
 
 def build_package_id(workflow_name: str | None, graph_sha256: str) -> str:
@@ -930,6 +1422,8 @@ def build_package_documents(
     runtime: RuntimeMetadata,
     custom_nodes: list[CustomNodeRecord],
     models: list[dict[str, Any]],
+    outputs: list[WorkflowOutputRecord] | None = None,
+    unresolved_runtime_inputs: list[dict[str, Any]] | None = None,
     hardware: MemoryObservation,
     started_at: str,
     finished_at: str,
@@ -958,11 +1452,16 @@ def build_package_documents(
             "comfyui_version": runtime.comfyui_version,
             "version_lock": True,
         },
+        "unresolved_runtime_inputs": unresolved_runtime_inputs or [],
     }
 
     dashboard_json = {
+        "version": SCHEMA_VERSION,
         "schema_version": SCHEMA_VERSION,
         "status": "not_configured",
+        "inputs": [],
+        "outputs": [record.to_dict() for record in outputs or []],
+        "sections": [],
         "controls": [],
         "notes": "Dashboard layout is configured inside Noofy creator mode.",
     }

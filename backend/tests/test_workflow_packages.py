@@ -402,6 +402,63 @@ def test_validator_rejects_video_widget_bound_to_image_output() -> None:
     assert "type 'display_video' but output 'image' is 'image'" in result.errors[0]
 
 
+def test_validator_accepts_declared_non_image_output_kinds() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "media_outputs", "name": "Media Outputs", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {
+                "1": {"class_type": "SaveAudio", "inputs": {}},
+                "2": {"class_type": "SaveVideo", "inputs": {}},
+                "3": {"class_type": "Save3D", "inputs": {}},
+                "4": {"class_type": "SaveText", "inputs": {}},
+                "5": {"class_type": "SaveFile", "inputs": {}},
+            },
+            "outputs": [
+                {"id": "audio", "label": "Audio Output", "node_id": "1", "type": "audio", "kind": "audio"},
+                {"id": "video", "label": "Video Output", "node_id": "2", "type": "video", "kind": "video"},
+                {"id": "mesh", "label": "3D Output", "node_id": "3", "type": "3d", "kind": "3d"},
+                {"id": "text", "label": "Text Output", "node_id": "4", "type": "text", "kind": "text"},
+                {"id": "file", "label": "File Output", "node_id": "5", "type": "file", "kind": "file"},
+            ],
+            "dashboard": {"version": "1", "status": "not_configured", "sections": []},
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert result.valid
+
+
+def test_validator_rejects_image_widget_bound_to_non_image_output() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "invalid_image", "name": "Invalid Image", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"9": {"class_type": "SaveAudio", "inputs": {}}},
+            "outputs": [{"id": "audio", "label": "Audio", "node_id": "9", "type": "audio", "kind": "audio"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Main",
+                        "controls": [
+                            {"id": "image", "type": "display_image", "label": "Image", "output_id": "audio"},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    result = WorkflowPackageValidator().validate_structure(package)
+
+    assert not result.valid
+    assert "type 'display_image' but output 'audio' is 'audio'" in result.errors[0]
+
+
 def test_validator_accepts_file_widget_with_accept_rules() -> None:
     package = WorkflowPackage.model_validate(
         {

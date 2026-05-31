@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import mimetypes
+import re
+from pathlib import Path
 from typing import Any
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
@@ -15,6 +18,31 @@ from app.workflows.package import (
 
 NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
 LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
+LOCAL_AUDIO_NODE_TYPES = {"LoadAudio"}
+LOCAL_VIDEO_NODE_TYPES = {"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"}
+LOCAL_THREE_D_NODE_TYPES = {"Load3D"}
+WORKFLOW_MEDIA_KINDS = frozenset({"image", "audio", "video", "3d", "text", "file"})
+FILE_INPUT_NAMES = frozenset(
+    {
+        "file",
+        "filename",
+        "path",
+        "file_path",
+        "filepath",
+        "source",
+        "input",
+        "audio",
+        "video",
+        "image",
+        "model_file",
+        "text_file",
+    }
+)
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"})
+AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".aiff", ".aif", ".opus"})
+VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".gif"})
+THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".ply", ".usdz", ".dae"})
+TEXT_EXTENSIONS = frozenset({".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml", ".xml", ".srt", ".vtt"})
 UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS = {
     "comfyui_launch_options",
     "launch_config",
@@ -358,20 +386,197 @@ def detect_unresolved_runtime_inputs(
             continue
         node_type = node.get("class_type")
         inputs = node.get("inputs")
-        if node_type not in LOCAL_IMAGE_NODE_TYPES or not isinstance(inputs, dict):
+        if not isinstance(node_type, str) or not isinstance(inputs, dict):
             continue
-        image_value = inputs.get("image")
-        if isinstance(image_value, str) and image_value:
+        for input_name, input_value in inputs.items():
+            expected_kind = expected_runtime_input_kind(node_type, str(input_name), input_value)
+            if expected_kind is None or not value_contains_local_reference(input_value):
+                continue
+            extension_hint = safe_extension_hint(input_value)
             unresolved.append(
                 UnresolvedRuntimeInput(
                     node_id=str(node_id),
                     node_type=node_type,
-                    input_name="image",
-                    current_value=image_value,
-                    reason="creator_local_image_not_bundled",
+                    input_name=str(input_name),
+                    current_value=redacted_input_value(expected_kind),
+                    reason=f"creator_local_{expected_kind}_not_bundled",
+                    expected_kind=expected_kind,
+                    required=True,
+                    extension_hint=extension_hint,
+                    mime_type_hint=safe_mime_type_hint(extension_hint, expected_kind),
                 )
             )
     return unresolved
+
+
+def normalize_unresolved_runtime_inputs(value: Any) -> list[UnresolvedRuntimeInput]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[UnresolvedRuntimeInput] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        node_id = optional_clean_string(item.get("node_id"))
+        node_type = optional_clean_string(item.get("node_type"))
+        input_name = optional_clean_string(item.get("input_name"))
+        if node_id is None or node_type is None or input_name is None:
+            continue
+        expected_kind = optional_clean_string(item.get("expected_kind"))
+        if expected_kind not in WORKFLOW_MEDIA_KINDS:
+            expected_kind = kind_from_path_like_value(item.get("extension_hint"))
+        normalized_kind = expected_kind or "file"
+        extension_hint = safe_extension_hint(item.get("extension_hint"))
+        mime_type_hint = safe_mime_type_hint(extension_hint, normalized_kind)
+        explicit_mime_type_hint = optional_clean_string(item.get("mime_type_hint"))
+        if explicit_mime_type_hint and safe_mime_type_value(explicit_mime_type_hint):
+            mime_type_hint = explicit_mime_type_hint
+        normalized.append(
+            UnresolvedRuntimeInput(
+                node_id=node_id,
+                node_type=node_type,
+                input_name=input_name,
+                current_value=redacted_input_value(normalized_kind),
+                reason=unresolved_input_reason(normalized_kind),
+                expected_kind=normalized_kind,
+                required=item.get("required") if isinstance(item.get("required"), bool) else True,
+                extension_hint=extension_hint,
+                mime_type_hint=mime_type_hint,
+            )
+        )
+    return normalized
+
+
+def expected_runtime_input_kind(node_type: str, input_name: str, value: Any) -> str | None:
+    normalized_node = node_type.lower()
+    normalized_input = input_name.lower()
+    if node_type in LOCAL_IMAGE_NODE_TYPES and normalized_input == "image":
+        return "image"
+    if node_type in LOCAL_AUDIO_NODE_TYPES and normalized_input in {"audio", "file", "filename", "path", "audio_path"}:
+        return "audio"
+    if is_video_input_node_type(node_type) and normalized_input in {"video", "file", "filename", "path", "video_path"}:
+        return "video"
+    if node_type in LOCAL_THREE_D_NODE_TYPES and normalized_input in {"model_file", "file", "filename", "path"}:
+        return "3d"
+    if "text" in normalized_node and normalized_input in FILE_INPUT_NAMES:
+        return "text"
+    if is_generic_file_input(node_type, input_name, value):
+        return kind_from_path_like_value(value) or "file"
+    return None
+
+
+def is_video_input_node_type(node_type: str) -> bool:
+    normalized = node_type.lower()
+    return node_type in LOCAL_VIDEO_NODE_TYPES or (
+        "video" in normalized and any(token in normalized for token in ("load", "input", "import"))
+    )
+
+
+def is_generic_file_input(node_type: str, input_name: str, value: Any) -> bool:
+    normalized_node = node_type.lower()
+    normalized_input = input_name.lower()
+    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+        return False
+    if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
+        return False
+    if normalized_input not in FILE_INPUT_NAMES and not any(
+        token in normalized_input for token in ("file", "filepath", "file_path", "document", "archive", "subtitle")
+    ):
+        return False
+    strong_node_signal = any(
+        token in normalized_node
+        for token in ("file", "load", "open", "import", "document", "archive", "json", "csv", "subtitle", "text")
+    )
+    return strong_node_signal or kind_from_path_like_value(value) is not None
+
+
+def value_contains_local_reference(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip()) and not is_graph_link(value)
+    if isinstance(value, dict):
+        return any(value_contains_local_reference(item) for item in value.values())
+    if isinstance(value, list):
+        return any(value_contains_local_reference(item) for item in value)
+    return False
+
+
+def is_graph_link(value: str) -> bool:
+    return bool(re.fullmatch(r"\d+", value))
+
+
+def kind_from_path_like_value(value: Any) -> str | None:
+    suffix = safe_extension_hint(value)
+    if suffix is None:
+        return None
+    if suffix in IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+    if suffix in THREE_D_EXTENSIONS:
+        return "3d"
+    if suffix in TEXT_EXTENSIONS:
+        return "text"
+    return "file"
+
+
+def safe_extension_hint(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for nested in value.values():
+            suffix = safe_extension_hint(nested)
+            if suffix is not None:
+                return suffix
+        return None
+    if isinstance(value, list):
+        for nested in value:
+            suffix = safe_extension_hint(nested)
+            if suffix is not None:
+                return suffix
+        return None
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().lower()
+    suffix = candidate if candidate.startswith(".") else Path(candidate).suffix.lower()
+    if re.fullmatch(r"\.[a-z0-9][a-z0-9_-]{0,15}", suffix):
+        return suffix
+    return None
+
+
+def safe_mime_type_hint(extension: str | None, expected_kind: str) -> str | None:
+    if extension:
+        guessed = mimetypes.types_map.get(extension) or mimetypes.common_types.get(extension)
+        if guessed:
+            return guessed
+    fallback = {
+        "image": "image/*",
+        "audio": "audio/*",
+        "video": "video/*",
+        "3d": "model/*",
+        "text": "text/plain",
+    }
+    return fallback.get(expected_kind)
+
+
+def safe_mime_type_value(value: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9.+-]*/[a-z0-9*][a-z0-9.+*-]*", value.strip().lower()))
+
+
+def redacted_input_value(kind: str) -> str:
+    if kind == "image":
+        return "__noofy_runtime_image_input_required__"
+    safe_kind = "three_d" if kind == "3d" else kind
+    return f"__noofy_runtime_{safe_kind}_input_required__"
+
+
+def unresolved_input_reason(kind: str) -> str:
+    return f"creator_local_{kind}_not_bundled"
+
+
+def optional_clean_string(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def filter_resolved_runtime_inputs(

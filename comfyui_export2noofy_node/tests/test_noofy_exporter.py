@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import sys
 import zipfile
@@ -46,7 +47,7 @@ def test_prepare_graph_for_export_preserves_load_image_inputs_without_mutating_o
     assert prompt["2"]["inputs"]["batch_size"] == 4
 
 
-def test_redact_local_image_inputs_for_package_removes_creator_image_references() -> None:
+def test_redact_local_inputs_for_package_removes_creator_image_references() -> None:
     graph = {
         "1": {
             "class_type": "LoadImage",
@@ -62,14 +63,15 @@ def test_redact_local_image_inputs_for_package_removes_creator_image_references(
         },
     }
 
-    package_graph, adjustments = exporter.redact_local_image_inputs_for_package(graph)
+    package_graph, adjustments, unresolved = exporter.redact_local_inputs_for_package(graph)
 
     assert package_graph["1"]["inputs"]["image"] == exporter.REDACTED_IMAGE_INPUT_VALUE
     assert package_graph["1"]["inputs"]["upload"] == "image"
     assert package_graph["2"]["inputs"]["image"] == exporter.REDACTED_IMAGE_INPUT_VALUE
     assert package_graph["2"]["inputs"]["channel"] == "alpha"
     assert package_graph["3"]["inputs"]["images"] == ["1", 0]
-    assert adjustments == {"image_inputs_redacted": 2}
+    assert adjustments["image_inputs_redacted"] == 2
+    assert [item["expected_kind"] for item in unresolved] == ["image", "image"]
     assert graph["1"]["inputs"]["image"] == "creator-portrait.png"
     assert graph["2"]["inputs"]["image"] == "private-mask.png"
 
@@ -184,6 +186,46 @@ def test_detect_model_references_does_not_reuse_cache_for_same_filename_at_diffe
     assert first_records[0]["filename"] == second_records[0]["filename"]
     assert first_records[0]["sha256"] == hashlib.sha256(b"first model").hexdigest()
     assert second_records[0]["sha256"] == hashlib.sha256(b"second model").hexdigest()
+
+
+def test_parallel_model_hashing_preserves_order_and_matches_serial_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "checkpoints" / "first.safetensors"
+    second = tmp_path / "checkpoints" / "second.safetensors"
+    first.parent.mkdir()
+    first.write_bytes(b"first model")
+    second.write_bytes(b"second model")
+    prompt = {
+        "20": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "second.safetensors"}},
+        "10": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "first.safetensors"}},
+    }
+
+    def resolve(folder: str, filename: str) -> str | None:
+        return str(tmp_path / folder / filename)
+
+    monkeypatch.setenv(exporter.MODEL_HASH_CONCURRENCY_ENV, "4")
+    monkeypatch.setattr(exporter, "verification_filesystem_downgrade_reason", lambda _paths: None)
+    parallel_metrics = exporter.VerifyHashMetrics()
+    parallel_records = exporter.detect_model_references(prompt, resolve, metrics=parallel_metrics)
+
+    monkeypatch.setenv(exporter.MODEL_HASH_CONCURRENCY_ENV, "1")
+    serial_records = exporter.detect_model_references(prompt, resolve)
+
+    assert [record["filename"] for record in parallel_records] == [
+        "first.safetensors",
+        "second.safetensors",
+    ]
+    assert [record["sha256"] for record in parallel_records] == [
+        hashlib.sha256(b"first model").hexdigest(),
+        hashlib.sha256(b"second model").hexdigest(),
+    ]
+    assert [record["sha256"] for record in parallel_records] == [
+        record["sha256"] for record in serial_records
+    ]
+    assert parallel_metrics.cache_misses == 2
+    assert parallel_metrics.bytes_hashed == len(b"first model") + len(b"second model")
 
 
 def test_detect_model_references_invalidates_stale_cache_when_file_changes(
@@ -411,7 +453,7 @@ def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None
             "inputs": {"image": "creator-family-photo.png", "upload": "image"},
         }
     }
-    package_graph, privacy_adjustments = exporter.redact_local_image_inputs_for_package(test_graph)
+    package_graph, privacy_adjustments, unresolved = exporter.redact_local_inputs_for_package(test_graph)
     runtime = exporter.RuntimeMetadata(
         comfyui_version="1.2.3",
         python_version="3.12.0",
@@ -441,6 +483,7 @@ def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None
             **privacy_adjustments,
         },
         warnings=[],
+        unresolved_runtime_inputs=unresolved,
     )
 
     target = tmp_path / "workflow.noofy"
@@ -465,3 +508,143 @@ def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None
     assert "creator-family-photo.png" not in report
     assert b"creator-family-photo.png" not in package_blob
     assert '"image_inputs_redacted": 1' in report
+
+
+def test_thumbnail_defaults_to_placeholder_without_opening_flac(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "ComfyUI_temp_secret_00001_.flac"
+    source.write_bytes(b"fLaC\x00\x00\x00")
+
+    from PIL import Image
+
+    def fail_open(_source: object) -> object:
+        raise AssertionError("Pillow should not open generated audio outputs")
+
+    monkeypatch.setattr(Image, "open", fail_open)
+
+    assert exporter.create_thumbnail_bytes(source) == exporter.create_placeholder_thumbnail_bytes()
+
+
+def test_history_output_declarations_use_kinds_without_runtime_file_identity() -> None:
+    graph = {
+        "8": {"class_type": "SaveAudio", "inputs": {}},
+        "9": {"class_type": "SaveImage", "inputs": {}},
+        "10": {"class_type": "Export3D", "inputs": {}},
+        "11": {"class_type": "TextOutput", "inputs": {}},
+    }
+    history = {
+        "prompt-id": {
+            "outputs": {
+                "8": {"audio": [{"filename": "ComfyUI_temp_secret_00001_.flac", "subfolder": "private", "type": "temp"}]},
+                "9": {"images": [{"filename": "ComfyUI_00002_.png", "subfolder": "creator", "type": "output"}]},
+                "10": {"files": [{"filename": "scan.glb", "subfolder": "meshes", "type": "output"}]},
+                "11": {"text": ["hello"]},
+            }
+        }
+    }
+
+    outputs = exporter.collect_history_output_declarations(history, graph)
+
+    assert [output.to_dict() for output in outputs] == [
+        {"id": "audio-8", "label": "Audio Output", "node_id": "8", "node_type": "SaveAudio", "type": "audio", "kind": "audio"},
+        {"id": "image-9", "label": "Image Output", "node_id": "9", "node_type": "SaveImage", "type": "image", "kind": "image"},
+        {"id": "3d-10", "label": "3D Output", "node_id": "10", "node_type": "Export3D", "type": "3d", "kind": "3d"},
+        {"id": "text-11", "label": "Text Output", "node_id": "11", "node_type": "TextOutput", "type": "text", "kind": "text"},
+    ]
+    dashboard_json = json.dumps([output.to_dict() for output in outputs])
+    assert "ComfyUI_temp_secret" not in dashboard_json
+    assert "private" not in dashboard_json
+    assert "output" not in dashboard_json
+
+
+def test_redact_local_media_and_file_inputs_retains_safe_setup_metadata() -> None:
+    graph = {
+        "1": {"class_type": "LoadAudio", "inputs": {"audio": "/home/creator/private-song.flac"}},
+        "2": {"class_type": "VHS_LoadVideo", "inputs": {"video": "/home/creator/private-video.mp4"}},
+        "3": {"class_type": "Load3D", "inputs": {"model_file": "/home/creator/scan.glb"}},
+        "4": {"class_type": "LoadFile", "inputs": {"file_path": "/home/creator/notes.json"}},
+        "5": {"class_type": "KSampler", "inputs": {"model": ["4", 0]}},
+    }
+
+    package_graph, adjustments, unresolved = exporter.redact_local_inputs_for_package(graph)
+
+    assert package_graph["1"]["inputs"]["audio"] == "__noofy_runtime_audio_input_required__"
+    assert package_graph["2"]["inputs"]["video"] == "__noofy_runtime_video_input_required__"
+    assert package_graph["3"]["inputs"]["model_file"] == "__noofy_runtime_three_d_input_required__"
+    assert package_graph["4"]["inputs"]["file_path"] == "__noofy_runtime_text_input_required__"
+    assert package_graph["5"]["inputs"]["model"] == ["4", 0]
+    assert adjustments["audio_inputs_redacted"] == 1
+    assert adjustments["video_inputs_redacted"] == 1
+    assert adjustments["three_d_inputs_redacted"] == 1
+    assert adjustments["text_inputs_redacted"] == 1
+    assert [item["expected_kind"] for item in unresolved] == ["audio", "video", "3d", "text"]
+    assert [item["extension_hint"] for item in unresolved] == [".flac", ".mp4", ".glb", ".json"]
+    unresolved_blob = json.dumps(unresolved)
+    assert "/home/creator" not in unresolved_blob
+    assert "private-song.flac" not in unresolved_blob
+    assert "private-video.mp4" not in unresolved_blob
+    assert "scan.glb" not in unresolved_blob
+    assert "notes.json" not in unresolved_blob
+
+
+def test_noofy_package_omits_generated_output_identity_and_media_bytes(tmp_path: Path) -> None:
+    generated_audio_name = "ComfyUI_temp_secret_00001_.flac"
+    generated_image_name = "ComfyUI_00002_.png"
+    graph = {"8": {"class_type": "SaveAudio", "inputs": {}}, "9": {"class_type": "SaveImage", "inputs": {}}}
+    history = {
+        "prompt-id": {
+            "outputs": {
+                "8": {"audio": [{"filename": generated_audio_name, "subfolder": "temp/private", "type": "temp"}]},
+                "9": {"images": [{"filename": generated_image_name, "subfolder": "output/private", "type": "output"}]},
+            }
+        }
+    }
+    runtime = exporter.RuntimeMetadata(
+        comfyui_version="1.2.3",
+        python_version="3.12.0",
+        platform_name="linux",
+        gpu_backend="cuda",
+        gpu_name="GPU",
+    )
+    hardware = exporter.MemoryObservation(
+        observed_peak_vram_mb=1024,
+        observed_peak_ram_mb=2048,
+        gpu_name="GPU",
+        backend="cuda",
+    )
+    documents = exporter.build_package_documents(
+        graph=graph,
+        workflow_name="Audio First",
+        runtime=runtime,
+        custom_nodes=[],
+        models=[],
+        outputs=exporter.collect_history_output_declarations(history, graph),
+        unresolved_runtime_inputs=[],
+        hardware=hardware,
+        started_at="2026-04-30T00:00:00Z",
+        finished_at="2026-04-30T00:01:00Z",
+        duration_seconds=60,
+        graph_adjustments={},
+        warnings=[],
+    )
+
+    target = tmp_path / "workflow.noofy"
+    exporter.write_noofy_package(
+        target_path=target,
+        graph=graph,
+        documents=documents,
+        custom_nodes=[],
+        thumbnail_bytes=exporter.create_placeholder_thumbnail_bytes(),
+    )
+
+    with zipfile.ZipFile(target) as package:
+        blob = b"".join(package.read(name) for name in package.namelist())
+        dashboard = json.loads(package.read("dashboard.json"))
+
+    assert [output["kind"] for output in dashboard["outputs"]] == ["audio", "image"]
+    assert generated_audio_name.encode("utf-8") not in blob
+    assert generated_image_name.encode("utf-8") not in blob
+    assert b"temp/private" not in blob
+    assert b"output/private" not in blob

@@ -1,5 +1,5 @@
 from app.engine.models import MissingModel, WorkflowValidationResult
-from app.workflows.package import DASHBOARD_CONTROL_TYPES, WorkflowPackage
+from app.workflows.package import DASHBOARD_CONTROL_TYPES, WORKFLOW_OUTPUT_KINDS, WorkflowPackage
 
 _GRID_COLUMNS = 32
 
@@ -55,6 +55,11 @@ class WorkflowPackageValidator:
             if workflow_output.node_id not in graph_node_ids:
                 errors.append(
                     f"Output '{workflow_output.id}' references missing node '{workflow_output.node_id}'."
+                )
+            output_kind = workflow_output.kind or workflow_output.type
+            if output_kind not in WORKFLOW_OUTPUT_KINDS:
+                errors.append(
+                    f"Output '{workflow_output.id}' declares unsupported kind '{output_kind}'."
                 )
 
         # Validate dashboard controls.

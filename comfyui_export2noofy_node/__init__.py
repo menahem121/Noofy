@@ -38,9 +38,10 @@ except ModuleNotFoundError as exc:
 if PromptServer is not None:
     from noofy_exporter import (  # noqa: E402
         ModelHashCache,
+        VerifyHashMetrics,
         build_export_filename,
         build_package_documents,
-        collect_history_output_paths,
+        collect_history_output_declarations,
         collect_model_warnings,
         collect_runtime_metadata,
         create_memory_sampler,
@@ -50,7 +51,7 @@ if PromptServer is not None:
         flatten_warnings,
         output_export_path,
         prepare_graph_for_export,
-        redact_local_image_inputs_for_package,
+        redact_local_inputs_for_package,
         write_noofy_package,
     )
 
@@ -195,22 +196,20 @@ if PromptServer is not None:
             await sampler_task
             sampler_task = None
 
-            package_graph, privacy_adjustments = redact_local_image_inputs_for_package(test_graph)
+            output_records = collect_history_output_declarations(history, test_graph)
+            package_graph, privacy_adjustments, unresolved_runtime_inputs = redact_local_inputs_for_package(
+                test_graph
+            )
             adjustments.update(privacy_adjustments)
-            if privacy_adjustments["image_inputs_redacted"]:
-                thumbnail_bytes = create_thumbnail_bytes(None)
-            else:
-                output_paths = collect_history_output_paths(
-                    history,
-                    lambda directory_type: folder_paths.get_directory_by_type(directory_type),
-                )
-                thumbnail_bytes = create_thumbnail_bytes(output_paths[0] if output_paths else None)
+            thumbnail_bytes = create_thumbnail_bytes(None)
 
             custom_nodes = detect_custom_nodes(test_graph, nodes)
+            model_hash_metrics = VerifyHashMetrics()
             models = detect_model_references(
                 test_graph,
                 lambda folder, filename: folder_paths.get_full_path(folder, filename),
                 hash_cache=_model_hash_cache(),
+                metrics=model_hash_metrics,
             )
             duration_seconds = time.monotonic() - started_at
 
@@ -225,6 +224,8 @@ if PromptServer is not None:
                 runtime=runtime,
                 custom_nodes=custom_nodes,
                 models=models,
+                outputs=output_records,
+                unresolved_runtime_inputs=unresolved_runtime_inputs,
                 hardware=hardware,
                 started_at=started_at_iso,
                 finished_at=finished_at_iso,

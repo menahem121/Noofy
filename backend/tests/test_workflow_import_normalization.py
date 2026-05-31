@@ -8,6 +8,7 @@ from app.workflows.import_normalization import (
     filter_resolved_runtime_inputs,
     normalize_custom_nodes,
     normalize_models,
+    normalize_unresolved_runtime_inputs,
     reject_unsupported_exported_launch_options,
 )
 from app.workflows.package import WorkflowInput
@@ -66,6 +67,58 @@ def test_detect_unresolved_runtime_inputs_finds_local_load_image_values() -> Non
 
     assert len(unresolved) == 1
     assert unresolved[0].reason == "creator_local_image_not_bundled"
+    assert unresolved[0].current_value == "__noofy_runtime_image_input_required__"
+    assert unresolved[0].expected_kind == "image"
+
+
+def test_detect_unresolved_runtime_inputs_finds_local_media_and_file_values() -> None:
+    unresolved = detect_unresolved_runtime_inputs(
+        {
+            "1": {"class_type": "LoadAudio", "inputs": {"audio": "/Users/local/song.flac"}},
+            "2": {"class_type": "VHS_LoadVideo", "inputs": {"video": "/Users/local/movie.mp4"}},
+            "3": {"class_type": "Load3D", "inputs": {"model_file": "/Users/local/scan.glb"}},
+            "4": {"class_type": "LoadFile", "inputs": {"file_path": "/Users/local/data.json"}},
+            "5": {"class_type": "KSampler", "inputs": {"model": ["4", 0]}},
+        }
+    )
+
+    assert [(item.node_id, item.expected_kind, item.extension_hint) for item in unresolved] == [
+        ("1", "audio", ".flac"),
+        ("2", "video", ".mp4"),
+        ("3", "3d", ".glb"),
+        ("4", "text", ".json"),
+    ]
+    assert [item.current_value for item in unresolved] == [
+        "__noofy_runtime_audio_input_required__",
+        "__noofy_runtime_video_input_required__",
+        "__noofy_runtime_three_d_input_required__",
+        "__noofy_runtime_text_input_required__",
+    ]
+
+
+def test_normalize_unresolved_runtime_inputs_redacts_package_values() -> None:
+    unresolved = normalize_unresolved_runtime_inputs(
+        [
+            {
+                "node_id": "4",
+                "node_type": "LoadAudio",
+                "input_name": "audio",
+                "current_value": "/Users/local/private-song.flac",
+                "reason": "creator_local_audio_not_bundled /Users/local/private-song.flac",
+                "expected_kind": "audio",
+                "required": True,
+                "extension_hint": ".flac",
+                "mime_type_hint": "audio/flac",
+            }
+        ]
+    )
+
+    assert len(unresolved) == 1
+    assert unresolved[0].current_value == "__noofy_runtime_audio_input_required__"
+    assert unresolved[0].reason == "creator_local_audio_not_bundled"
+    assert unresolved[0].expected_kind == "audio"
+    assert unresolved[0].extension_hint == ".flac"
+    assert unresolved[0].mime_type_hint == "audio/flac"
 
 
 def test_normalize_custom_nodes_merges_capsule_and_package_metadata() -> None:

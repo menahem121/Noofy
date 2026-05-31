@@ -176,6 +176,32 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
+def test_noofy_importer_preserves_declared_non_image_output_kinds() -> None:
+    archive = _archive_bytes_with_dashboard_update(
+        {
+            "version": "0.1.0",
+            "status": "not_configured",
+            "inputs": [],
+            "outputs": [
+                {"id": "audio-144", "label": "Audio Output", "node_id": "144", "type": "audio", "kind": "audio"},
+                {"id": "video-144", "label": "Video Output", "node_id": "144", "type": "video", "kind": "video"},
+                {"id": "3d-144", "label": "3D Output", "node_id": "144", "type": "3d", "kind": "3d"},
+                {"id": "text-144", "label": "Text Output", "node_id": "144", "type": "text", "kind": "text"},
+                {"id": "file-144", "label": "File Output", "node_id": "144", "type": "file", "kind": "file"},
+            ],
+            "sections": [],
+        }
+    )
+
+    package = NoofyArchiveImporter(
+        archive,
+        original_filename="media-outputs.noofy",
+    ).normalize()
+
+    assert [output.kind for output in package.outputs] == ["audio", "video", "3d", "text", "file"]
+    assert package.dashboard.status == "not_configured"
+
+
 def test_noofy_importer_normalizes_single_model_source_url_string() -> None:
     source_url = "https://example.test/upscale.safetensors"
     archive = _archive_bytes_with_capsule_update(
@@ -1531,6 +1557,22 @@ def _archive_bytes_with_package_update(
                 package = json.loads(contents.decode("utf-8"))
                 package.update(update)
                 contents = json.dumps(package).encode("utf-8")
+            rewritten.writestr(info, contents)
+    return payload.getvalue()
+
+
+def _archive_bytes_with_dashboard_update(
+    dashboard: dict, *, archive_bytes: bytes | None = None
+) -> bytes:
+    source = io.BytesIO(archive_bytes or _archive_bytes())
+    payload = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
+        for info in original.infolist():
+            contents = original.read(info)
+            if info.filename == "dashboard.json":
+                contents = json.dumps(dashboard).encode("utf-8")
             rewritten.writestr(info, contents)
     return payload.getvalue()
 
