@@ -1,7 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
+
+// The dialog loads custom workflow icons in an effect on mount. Tests that do not
+// otherwise await an async result must flush that pending fetch so its state update
+// is wrapped in act(...).
+async function flushPendingEffects() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 describe("WorkflowExportDialog", () => {
   const fetchMock = vi.fn();
@@ -28,7 +37,7 @@ describe("WorkflowExportDialog", () => {
     fetchMock.mockReset();
   });
 
-  it("shows editable noofy metadata and read-only package details", () => {
+  it("shows editable noofy metadata and read-only package details", async () => {
     render(
       <WorkflowExportDialog
         workflowName="Cleanup Flow"
@@ -62,9 +71,11 @@ describe("WorkflowExportDialog", () => {
     expect(screen.queryByLabelText("Icon")).not.toBeInTheDocument();
     expect(screen.getByText("Imported")).toBeInTheDocument();
     expect(screen.getByText("cleanup.safetensors")).toBeInTheDocument();
+
+    await flushPendingEffects();
   });
 
-  it("cancels without exporting", () => {
+  it("cancels without exporting", async () => {
     const onClose = vi.fn();
     render(
       <WorkflowExportDialog
@@ -79,6 +90,8 @@ describe("WorkflowExportDialog", () => {
 
     expect(onClose).toHaveBeenCalled();
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toBe(false);
+
+    await flushPendingEffects();
   });
 
   it("exports edited noofy metadata in the export payload", async () => {

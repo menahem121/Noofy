@@ -172,8 +172,8 @@ describe("RuntimeStatusProvider", () => {
       wrapper: wrapper(),
     });
 
-    const refresh = result.current.refreshRuntime({ force: true, silent: false });
     await act(async () => {
+      const refresh = result.current.refreshRuntime({ force: true, silent: false });
       vi.advanceTimersByTime(8_000);
       await refresh;
     });
@@ -194,14 +194,16 @@ describe("RuntimeStatusProvider", () => {
       wrapper: wrapper(readyRuntimeState),
     });
 
-    const firstRefresh = result.current.refreshRuntime({ force: true, silent: true });
-    const secondRefresh = result.current.refreshRuntime({ force: true, silent: true });
-    second.resolve(jsonResponse(readyRuntime));
+    let firstRefresh!: Promise<unknown>;
+    let secondRefresh!: Promise<unknown>;
     await act(async () => {
+      firstRefresh = result.current.refreshRuntime({ force: true, silent: true });
+      secondRefresh = result.current.refreshRuntime({ force: true, silent: true });
+      second.resolve(jsonResponse(readyRuntime));
       await secondRefresh;
     });
-    first.reject(new Error("old failure"));
     await act(async () => {
+      first.reject(new Error("old failure"));
       await firstRefresh;
     });
 
