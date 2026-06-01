@@ -51,6 +51,8 @@ def test_loader_merges_user_and_bundled(tmp_path: Path) -> None:
     packages = loader.list_packages()
     ids = [p.metadata.id for p in packages]
     assert ids == ["wf_a", "wf_c"]
+    sources = {package.metadata.id: source for package, source in loader.list_packages_with_sources()}
+    assert sources == {"wf_a": "bundled", "wf_c": "user"}
 
 
 def test_user_workflow_does_not_silently_override_bundled_by_id(tmp_path: Path) -> None:
@@ -124,6 +126,19 @@ def test_development_loader_can_allow_user_overrides(tmp_path: Path) -> None:
 
     package = loader.get_package("wf_a")
     assert package.metadata.name == "User Override A"
+    assert {package.metadata.id: source for package, source in loader.list_packages_with_sources()} == {"wf_a": "user"}
+
+
+def test_loader_reports_imported_package_source(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    imported = tmp_path / "imported"
+    _write_package(bundled, "wf_a")
+    _write_package(imported, "wf_imported")
+
+    loader = WorkflowPackageLoader(bundled, imported_packages_dir=imported)
+
+    sources = {package.metadata.id: source for package, source in loader.list_packages_with_sources()}
+    assert sources == {"wf_a": "bundled", "wf_imported": "imported"}
 
 
 def test_loader_returns_empty_when_dirs_missing(tmp_path: Path) -> None:

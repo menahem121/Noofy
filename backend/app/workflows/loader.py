@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.artifacts import ModelVerificationLevel
 from app.workflows.import_normalization import (
@@ -18,6 +18,7 @@ from app.workflows.store_paths import safe_store_segment
 
 _STUB_DASHBOARD_VERSION = "0.1.0"
 _CAPSULE_LOCK_FILENAME = "capsule.lock.json"
+WorkflowPackageSource = Literal["bundled", "user", "imported"]
 
 
 def _load_dashboard_from_dir(package_dir: Path) -> tuple[list[WorkflowInput], list[WorkflowOutput], DashboardSchema]:
@@ -105,21 +106,11 @@ class WorkflowPackageLoader:
         self.allow_user_overrides = allow_user_overrides
 
     def list_packages(self) -> list[WorkflowPackage]:
-        by_id: dict[str, WorkflowPackage] = {}
+        return [package for package, _source in self.list_packages_with_sources()]
 
-        # Bundled (lower priority)
-        for package in self._load_from(self.packages_dir):
-            by_id[package.metadata.id] = package
-
-        # User packages cannot shadow bundled packages unless a development
-        # caller opts into that behavior explicitly.
-        for user_dir in self._user_search_dirs():
-            for package in self._load_from(user_dir):
-                if package.metadata.id in by_id and not self.allow_user_overrides:
-                    continue
-                by_id[package.metadata.id] = package
-
-        return sorted(by_id.values(), key=lambda p: p.metadata.id)
+    def list_packages_with_sources(self) -> list[tuple[WorkflowPackage, WorkflowPackageSource]]:
+        by_id = self._load_packages_by_id()
+        return sorted(by_id.values(), key=lambda record: record[0].metadata.id)
 
     def get_package(self, workflow_id: str) -> WorkflowPackage:
         for package in self.list_packages():
@@ -150,6 +141,28 @@ class WorkflowPackageLoader:
         if self.imported_packages_dir is not None and self.imported_packages_dir not in directories:
             directories.append(self.imported_packages_dir)
         return directories
+
+    def _load_packages_by_id(self) -> dict[str, tuple[WorkflowPackage, WorkflowPackageSource]]:
+        by_id: dict[str, tuple[WorkflowPackage, WorkflowPackageSource]] = {}
+
+        # Bundled (lower priority)
+        for package in self._load_from(self.packages_dir):
+            by_id[package.metadata.id] = (package, "bundled")
+
+        # User packages cannot shadow bundled packages unless a development
+        # caller opts into that behavior explicitly.
+        for user_dir in self._user_search_dirs():
+            source: WorkflowPackageSource = (
+                "imported"
+                if self.imported_packages_dir is not None and user_dir == self.imported_packages_dir
+                else "user"
+            )
+            for package in self._load_from(user_dir):
+                if package.metadata.id in by_id and not self.allow_user_overrides:
+                    continue
+                by_id[package.metadata.id] = (package, source)
+
+        return by_id
 
     def _load_file(self, package_file: Path) -> WorkflowPackage:
         with package_file.open("r", encoding="utf-8") as file:

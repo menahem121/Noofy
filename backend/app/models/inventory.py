@@ -269,7 +269,7 @@ class ModelInventoryService:
         availability_service = getattr(self.engine_service, "model_availability_service", None)
         if workflow_loader is None or availability_service is None:
             return
-        for package in workflow_loader.list_packages():
+        for package in _global_inventory_relevant_workflow_packages(workflow_loader):
             try:
                 summary = availability_service.summarize(package)
             except Exception:
@@ -391,6 +391,17 @@ def _delete_unavailable_reason(source: ModelInventorySource, ownership: ModelOwn
     if source == "noofy" and ownership == "noofy_local":
         return "Only models imported or downloaded by Noofy can be deleted."
     return "Only files inside Noofy Models or the configured ComfyUI models folder can be deleted."
+
+
+def _global_inventory_relevant_workflow_packages(workflow_loader: object) -> list[object]:
+    list_with_sources = getattr(workflow_loader, "list_packages_with_sources", None)
+    if callable(list_with_sources):
+        return [
+            package
+            for package, source in list_with_sources()
+            if source in {"user", "imported"} or getattr(package, "import_metadata", None) is not None
+        ]
+    return []
 
 
 __all__ = [

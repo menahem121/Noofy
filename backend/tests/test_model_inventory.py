@@ -13,24 +13,35 @@ from app.models.inventory import ModelDownloadStartRequest, ModelOwnershipStore,
 from app.models.downloads import ModelDownloadJobService
 from app.models.folders import ModelFolderSettingsService, ModelFolderSettingsStore, ModelFolderUpdateRequest
 from app.workflows.model_availability import ModelAvailabilityService
-from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
+from app.workflows.package import RequiredModel, WorkflowImportMetadata, WorkflowMetadata, WorkflowPackage
 
 
-def _package(models: list[RequiredModel]) -> WorkflowPackage:
+def _package(
+    models: list[RequiredModel],
+    *,
+    workflow_id: str = "wf_text",
+    name: str = "Text workflow",
+    import_metadata: WorkflowImportMetadata | None = None,
+) -> WorkflowPackage:
     return WorkflowPackage(
-        metadata=WorkflowMetadata(id="wf_text", name="Text workflow", version="0.1.0"),
+        metadata=WorkflowMetadata(id=workflow_id, name=name, version="0.1.0"),
         engine="comfyui",
         required_models=models,
         comfyui_graph={},
+        import_metadata=import_metadata,
     )
 
 
 class FakeWorkflowLoader:
-    def __init__(self, packages: list[WorkflowPackage]) -> None:
+    def __init__(self, packages: list[WorkflowPackage], sources: dict[str, str] | None = None) -> None:
         self.packages = packages
+        self.sources = sources or {}
 
     def list_packages(self) -> list[WorkflowPackage]:
         return self.packages
+
+    def list_packages_with_sources(self) -> list[tuple[WorkflowPackage, str]]:
+        return [(package, self.sources.get(package.metadata.id, "imported")) for package in self.packages]
 
     def get_package(self, workflow_id: str) -> WorkflowPackage:
         for package in self.packages:
@@ -40,7 +51,14 @@ class FakeWorkflowLoader:
 
 
 class FakeEngineService:
-    def __init__(self, *, noofy_root: Path, external_root: Path | None, packages: list[WorkflowPackage]) -> None:
+    def __init__(
+        self,
+        *,
+        noofy_root: Path,
+        external_root: Path | None,
+        packages: list[WorkflowPackage],
+        workflow_sources: dict[str, str] | None = None,
+    ) -> None:
         self.log_store = LogStore()
         roots = [noofy_root]
         if external_root is not None:
@@ -50,7 +68,7 @@ class FakeEngineService:
             noofy_models_dir=noofy_root,
             log_store=self.log_store,
         )
-        self.workflow_loader = FakeWorkflowLoader(packages)
+        self.workflow_loader = FakeWorkflowLoader(packages, workflow_sources)
 
     async def list_available_models(self) -> list[ModelInfo]:
         return [
@@ -62,7 +80,12 @@ class FakeEngineService:
         return None
 
 
-def _client(tmp_path: Path, packages: list[WorkflowPackage]) -> TestClient:
+def _client(
+    tmp_path: Path,
+    packages: list[WorkflowPackage],
+    *,
+    workflow_sources: dict[str, str] | None = None,
+) -> TestClient:
     noofy_root = tmp_path / "Noofy Models"
     external_root = tmp_path / "ComfyUI" / "models"
     external_root.mkdir(parents=True, exist_ok=True)
@@ -73,7 +96,12 @@ def _client(tmp_path: Path, packages: list[WorkflowPackage]) -> TestClient:
     model_folder_service.update(
         ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root), external_comfyui_models_dir=str(external_root))
     )
-    engine = FakeEngineService(noofy_root=noofy_root, external_root=external_root, packages=packages)
+    engine = FakeEngineService(
+        noofy_root=noofy_root,
+        external_root=external_root,
+        packages=packages,
+        workflow_sources=workflow_sources,
+    )
     return TestClient(
         create_app(
             engine_service=engine,
@@ -135,6 +163,55 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert "configs/v1-inference.yaml" not in by_key
     assert "configs/anything_v3.yaml" not in by_key
     assert "configs/engine-config.yaml" not in by_key
+
+
+def test_models_inventory_omits_unused_bundled_workflow_missing_requirements(tmp_path: Path) -> None:
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="native-only-missing.safetensors",
+                size_bytes=10,
+                source_url="https://example.test/native-only-missing.safetensors",
+            ),
+        ],
+        workflow_id="native_text",
+        name="Native text workflow",
+    )
+
+    with _client(tmp_path, [package], workflow_sources={"native_text": "bundled"}) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    data = response.json()
+    by_key = {model["model_key"]: model for model in data["models"]}
+    assert "checkpoints/native-only-missing.safetensors" not in by_key
+    assert data["summary"]["missing_count"] == 0
+
+
+def test_models_inventory_includes_imported_workflow_missing_requirements(tmp_path: Path) -> None:
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="imported-missing.safetensors",
+                size_bytes=10,
+                source_url="https://example.test/imported-missing.safetensors",
+            ),
+        ],
+        workflow_id="imported_text",
+        name="Imported text workflow",
+        import_metadata=WorkflowImportMetadata(original_filename="imported.noofy"),
+    )
+
+    with _client(tmp_path, [package], workflow_sources={"imported_text": "imported"}) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    by_key = {model["model_key"]: model for model in response.json()["models"]}
+    missing = by_key["checkpoints/imported-missing.safetensors"]
+    assert missing["source_label"] == "Required by workflow"
+    assert missing["downloadable_references"][0]["workflow_id"] == "imported_text"
 
 
 def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_path: Path) -> None:
