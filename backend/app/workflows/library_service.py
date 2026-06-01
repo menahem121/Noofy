@@ -841,9 +841,52 @@ class WorkflowLibraryService:
             return "Background Replacement"
         if "restore" in combined or "restoration" in combined:
             return "Restoration"
+        media_type_category = self._infer_media_workflow_type_category(package)
+        if media_type_category is not None:
+            return media_type_category
         if any(input_def.control.startswith("load_image") for input_def in package.inputs):
             return "Img2img"
         return "Txt2img"
+
+    def _infer_media_workflow_type_category(self, package: WorkflowPackage) -> str | None:
+        output_kinds = {
+            (output.kind or output.type).casefold()
+            for output in package.outputs
+            if output.kind or output.type
+        }
+        input_controls = {input_def.control.casefold() for input_def in package.inputs}
+        unresolved_input_kinds = {
+            unresolved.expected_kind.casefold()
+            for unresolved in package.unresolved_runtime_inputs
+            if unresolved.expected_kind
+        }
+        has_image_input = (
+            any(control.startswith("load_image") for control in input_controls)
+            or "image" in unresolved_input_kinds
+        )
+        has_audio_input = "load_audio" in input_controls or "audio" in unresolved_input_kinds
+        has_video_input = "load_video" in input_controls or "video" in unresolved_input_kinds
+
+        if "audio" in output_kinds:
+            if has_audio_input:
+                return "audio2audio"
+            return "txt2audio"
+        if "video" in output_kinds:
+            if has_video_input:
+                return "vid2vid"
+            if has_image_input:
+                return "img2vid"
+            return "txt2vid"
+        if "3d" in output_kinds:
+            if has_image_input:
+                return "imgTo3D"
+            return "txtTo3D"
+        if "text" in output_kinds:
+            if has_image_input:
+                return "img2text"
+            if has_audio_input:
+                return "audio2txt"
+        return None
 
     def _graph_keyword_text(self, graph: dict[str, Any]) -> str:
         parts: list[str] = []

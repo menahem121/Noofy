@@ -63,15 +63,6 @@ interface WorkflowsPageProps {
   initialSearchQuery?: string;
 }
 
-type WorkflowCategory =
-  | "All"
-  | (typeof WORKFLOW_CATEGORY_OPTIONS)[number];
-
-const CATEGORY_FILTERS: WorkflowCategory[] = [
-  "All",
-  ...WORKFLOW_CATEGORY_OPTIONS,
-];
-
 type SortDirection = "asc" | "desc";
 type WorkflowSortKey = "name" | "tags" | "status" | "source" | "category" | "mainModel";
 
@@ -123,7 +114,7 @@ export function WorkflowsPage({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const detailsPanelFrameRef = useRef<number | null>(null);
   const detailsPanelCloseTimerRef = useRef<number | null>(null);
-  const [activeCategory, setActiveCategory] = useState<WorkflowCategory>("All");
+  const [activeCategory, setActiveCategory] = useState("All");
   const [search, setSearch] = useState(initialSearchQuery);
   const [statusFilter, setStatusFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -184,6 +175,13 @@ export function WorkflowsPage({
     () => Array.from(new Set(workflows.map((workflow) => workflow.category).filter(Boolean) as string[])).sort(),
     [workflows],
   );
+  const categoryTabs = useMemo(() => ["All", ...uniqueCategories], [uniqueCategories]);
+
+  useEffect(() => {
+    if (!categoryTabs.includes(activeCategory)) {
+      setActiveCategory("All");
+    }
+  }, [activeCategory, categoryTabs]);
 
   const filteredWorkflows = useMemo(
     () => {
@@ -431,7 +429,7 @@ export function WorkflowsPage({
           </div>
 
           <div className="models-type-tabs" role="tablist" aria-label="Filter by workflow category">
-            {CATEGORY_FILTERS.map((category) => (
+            {categoryTabs.map((category) => (
               <button
                 key={category}
                 role="tab"

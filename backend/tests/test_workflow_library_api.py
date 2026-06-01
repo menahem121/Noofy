@@ -30,6 +30,7 @@ from app.runtime.runners.supervisor import CORE_RUNNER_FINGERPRINT, CORE_RUNNER_
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate, workflow_package_display_name
+from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage, WorkflowPackageIdentity
 from app.workflows.validator import WorkflowPackageValidator
@@ -408,6 +409,168 @@ def test_workflow_list_returns_lightweight_table_fields(tmp_path: Path) -> None:
     assert row["hardware_warning"] is None
     assert "models_used" not in row
     assert "overview" not in row
+
+
+def test_workflow_list_infers_media_workflow_type_categories_from_declared_interfaces(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    cases = [
+        (
+            "txt2audio",
+            "txt2audio",
+            [{"id": "prompt", "label": "Prompt", "control": "textarea"}],
+            [{"id": "audio", "label": "Audio", "type": "audio", "kind": "audio"}],
+            [],
+        ),
+        (
+            "audio2audio",
+            "audio2audio",
+            [{"id": "audio_in", "label": "Audio", "control": "load_audio"}],
+            [{"id": "audio", "label": "Audio", "type": "audio", "kind": "audio"}],
+            [],
+        ),
+        (
+            "txt2vid",
+            "txt2vid",
+            [{"id": "prompt", "label": "Prompt", "control": "textarea"}],
+            [{"id": "video", "label": "Video", "type": "video", "kind": "video"}],
+            [],
+        ),
+        (
+            "img2vid",
+            "img2vid",
+            [{"id": "image_in", "label": "Image", "control": "load_image"}],
+            [{"id": "video", "label": "Video", "type": "video", "kind": "video"}],
+            [],
+        ),
+        (
+            "vid2vid",
+            "vid2vid",
+            [{"id": "video_in", "label": "Video", "control": "load_video"}],
+            [{"id": "video", "label": "Video", "type": "video", "kind": "video"}],
+            [],
+        ),
+        (
+            "imgTo3D",
+            "imgTo3D",
+            [{"id": "image_in", "label": "Image", "control": "load_image"}],
+            [{"id": "model", "label": "Model", "type": "3d", "kind": "3d"}],
+            [],
+        ),
+        (
+            "txtTo3D",
+            "txtTo3D",
+            [{"id": "prompt", "label": "Prompt", "control": "textarea"}],
+            [{"id": "model", "label": "Model", "type": "3d", "kind": "3d"}],
+            [],
+        ),
+        (
+            "img2text",
+            "img2text",
+            [{"id": "image_in", "label": "Image", "control": "load_image"}],
+            [{"id": "caption", "label": "Caption", "type": "text", "kind": "text"}],
+            [],
+        ),
+        (
+            "audio2txt",
+            "audio2txt",
+            [{"id": "audio_in", "label": "Audio", "control": "load_audio"}],
+            [{"id": "transcript", "label": "Transcript", "type": "text", "kind": "text"}],
+            [],
+        ),
+        (
+            "unresolved_image_to_video",
+            "img2vid",
+            [],
+            [{"id": "video", "label": "Video", "type": "video", "kind": "video"}],
+            [{"expected_kind": "image"}],
+        ),
+    ]
+    for workflow_id, _, inputs, outputs, unresolved in cases:
+        _write_category_fixture(packages_dir, workflow_id, inputs, outputs, unresolved=unresolved)
+
+    service = WorkflowLibraryService(
+        WorkflowPackageLoader(packages_dir),
+        model_availability_service=FakeAvailabilityService(),
+        log_store=LogStore(),
+    )
+
+    categories = {row["id"]: row["category"] for row in service.list_workflows()}
+    for workflow_id, expected_category, _, _, _ in cases:
+        assert categories[workflow_id] == expected_category
+
+
+def test_workflow_list_preserves_task_category_inference_before_media_type_fallback(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    _write_category_fixture(
+        packages_dir,
+        "video_upscale",
+        [{"id": "video_in", "label": "Video", "control": "load_video"}],
+        [{"id": "video", "label": "Video", "type": "video", "kind": "video"}],
+    )
+
+    service = WorkflowLibraryService(
+        WorkflowPackageLoader(packages_dir),
+        model_availability_service=FakeAvailabilityService(),
+        log_store=LogStore(),
+    )
+
+    row = service.list_workflows()[0]
+
+    assert row["category"] == "Upscaling"
+
+
+def _write_category_fixture(
+    packages_dir: Path,
+    workflow_id: str,
+    inputs: list[dict[str, str]],
+    outputs: list[dict[str, str]],
+    unresolved: list[dict[str, str]] | None = None,
+) -> None:
+    package_dir = packages_dir / workflow_id
+    package_dir.mkdir(parents=True)
+    normalized_inputs = [
+        {
+            **input_def,
+            "binding": {"node_id": "1", "input_name": input_def["id"]},
+            "default": "",
+            "validation": {},
+        }
+        for input_def in inputs
+    ]
+    normalized_outputs = [
+        {
+            **output_def,
+            "node_id": "2",
+        }
+        for output_def in outputs
+    ]
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": workflow_id, "name": workflow_id, "version": "1.0.0"},
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": {
+                    "1": {"class_type": "InputNode", "inputs": {}},
+                    "2": {"class_type": "OutputNode", "inputs": {}},
+                },
+                "inputs": normalized_inputs,
+                "outputs": normalized_outputs,
+                "custom_nodes": [],
+                "unresolved_runtime_inputs": [
+                    {
+                        "node_id": "3",
+                        "node_type": "LoadImage",
+                        "input_name": "image",
+                        "reason": "creator_local_image_not_bundled",
+                        "expected_kind": item["expected_kind"],
+                    }
+                    for item in (unresolved or [])
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_hardware_warning_is_yellow_for_temporary_low_free_memory(tmp_path: Path) -> None:

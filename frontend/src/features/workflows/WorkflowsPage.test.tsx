@@ -387,6 +387,21 @@ describe("WorkflowsPage", () => {
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
   });
 
+  it("shows quick category tabs only for categories in the current library", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+
+    const categoryTabs = within(screen.getByRole("tablist", { name: "Filter by workflow category" })).getAllByRole("tab");
+    expect(categoryTabs.map((tab) => tab.textContent)).toEqual(["All", "Inpainting", "Txt2img"]);
+    expect(screen.queryByRole("tab", { name: "txt2audio" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Inpainting" }));
+
+    expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
+    expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+  });
+
   it("shows advisory hardware warning pills without disabling Open", async () => {
     renderPage();
 

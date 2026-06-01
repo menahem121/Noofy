@@ -16,6 +16,21 @@ A package should contain:
 - output mapping for generated images, audio, video, 3D assets, text, or files
 - dashboard schema for the end-user interface
 
+## Discovery Categories
+
+`metadata.category` is user-facing discovery metadata. It may describe broad
+workflow types such as `Txt2img`, `Img2img`, `txt2audio`, `audio2audio`,
+`txt2vid`, `img2vid`, `imgTo3D`, `txtTo3D`, `img2text`, `audio2txt`, and
+`vid2vid`, or more task-oriented labels such as inpainting, restoration, or
+control workflows.
+
+Categories are not the workflow execution contract. Execution and rendering
+must continue to come from package inputs, package outputs, dashboard bindings,
+and `EngineAdapter` output handling. Frontend discovery filters may use
+categories, but preview/result widgets must rely on explicit workflow outputs
+and supported dashboard result widgets for image, audio, video, 3D, text, or
+generic file outputs.
+
 ## Hardware And Memory Observations
 
 A `.noofy` package may include creator/export-time hardware observations, such as peak RAM/VRAM, tested resolution, batch size, backend, GPU name, model set, and run duration.
