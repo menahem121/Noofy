@@ -20,7 +20,7 @@ NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
 LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
 LOCAL_AUDIO_NODE_TYPES = {"LoadAudio"}
 LOCAL_VIDEO_NODE_TYPES = {"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"}
-LOCAL_THREE_D_NODE_TYPES = {"Load3D"}
+LOCAL_THREE_D_NODE_TYPES = {"Load3D", "Load3DAnimation"}
 WORKFLOW_MEDIA_KINDS = frozenset({"image", "audio", "video", "3d", "text", "file"})
 FILE_INPUT_NAMES = frozenset(
     {
@@ -456,7 +456,13 @@ def expected_runtime_input_kind(node_type: str, input_name: str, value: Any) -> 
         return "audio"
     if is_video_input_node_type(node_type) and normalized_input in {"video", "file", "filename", "path", "video_path"}:
         return "video"
-    if node_type in LOCAL_THREE_D_NODE_TYPES and normalized_input in {"model_file", "file", "filename", "path"}:
+    if (
+        node_type in LOCAL_THREE_D_NODE_TYPES
+        or (
+            any(token in normalized_node for token in ("3d", "mesh", "glb", "gltf"))
+            and any(token in normalized_node for token in ("load", "input", "import"))
+        )
+    ) and normalized_input in {"model", "mesh", "model_file", "file", "filename", "path", "model_path", "mesh_path"}:
         return "3d"
     if "text" in normalized_node and normalized_input in FILE_INPUT_NAMES:
         return "text"
@@ -475,7 +481,7 @@ def is_video_input_node_type(node_type: str) -> bool:
 def is_generic_file_input(node_type: str, input_name: str, value: Any) -> bool:
     normalized_node = node_type.lower()
     normalized_input = input_name.lower()
-    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+    if any(media in normalized_node for media in ("image", "audio", "video", "3d", "mesh", "lora")):
         return False
     if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
         return False

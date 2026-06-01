@@ -49,6 +49,7 @@ import {
   uploadDashboardAudioAsset,
   uploadDashboardFileAsset,
   uploadDashboardVideoAsset,
+  uploadDashboardThreeDAsset,
   validateWorkflow,
   type DashboardSavePayload,
   type DashboardControlDef,
@@ -82,7 +83,8 @@ import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../l
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { workflowDisplayName } from "../../lib/workflowNames";
-import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputVideoMedia } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
+import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import {
   failedModelMessage,
   isModelDownloadActive,
@@ -226,6 +228,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const outputAudios = useMemo(() => extractAudioOutputs(state.result), [state.result]);
   const outputVideos = useMemo(() => extractVideoOutputs(state.result), [state.result]);
   const outputFiles = useMemo(() => extractFileOutputs(state.result), [state.result]);
+  const outputThreeDs = useMemo(() => extractThreeDOutputs(state.result), [state.result]);
 
   useEffect(() => {
     setComparisonInputImageUrl(null);
@@ -380,9 +383,13 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     () => extractFileOutputsByNodeId(state.result),
     [state.result],
   );
+  const outputThreeDsByNodeId = useMemo<Map<string, OutputThreeDMedia[]>>(
+    () => extractThreeDOutputsByNodeId(state.result),
+    [state.result],
+  );
   const classicPreviewMedia = useMemo(
-    () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputFiles),
-    [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
+    () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputThreeDsByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputThreeDs, outputFiles),
+    [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputThreeDs, outputThreeDsByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
   );
   const hasActiveGallerySave = Object.values(gallerySaveByControlId).some(
     (item) => item.status === "queued" || item.status === "saving",
@@ -742,6 +749,11 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     setInputValue(inputId, asset_id);
   }
 
+  async function handleThreeDUpload(inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) {
+    const { asset_id } = await uploadDashboardThreeDAsset(workflowId, file, onProgress, signal);
+    setInputValue(inputId, asset_id);
+  }
+
   function loraBrowserFor(control: DashboardControlDef, input: WorkflowInputDef) {
     if (control.type !== "lora_loader") return undefined;
     const civitaiConfigured = Boolean(state.apiKeySettings?.providers?.civitai?.configured);
@@ -1019,7 +1031,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const topBarProgress = isRunning ? { percent: progressPercent } : null;
 
   const inputControls = allControls.filter(
-    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_video" && c.type !== "display_file" && c.input_id),
+    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_video" && c.type !== "display_file" && c.type !== "display_3d" && c.input_id),
   );
   const inputControlIds = useMemo(() => new Set(inputControls.map((control) => control.id)), [inputControls]);
   const inputTopLevelItems = useMemo(
@@ -1310,6 +1322,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           outputAudiosByNodeId={outputAudiosByNodeId}
           outputVideosByNodeId={outputVideosByNodeId}
           outputFilesByNodeId={outputFilesByNodeId}
+          outputThreeDsByNodeId={outputThreeDsByNodeId}
           comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
           outputPreferences={outputPreferences}
@@ -1333,6 +1346,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           onAudioUpload={handleAudioUpload}
           onVideoUpload={handleVideoUpload}
           onFileUpload={handleFileUpload}
+          onThreeDUpload={handleThreeDUpload}
           loraBrowserFor={loraBrowserFor}
           onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
           onSaveOutputToGallery={state.result?.status === "completed" ? (controlId) => void handleSaveOutputToGallery(controlId) : undefined}
@@ -1394,6 +1408,7 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
               onAudioUpload={handleAudioUpload}
               onVideoUpload={handleVideoUpload}
               onFileUpload={handleFileUpload}
+              onThreeDUpload={handleThreeDUpload}
               loraBrowserFor={loraBrowserFor}
             />
           ) : (
@@ -1453,6 +1468,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
                 <strong>{classicPreviewMedia.media.filename}</strong>
                 <span>{audioOutputMetaLabel(classicPreviewMedia.media)}</span>
               </div>
+            ) : classicPreviewMedia?.kind === "3d" ? (
+              <ThreeDViewer url={classicPreviewMedia.media.url} filename={classicPreviewMedia.media.filename} size={classicPreviewMedia.media.size} />
             ) : classicPreviewMedia?.kind === "file" ? (
               <div className="preview-file-output">
                 <FileIcon size={28} aria-hidden="true" />
@@ -1655,6 +1672,7 @@ function DashboardInputControls({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
 }: {
   items: DashboardTopLevelControlItem[];
@@ -1665,6 +1683,7 @@ function DashboardInputControls({
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   return (
@@ -1688,6 +1707,7 @@ function DashboardInputControls({
                     onAudioUpload={onAudioUpload}
                     onVideoUpload={onVideoUpload}
                     onFileUpload={onFileUpload}
+                    onThreeDUpload={onThreeDUpload}
                     loraBrowserFor={loraBrowserFor}
                   />
                 ))}
@@ -1706,6 +1726,7 @@ function DashboardInputControls({
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
+            onThreeDUpload={onThreeDUpload}
             loraBrowserFor={loraBrowserFor}
           />
         );
@@ -1724,6 +1745,7 @@ function ClassicDashboardInputControl({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
 }: {
   control: DashboardControlDef;
@@ -1735,6 +1757,7 @@ function ClassicDashboardInputControl({
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
         if (control.type === "note") {
@@ -1764,6 +1787,7 @@ function ClassicDashboardInputControl({
             onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
             onVideoUpload={(file, onProgress, signal) => onVideoUpload(input.id, file, onProgress, signal)}
             onFileUpload={onFileUpload}
+            onThreeDUpload={(file, onProgress, signal) => onThreeDUpload(input.id, file, onProgress, signal)}
           />
         );
 }
@@ -2661,6 +2685,12 @@ function extractFileOutputs(result: JobResult | null): OutputFileMedia[] {
     .filter((item): item is OutputFileMedia => Boolean(item));
 }
 
+function extractThreeDOutputs(result: JobResult | null): OutputThreeDMedia[] {
+  return extractMediaItems(result, "3d")
+    .map(({ item }) => normalizeThreeDOutput(item))
+    .filter((item): item is OutputThreeDMedia => Boolean(item));
+}
+
 function extractVideoOutputsByNodeId(result: JobResult | null): Map<string, OutputVideoMedia[]> {
   const map = new Map<string, OutputVideoMedia[]>();
   for (const { item, nodeId } of extractMediaItems(result, "video")) {
@@ -2681,7 +2711,17 @@ function extractFileOutputsByNodeId(result: JobResult | null): Map<string, Outpu
   return map;
 }
 
-function extractMediaItems(result: JobResult | null, kind: "audio" | "video" | "file") {
+function extractThreeDOutputsByNodeId(result: JobResult | null): Map<string, OutputThreeDMedia[]> {
+  const map = new Map<string, OutputThreeDMedia[]>();
+  for (const { item, nodeId } of extractMediaItems(result, "3d")) {
+    if (!nodeId) continue;
+    const normalized = normalizeThreeDOutput(item);
+    if (normalized) map.set(nodeId, [...(map.get(nodeId) ?? []), normalized]);
+  }
+  return map;
+}
+
+function extractMediaItems(result: JobResult | null, kind: "audio" | "video" | "3d" | "file") {
   const outputs: Array<{ item: unknown; nodeId: string | null }> = [];
   if (!result) return outputs;
   for (const output of result.outputs) {
@@ -2689,7 +2729,7 @@ function extractMediaItems(result: JobResult | null, kind: "audio" | "video" | "
     if (!outputPayload || typeof outputPayload !== "object") continue;
     const nodeIdKey = Object.keys(output).find((key) => key !== "output");
     const nodeId = typeof output.node_id === "string" ? output.node_id : nodeIdKey ?? null;
-    for (const bucketName of ["images", "audio", "video", "videos", "gifs", "files", "text"]) {
+    for (const bucketName of ["images", "audio", "video", "videos", "gifs", "3d", "files", "text"]) {
       const items = (outputPayload as Record<string, unknown>)[bucketName];
       if (!Array.isArray(items)) continue;
       for (const item of items) {
@@ -2700,11 +2740,11 @@ function extractMediaItems(result: JobResult | null, kind: "audio" | "video" | "
   return outputs;
 }
 
-function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" | "video" | "file" {
+function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" | "video" | "3d" | "file" {
   if (item && typeof item === "object") {
     const record = item as Record<string, unknown>;
-    if (record.kind === "image" || record.kind === "audio" || record.kind === "video" || record.kind === "file") return record.kind;
-    if (record.type === "image" || record.type === "audio" || record.type === "video" || record.type === "file") return record.type;
+    if (record.kind === "image" || record.kind === "audio" || record.kind === "video" || record.kind === "3d" || record.kind === "file") return record.kind;
+    if (record.type === "image" || record.type === "audio" || record.type === "video" || record.type === "3d" || record.type === "file") return record.type;
     const mimeType =
       typeof record.mime_type === "string"
         ? record.mime_type.toLowerCase()
@@ -2714,14 +2754,17 @@ function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" |
     if (mimeType.startsWith("image/")) return "image";
     if (mimeType.startsWith("audio/")) return "audio";
     if (mimeType.startsWith("video/")) return "video";
+    if (mimeType.startsWith("model/")) return "3d";
     if (mimeType && mimeType !== "application/octet-stream") return "file";
     const filename = typeof record.filename === "string" ? record.filename.toLowerCase() : "";
     if (/\.(mp4|mov|webm|mkv)$/.test(filename)) return "video";
     if (/\.(wav|mp3|flac|ogg|m4a)$/.test(filename)) return "audio";
+    if (/\.(glb|gltf|obj|stl|fbx|ply|usdz|dae)$/.test(filename)) return "3d";
     if (/\.[a-z0-9][a-z0-9._-]*$/.test(filename)) return "file";
   }
   if (bucketName === "audio") return "audio";
   if (bucketName === "video" || bucketName === "videos") return "video";
+  if (bucketName === "3d") return "3d";
   if (bucketName === "files" || bucketName === "text") return "file";
   return "image";
 }
@@ -2760,16 +2803,34 @@ function normalizeFileOutput(file: unknown): OutputFileMedia | null {
   };
 }
 
+function normalizeThreeDOutput(model: unknown): OutputThreeDMedia | null {
+  if (!model || typeof model !== "object") return null;
+  const item = model as Record<string, unknown>;
+  const rawUrl = typeof item.view_url === "string" ? item.view_url : typeof item.url === "string" ? item.url : null;
+  if (!rawUrl) return null;
+  const filename = typeof item.filename === "string" && item.filename ? item.filename : filenameFromMediaUrl(rawUrl, "noofy-model.glb");
+  return {
+    url: resolveBackendUrl(rawUrl, { includeToken: true }),
+    filename,
+    thumbnailUrl: typeof item.thumbnail_url === "string" ? resolveBackendUrl(item.thumbnail_url, { includeToken: true }) : null,
+    mimeType: typeof item.mime_type === "string" ? item.mime_type : null,
+    extension: typeof item.extension === "string" ? item.extension : extensionFromFilename(filename),
+    size: typeof item.size === "number" ? item.size : null,
+  };
+}
+
 function selectClassicPreviewMedia(
   controls: DashboardControlDef[],
   outputs: WorkflowOutputDef[],
   imagesByNodeId: Map<string, string[]>,
   audiosByNodeId: Map<string, OutputAudioMedia[]>,
   videosByNodeId: Map<string, OutputVideoMedia[]>,
+  threeDsByNodeId: Map<string, OutputThreeDMedia[]>,
   filesByNodeId: Map<string, OutputFileMedia[]>,
   fallbackImages: string[],
   fallbackAudios: OutputAudioMedia[],
   fallbackVideos: OutputVideoMedia[],
+  fallbackThreeDs: OutputThreeDMedia[],
   fallbackFiles: OutputFileMedia[],
 ) {
   const outputsById = new Map(outputs.map((output) => [output.id, output]));
@@ -2782,6 +2843,7 @@ function selectClassicPreviewMedia(
     if (kind === "video" && videosByNodeId.get(output.node_id)?.[0]) return { kind: "video" as const, media: videosByNodeId.get(output.node_id)![0], controlId };
     if (kind === "image" && imagesByNodeId.get(output.node_id)?.[0]) return { kind: "image" as const, url: imagesByNodeId.get(output.node_id)![0], controlId };
     if (kind === "audio" && audiosByNodeId.get(output.node_id)?.[0]) return { kind: "audio" as const, media: audiosByNodeId.get(output.node_id)![0], controlId };
+    if (kind === "3d" && threeDsByNodeId.get(output.node_id)?.[0]) return { kind: "3d" as const, media: threeDsByNodeId.get(output.node_id)![0], controlId };
     if (kind === "file" && filesByNodeId.get(output.node_id)?.[0]) return { kind: "file" as const, media: filesByNodeId.get(output.node_id)![0], controlId };
   }
   for (const output of outputs) {
@@ -2789,11 +2851,13 @@ function selectClassicPreviewMedia(
     if (kind === "video" && videosByNodeId.get(output.node_id)?.[0]) return { kind: "video" as const, media: videosByNodeId.get(output.node_id)![0] };
     if (kind === "image" && imagesByNodeId.get(output.node_id)?.[0]) return { kind: "image" as const, url: imagesByNodeId.get(output.node_id)![0] };
     if (kind === "audio" && audiosByNodeId.get(output.node_id)?.[0]) return { kind: "audio" as const, media: audiosByNodeId.get(output.node_id)![0] };
+    if (kind === "3d" && threeDsByNodeId.get(output.node_id)?.[0]) return { kind: "3d" as const, media: threeDsByNodeId.get(output.node_id)![0] };
     if (kind === "file" && filesByNodeId.get(output.node_id)?.[0]) return { kind: "file" as const, media: filesByNodeId.get(output.node_id)![0] };
   }
   if (fallbackVideos[0]) return { kind: "video" as const, media: fallbackVideos[0] };
   if (fallbackImages[0]) return { kind: "image" as const, url: fallbackImages[0] };
   if (fallbackAudios[0]) return { kind: "audio" as const, media: fallbackAudios[0] };
+  if (fallbackThreeDs[0]) return { kind: "3d" as const, media: fallbackThreeDs[0] };
   if (fallbackFiles[0]) return { kind: "file" as const, media: fallbackFiles[0] };
   return null;
 }
@@ -3073,7 +3137,7 @@ function buildDashboardSchemaForEditing(
         id: control.id,
         valueId: output.id,
         binding: { nodeId: output.node_id, inputName: "" },
-        widgetType: outputKind === "audio" ? "display_audio" : outputKind === "video" ? "display_video" : outputKind === "file" ? "display_file" : "display_image",
+        widgetType: outputKind === "audio" ? "display_audio" : outputKind === "video" ? "display_video" : outputKind === "3d" ? "display_3d" : outputKind === "file" ? "display_file" : "display_image",
         title: control.label,
         description: control.description ?? "",
         defaultValue: null,
@@ -3187,10 +3251,12 @@ function toBuilderWidgetType(type: string): WidgetType {
     "load_audio",
     "load_video",
     "load_file",
+    "load_3d",
     "display_image",
     "display_audio",
     "display_video",
     "display_file",
+    "display_3d",
     "seed_widget",
     "lora_loader",
     "select",

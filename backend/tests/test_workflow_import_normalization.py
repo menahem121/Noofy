@@ -96,6 +96,16 @@ def test_detect_unresolved_runtime_inputs_finds_local_media_and_file_values() ->
     ]
 
 
+def test_detect_unresolved_runtime_inputs_ignores_generic_model_loaders() -> None:
+    unresolved = detect_unresolved_runtime_inputs(
+        {
+            "1": {"class_type": "ModelLoader", "inputs": {"model": "/Users/local/checkpoint.safetensors"}},
+        }
+    )
+
+    assert unresolved == []
+
+
 def test_normalize_unresolved_runtime_inputs_redacts_package_values() -> None:
     unresolved = normalize_unresolved_runtime_inputs(
         [

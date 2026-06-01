@@ -180,6 +180,61 @@ def test_result_from_history_normalizes_generic_file_output(tmp_path: Path) -> N
     assert file_output["url"].startswith("/api/jobs/job-file/outputs/view?")
 
 
+def test_result_from_history_recognizes_native_three_d_bucket(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-three-d",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "30": {
+                    "3d": [
+                        {"filename": "mesh.glb", "subfolder": "", "type": "output"}
+                    ]
+                }
+            },
+        },
+    )
+
+    model = result.outputs[0]["output"]["3d"][0]
+    assert model["kind"] == "3d"
+    assert model["type"] == "3d"
+    assert model["extension"] == ".glb"
+    assert model["size"] is None
+    assert model["url"].startswith("/api/jobs/job-three-d/outputs/view?")
+
+
+@pytest.mark.anyio
+async def test_probe_output_metadata_uses_range_response_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/view"
+        assert request.headers["range"] == "bytes=0-0"
+        return httpx.Response(
+            206,
+            headers={"content-range": "bytes 0-0/4096", "content-type": "model/gltf-binary"},
+            content=b"x",
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+
+    assert await adapter._probe_output_metadata(
+        {"filename": "mesh.glb", "subfolder": "", "type": "output"}
+    ) == (4096, "model/gltf-binary")
+
+
 def test_result_from_history_prefers_declared_output_kind(tmp_path: Path) -> None:
     adapter = ComfyUIEngineAdapter(
         "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
@@ -939,6 +994,37 @@ def test_stage_assets_uses_saved_file_dashboard_binding(tmp_path: Path) -> None:
     assert new_graph["custom"]["inputs"]["file_path"].startswith("staging/")
     assert new_graph["custom"]["inputs"]["other"] == asset_id
     assert graph["custom"]["inputs"]["file_path"] == asset_id
+
+
+def test_stage_assets_uses_saved_three_d_dashboard_binding(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    asset_id = "12345678-1234-1234-1234-123456789abc.glb"
+    (assets_dir / asset_id).write_bytes(b"glTF\x02\x00\x00\x00")
+
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        tmp_path / "models",
+        dashboard_assets_dir=assets_dir,
+        log_store=LogStore(),
+    )
+    graph = {
+        "custom": {
+            "class_type": "Load3D",
+            "inputs": {"model_file": asset_id, "other": asset_id},
+        }
+    }
+
+    new_graph, staged = adapter._stage_assets(
+        _media_package("load_3d", node_id="custom", input_name="model_file"),
+        graph,
+        "job-three-d",
+    )
+
+    assert len(staged) == 1
+    assert new_graph["custom"]["inputs"]["model_file"].startswith("staging/")
+    assert new_graph["custom"]["inputs"]["other"] == asset_id
+    assert graph["custom"]["inputs"]["model_file"] == asset_id
 
 
 def test_stage_assets_reuses_one_file_for_multiple_saved_bindings(tmp_path: Path) -> None:

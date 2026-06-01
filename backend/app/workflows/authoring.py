@@ -287,8 +287,12 @@ _AUDIO_NODE_TYPES = frozenset({"LoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
 _VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
 _VIDEO_OUTPUT_NODE_TYPES = frozenset({"PreviewVideo", "SaveVideo", "SaveWEBM", "VHS_VideoCombine"})
+_THREE_D_NODE_TYPES = frozenset({"Load3D", "Load3DAnimation"})
+_THREE_D_OUTPUT_NODE_TYPES = frozenset({"SaveGLB", "Preview3D", "Preview3DAnimation"})
 _FILE_OUTPUT_NODE_TYPES = frozenset({"SaveFile", "SaveText", "SaveJSON", "SaveCSV", "SaveDocument"})
 _FILE_INPUT_NAMES = frozenset({"file", "filename", "path", "file_path", "filepath", "json", "csv", "srt", "subtitle", "subtitles", "zip", "npy", "pt"})
+_THREE_D_INPUT_NAMES = frozenset({"model", "mesh", "model_file", "file", "filename", "path", "model_path", "mesh_path"})
+_THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply", ".usdz", ".dae"})
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 _NOTE_NODE_TYPES = frozenset({"Note"})
@@ -340,6 +344,17 @@ def _classify_graph_inputs(
                     "auto_select": node_id_str == default_video_output_node_id,
                 }
             )
+        if _is_three_d_output_node_type(node_type):
+            scalar_inputs.append(
+                {
+                    "input_name": "output_3d",
+                    "current_value": None,
+                    "kind": "three_d_output",
+                    "suggested_widget_type": "display_3d",
+                    "widget_types": ["display_3d"],
+                    "auto_select": False,
+                }
+            )
         if _is_file_output_node_type(node_type):
             scalar_inputs.append(
                 {
@@ -371,7 +386,7 @@ def _classify_graph_inputs(
                 continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
             kind = _value_kind(input_name, value, node_type)
-            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "file_input", "lora"}:
+            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "three_d_input", "file_input", "lora"}:
                 kind = "select"
             if kind is None:
                 continue
@@ -399,6 +414,7 @@ def _classify_graph_inputs(
                     "is_image_node": node_type in _IMAGE_NODE_TYPES,
                     "is_audio_node": node_type in _AUDIO_NODE_TYPES,
                     "is_video_node": _is_video_input_node_type(node_type),
+                    "is_three_d_node": _is_three_d_input_node_type(node_type),
                     "is_lora_node": node_type in _LORA_NODE_TYPES,
                     "inputs": scalar_inputs,
                 }
@@ -641,6 +657,8 @@ def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
         return "audio_input"
     if _is_video_input_node_type(node_type) and input_name in {"video", "file", "filename", "path", "video_path"}:
         return "video_input"
+    if _is_three_d_input(node_type, input_name, value):
+        return "three_d_input"
     if _is_file_input(node_type, input_name, value):
         return "file_input"
     if node_type in _LORA_NODE_TYPES and input_name in ("lora_name",):
@@ -667,6 +685,8 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "audio_output": ["display_audio"],
         "video_input": ["load_video"],
         "video_output": ["display_video"],
+        "three_d_input": ["load_3d"],
+        "three_d_output": ["display_3d"],
         "file_input": ["load_file"],
         "file_output": ["display_file"],
         "lora": ["lora_loader"],
@@ -689,10 +709,34 @@ def _is_video_output_node_type(node_type: str) -> bool:
     return "video" in normalized and any(token in normalized for token in ("preview", "save", "combine", "output", "export"))
 
 
+def _is_three_d_input_node_type(node_type: str) -> bool:
+    normalized = node_type.lower()
+    return node_type in _THREE_D_NODE_TYPES or (
+        any(token in normalized for token in ("3d", "mesh", "glb", "gltf"))
+        and any(token in normalized for token in ("load", "input", "import"))
+    )
+
+
+def _is_three_d_output_node_type(node_type: str) -> bool:
+    normalized = node_type.lower()
+    return node_type in _THREE_D_OUTPUT_NODE_TYPES or (
+        any(token in normalized for token in ("3d", "mesh", "glb"))
+        and any(token in normalized for token in ("preview", "save", "output", "export"))
+    )
+
+
+def _is_three_d_input(node_type: str, input_name: str, value: Any) -> bool:
+    normalized_input = input_name.lower()
+    suffix = Path(value).suffix.lower() if isinstance(value, str) else ""
+    return normalized_input in _THREE_D_INPUT_NAMES and (
+        _is_three_d_input_node_type(node_type) or suffix in _THREE_D_EXTENSIONS
+    )
+
+
 def _is_file_input(node_type: str, input_name: str, value: Any) -> bool:
     normalized_node = node_type.lower()
     normalized_input = input_name.lower()
-    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+    if any(media in normalized_node for media in ("image", "audio", "video", "3d", "mesh", "lora")):
         return False
     if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
         return False
@@ -711,7 +755,7 @@ def _is_file_output_node_type(node_type: str) -> bool:
     if node_type in _FILE_OUTPUT_NODE_TYPES:
         return True
     normalized = node_type.lower()
-    if any(media in normalized for media in ("image", "audio", "video")):
+    if any(media in normalized for media in ("image", "audio", "video", "3d", "mesh", "glb")):
         return False
     return any(token in normalized for token in ("file", "document", "archive", "json", "csv", "text", "subtitle")) and any(
         token in normalized for token in ("save", "write", "export", "output")

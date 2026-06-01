@@ -11,6 +11,7 @@ const items = [
   { id: "image-1", kind: "image", type: "image", content_url: "/api/gallery/image-1/content", thumbnail_url: "/api/gallery/image-1/thumbnail", file_state: "available", workflow_id: "wf", workflow_title: "Portrait Maker", job_id: "job", control_id: "image", output_id: "i", widget_title: "Portrait", filename: "portrait.png", mime_type: "image/png", extension: ".png", size_bytes: 100, created_at: "2026-05-05T12:00:00Z", width: 1024, height: 1024, favorite: true, generation_settings: { settings: { Prompt: "studio portrait" } } },
   { id: "video-1", kind: "video", type: "video", content_url: "/api/gallery/video-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Motion Maker", job_id: "job", control_id: "video", output_id: "v", widget_title: "Motion", filename: "motion.webm", mime_type: "video/webm", extension: ".webm", size_bytes: 200, duration_seconds: 12, created_at: "2026-05-04T12:00:00Z", favorite: false },
   { id: "audio-1", kind: "audio", type: "audio", content_url: "/api/gallery/audio-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Voice Maker", job_id: "job", control_id: "audio", output_id: "a", widget_title: "Voice", filename: "voice.wav", mime_type: "audio/wav", extension: ".wav", size_bytes: 300, duration_seconds: 8, created_at: "2026-05-03T12:00:00Z", favorite: false },
+  { id: "three-d-1", kind: "3d", type: "3d", content_url: "/api/gallery/three-d-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Mesh Maker", job_id: "job", control_id: "three-d", output_id: "m", widget_title: "Mesh", filename: "mesh.glb", mime_type: "model/gltf-binary", extension: ".glb", size_bytes: null, created_at: "2026-05-02T18:00:00Z", favorite: false },
   { id: "file-1", kind: "file", type: "file", content_url: "/api/gallery/file-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Transcript Maker", job_id: "job", control_id: "file", output_id: "f", widget_title: "Transcript", filename: "captions.srt", mime_type: "application/x-subrip", extension: ".srt", size_bytes: 400, created_at: "2026-05-02T12:00:00Z", favorite: false },
 ];
 
@@ -39,11 +40,21 @@ describe("GalleryPage", () => {
     expect(await screen.findByAltText("studio portrait")).toBeInTheDocument();
     expect(screen.getByText("motion.webm")).toBeInTheDocument();
     expect(screen.getByText("voice.wav")).toBeInTheDocument();
+    expect(screen.getByText("mesh.glb")).toBeInTheDocument();
     expect(screen.getByText("captions.srt")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Audio" }));
     expect(screen.getByText("voice.wav")).toBeInTheDocument();
     expect(screen.queryByText("motion.webm")).not.toBeInTheDocument();
+  });
+
+  it("filters and opens 3D models with the shared guarded viewer", async () => {
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: "3D Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open 3d model: mesh.glb" }));
+
+    expect(screen.getByRole("dialog", { name: "3D model details" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview 3D model" })).toBeInTheDocument();
   });
 
   it("opens a safe file detail without embedding arbitrary file content", async () => {
@@ -72,7 +83,7 @@ describe("GalleryPage", () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/gallery")) return Promise.resolve(jsonResponse({
-        items: [{ ...items[3], file_state: "missing" }],
+        items: [{ ...items[4], file_state: "missing" }],
         total: 1,
       }));
       return Promise.reject(new Error(`Unexpected request: ${url}`));

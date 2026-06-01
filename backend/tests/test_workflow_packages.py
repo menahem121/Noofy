@@ -459,6 +459,28 @@ def test_validator_rejects_image_widget_bound_to_non_image_output() -> None:
     assert "type 'display_image' but output 'audio' is 'audio'" in result.errors[0]
 
 
+def test_validator_accepts_three_d_output_widget() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "three_d_widget", "name": "3D Widget", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"1": {"class_type": "Load3D", "inputs": {"model_file": ""}}, "2": {"class_type": "SaveGLB", "inputs": {}}},
+            "inputs": [{"id": "model", "label": "Model", "control": "load_3d", "binding": {"node_id": "1", "input_name": "model_file"}}],
+            "outputs": [{"id": "model", "label": "Model", "node_id": "2", "type": "3d", "kind": "3d"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [{"id": "main", "title": "Main", "controls": [
+                    {"id": "model-input", "type": "load_3d", "label": "Model", "input_id": "model"},
+                    {"id": "model-output", "type": "display_3d", "label": "Model", "output_id": "model"},
+                ]}],
+            },
+        }
+    )
+
+    assert WorkflowPackageValidator().validate_structure(package).valid
+
+
 def test_validator_accepts_file_widget_with_accept_rules() -> None:
     package = WorkflowPackage.model_validate(
         {

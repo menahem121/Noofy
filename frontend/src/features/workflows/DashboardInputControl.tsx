@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { DownloadCloud, File as FileIcon, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
+import { Box, DownloadCloud, File as FileIcon, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
 
 import {
   dashboardAssetMediaUrl,
@@ -21,6 +21,7 @@ import {
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
 import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel } from "./media";
+import { ThreeDViewer } from "../three-d/ThreeDViewer";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
@@ -44,6 +45,7 @@ interface DashboardInputControlProps {
   onAudioUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload?: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }
 
 export function DashboardInputControl({
@@ -59,6 +61,7 @@ export function DashboardInputControl({
   onAudioUpload = async () => undefined,
   onVideoUpload = async () => undefined,
   onFileUpload = async () => undefined,
+  onThreeDUpload = async () => undefined,
 }: DashboardInputControlProps) {
   const label = control.label || input.label;
   const description = control.description;
@@ -69,7 +72,7 @@ export function DashboardInputControl({
       return (
         <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
           {description ? <small>{description}</small> : null}
-          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
         </label>
       );
     }
@@ -78,7 +81,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -86,14 +89,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}</>;
 }
 
 function renderControl(
@@ -108,6 +111,7 @@ function renderControl(
   onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onVideoUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
+  onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   loraBrowser?: LoraBrowserControlProps,
 ) {
   const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
@@ -234,6 +238,9 @@ function renderControl(
           onFileUpload={onFileUpload}
         />
       );
+
+    case "load_3d":
+      return <AssetThreeDInput value={value} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
 
     case "select":
       return (
@@ -1153,6 +1160,76 @@ function fileAcceptString(validation: Record<string, unknown>): string {
     ? validation.accepted_mime_types.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
     : [];
   return [...extensions, ...mimeTypes].join(",");
+}
+
+function AssetThreeDInput({
+  value,
+  disabled,
+  onChange,
+  onThreeDUpload,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: unknown) => void;
+  onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const assetId = typeof value === "string" ? value : null;
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    setMetadata(null);
+    setError(null);
+    if (!assetId) return;
+    let canceled = false;
+    fetchAssetMetadata(assetId).then((result) => { if (!canceled) setMetadata(result); }).catch(() => {
+      if (!canceled) setError("3D model metadata could not be loaded.");
+    });
+    return () => { canceled = true; };
+  }, [assetId]);
+
+  async function choose(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    abortRef.current = new AbortController();
+    setError(null);
+    setProgress({ loaded: 0, total: file.size || null, percent: 0 });
+    try {
+      await onThreeDUpload(file, setProgress, abortRef.current.signal);
+      setProgress(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "3D model upload failed.");
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  const filename = metadata?.original_filename ?? assetId ?? "3D model";
+  return (
+    <div className="dashboard-three-d-input">
+      <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
+      {assetId ? (
+        <>
+          <ThreeDViewer url={dashboardAssetMediaUrl(assetId)} filename={filename} size={metadata?.size} />
+          <div className="dashboard-file-input__selected">
+            <Box size={24} />
+            <div className="dashboard-file-input__meta"><strong>{filename}</strong><span>{fileMetadataLabel(metadata?.extension, metadata?.content_type, metadata?.size, "3D model")}</span></div>
+            <div className="dashboard-file-input__actions">
+              <button className="secondary-button secondary-button--small" type="button" disabled={disabled || Boolean(progress)} onClick={() => inputRef.current?.click()}><RefreshCw size={14} />Replace</button>
+              <button className="secondary-button secondary-button--small" type="button" disabled={disabled || Boolean(progress)} onClick={() => onChange(null)}><Trash2 size={14} />Remove</button>
+            </div>
+          </div>
+        </>
+      ) : <button className="dashboard-file-input__empty" type="button" disabled={disabled || Boolean(progress)} onClick={() => inputRef.current?.click()}><Box size={22} /><span>{progress ? `Uploading 3D model... ${progress.percent ?? 0}%` : "Click here to upload a 3D model"}</span></button>}
+      {progress ? <button className="secondary-button secondary-button--small" type="button" onClick={() => abortRef.current?.abort()}><X size={14} />Cancel upload</button> : null}
+      {error ? <small className="field-error">{error}</small> : null}
+    </div>
+  );
 }
 
 function extensionFromFilename(filename: string): string | null {

@@ -15,6 +15,9 @@ import websockets
 
 from app.engine.job_store import JobStore
 from app.diagnostics import DiagnosticsSink, sanitize_text
+from app.media_types import MEDIA_KINDS as _MEDIA_KINDS
+from app.media_types import MEDIA_OUTPUT_BUCKETS as _MEDIA_OUTPUT_BUCKETS
+from app.media_types import classify_media_kind
 from app.engine.models import (
     EngineJob,
     EngineOutputStream,
@@ -29,9 +32,7 @@ _ASSET_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9_-]+)+$",
     re.IGNORECASE,
 )
-_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video", "load_file"})
-_MEDIA_OUTPUT_BUCKETS = ("images", "audio", "video", "videos", "gifs", "files", "text")
-_MEDIA_KINDS = frozenset({"image", "audio", "video", "file"})
+_DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video", "load_file", "load_3d"})
 
 
 class ComfyUIEngineAdapter:
@@ -222,14 +223,77 @@ class ComfyUIEngineAdapter:
     async def get_result(self, job_id: str) -> JobResult:
         history_entry = await self._get_history_entry(job_id)
         if history_entry is None:
-            return self.job_store.get_result(job_id)
+            result = self.job_store.get_result(job_id)
+            if result.status == "completed":
+                await self._hydrate_missing_output_metadata(job_id, result)
+                self.job_store.set_result(result)
+            return result
 
         result = self._result_from_history(job_id, history_entry)
+        if result.status == "completed":
+            await self._hydrate_missing_output_metadata(job_id, result)
         self.job_store.set_result(result)
         progress = self._progress_from_history(job_id, history_entry)
         self.job_store.set_progress(progress)
         self._log_terminal_progress_once(progress)
         return result
+
+    async def _hydrate_missing_output_metadata(self, job_id: str, result: JobResult) -> None:
+        hydrated_count = 0
+        for output_record in result.outputs:
+            node_output = output_record.get("output")
+            if not isinstance(node_output, dict):
+                continue
+            for bucket_name in _MEDIA_OUTPUT_BUCKETS:
+                items = node_output.get(bucket_name)
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict) or item.get("size") is not None:
+                        continue
+                    metadata = await self._probe_output_metadata(item)
+                    if metadata is None:
+                        continue
+                    size, mime_type = metadata
+                    item["size"] = size
+                    if mime_type and item.get("mime_type") == "application/octet-stream":
+                        item["mime_type"] = mime_type
+                    hydrated_count += 1
+        if hydrated_count:
+            self.log_store.add(
+                "debug",
+                "Probed generated output metadata",
+                "comfyui.adapter",
+                job_id=job_id,
+                details={"output_count": hydrated_count},
+            )
+
+    async def _probe_output_metadata(self, item: dict[str, Any]) -> tuple[int, str | None] | None:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                async with client.stream(
+                    "GET",
+                    f"{self.base_url}/view",
+                    params={
+                        "filename": str(item.get("filename") or ""),
+                        "subfolder": str(item.get("subfolder") or ""),
+                        "type": _engine_output_type_from_item(item),
+                    },
+                    headers={"Range": "bytes=0-0"},
+                ) as response:
+                    if response.status_code not in {200, 206}:
+                        return None
+                    content_range = response.headers.get("content-range", "")
+                    total_match = re.search(r"/(\d+)$", content_range)
+                    if total_match:
+                        return int(total_match.group(1)), response.headers.get("content-type")
+                    if response.status_code == 200:
+                        content_length = response.headers.get("content-length")
+                        if content_length and content_length.isdigit():
+                            return int(content_length), response.headers.get("content-type")
+        except httpx.HTTPError:
+            return None
+        return None
 
     async def list_available_models(self) -> list[ModelInfo]:
         api_models = await self._list_available_models_from_api()
@@ -824,7 +888,7 @@ class ComfyUIEngineAdapter:
                     self._enrich_media_output(
                         job_id,
                         item,
-                        _classify_media_kind(item, bucket_name, declared_kind),
+                        classify_media_kind(item, bucket_name, declared_kind),
                     )
                     if isinstance(item, dict)
                     else item
@@ -852,6 +916,7 @@ class ComfyUIEngineAdapter:
             or item.get("content_type")
             or mimetypes.guess_type(str(item.get("filename") or ""))[0]
             or ("audio/mpeg" if kind == "audio" else "application/octet-stream"),
+            "size": item.get("size"),
         }
         suffix = Path(str(item.get("filename") or "")).suffix.lower()
         if suffix and "extension" not in enriched:
@@ -994,50 +1059,6 @@ def _unambiguous_output_kinds_by_node(workflow_package: WorkflowPackage) -> dict
         for node_id, kinds in kinds_by_node.items()
         if len(kinds) == 1
     }
-
-
-def _classify_media_kind(
-    item: dict[str, Any],
-    bucket_name: str,
-    declared_kind: str | None,
-) -> str:
-    if declared_kind in _MEDIA_KINDS:
-        return declared_kind
-
-    item_kind = item.get("kind") or item.get("type")
-    if item_kind in _MEDIA_KINDS:
-        return str(item_kind)
-
-    mime_type = str(item.get("mime_type") or item.get("content_type") or "").lower()
-    if mime_type.startswith("image/"):
-        return "image"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type.startswith("video/"):
-        return "video"
-    if mime_type and mime_type != "application/octet-stream":
-        return "file"
-
-    suffix = Path(str(item.get("filename") or "")).suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-        return "image"
-    if suffix in {".wav", ".mp3", ".flac", ".ogg", ".m4a"}:
-        return "audio"
-    if suffix in {".mp4", ".mov", ".webm", ".mkv"}:
-        return "video"
-    if suffix:
-        return "file"
-
-    weak_fallbacks = {
-        "images": "image",
-        "gifs": "image",
-        "audio": "audio",
-        "video": "video",
-        "videos": "video",
-        "files": "file",
-        "text": "file",
-    }
-    return weak_fallbacks.get(bucket_name, "image")
 
 
 def _engine_output_type_from_item(item: dict[str, Any]) -> str:

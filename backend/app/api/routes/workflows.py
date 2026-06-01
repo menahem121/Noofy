@@ -25,6 +25,7 @@ from app.workflows.assets import (
     AssetUploadError,
     MAX_AUDIO_ASSET_BYTES,
     MAX_FILE_ASSET_BYTES,
+    MAX_THREE_D_ASSET_BYTES,
     MAX_VIDEO_ASSET_BYTES,
 )
 from app.workflows.authoring import DashboardAuthoringError
@@ -671,6 +672,29 @@ async def upload_dashboard_video_asset(
         return await asyncio.to_thread(
             asset_service.store_video_stream,
             video.file,
+            content_type,
+            original_filename,
+            declared_size=declared_size,
+        )
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/assets/3d")
+async def upload_dashboard_three_d_asset(
+    workflow_id: str,
+    request: Request,
+    asset_service: DashboardAssetServiceDep,
+    model: UploadFile = File(...),
+):
+    content_type = model.content_type or "application/octet-stream"
+    original_filename = model.filename or "upload"
+    declared_size = _declared_upload_size(request, model, MAX_THREE_D_ASSET_BYTES)
+    try:
+        await model.seek(0)
+        return await asyncio.to_thread(
+            asset_service.store_three_d_stream,
+            model.file,
             content_type,
             original_filename,
             declared_size=declared_size,

@@ -100,8 +100,8 @@ or `file`. The compatibility `type` field mirrors that media kind, while engine
 retrieval details remain separate. Package and dashboard validation accepts
 these declared output kinds as first-class outputs, but output widgets remain
 strict: image widgets bind only to `image`, audio widgets only to `audio`, video
-widgets only to `video`, and generic file widgets only to `file` until dedicated
-widgets exist for additional kinds.
+widgets only to `video`, 3D widgets only to `3d`, and generic file widgets only
+to `file`.
 
 Portable `.noofy` archives must not contain creator-local input media, generated
 output media, generated filenames, output subfolders, temp/output paths, creator

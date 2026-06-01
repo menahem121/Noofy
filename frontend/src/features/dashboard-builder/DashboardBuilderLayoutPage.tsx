@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
+  Box,
   ArrowLeft,
   CheckCircle2,
   ChevronDown,
@@ -82,10 +83,12 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   load_audio: FileAudio,
   load_video: Video,
   load_file: File,
+  load_3d: Box,
   display_image: Sparkles,
   display_audio: FileAudio,
   display_video: Video,
   display_file: File,
+  display_3d: Box,
   seed_widget: Shuffle,
   lora_loader: Sparkles,
   select: ChevronDown,
@@ -998,6 +1001,9 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
         <span>{widget.widgetType === "load_file" ? "Click here to upload a file" : "Generated file will appear here"}</span>
       </div>
     );
+  }
+  if (widget.widgetType === "load_3d" || widget.widgetType === "display_3d") {
+    return <div className="layout-preview-media"><Box size={24} /><span>{widget.widgetType === "load_3d" ? "Click here to upload a 3D model" : "Generated 3D model will appear here"}</span></div>;
   }
 
   if (widget.widgetType === "display_image") {

@@ -24,13 +24,12 @@ from pydantic import BaseModel, Field
 
 from app.diagnostics import DiagnosticsSink, sanitize_text
 from app.engine.models import EngineOutputStream, JobResult
+from app.media_types import MEDIA_KINDS, MEDIA_OUTPUT_BUCKETS as MEDIA_BUCKETS, classify_media_kind
 from app.workflows.library import workflow_package_display_name
 from app.workflows.package import WorkflowPackage
 
 GALLERY_SCHEMA_VERSION = 2
 THUMBNAIL_SIZE = (512, 512)
-MEDIA_KINDS = {"image", "video", "audio", "file"}
-MEDIA_BUCKETS = ("images", "audio", "video", "videos", "gifs", "files", "text")
 SaveState = Literal[
     "queued",
     "saving",
@@ -872,7 +871,7 @@ class GalleryCaptureService:
                     workflow_id=manifest.workflow_id, workflow_title=manifest.workflow_title,
                     job_id=result.job_id, control_id=widget.control_id, output_id=widget.output_id,
                     node_id=widget.node_id, widget_title=widget.widget_title,
-                    kind=widget.media_kind if prefer_declared_kind else _classify_media_kind(item, bucket),
+                    kind=widget.media_kind if prefer_declared_kind else classify_media_kind(item, bucket),
                     staged_path=staged_path,
                     source_filename=filename, source_mime_type=streamed.media_type,
                     extension=_optional_str(item.get("extension")) or Path(filename).suffix,
@@ -910,7 +909,7 @@ def build_run_submission_snapshot(
     valid_ids: set[str] = set()
     for section in package.dashboard.sections:
         for control in section.controls:
-            if control.type not in {"display_image", "display_audio", "display_video", "display_file", "result_image"} or not control.output_id:
+            if control.type not in {"display_image", "display_audio", "display_video", "display_file", "display_3d", "result_image"} or not control.output_id:
                 continue
             output = outputs_by_id.get(control.output_id)
             if output is None:
@@ -969,36 +968,10 @@ def _matching_output_items(
                 continue
             for item in items:
                 if isinstance(item, dict) and (
-                    prefer_declared_kind or _classify_media_kind(item, bucket) == widget.media_kind
+                    prefer_declared_kind or classify_media_kind(item, bucket) == widget.media_kind
                 ):
                     matched.append((bucket, item))
     return matched
-
-
-def _classify_media_kind(item: dict[str, Any], bucket: str) -> str:
-    explicit = item.get("kind") or item.get("type")
-    if explicit in MEDIA_KINDS:
-        return str(explicit)
-    mime_type = str(item.get("mime_type") or item.get("content_type") or "").lower()
-    if mime_type.startswith("image/"):
-        return "image"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type.startswith("video/"):
-        return "video"
-    if mime_type and mime_type != "application/octet-stream":
-        return "file"
-    suffix = Path(str(item.get("filename") or "")).suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-        return "image"
-    if suffix in {".wav", ".mp3", ".flac", ".ogg", ".m4a"}:
-        return "audio"
-    if suffix in {".mp4", ".mov", ".webm", ".mkv"}:
-        return "video"
-    if suffix:
-        return "file"
-    bucket_kind = {"images": "image", "gifs": "image", "audio": "audio", "video": "video", "videos": "video", "files": "file", "text": "file"}.get(bucket)
-    return bucket_kind or "file"
 
 
 def _generation_settings(

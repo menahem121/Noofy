@@ -503,6 +503,48 @@ describe("workflowFromBindableInputs", () => {
     ]);
   });
 
+  it("auto-creates 3D input and canonical output widgets", () => {
+    const workflow = workflowFromBindableInputs("wf-three-d", "3D Workflow", [
+      {
+        node_id: "10",
+        node_type: "Load3D",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "model_file",
+            current_value: "",
+            kind: "three_d_input",
+            suggested_widget_type: "load_3d",
+            widget_types: ["load_3d"],
+          },
+        ],
+      },
+      {
+        node_id: "20",
+        node_type: "SaveGLB",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_3d",
+            current_value: null,
+            kind: "three_d_output",
+            suggested_widget_type: "display_3d",
+            widget_types: ["display_3d"],
+          },
+        ],
+      },
+    ]);
+
+    const schema = buildInitialDashboard(workflow);
+
+    expect(schema.widgets.map((widget) => widget.widgetType)).toEqual(["load_3d", "display_3d"]);
+    expect(toBackendPayload(schema).dashboard.outputs).toEqual([
+      { id: "3d", label: "3D model", node_id: "20", type: "3d", kind: "3d" },
+    ]);
+  });
+
   it("adds missing LoadImage widgets to an existing builder schema without duplicating widgets", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

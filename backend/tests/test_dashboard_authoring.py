@@ -688,6 +688,37 @@ def test_classify_graph_inputs_includes_video_widgets_and_custom_binding_hint() 
     }
 
 
+def test_classify_graph_inputs_includes_three_d_widgets() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "40": {"class_type": "Load3D", "inputs": {"model_file": "creator-local-model.glb"}},
+            "41": {"class_type": "SaveGLB", "inputs": {"mesh": ["40", 0], "filename_prefix": "mesh"}},
+        }
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["40"]["inputs"][0]["kind"] == "three_d_input"
+    assert input_nodes["40"]["inputs"][0]["widget_types"] == ["load_3d"]
+    assert input_nodes["41"]["inputs"][0] == {
+        "input_name": "output_3d",
+        "current_value": None,
+        "kind": "three_d_output",
+        "suggested_widget_type": "display_3d",
+        "widget_types": ["display_3d"],
+        "auto_select": False,
+    }
+
+
+def test_classify_graph_inputs_does_not_treat_generic_model_loaders_as_three_d() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "40": {"class_type": "ModelLoader", "inputs": {"model": "checkpoint.safetensors"}},
+        }
+    )
+
+    assert nodes[0]["inputs"][0]["kind"] != "three_d_input"
+
+
 def test_classify_graph_inputs_auto_selects_deepest_image_output() -> None:
     nodes = _classify_graph_inputs(
         {

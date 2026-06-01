@@ -47,6 +47,7 @@ PNG_1X1 = base64.b64decode(
         ("image", "output.png", "image/png", PNG_1X1),
         ("video", "clip.webm", "video/webm", b"\x1aE\xdf\xa3video"),
         ("audio", "speech.wav", "audio/wav", b"RIFF\x00\x00\x00\x00WAVE"),
+        ("3d", "mesh.glb", "model/gltf-binary", b"glTF\x02\x00\x00\x00"),
         ("file", "captions.srt", "application/x-subrip", b"1\n00:00:00,000 --> 00:00:01,000\nHello\n"),
     ],
 )
@@ -150,6 +151,28 @@ async def test_gallery_capture_streams_enabled_mixed_media_and_reuses_saved_item
     assert store.get_item(first.item_ids[0]).kind == "audio"
     capture.schedule_output_save(result.job_id, "result", result=result)
     assert calls == ["speech.wav"]
+
+
+@pytest.mark.anyio
+async def test_gallery_capture_streams_three_d_output(tmp_path: Path) -> None:
+    store = GalleryStore(tmp_path / "gallery")
+
+    async def stream_output(job_id: str, filename: str, subfolder: str, output_type: str, range_header: str | None):
+        async def body():
+            yield b"glTF\x02\x00\x00\x00"
+
+        return EngineOutputStream(body=body(), media_type="model/gltf-binary", headers={"content-length": "8"})
+
+    capture = GalleryCaptureService(store, stream_output=stream_output)
+    result = JobResult(job_id="job-three-d", status="completed", outputs=[
+        {"node_id": "9", "output": {"3d": [{"filename": "mesh.glb", "kind": "3d", "output_type": "output"}]}}
+    ])
+    capture.register_completed_run(result, _snapshot("3d"))
+    capture.schedule_output_save(result.job_id, "result", result=result)
+    request = await _wait_for_request(capture, result.job_id, "result")
+
+    assert request.status == "saved"
+    assert store.get_item(request.item_ids[0]).kind == "3d"
 
 
 @pytest.mark.anyio

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
+  Box,
   Calendar,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +30,7 @@ import {
   type GalleryKind,
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
+import { ThreeDViewer } from "../three-d/ThreeDViewer";
 
 type KindFilter = "all" | GalleryKind;
 type SortOrder = "newest" | "oldest";
@@ -68,7 +70,7 @@ function dimensions(item: GalleryItem): string | null {
 }
 
 function kindLabel(kind: GalleryKind): string {
-  return kind === "image" ? "Image" : kind === "video" ? "Video" : kind === "audio" ? "Audio" : "File";
+  return kind === "image" ? "Image" : kind === "video" ? "Video" : kind === "audio" ? "Audio" : kind === "3d" ? "3D model" : "File";
 }
 
 function itemLabel(item: GalleryItem): string {
@@ -180,7 +182,7 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
 
       <nav className="gallery-kind-tabs" aria-label="Gallery media types">
         {([
-          ["all", "All"], ["image", "Images"], ["video", "Videos"], ["audio", "Audio"], ["file", "Files"],
+          ["all", "All"], ["image", "Images"], ["video", "Videos"], ["audio", "Audio"], ["3d", "3D Models"], ["file", "Files"],
         ] as Array<[KindFilter, string]>).map(([value, label]) => (
           <button key={value} className={kindFilter === value ? "gallery-kind-tab gallery-kind-tab--active" : "gallery-kind-tab"} type="button" onClick={() => setKindFilter(value)}>
             {label}
@@ -281,12 +283,12 @@ function CardVisual({ item }: { item: GalleryItem }) {
   if (item.fileState === "missing") {
     return <div className="gallery-thumb__missing"><AlertCircle size={34} /><span>Output unavailable</span></div>;
   }
-  const badge = formatDuration(item.durationSeconds) ?? (item.kind === "file" ? item.extension?.replace(".", "").toUpperCase() : dimensions(item));
+  const badge = formatDuration(item.durationSeconds) ?? (item.kind === "file" || item.kind === "3d" ? item.extension?.replace(".", "").toUpperCase() : dimensions(item));
   const previewUrl = galleryPreviewUrl(item);
-  if (item.kind === "image" && previewUrl) {
+  if ((item.kind === "image" || (item.kind === "3d" && item.thumbnailUrl)) && previewUrl) {
     return <img className="gallery-thumb__img" src={previewUrl} alt={item.prompt || item.filename} loading="lazy" draggable={false} />;
   }
-  const Icon = item.kind === "video" ? Film : item.kind === "audio" ? FileAudio : item.kind === "file" ? FileText : ImageIcon;
+  const Icon = item.kind === "video" ? Film : item.kind === "audio" ? FileAudio : item.kind === "3d" ? Box : item.kind === "file" ? FileText : ImageIcon;
   return (
     <div className={`gallery-media-placeholder gallery-media-placeholder--${item.kind}`}>
       <Icon size={38} aria-hidden="true" />
@@ -353,6 +355,7 @@ function DetailPreview({ item, contentUrl }: { item: GalleryItem; contentUrl: st
   if (item.kind === "image") return <img className="img-modal__img" src={contentUrl} alt={item.prompt || item.filename} />;
   if (item.kind === "video") return <video className="gallery-detail-video" src={contentUrl} controls preload="metadata" />;
   if (item.kind === "audio") return <div className="gallery-detail-audio"><FileAudio size={64} /><strong>{item.filename}</strong><audio src={contentUrl} controls preload="metadata" /></div>;
+  if (item.kind === "3d") return <ThreeDViewer className="gallery-detail-three-d" url={contentUrl} filename={item.filename} size={item.sizeBytes} />;
   return <div className="gallery-detail-file"><FileText size={72} /><strong>{item.extension?.replace(".", "").toUpperCase() || "FILE"}</strong><span>{item.filename}</span></div>;
 }
 
@@ -372,7 +375,7 @@ function GalleryLoadingState() {
 }
 
 function GalleryEmptyState({ onNavigate }: { onNavigate: (route: AppRouteId) => void }) {
-  return <div className="gallery-empty"><div className="gallery-empty__icon"><Film size={42} /></div><h2>No saved media yet</h2><p>Generated images, videos, audio, and files you save will appear here.</p><button className="primary-button" type="button" onClick={() => onNavigate("home")}>Open Workflows<ArrowRight size={16} /></button></div>;
+  return <div className="gallery-empty"><div className="gallery-empty__icon"><Film size={42} /></div><h2>No saved media yet</h2><p>Generated images, videos, audio, 3D models, and files you save will appear here.</p><button className="primary-button" type="button" onClick={() => onNavigate("home")}>Open Workflows<ArrowRight size={16} /></button></div>;
 }
 
 function GalleryErrorState({ error, onRetry }: { error: string | null; onRetry: () => void }) {

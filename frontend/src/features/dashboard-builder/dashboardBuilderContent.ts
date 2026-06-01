@@ -3,6 +3,7 @@ import {
   Cpu,
   File,
   FileAudio,
+  Box,
   Image as ImageIcon,
   ImagePlus,
   Layers,
@@ -27,10 +28,12 @@ export type WidgetType =
   | "load_audio"
   | "load_video"
   | "load_file"
+  | "load_3d"
   | "display_image"
   | "display_audio"
   | "display_video"
   | "display_file"
+  | "display_3d"
   | "seed_widget"
   | "lora_loader"
   | "select";
@@ -48,6 +51,8 @@ export type WorkflowValueKind =
   | "video_output"
   | "file_input"
   | "file_output"
+  | "three_d_input"
+  | "three_d_output"
   | "seed"
   | "lora"
   | "select";
@@ -66,7 +71,7 @@ export interface WorkflowNodeValue {
   technical?: boolean;
 }
 
-export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "video" | "file" | "lora" | "tune" | "output" | "save";
+export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "video" | "file" | "3d" | "lora" | "tune" | "output" | "save";
 
 export interface WorkflowNode {
   id: string;
@@ -194,6 +199,7 @@ export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {
   audio: FileAudio,
   video: Video,
   file: File,
+  "3d": Box,
   lora: Sparkles,
   tune: SlidersHorizontal,
   output: ImageIcon,
@@ -213,6 +219,8 @@ export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   video_output: Video,
   file_input: File,
   file_output: File,
+  three_d_input: Box,
+  three_d_output: Box,
   seed: Shuffle,
   lora: Sparkles,
   select: Layers,
@@ -230,10 +238,12 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   load_audio: "Load audio",
   load_video: "Load video",
   load_file: "Load file",
+  load_3d: "Load 3D model",
   display_image: "Display image",
   display_audio: "Display audio",
   display_video: "Display video",
   display_file: "Display file",
+  display_3d: "Display 3D model",
   seed_widget: "Variation ID (seed)",
   lora_loader: "LoRA loader",
   select: "Dropdown",
@@ -250,13 +260,14 @@ const INPUT_WIDGET_TYPES: WidgetType[] = [
   "load_audio",
   "load_video",
   "load_file",
+  "load_3d",
   "seed_widget",
   "lora_loader",
   "select",
 ];
 
 export function isOutputWidgetType(widgetType: string): boolean {
-  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "display_video" || widgetType === "display_file" || widgetType === "result_image";
+  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "display_video" || widgetType === "display_file" || widgetType === "display_3d" || widgetType === "result_image";
 }
 
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
@@ -277,6 +288,7 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   if (kind === "file_output") {
     return ["display_file"];
   }
+  if (kind === "three_d_output") return ["display_3d"];
 
   if (kind === "image_input") {
     return ["load_image", "load_image_mask"];
@@ -291,6 +303,7 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
   if (kind === "file_input") {
     return ["load_file"];
   }
+  if (kind === "three_d_input") return ["load_3d"];
 
   if (kind === "seed") {
     return ["seed_widget", "int_field", "slider"];
@@ -329,6 +342,8 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "video_input") return "load_video";
   if (value.valueKind === "file_output") return "display_file";
   if (value.valueKind === "file_input") return "load_file";
+  if (value.valueKind === "three_d_output") return "display_3d";
+  if (value.valueKind === "three_d_input") return "load_3d";
   if (value.valueKind === "seed") return "seed_widget";
   if (value.valueKind === "lora") return "lora_loader";
   if (value.valueKind === "boolean") return "toggle";
@@ -386,6 +401,7 @@ function isImageDimensionValue(value: Pick<WorkflowNodeValue, "inputName" | "lab
 
 export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): string {
   if (value.valueKind === "note") return nodeTitle || "Note";
+  if (value.valueKind === "three_d_input" || value.valueKind === "three_d_output") return "3D model";
 
   const labelMap: Record<string, string> = {
     text: nodeTitle.toLowerCase().includes("negative") ? "Negative prompt" : "Prompt",
@@ -733,6 +749,7 @@ export function workflowFromBindableInputs(
     node_title?: string;
     is_image_node: boolean;
     is_audio_node?: boolean;
+    is_three_d_node?: boolean;
     is_lora_node: boolean;
     inputs: Array<{
       input_name: string;
@@ -752,6 +769,7 @@ export function workflowFromBindableInputs(
     const t = nodeType.toLowerCase();
     if (t.includes("audio")) return "audio";
     if (t.includes("video")) return "video";
+    if (t.includes("3d") || t.includes("mesh") || t.includes("glb")) return "3d";
     if (t.includes("file") || t.includes("document") || t.includes("archive")) return "file";
     if (t === "note") return "note";
     if (t.includes("clip") || t.includes("text")) return "text";
@@ -769,6 +787,8 @@ export function workflowFromBindableInputs(
     if (kind === "audio_output") return "audio_output";
     if (kind === "video_input") return "video_input";
     if (kind === "video_output") return "video_output";
+    if (kind === "three_d_input") return "three_d_input";
+    if (kind === "three_d_output") return "three_d_output";
     if (kind === "file_input") return "file_input";
     if (kind === "file_output") return "file_output";
     if (kind === "note") return "note";
@@ -784,7 +804,7 @@ export function workflowFromBindableInputs(
     id: node.node_id,
     classType: node.node_type,
     title: node.node_title ?? node.node_type,
-    iconKind: node.is_audio_node ? "audio" : nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
+    iconKind: node.is_three_d_node ? "3d" : node.is_audio_node ? "audio" : nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
     values: node.inputs.map((inp) => ({
       id: `node-${node.node_id}-${inp.input_name}`,
       nodeId: node.node_id,
@@ -904,10 +924,11 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   return { inputs, dashboard };
 }
 
-function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "video" | "file" {
+function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "video" | "3d" | "file" {
   if (widgetType === "display_audio") return "audio";
   if (widgetType === "display_video") return "video";
   if (widgetType === "display_file") return "file";
+  if (widgetType === "display_3d") return "3d";
   return "image";
 }
 
@@ -954,28 +975,36 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
 }
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
-  return addAutomaticFileOutputWidget(
-    addAutomaticVideoOutputWidget(
-      addAutomaticAudioOutputWidget(
-        addAutomaticImageOutputWidget(
-          addAutomaticFileInputWidgets(
-            addAutomaticVideoInputWidgets(
-              addAutomaticAudioInputWidgets(
-                addAutomaticImageInputWidgets(addAutomaticNoteWidgets(schema, workflow), workflow),
-                workflow,
-              ),
-              workflow,
-            ),
-            workflow,
-          ),
-          workflow,
-        ),
-        workflow,
-      ),
-      workflow,
-    ),
-    workflow,
-  );
+  let next = addAutomaticNoteWidgets(schema, workflow);
+  next = addAutomaticImageInputWidgets(next, workflow);
+  next = addAutomaticAudioInputWidgets(next, workflow);
+  next = addAutomaticVideoInputWidgets(next, workflow);
+  next = addAutomaticThreeDInputWidgets(next, workflow);
+  next = addAutomaticFileInputWidgets(next, workflow);
+  next = addAutomaticImageOutputWidget(next, workflow);
+  next = addAutomaticAudioOutputWidget(next, workflow);
+  next = addAutomaticVideoOutputWidget(next, workflow);
+  next = addAutomaticThreeDOutputWidget(next, workflow);
+  return addAutomaticFileOutputWidget(next, workflow);
+}
+
+export function addAutomaticThreeDInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingBindings = new Set(schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`));
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (value.valueKind !== "three_d_input" || existingValueIds.has(value.id)) continue;
+      const bindingKey = `${value.nodeId}:${value.inputName}`;
+      if (existingBindings.has(bindingKey)) continue;
+      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_3d", defaultValue: null });
+      existingValueIds.add(value.id);
+      existingBindings.add(bindingKey);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
 export function addAutomaticFileInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
@@ -1203,6 +1232,26 @@ export function addAutomaticFileOutputWidget(schema: DashboardSchema, workflow: 
   return {
     ...schema,
     widgets: [...schema.widgets, { ...createDashboardWidgetForValue(selected.value, selected.node), widgetType: "display_file", defaultValue: null }],
+  };
+}
+
+export function addAutomaticThreeDOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const outputRecords = workflow.nodes.flatMap((node) =>
+    node.values.filter((value) => value.valueKind === "three_d_output").map((value) => ({ node, value })),
+  );
+  const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
+  if (!selected) return schema;
+  const valueIds = new Set(outputRecords.map((record) => record.value.id));
+  const bindings = new Set(outputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
+  const hasOutputWidget = schema.widgets.some((widget) =>
+    widget.widgetType === "display_3d" &&
+    (valueIds.has(widget.valueId) || bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
+  );
+  if (hasOutputWidget) return schema;
+
+  return {
+    ...schema,
+    widgets: [...schema.widgets, { ...createDashboardWidgetForValue(selected.value, selected.node), widgetType: "display_3d", defaultValue: null }],
   };
 }
 

@@ -339,6 +339,10 @@
   background: linear-gradient(145deg, rgba(78, 68, 58, 0.72), rgba(43, 39, 36, 0.94));
 }
 
+.gallery-media-placeholder--3d {
+  background: linear-gradient(145deg, rgba(66, 76, 98, 0.78), rgba(34, 39, 51, 0.96));
+}
+
 .gallery-media-placeholder strong {
   color: var(--text-primary);
   font-size: 12px;
@@ -659,6 +663,16 @@
   width: min(100%, 860px);
   max-height: calc(100vh - 96px);
   background: #111;
+}
+
+.gallery-detail-three-d {
+  width: min(100%, 920px);
+  min-height: min(660px, calc(100vh - 96px));
+  padding: 14px;
+}
+
+.gallery-detail-three-d .three-d-viewer__stage {
+  min-height: min(540px, calc(100vh - 210px));
 }
 
 .gallery-detail-audio,

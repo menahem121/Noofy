@@ -17,6 +17,7 @@ import {
   ExternalLink,
   File as FileIcon,
   FileAudio,
+  Box,
   GripVertical,
   Image as ImageIcon,
   ImagePlus,
@@ -64,7 +65,8 @@ import { DashboardInputControl } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
-import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputVideoMedia } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
+import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { GallerySaveAction } from "./GallerySaveAction";
 import { topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
@@ -93,6 +95,7 @@ interface CanvasDashboardViewProps {
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
+  outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -110,6 +113,7 @@ interface CanvasDashboardViewProps {
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onSaveOutputToGallery?: (controlId: string) => void;
@@ -135,6 +139,7 @@ export function CanvasDashboardView({
   outputAudiosByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
+  outputThreeDsByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -152,6 +157,7 @@ export function CanvasDashboardView({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
   onSaveOutputToGallery,
@@ -676,6 +682,7 @@ export function CanvasDashboardView({
                 outputAudiosByNodeId={outputAudiosByNodeId}
                 outputVideosByNodeId={outputVideosByNodeId}
                 outputFilesByNodeId={outputFilesByNodeId}
+                outputThreeDsByNodeId={outputThreeDsByNodeId}
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
@@ -685,6 +692,7 @@ export function CanvasDashboardView({
                 onAudioUpload={onAudioUpload}
                 onVideoUpload={onVideoUpload}
                 onFileUpload={onFileUpload}
+                onThreeDUpload={onThreeDUpload}
                 loraBrowserFor={loraBrowserFor}
                 onOutputPreferenceChange={onOutputPreferenceChange}
                 onSaveOutputToGallery={onSaveOutputToGallery}
@@ -757,6 +765,7 @@ function CanvasWidgetCell({
   outputAudiosByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
+  outputThreeDsByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -766,6 +775,7 @@ function CanvasWidgetCell({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
   onSaveOutputToGallery,
@@ -783,6 +793,7 @@ function CanvasWidgetCell({
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
+  outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -792,6 +803,7 @@ function CanvasWidgetCell({
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onSaveOutputToGallery?: (controlId: string) => void;
@@ -854,6 +866,7 @@ function CanvasWidgetCell({
             outputAudiosByNodeId={outputAudiosByNodeId}
             outputVideosByNodeId={outputVideosByNodeId}
             outputFilesByNodeId={outputFilesByNodeId}
+            outputThreeDsByNodeId={outputThreeDsByNodeId}
             comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             inputValues={inputValues}
             outputPreferences={outputPreferences}
@@ -863,6 +876,7 @@ function CanvasWidgetCell({
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
+            onThreeDUpload={onThreeDUpload}
             loraBrowserFor={loraBrowserFor}
             onOutputPreferenceChange={onOutputPreferenceChange}
             gallerySaveByControlId={gallerySaveByControlId}
@@ -880,6 +894,7 @@ function CanvasWidgetCell({
               outputAudiosByNodeId={outputAudiosByNodeId}
               outputVideosByNodeId={outputVideosByNodeId}
               outputFilesByNodeId={outputFilesByNodeId}
+              outputThreeDsByNodeId={outputThreeDsByNodeId}
               comparisonBeforeImageUrl={comparisonBeforeImageUrl}
               imagePreviewEnabled={!isEditingLayout}
             />
@@ -900,6 +915,7 @@ function CanvasWidgetCell({
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
+            onThreeDUpload={onThreeDUpload}
             loraBrowserFor={loraBrowserFor}
           />
         )}
@@ -917,6 +933,7 @@ function GroupedCanvasControls({
   outputAudiosByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
+  outputThreeDsByNodeId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -927,6 +944,7 @@ function GroupedCanvasControls({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
   onOutputPreferenceChange,
   onSaveOutputToGallery,
@@ -939,6 +957,7 @@ function GroupedCanvasControls({
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
+  outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -949,6 +968,7 @@ function GroupedCanvasControls({
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onSaveOutputToGallery?: (controlId: string) => void;
@@ -972,6 +992,7 @@ function GroupedCanvasControls({
                   outputAudiosByNodeId={outputAudiosByNodeId}
                   outputVideosByNodeId={outputVideosByNodeId}
                   outputFilesByNodeId={outputFilesByNodeId}
+                  outputThreeDsByNodeId={outputThreeDsByNodeId}
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
@@ -1009,6 +1030,7 @@ function GroupedCanvasControls({
                 onAudioUpload={onAudioUpload}
                 onVideoUpload={onVideoUpload}
                 onFileUpload={onFileUpload}
+                onThreeDUpload={onThreeDUpload}
                 loraBrowserFor={loraBrowserFor}
               />
             )}
@@ -1027,10 +1049,12 @@ function iconForControlType(type: string): typeof Type {
   if (type === "load_audio") return FileAudio;
   if (type === "load_video") return Video;
   if (type === "load_file") return FileIcon;
+  if (type === "load_3d") return Box;
   if (type === "display_image" || type === "result_image") return Sparkles;
   if (type === "display_audio") return FileAudio;
   if (type === "display_video") return Video;
   if (type === "display_file") return FileIcon;
+  if (type === "display_3d") return Box;
   if (type === "seed_widget") return Shuffle;
   if (type === "lora_loader") return Sparkles;
   if (type === "select") return ChevronDown;
@@ -1039,7 +1063,7 @@ function iconForControlType(type: string): typeof Type {
 }
 
 function isOutputControlType(type: string): boolean {
-  return type === "display_image" || type === "display_audio" || type === "display_video" || type === "display_file" || type === "result_image";
+  return type === "display_image" || type === "display_audio" || type === "display_video" || type === "display_file" || type === "display_3d" || type === "result_image";
 }
 
 function DashboardNoteBody({ title, body }: { title?: string; body?: string }) {
@@ -1077,6 +1101,7 @@ function OutputWidgetContent({
   outputAudiosByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
+  outputThreeDsByNodeId,
   comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
 }: {
@@ -1086,6 +1111,7 @@ function OutputWidgetContent({
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
+  outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
 }) {
@@ -1094,10 +1120,12 @@ function OutputWidgetContent({
   const wantsAudio = outputKind === "audio" || control.type === "display_audio";
   const wantsVideo = outputKind === "video" || control.type === "display_video";
   const wantsFile = outputKind === "file" || control.type === "display_file";
-  const imageUrls = output && !wantsAudio && !wantsVideo && !wantsFile ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
+  const wantsThreeD = outputKind === "3d" || control.type === "display_3d";
+  const imageUrls = output && !wantsAudio && !wantsVideo && !wantsThreeD && !wantsFile ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
   const audioOutputs = output && wantsAudio ? outputAudiosByNodeId.get(output.node_id) ?? [] : [];
   const videoOutputs = output && wantsVideo ? outputVideosByNodeId.get(output.node_id) ?? [] : [];
   const fileOutputs = output && wantsFile ? outputFilesByNodeId.get(output.node_id) ?? [] : [];
+  const threeDOutputs = output && wantsThreeD ? outputThreeDsByNodeId.get(output.node_id) ?? [] : [];
   const firstImageUrl = imageUrls[0];
   const [previewImage, setPreviewImage] = useState<{ url: string; alt: string; beforeImageUrl?: string } | null>(null);
 
@@ -1220,6 +1248,10 @@ function OutputWidgetContent({
         ))}
       </div>
     );
+  }
+
+  if (threeDOutputs.length > 0) {
+    return <div className="widget-output-three-d">{threeDOutputs.map((model, index) => <ThreeDViewer key={`${model.url}-${index}`} url={model.url} filename={model.filename} size={model.size} />)}</div>;
   }
 
   if (videoOutputs.length > 0) {
@@ -1661,6 +1693,7 @@ function InputWidgetContent({
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
+  onThreeDUpload,
   loraBrowserFor,
 }: {
   control: DashboardControlDef;
@@ -1672,6 +1705,7 @@ function InputWidgetContent({
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
+  onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
   const inputId = control.input_id ?? control.id;
@@ -1693,6 +1727,7 @@ function InputWidgetContent({
       onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
       onVideoUpload={(file, onProgress, signal) => onVideoUpload(input.id, file, onProgress, signal)}
       onFileUpload={onFileUpload}
+      onThreeDUpload={(file, onProgress, signal) => onThreeDUpload(input.id, file, onProgress, signal)}
     />
   );
 }

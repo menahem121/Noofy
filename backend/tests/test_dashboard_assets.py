@@ -1,4 +1,5 @@
 """Tests for DashboardAssetService."""
+import json
 import struct
 from io import BytesIO
 from pathlib import Path
@@ -64,6 +65,12 @@ PNG_BYTES = _make_png()
 WAV_BYTES = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt " + b"\x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
 MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp41"
 WEBM_BYTES = b"\x1aE\xdf\xa3\x9fB\x86\x81\x01"
+EMBEDDED_GLTF_BYTES = json.dumps(
+    {
+        "asset": {"version": "2.0"},
+        "buffers": [{"uri": "data:application/octet-stream;base64,AA==", "byteLength": 1}],
+    }
+).encode()
 
 
 def test_store_png_returns_asset_id(tmp_path: Path) -> None:
@@ -155,6 +162,41 @@ def test_store_audio_stream_returns_metadata(tmp_path: Path) -> None:
     assert result["duration_seconds"] == 0
     assert svc.asset_path(result["asset_id"]).read_bytes() == WAV_BYTES
     assert svc.metadata(result["asset_id"])["kind"] == "audio"
+
+
+def test_store_three_d_stream_accepts_embedded_gltf_json(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_three_d_stream(BytesIO(EMBEDDED_GLTF_BYTES), "application/json", "scene.gltf")
+
+    assert result["asset_id"].endswith(".gltf")
+    assert result["kind"] == "3d"
+    assert result["content_type"] == "model/gltf+json"
+    assert result["extension"] == ".gltf"
+    assert svc.metadata(result["asset_id"])["extension"] == ".gltf"
+
+
+def test_store_three_d_stream_rejects_nested_external_gltf_uri_and_cleans_upload(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    gltf = json.dumps({"asset": {"version": "2.0"}, "extensions": {"vendor": {"uri": "remote.bin"}}}).encode()
+
+    with pytest.raises(AssetUploadError, match="Multi-file GLTF"):
+        svc.store_three_d_stream(BytesIO(gltf), "model/gltf+json", "scene.gltf")
+
+    assert not list((tmp_path / "assets").glob("*.tmp"))
+    assert not list((tmp_path / "assets").glob("*.gltf"))
+
+
+def test_store_three_d_stream_bounds_gltf_json_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    monkeypatch.setattr(assets_module, "MAX_GLTF_JSON_BYTES", 8)
+
+    with pytest.raises(AssetUploadError, match="16 MB"):
+        svc.store_three_d_stream(BytesIO(EMBEDDED_GLTF_BYTES), "model/gltf+json", "scene.gltf")
+
+    assert not list((tmp_path / "assets").glob("*.tmp"))
 
 
 def test_store_audio_stream_sanitizes_original_filename(tmp_path: Path) -> None:
@@ -478,6 +520,23 @@ def test_upload_dashboard_video_asset_route_streams_file(tmp_path: Path) -> None
     body = response.json()
     assert body["asset_id"].endswith(".mp4")
     assert body["kind"] == "video"
+    assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
+def test_upload_dashboard_three_d_asset_route_streams_model(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf-1/assets/3d",
+            files={"model": ("scene.gltf", EMBEDDED_GLTF_BYTES, "application/json")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"].endswith(".gltf")
+    assert body["kind"] == "3d"
     assert (tmp_path / "assets" / body["asset_id"]).exists()
 
 

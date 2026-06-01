@@ -32,7 +32,7 @@ TEXT_EXTENSIONS = frozenset({".txt", ".md", ".json", ".csv", ".tsv", ".srt", ".v
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"})
 AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac"})
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"})
-THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".usdz", ".ply", ".spz", ".splat", ".ksplat"})
+THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".usdz", ".ply", ".dae", ".spz", ".splat", ".ksplat"})
 FILE_INPUT_NAMES = frozenset(
     {
         "audio",
@@ -57,7 +57,7 @@ FILE_INPUT_NAMES = frozenset(
 )
 LOCAL_AUDIO_NODE_TYPES = {"LoadAudio"}
 LOCAL_VIDEO_NODE_TYPES = {"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"}
-LOCAL_THREE_D_NODE_TYPES = {"Load3D"}
+LOCAL_THREE_D_NODE_TYPES = {"Load3D", "Load3DAnimation"}
 MODEL_VERIFICATION_HASH_AND_SIZE = "sha256_size"
 MODEL_VERIFICATION_FILENAME_AND_SIZE = "filename_size"
 MODEL_VERIFICATION_FILENAME_ONLY = "filename_only"
@@ -699,7 +699,7 @@ def expected_input_kind(node_type: str, input_name: str, value: Any) -> str | No
         return "audio"
     if is_video_input_node_type(node_type) and normalized_input in {"video", "file", "filename", "path", "video_path"}:
         return "video"
-    if node_type in LOCAL_THREE_D_NODE_TYPES and normalized_input in {"model_file", "file", "filename", "path"}:
+    if node_type in LOCAL_THREE_D_NODE_TYPES and normalized_input in {"model", "mesh", "model_file", "file", "filename", "path", "model_path", "mesh_path"}:
         return "3d"
     if is_generic_file_input(node_type, input_name, value):
         return kind_from_path_like_value(value) or "file"
@@ -718,7 +718,7 @@ def is_video_input_node_type(node_type: str) -> bool:
 def is_generic_file_input(node_type: str, input_name: str, value: Any) -> bool:
     normalized_node = node_type.lower()
     normalized_input = input_name.lower()
-    if any(media in normalized_node for media in ("image", "audio", "video", "lora")):
+    if any(media in normalized_node for media in ("image", "audio", "video", "3d", "mesh", "lora")):
         return False
     if any(model_token in normalized_node for model_token in ("checkpoint", "model", "controlnet", "embedding", "vae", "unet", "clip")):
         return False

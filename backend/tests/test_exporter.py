@@ -216,6 +216,18 @@ def test_export_produces_valid_noofy_archive(tmp_path: Path) -> None:
         assert "dashboard.json" in names
 
 
+def test_exported_archive_omits_dashboard_three_d_asset_bytes(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    asset_service = DashboardAssetService(assets_dir)
+    model = asset_service.store_three_d_stream(io.BytesIO(b"glTF\x02\x00\x00\x00"), "model/gltf-binary", "mesh.glb")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path, dashboard_assets_dir=assets_dir)
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        assert all(model["asset_id"] not in name for name in zf.namelist())
+
+
 def test_export_does_not_modify_original_file(tmp_path: Path) -> None:
     exporter, workflow_id, original_bytes = _setup_with_configured_dashboard(tmp_path)
 

@@ -28,11 +28,13 @@ export type WidgetTypeKey =
   | "load_audio"
   | "load_video"
   | "load_file"
+  | "load_3d"
   | "display_mask"
   | "display_image"
   | "display_audio"
   | "display_video"
   | "display_file"
+  | "display_3d"
   | "result_image"
   | "seed_widget"
   | "lora_loader"
@@ -51,6 +53,7 @@ const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
   load_audio: "wide",
   load_video: "media-large",
   load_file: "standard",
+  load_3d: "media",
   display_mask: "media",
   lora_loader: "standard",
   textarea: "standard",
@@ -58,6 +61,7 @@ const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
   display_audio: "standard",
   display_video: "media-large",
   display_file: "standard",
+  display_3d: "media-large",
   result_image: "media-large",
 };
 
@@ -67,7 +71,9 @@ export function defaultLayoutForWidgetType(widgetType: string): GridItemLayout {
   if (widgetType === "load_video") return { x: 0, y: 0, w: 14, h: 12, minW: 14, minH: 12 };
   if (widgetType === "display_video") return { x: 0, y: 0, w: 16, h: 14, minW: 16, minH: 14 };
   if (widgetType === "load_file") return { x: 0, y: 0, w: 10, h: 6, minW: 10, minH: 6 };
+  if (widgetType === "load_3d") return { x: 0, y: 0, w: 12, h: 10, minW: 12, minH: 10 };
   if (widgetType === "display_file") return { x: 0, y: 0, w: 10, h: 6, minW: 10, minH: 6 };
+  if (widgetType === "display_3d") return { x: 0, y: 0, w: 16, h: 14, minW: 16, minH: 14 };
   const preset = DEFAULT_PRESETS[widgetType as WidgetTypeKey] ?? "standard";
   const def = WIDGET_SIZE_PRESETS[preset];
   return { x: 0, y: 0, w: def.w, h: def.h, minW: def.w, minH: def.h };

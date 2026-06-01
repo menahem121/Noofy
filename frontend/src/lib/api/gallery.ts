@@ -1,6 +1,6 @@
 import { deleteJson, getJson, putJson, resolveBackendUrl } from "./client";
 
-export type GalleryKind = "image" | "video" | "audio" | "file";
+export type GalleryKind = "image" | "video" | "audio" | "3d" | "file";
 export type GalleryGenerationSettings = Record<string, unknown>;
 export type GalleryUsedSettings = Record<string, string | number | boolean>;
 
@@ -57,7 +57,7 @@ export function galleryPreviewUrl(item: GalleryItem): string {
 }
 
 function galleryKind(value: unknown): GalleryKind {
-  return value === "video" || value === "audio" || value === "file" ? value : "image";
+  return value === "video" || value === "audio" || value === "3d" || value === "file" ? value : "image";
 }
 
 function optionalString(value: unknown): string | null {

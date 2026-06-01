@@ -27,6 +27,15 @@ export interface OutputFileMedia {
   size?: number | null;
 }
 
+export interface OutputThreeDMedia {
+  url: string;
+  filename: string;
+  thumbnailUrl?: string | null;
+  mimeType?: string | null;
+  extension?: string | null;
+  size?: number | null;
+}
+
 export function audioMetadataLabel(
   format: string | null | undefined,
   mimeType: string | null | undefined,

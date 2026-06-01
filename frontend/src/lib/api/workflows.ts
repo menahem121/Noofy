@@ -555,6 +555,7 @@ export interface BindableNode {
   node_title?: string;
   is_image_node: boolean;
   is_audio_node?: boolean;
+  is_three_d_node?: boolean;
   is_lora_node: boolean;
   inputs: BindableInputEntry[];
 }
@@ -891,6 +892,15 @@ export async function uploadDashboardVideoAsset(
   return uploadDashboardLargeMediaAsset("video", workflowId, file, onProgress, signal);
 }
 
+export async function uploadDashboardThreeDAsset(
+  workflowId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<DashboardAssetUploadResponse> {
+  return uploadDashboardLargeMediaAsset("3d", workflowId, file, onProgress, signal);
+}
+
 export async function uploadDashboardFileAsset(
   workflowId: string,
   inputId: string,
@@ -902,7 +912,7 @@ export async function uploadDashboardFileAsset(
 }
 
 async function uploadDashboardLargeMediaAsset(
-  kind: "audio" | "video" | "file",
+  kind: "audio" | "video" | "file" | "3d",
   workflowId: string,
   file: File,
   onProgress?: (progress: UploadProgress) => void,
@@ -910,11 +920,11 @@ async function uploadDashboardLargeMediaAsset(
   inputId?: string,
 ): Promise<DashboardAssetUploadResponse> {
   const formData = new FormData();
-  formData.append(kind, file);
+  formData.append(kind === "3d" ? "model" : kind, file);
   if (inputId) formData.append("input_id", inputId);
   const token = getApiToken();
   const url = `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/${kind}`;
-  const label = kind === "audio" ? "Audio" : kind === "video" ? "Video" : "File";
+  const label = kind === "audio" ? "Audio" : kind === "video" ? "Video" : kind === "3d" ? "3D model" : "File";
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();

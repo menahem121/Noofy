@@ -238,6 +238,41 @@ describe("DashboardInputControl", () => {
     expect(createObjectUrlMock).not.toHaveBeenCalled();
   });
 
+  it("renders selected 3D assets through the guarded shared viewer", async () => {
+    const onChange = vi.fn();
+    fetchMock.mockResolvedValue(jsonResponse({
+      asset_id: "12345678-1234-1234-1234-123456789abc.glb",
+      kind: "3d",
+      original_filename: "mesh.glb",
+      content_type: "model/gltf-binary",
+      extension: ".glb",
+      size: null,
+    }));
+
+    render(
+      <DashboardInputControl
+        control={{ id: "model", type: "load_3d", label: "Input model", input_id: "model" }}
+        input={{
+          id: "model",
+          label: "Input model",
+          control: "load_3d",
+          binding: { node_id: "10", input_name: "model_file" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.glb"
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+        onThreeDUpload={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("mesh.glb")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview 3D model" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
   it("allows a long audio upload to be canceled", async () => {
     let uploadSignal: AbortSignal | undefined;
     const onAudioUpload = vi.fn((_file: File, _onProgress: unknown, signal?: AbortSignal) => {

@@ -47,10 +47,25 @@ ALLOWED_VIDEO_MIME_TYPES = frozenset(
         "application/octet-stream",
     }
 )
+ALLOWED_THREE_D_MIME_TYPES = frozenset(
+    {
+        "model/gltf-binary",
+        "model/gltf+json",
+        "model/obj",
+        "model/stl",
+        "model/fbx",
+        "model/ply",
+        "application/json",
+        "application/octet-stream",
+        "text/plain",
+    }
+)
 MAX_ASSET_BYTES = 25 * 1024 * 1024  # 25 MB
 MAX_AUDIO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 MAX_VIDEO_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
 MAX_FILE_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
+MAX_THREE_D_ASSET_BYTES = 100 * 1024 * 1024 * 1024  # 100 GB
+MAX_GLTF_JSON_BYTES = 16 * 1024 * 1024  # 16 MB
 MAX_WORKFLOW_ICON_SIZE = 256
 _STREAM_CHUNK_BYTES = 1024 * 1024
 
@@ -170,6 +185,32 @@ class DashboardAssetService:
             validate_filename_extension=lambda _filename, _ext: None,
             canonical_content_type=lambda _filename, _detected: normalized_content_type,
             extra_metadata=lambda _path, _detected: {"extension": selected_extension},
+        )
+
+    def store_three_d_stream(
+        self,
+        source: BinaryIO,
+        content_type: str,
+        original_filename: str,
+        *,
+        declared_size: int | None = None,
+    ) -> dict[str, Any]:
+        extension = _validate_three_d_filename_extension(original_filename)
+        return self._store_large_media_stream(
+            source,
+            content_type,
+            original_filename,
+            kind="3d",
+            declared_size=declared_size,
+            max_bytes=MAX_THREE_D_ASSET_BYTES,
+            allowed_mime_types=ALLOWED_THREE_D_MIME_TYPES,
+            normalize_content_type=_normalized_three_d_content_type,
+            detect_content_type=lambda _data: "3d",
+            content_type_matches=lambda _declared, _detected: True,
+            extension_for=lambda _filename, _detected, _declared: extension,
+            validate_filename_extension=lambda _filename, _ext: None,
+            canonical_content_type=lambda _filename, _detected: _canonical_three_d_content_type(extension),
+            extra_metadata=lambda path, _detected: _three_d_metadata(path, extension),
         )
 
     def _store_large_media_stream(
@@ -393,12 +434,14 @@ class DashboardAssetService:
             content_type = raw.get("content_type")
             if isinstance(content_type, str) and content_type.strip():
                 metadata["content_type"] = content_type
-            if raw.get("kind") in {"audio", "video"}:
+            if raw.get("kind") in {"audio", "video", "3d"}:
                 metadata["kind"] = raw["kind"]
                 if isinstance(raw.get("size"), int):
                     metadata["size"] = raw["size"]
                 if isinstance(raw.get("format"), str):
                     metadata["format"] = raw["format"]
+                if isinstance(raw.get("extension"), str):
+                    metadata["extension"] = raw["extension"]
                 if isinstance(raw.get("duration_seconds"), (int, float)):
                     metadata["duration_seconds"] = raw["duration_seconds"]
                 if isinstance(raw.get("width"), int):
@@ -480,6 +523,64 @@ def _validate_audio_filename_extension(original_filename: str, detected_ext: str
 
 def _safe_original_filename(original_filename: str) -> str:
     return Path(original_filename.replace("\\", "/")).name.strip() or "upload"
+
+
+def _validate_three_d_filename_extension(original_filename: str) -> str:
+    suffix = Path(_safe_original_filename(original_filename)).suffix.lower()
+    if suffix not in {".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"}:
+        raise AssetUploadError(
+            f"File extension '{suffix or '<missing>'}' is not supported. Use GLB, GLTF, OBJ, STL, FBX, or PLY."
+        )
+    return suffix
+
+
+def _normalized_three_d_content_type(content_type: str, original_filename: str) -> str:
+    normalized = _normalized_file_content_type(content_type)
+    if normalized == "application/json" and Path(original_filename).suffix.lower() == ".gltf":
+        return "model/gltf+json"
+    if normalized != "application/octet-stream":
+        return normalized
+    return _canonical_three_d_content_type(Path(original_filename).suffix.lower())
+
+
+def _canonical_three_d_content_type(extension: str) -> str:
+    return {
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
+        ".obj": "model/obj",
+        ".stl": "model/stl",
+        ".fbx": "model/fbx",
+        ".ply": "model/ply",
+    }.get(extension, "application/octet-stream")
+
+
+def _three_d_metadata(path: Path, extension: str) -> dict[str, str]:
+    if extension == ".gltf":
+        _validate_self_contained_gltf(path)
+    return {"extension": extension}
+
+
+def _validate_self_contained_gltf(path: Path) -> None:
+    if path.stat().st_size > MAX_GLTF_JSON_BYTES:
+        raise AssetUploadError("GLTF JSON exceeds the 16 MB preview limit. Convert this model to GLB.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AssetUploadError("GLTF file is not valid JSON. Convert this model to GLB.") from exc
+    if not isinstance(payload, dict):
+        raise AssetUploadError("GLTF file is invalid. Convert this model to GLB.")
+    def validate_dependencies(value: Any) -> None:
+        if isinstance(value, dict):
+            uri = value.get("uri")
+            if isinstance(uri, str) and not uri.startswith("data:"):
+                raise AssetUploadError("Multi-file GLTF models are not supported yet. Convert this model to GLB.")
+            for child in value.values():
+                validate_dependencies(child)
+        elif isinstance(value, list):
+            for child in value:
+                validate_dependencies(child)
+
+    validate_dependencies(payload)
 
 
 def _normalized_file_content_type(content_type: str) -> str:

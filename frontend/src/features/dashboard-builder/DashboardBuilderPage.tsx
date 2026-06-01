@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Box,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -1552,8 +1553,8 @@ function DefaultValueEditor({
     );
   }
 
-  if (widget.widgetType === "load_audio" || widget.widgetType === "load_video" || widget.widgetType === "load_file") {
-    const mediaName = widget.widgetType === "load_audio" ? "audio" : widget.widgetType === "load_video" ? "video" : "file";
+  if (widget.widgetType === "load_audio" || widget.widgetType === "load_video" || widget.widgetType === "load_3d" || widget.widgetType === "load_file") {
+    const mediaName = widget.widgetType === "load_audio" ? "audio" : widget.widgetType === "load_video" ? "video" : widget.widgetType === "load_3d" ? "3D model" : "file";
     return (
       <p className="builder-config__hint">
         End-users will pick a {mediaName} from their computer when they open the dashboard.
@@ -2007,6 +2008,14 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       </div>
     );
   }
+  if (widget.widgetType === "load_3d") {
+    return (
+      <div className="preview-image-input">
+        <Box size={24} aria-hidden="true" />
+        <span>3D model upload</span>
+      </div>
+    );
+  }
 
   if (widget.widgetType === "display_image") {
     return (
@@ -2039,6 +2048,14 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       <div className="preview-image-output">
         <File size={24} aria-hidden="true" />
         <span>File output</span>
+      </div>
+    );
+  }
+  if (widget.widgetType === "display_3d") {
+    return (
+      <div className="preview-image-output">
+        <Box size={24} aria-hidden="true" />
+        <span>Generated 3D model will appear here</span>
       </div>
     );
   }
