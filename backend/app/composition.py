@@ -32,6 +32,7 @@ from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.import_orchestrator import WorkflowImportOrchestrator
 from app.workflows.library_service import WorkflowLibraryService
+from app.runs.media_staging import MediaInputStagingResolver
 from app.workflows.user_state import UserStateService
 
 
@@ -156,6 +157,10 @@ def create_api_services(
     if workflow_import_orchestrator is not None:
         workflow_import_orchestrator.history_service = history
     user_state = user_state_service or UserStateService(settings.paths.user_state_dir)
+    assets = asset_service or DashboardAssetService(
+        settings.paths.dashboard_assets_dir,
+        log_store=getattr(engine_service, "log_store", None),
+    )
     if workflow_import_orchestrator is not None:
         workflow_import_orchestrator.user_state_service = user_state
     folders = model_folder_service or ModelFolderSettingsService(
@@ -186,6 +191,11 @@ def create_api_services(
     run_orchestrator = getattr(engine_service, "run_orchestrator", None)
     if run_orchestrator is not None:
         run_orchestrator.credential_resolver = api_keys.get_key
+        run_orchestrator.media_staging_resolver = MediaInputStagingResolver(
+            dashboard_assets_dir=getattr(assets, "assets_dir", settings.paths.dashboard_assets_dir),
+            gallery_store=gallery,
+            log_store=getattr(engine_service, "log_store", None),
+        )
     model_availability_service = getattr(engine_service, "model_availability_service", None)
     provider_resolver = getattr(model_availability_service, "provider_resolver", None)
     if provider_resolver is not None:
@@ -219,10 +229,7 @@ def create_api_services(
             else getattr(engine_service, "comfyui_sidecar_service", engine_service)
         ),
         user_state_service=user_state,
-        asset_service=asset_service or DashboardAssetService(
-            settings.paths.dashboard_assets_dir,
-            log_store=getattr(engine_service, "log_store", None),
-        ),
+        asset_service=assets,
         gallery_store=gallery,
         api_key_service=api_keys,
         onboarding_service=onboarding,

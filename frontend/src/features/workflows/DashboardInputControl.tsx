@@ -6,6 +6,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { Box, DownloadCloud, File as FileIcon, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
 
@@ -13,6 +14,7 @@ import {
   dashboardAssetMediaUrl,
   fetchAssetBlobUrl,
   fetchAssetMetadata,
+  galleryContentUrlById,
   updateExternalApiKey,
   type DashboardControlDef,
   type DashboardAssetMetadata,
@@ -20,8 +22,9 @@ import {
   type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
-import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, isGalleryMediaReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
+import { GalleryPickerModal } from "./GalleryPickerModal";
 
 type DashboardInputControlVariant = "classic" | "canvas";
 
@@ -194,12 +197,27 @@ function renderControl(
       );
 
     case "load_image":
+      return (
+        <AssetImageInput
+          value={value}
+          disabled={disabled}
+          variant={variant}
+          galleryEnabled
+          validation={validation}
+          onChange={onChange}
+          onImageUpload={onImageUpload}
+        />
+      );
+
     case "load_image_mask":
       return (
         <AssetImageInput
           value={value}
           disabled={disabled}
           variant={variant}
+          galleryEnabled={false}
+          validation={validation}
+          onChange={onChange}
           onImageUpload={onImageUpload}
         />
       );
@@ -210,6 +228,7 @@ function renderControl(
           value={value}
           disabled={disabled}
           variant={variant}
+          validation={validation}
           onChange={onChange}
           onAudioUpload={onAudioUpload}
         />
@@ -221,6 +240,7 @@ function renderControl(
           value={value}
           disabled={disabled}
           variant={variant}
+          validation={validation}
           onChange={onChange}
           onVideoUpload={onVideoUpload}
         />
@@ -240,7 +260,7 @@ function renderControl(
       );
 
     case "load_3d":
-      return <AssetThreeDInput value={value} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
+      return <AssetThreeDInput value={value} validation={validation} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
 
     case "select":
       return (
@@ -560,29 +580,132 @@ function ApiCredentialInput({
   );
 }
 
+const IMAGE_ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+const AUDIO_ACCEPTED_EXTENSIONS = [".wav", ".mp3", ".flac", ".ogg", ".m4a"];
+const VIDEO_ACCEPTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".mkv"];
+const THREE_D_ACCEPTED_EXTENSIONS = [".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"];
+
+function MediaSourceChooser({
+  icon,
+  uploadLabel,
+  galleryLabel,
+  uploadingLabel,
+  uploadProgress,
+  disabled,
+  uploading = false,
+  galleryEnabled = true,
+  onUpload,
+  onGallery,
+}: {
+  icon: ReactNode;
+  uploadLabel: string;
+  galleryLabel: string;
+  uploadingLabel?: string;
+  uploadProgress?: UploadProgress | null;
+  disabled: boolean;
+  uploading?: boolean;
+  galleryEnabled?: boolean;
+  onUpload: () => void;
+  onGallery: () => void;
+}) {
+  if (!galleryEnabled) {
+    return (
+      <button className="dashboard-media-source dashboard-media-source--single" type="button" disabled={disabled || uploading} onClick={onUpload}>
+        {icon}
+        <span>{uploading ? uploadingLabel ?? uploadLabel : uploadLabel}</span>
+        {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
+      </button>
+    );
+  }
+
+  return (
+    <div className="dashboard-media-source-split">
+      <button className="dashboard-media-source dashboard-media-source--upload" type="button" disabled={disabled || uploading} onClick={onUpload}>
+        {icon}
+        <span>{uploading ? uploadingLabel ?? uploadLabel : "Upload from computer"}</span>
+        {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
+      </button>
+      <button className="dashboard-media-source dashboard-media-source--gallery" type="button" disabled={disabled || uploading} onClick={onGallery}>
+        <ImagePlus size={22} aria-hidden="true" />
+        <span>{galleryLabel}</span>
+      </button>
+    </div>
+  );
+}
+
+function pickerAcceptedExtensions(validation: Record<string, unknown>, fallback: string[]): string[] {
+  const extensions = Array.isArray(validation.accepted_extensions)
+    ? validation.accepted_extensions.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+  return extensions.length > 0 ? extensions : fallback;
+}
+
+function pickerAcceptedMimeTypes(validation: Record<string, unknown>): string[] {
+  return Array.isArray(validation.accepted_mime_types)
+    ? validation.accepted_mime_types.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function GallerySelectedActions({
+  disabled,
+  onReplace,
+  onRemove,
+}: {
+  disabled: boolean;
+  onReplace: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="dashboard-media-actions">
+      <button className="secondary-button secondary-button--small" type="button" disabled={disabled} onClick={onReplace}>
+        <RefreshCw size={14} aria-hidden="true" />
+        Replace
+      </button>
+      <button className="secondary-button secondary-button--small" type="button" disabled={disabled} onClick={onRemove}>
+        <Trash2 size={14} aria-hidden="true" />
+        Remove
+      </button>
+    </div>
+  );
+}
+
 function AssetImageInput({
   value,
   disabled,
   variant,
+  galleryEnabled,
+  validation,
+  onChange,
   onImageUpload,
 }: {
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
+  galleryEnabled: boolean;
+  validation: Record<string, unknown>;
+  onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [originalFilename, setOriginalFilename] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
-  const assetId = typeof value === "string" ? value : null;
-  const hasAsset = Boolean(assetId);
+  const assetId = isUploadedAssetValue(value) ? value : null;
+  const galleryReference = galleryEnabled && isGalleryMediaReference(value) && value.kind === "image" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference);
 
   useEffect(() => {
     setBlobUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+
+    if (galleryReference) {
+      setMissing(false);
+      return undefined;
+    }
 
     if (!assetId) {
       setMissing(false);
@@ -635,20 +758,25 @@ function AssetImageInput({
   }, [assetId]);
 
   function openFilePicker() {
-    if (!disabled) inputRef.current?.click();
+    if (!disabled) {
+      setReplaceChoiceOpen(false);
+      inputRef.current?.click();
+    }
   }
 
-  function handleSurfaceClick(event: MouseEvent<HTMLSpanElement>) {
+  function handleSurfaceClick(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
-    openFilePicker();
+    if (hasSelection) setReplaceChoiceOpen(galleryEnabled);
+    if (!galleryEnabled) openFilePicker();
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
-    openFilePicker();
+    if (hasSelection) setReplaceChoiceOpen(galleryEnabled);
+    if (!galleryEnabled) openFilePicker();
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -657,13 +785,23 @@ function AssetImageInput({
     if (file) void onImageUpload(file);
   }
 
+  function removeImage() {
+    if (disabled) return;
+    onChange(null);
+    setOriginalFilename(null);
+    setMissing(false);
+    setReplaceChoiceOpen(false);
+  }
+
   const stateClass = missing
     ? "dashboard-image-input--missing"
-    : blobUrl
+    : blobUrl || galleryReference
       ? "dashboard-image-input--preview"
-      : hasAsset
+      : hasSelection
         ? "dashboard-image-input--loading"
         : "dashboard-image-input--empty";
+  const galleryImageUrl = galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
+  const selectedFilename = galleryReference?.filename ?? originalFilename ?? assetId;
 
   return (
     <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`}>
@@ -677,20 +815,32 @@ function AssetImageInput({
         aria-hidden="true"
         onChange={handleFileChange}
       />
-      <span
+      {galleryOpen ? (
+        <GalleryPickerModal
+          kind="image"
+          acceptedExtensions={pickerAcceptedExtensions(validation, IMAGE_ACCEPTED_EXTENSIONS)}
+          acceptedMimeTypes={pickerAcceptedMimeTypes(validation)}
+          onClose={() => setGalleryOpen(false)}
+          onSelect={(reference) => {
+            setReplaceChoiceOpen(false);
+            onChange(reference);
+          }}
+        />
+      ) : null}
+      {blobUrl || galleryImageUrl || missing || hasSelection ? (
+      <button
         className="dashboard-image-input__surface"
-        role="button"
-        tabIndex={disabled ? -1 : 0}
-        aria-disabled={disabled}
+        type="button"
+        disabled={disabled}
         onClick={handleSurfaceClick}
         onKeyDown={handleKeyDown}
       >
-        {blobUrl ? (
+        {blobUrl || galleryImageUrl ? (
           <>
-            <img src={blobUrl} alt="Uploaded input" className="dashboard-image-input__preview" />
+            <img src={blobUrl ?? galleryImageUrl ?? ""} alt={galleryReference ? "Gallery input" : "Uploaded input"} className="dashboard-image-input__preview" />
             <span className="dashboard-image-input__overlay">
-              <span className="dashboard-image-input__filename">{originalFilename ?? assetId}</span>
-              <span className="dashboard-image-input__action">Click here to replace image</span>
+              <span className="dashboard-image-input__filename">{selectedFilename}</span>
+              <span className="dashboard-image-input__action">Replace image</span>
             </span>
           </>
         ) : missing ? (
@@ -699,25 +849,41 @@ function AssetImageInput({
               <ImagePlus size={24} />
             </span>
             <span className="dashboard-image-input__title">Image could not be loaded</span>
-            <span className="dashboard-image-input__hint">Click here to upload an image</span>
+            <span className="dashboard-image-input__hint">Upload from computer</span>
           </>
-        ) : assetId ? (
+        ) : hasSelection ? (
           <>
             <span className="dashboard-image-input__icon" aria-hidden="true">
               <ImagePlus size={24} />
             </span>
             <span className="dashboard-image-input__title">Loading image...</span>
-            <span className="dashboard-image-input__hint">{originalFilename ?? assetId}</span>
+            <span className="dashboard-image-input__hint">{selectedFilename}</span>
           </>
-        ) : (
-          <>
-            <span className="dashboard-image-input__icon" aria-hidden="true">
-              <ImagePlus size={24} />
-            </span>
-            <span className="dashboard-image-input__title">Click here to upload an image</span>
-          </>
-        )}
-      </span>
+        ) : null}
+      </button>
+      ) : (
+        <MediaSourceChooser
+          icon={<ImagePlus size={24} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          galleryLabel="Choose from Gallery"
+          disabled={disabled}
+          galleryEnabled={galleryEnabled}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      )}
+      {hasSelection ? <GallerySelectedActions disabled={disabled} onReplace={() => (galleryEnabled ? setReplaceChoiceOpen((current) => !current) : openFilePicker())} onRemove={removeImage} /> : null}
+      {hasSelection && replaceChoiceOpen ? (
+        <MediaSourceChooser
+          icon={<ImagePlus size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          galleryLabel="Choose from Gallery"
+          disabled={disabled}
+          galleryEnabled={galleryEnabled}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -726,24 +892,30 @@ function AssetAudioInput({
   value,
   disabled,
   variant,
+  validation,
   onChange,
   onAudioUpload,
 }: {
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
+  validation: Record<string, unknown>;
   onChange: (value: unknown) => void;
   onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const assetId = typeof value === "string" ? value : null;
-  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : null;
+  const assetId = isUploadedAssetValue(value) ? value : null;
+  const galleryReference = isGalleryMediaReference(value) && value.kind === "audio" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference);
+  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
@@ -751,6 +923,10 @@ function AssetAudioInput({
     setMetadata(null);
     setDuration(null);
     setError(null);
+    if (galleryReference) {
+      setDuration(galleryReference.duration_seconds ?? null);
+      return;
+    }
     if (!assetId) {
       return;
     }
@@ -770,10 +946,13 @@ function AssetAudioInput({
     return () => {
       canceled = true;
     };
-  }, [assetId]);
+  }, [assetId, galleryReference]);
 
   function openFilePicker() {
-    if (!disabled && !uploading) inputRef.current?.click();
+    if (!disabled && !uploading) {
+      setReplaceChoiceOpen(false);
+      inputRef.current?.click();
+    }
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -802,10 +981,16 @@ function AssetAudioInput({
     setMetadata(null);
     setDuration(null);
     setError(null);
+    setReplaceChoiceOpen(false);
   }
 
+  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "Audio file";
+  const extension = galleryReference?.extension ?? metadata?.format ?? extensionFromFilename(filename);
+  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? metadata?.size;
+
   return (
-    <div className={`dashboard-audio-input dashboard-audio-input--${variant}${assetId ? " dashboard-audio-input--selected" : ""}`}>
+    <div className={`dashboard-audio-input dashboard-audio-input--${variant}${hasSelection ? " dashboard-audio-input--selected" : ""}`}>
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -816,7 +1001,19 @@ function AssetAudioInput({
         aria-hidden="true"
         onChange={(event) => void handleFileChange(event)}
       />
-      {assetId && mediaUrl ? (
+      {galleryOpen ? (
+        <GalleryPickerModal
+          kind="audio"
+          acceptedExtensions={pickerAcceptedExtensions(validation, AUDIO_ACCEPTED_EXTENSIONS)}
+          acceptedMimeTypes={pickerAcceptedMimeTypes(validation)}
+          onClose={() => setGalleryOpen(false)}
+          onSelect={(reference) => {
+            setReplaceChoiceOpen(false);
+            onChange(reference);
+          }}
+        />
+      ) : null}
+      {hasSelection && mediaUrl ? (
         <div className="dashboard-audio-input__selected">
           <audio
             className="dashboard-audio-input__player"
@@ -830,27 +1027,35 @@ function AssetAudioInput({
             onError={() => setError("Audio could not be loaded. Choose another file.")}
           />
           <div className="dashboard-audio-input__meta">
-            <strong>{metadata?.original_filename ?? assetId}</strong>
-            <span>{audioMetadataLabel(metadata?.format, metadata?.content_type, metadata?.size, duration, "Audio file")}</span>
+            <strong>{filename}</strong>
+            <span>{audioMetadataLabel(extension, mimeType, size, duration, "Audio file")}</span>
           </div>
-          <div className="dashboard-audio-input__actions">
-            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
-              <RefreshCw size={14} aria-hidden="true" />
-              Replace
-            </button>
-            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={removeAudio}>
-              <Trash2 size={14} aria-hidden="true" />
-              Remove
-            </button>
-          </div>
+          <GallerySelectedActions disabled={disabled || uploading} onReplace={() => setReplaceChoiceOpen((current) => !current)} onRemove={removeAudio} />
         </div>
       ) : (
-        <button className="dashboard-audio-input__empty" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
-          <FileAudio size={22} aria-hidden="true" />
-          <span>{uploading ? "Uploading audio..." : "Click here to upload audio"}</span>
-          {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
-        </button>
+        <MediaSourceChooser
+          icon={<FileAudio size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          uploadingLabel="Uploading audio..."
+          galleryLabel="Choose from Gallery"
+          uploadProgress={uploadProgress}
+          disabled={disabled}
+          uploading={uploading}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
       )}
+      {hasSelection && replaceChoiceOpen ? (
+        <MediaSourceChooser
+          icon={<FileAudio size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          galleryLabel="Choose from Gallery"
+          disabled={disabled}
+          uploading={uploading}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      ) : null}
       {uploading && uploadProgress ? (
         <div className="dashboard-audio-input__progress-row">
           <div className="dashboard-audio-input__progress" aria-label="Audio upload progress">
@@ -871,17 +1076,21 @@ function AssetVideoInput({
   value,
   disabled,
   variant,
+  validation,
   onChange,
   onVideoUpload,
 }: {
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
+  validation: Record<string, unknown>;
   onChange: (value: unknown) => void;
   onVideoUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [width, setWidth] = useState<number | null>(null);
@@ -889,8 +1098,10 @@ function AssetVideoInput({
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const assetId = typeof value === "string" ? value : null;
-  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : null;
+  const assetId = isUploadedAssetValue(value) ? value : null;
+  const galleryReference = isGalleryMediaReference(value) && value.kind === "video" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference);
+  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
@@ -900,6 +1111,12 @@ function AssetVideoInput({
     setWidth(null);
     setHeight(null);
     setError(null);
+    if (galleryReference) {
+      setDuration(galleryReference.duration_seconds ?? null);
+      setWidth(galleryReference.width ?? null);
+      setHeight(galleryReference.height ?? null);
+      return;
+    }
     if (!assetId) return;
 
     let canceled = false;
@@ -918,10 +1135,13 @@ function AssetVideoInput({
     return () => {
       canceled = true;
     };
-  }, [assetId]);
+  }, [assetId, galleryReference]);
 
   function openFilePicker() {
-    if (!disabled && !uploading) inputRef.current?.click();
+    if (!disabled && !uploading) {
+      setReplaceChoiceOpen(false);
+      inputRef.current?.click();
+    }
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -952,10 +1172,17 @@ function AssetVideoInput({
     setWidth(null);
     setHeight(null);
     setError(null);
+    setReplaceChoiceOpen(false);
   }
 
+  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "Video file";
+  const extension = galleryReference?.extension ?? metadata?.format ?? extensionFromFilename(filename);
+  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? metadata?.size;
+  const fps = galleryReference?.fps ?? metadata?.fps;
+
   return (
-    <div className={`dashboard-video-input dashboard-video-input--${variant}${assetId ? " dashboard-video-input--selected" : ""}`}>
+    <div className={`dashboard-video-input dashboard-video-input--${variant}${hasSelection ? " dashboard-video-input--selected" : ""}`}>
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -966,7 +1193,19 @@ function AssetVideoInput({
         aria-hidden="true"
         onChange={(event) => void handleFileChange(event)}
       />
-      {assetId && mediaUrl ? (
+      {galleryOpen ? (
+        <GalleryPickerModal
+          kind="video"
+          acceptedExtensions={pickerAcceptedExtensions(validation, VIDEO_ACCEPTED_EXTENSIONS)}
+          acceptedMimeTypes={pickerAcceptedMimeTypes(validation)}
+          onClose={() => setGalleryOpen(false)}
+          onSelect={(reference) => {
+            setReplaceChoiceOpen(false);
+            onChange(reference);
+          }}
+        />
+      ) : null}
+      {hasSelection && mediaUrl ? (
         <div className="dashboard-video-input__selected">
           <video
             className="dashboard-video-input__player"
@@ -982,27 +1221,35 @@ function AssetVideoInput({
             onError={() => setError("Video could not be loaded. Choose another file.")}
           />
           <div className="dashboard-video-input__meta">
-            <strong>{metadata?.original_filename ?? assetId}</strong>
-            <span>{videoMetadataLabel(metadata?.format, metadata?.content_type, metadata?.size, duration, width, height, metadata?.fps, "Video file")}</span>
+            <strong>{filename}</strong>
+            <span>{videoMetadataLabel(extension, mimeType, size, duration, width, height, fps, "Video file")}</span>
           </div>
-          <div className="dashboard-video-input__actions">
-            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
-              <RefreshCw size={14} aria-hidden="true" />
-              Replace
-            </button>
-            <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={removeVideo}>
-              <Trash2 size={14} aria-hidden="true" />
-              Remove
-            </button>
-          </div>
+          <GallerySelectedActions disabled={disabled || uploading} onReplace={() => setReplaceChoiceOpen((current) => !current)} onRemove={removeVideo} />
         </div>
       ) : (
-        <button className="dashboard-video-input__empty" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
-          <Video size={24} aria-hidden="true" />
-          <span>{uploading ? "Uploading video..." : "Click here to upload video"}</span>
-          {uploading && uploadProgress ? <small>{uploadProgress.percent ?? 0}%</small> : null}
-        </button>
+        <MediaSourceChooser
+          icon={<Video size={24} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          uploadingLabel="Uploading video..."
+          galleryLabel="Choose from Gallery"
+          uploadProgress={uploadProgress}
+          disabled={disabled}
+          uploading={uploading}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
       )}
+      {hasSelection && replaceChoiceOpen ? (
+        <MediaSourceChooser
+          icon={<Video size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          galleryLabel="Choose from Gallery"
+          disabled={disabled}
+          uploading={uploading}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      ) : null}
       {uploading && uploadProgress ? (
         <div className="dashboard-video-input__progress-row">
           <div className="dashboard-video-input__progress" aria-label="Video upload progress">
@@ -1164,38 +1411,47 @@ function fileAcceptString(validation: Record<string, unknown>): string {
 
 function AssetThreeDInput({
   value,
+  validation,
   disabled,
   onChange,
   onThreeDUpload,
 }: {
   value: unknown;
+  validation: Record<string, unknown>;
   disabled: boolean;
   onChange: (value: unknown) => void;
   onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const assetId = typeof value === "string" ? value : null;
+  const assetId = isUploadedAssetValue(value) ? value : null;
+  const galleryReference = isGalleryMediaReference(value) && value.kind === "3d" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference);
+  const modelUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
 
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     setMetadata(null);
     setError(null);
+    if (galleryReference) return;
     if (!assetId) return;
     let canceled = false;
     fetchAssetMetadata(assetId).then((result) => { if (!canceled) setMetadata(result); }).catch(() => {
       if (!canceled) setError("3D model metadata could not be loaded.");
     });
     return () => { canceled = true; };
-  }, [assetId]);
+  }, [assetId, galleryReference]);
 
   async function choose(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    setReplaceChoiceOpen(false);
     abortRef.current = new AbortController();
     setError(null);
     setProgress({ loaded: 0, total: file.size || null, percent: 0 });
@@ -1209,23 +1465,73 @@ function AssetThreeDInput({
     }
   }
 
-  const filename = metadata?.original_filename ?? assetId ?? "3D model";
+  function openFilePicker() {
+    if (!disabled && !progress) {
+      setReplaceChoiceOpen(false);
+      inputRef.current?.click();
+    }
+  }
+
+  function removeModel() {
+    if (disabled || progress) return;
+    onChange(null);
+    setMetadata(null);
+    setError(null);
+    setReplaceChoiceOpen(false);
+  }
+
+  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "3D model";
+  const extension = galleryReference?.extension ?? metadata?.extension;
+  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? metadata?.size;
   return (
     <div className="dashboard-three-d-input">
       <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
-      {assetId ? (
+      {galleryOpen ? (
+        <GalleryPickerModal
+          kind="3d"
+          acceptedExtensions={pickerAcceptedExtensions(validation, THREE_D_ACCEPTED_EXTENSIONS)}
+          acceptedMimeTypes={pickerAcceptedMimeTypes(validation)}
+          onClose={() => setGalleryOpen(false)}
+          onSelect={(reference) => {
+            setReplaceChoiceOpen(false);
+            onChange(reference);
+          }}
+        />
+      ) : null}
+      {hasSelection && modelUrl ? (
         <>
-          <ThreeDViewer url={dashboardAssetMediaUrl(assetId)} filename={filename} size={metadata?.size} />
+          <ThreeDViewer url={modelUrl} filename={filename} size={size} />
           <div className="dashboard-file-input__selected">
             <Box size={24} />
-            <div className="dashboard-file-input__meta"><strong>{filename}</strong><span>{fileMetadataLabel(metadata?.extension, metadata?.content_type, metadata?.size, "3D model")}</span></div>
-            <div className="dashboard-file-input__actions">
-              <button className="secondary-button secondary-button--small" type="button" disabled={disabled || Boolean(progress)} onClick={() => inputRef.current?.click()}><RefreshCw size={14} />Replace</button>
-              <button className="secondary-button secondary-button--small" type="button" disabled={disabled || Boolean(progress)} onClick={() => onChange(null)}><Trash2 size={14} />Remove</button>
-            </div>
+            <div className="dashboard-file-input__meta"><strong>{filename}</strong><span>{fileMetadataLabel(extension, mimeType, size, "3D model")}</span></div>
+            <GallerySelectedActions disabled={disabled || Boolean(progress)} onReplace={() => setReplaceChoiceOpen((current) => !current)} onRemove={removeModel} />
           </div>
         </>
-      ) : <button className="dashboard-file-input__empty" type="button" disabled={disabled || Boolean(progress)} onClick={() => inputRef.current?.click()}><Box size={22} /><span>{progress ? `Uploading 3D model... ${progress.percent ?? 0}%` : "Click here to upload a 3D model"}</span></button>}
+      ) : (
+        <MediaSourceChooser
+          icon={<Box size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          uploadingLabel="Uploading 3D model..."
+          galleryLabel="Choose from Gallery"
+          uploadProgress={progress}
+          disabled={disabled}
+          uploading={Boolean(progress)}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      )}
+      {hasSelection && replaceChoiceOpen ? (
+        <MediaSourceChooser
+          icon={<Box size={22} aria-hidden="true" />}
+          uploadLabel="Upload from computer"
+          galleryLabel="Choose from Gallery"
+          disabled={disabled}
+          uploading={Boolean(progress)}
+          onUpload={openFilePicker}
+          onGallery={() => setGalleryOpen(true)}
+        />
+      ) : null}
       {progress ? <button className="secondary-button secondary-button--small" type="button" onClick={() => abortRef.current?.abort()}><X size={14} />Cancel upload</button> : null}
       {error ? <small className="field-error">{error}</small> : null}
     </div>

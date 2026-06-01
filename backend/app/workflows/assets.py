@@ -79,6 +79,10 @@ class DashboardAssetService:
         self._dir = assets_dir
         self.log_store = log_store
 
+    @property
+    def assets_dir(self) -> Path:
+        return self._dir
+
     def store(self, data: bytes, content_type: str, original_filename: str) -> dict[str, str]:
         if len(data) > MAX_ASSET_BYTES:
             raise AssetUploadError("File exceeds the 25 MB size limit.")

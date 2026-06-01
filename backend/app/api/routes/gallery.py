@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, StrictBool
 
@@ -15,8 +15,23 @@ class GalleryFavoriteUpdateRequest(BaseModel):
 
 
 @router.get("/gallery")
-async def list_gallery(gallery_store: GalleryStoreDep):
-    return gallery_store.list_items()
+async def list_gallery(
+    gallery_store: GalleryStoreDep,
+    kind: str | None = None,
+    search: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    cursor: str | None = None,
+    accepted_extensions: list[str] | None = Query(default=None),
+    accepted_mime_types: list[str] | None = Query(default=None),
+):
+    return gallery_store.list_items(
+        kind=kind,
+        search=search,
+        limit=limit,
+        cursor=cursor,
+        accepted_extensions=accepted_extensions,
+        accepted_mime_types=accepted_mime_types,
+    )
 
 
 @router.get("/gallery/{item_id}")

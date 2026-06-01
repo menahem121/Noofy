@@ -357,6 +357,97 @@ def test_build_snapshot_redacts_secrets_and_preserves_all_output_preferences() -
     assert set(snapshot.output_preferences) == {"result-image", "result-file"}
 
 
+def test_gallery_api_filters_searches_and_paginates_picker_results(tmp_path: Path) -> None:
+    store = GalleryStore(tmp_path / "gallery")
+    image = store.save_staged_output(_captured_output(store, idempotency_key="image", kind="image", filename="portrait.png", mime_type="image/png"))
+    store.save_staged_output(_captured_output(store, idempotency_key="video", kind="video", filename="portrait.mp4", mime_type="video/mp4", data=b"video"))
+    webp = store.save_staged_output(_captured_output(store, idempotency_key="webp", kind="image", filename="portrait.webp", mime_type="image/webp"))
+    store.save_staged_output(_captured_output(store, idempotency_key="gif", kind="image", filename="other.gif", mime_type="image/gif"))
+
+    with TestClient(create_app(engine_service=_FakeEngineService(), gallery_store=store)) as client:
+        first = client.get("/api/gallery", params=[
+            ("kind", "image"),
+            ("search", "portrait"),
+            ("limit", "1"),
+            ("accepted_extensions", ".png"),
+            ("accepted_extensions", ".webp"),
+        ])
+        first_payload = first.json()
+        second = client.get("/api/gallery", params=[
+            ("kind", "image"),
+            ("search", "portrait"),
+            ("limit", "50"),
+            ("cursor", first_payload["next_cursor"]),
+            ("accepted_extensions", ".png"),
+            ("accepted_extensions", ".webp"),
+        ])
+
+    assert first.status_code == 200
+    assert first_payload["total"] == 2
+    assert len(first_payload["items"]) == 1
+    assert first_payload["items"][0]["kind"] == "image"
+    assert first_payload["items"][0]["extension"] in {".png", ".webp"}
+    assert first_payload["next_cursor"]
+    assert second.status_code == 200
+    assert len(second.json()["items"]) == 1
+    assert {first_payload["items"][0]["id"], second.json()["items"][0]["id"]} == {image.id, webp.id}
+
+
+def test_gallery_api_keeps_unfiltered_listing_compatible(tmp_path: Path) -> None:
+    store = GalleryStore(tmp_path / "gallery")
+    store.save_staged_output(_captured_output(store, idempotency_key="image", kind="image", filename="image.png", mime_type="image/png"))
+    store.save_staged_output(_captured_output(store, idempotency_key="audio", kind="audio", filename="audio.wav", mime_type="audio/wav", data=b"RIFF"))
+
+    with TestClient(create_app(engine_service=_FakeEngineService(), gallery_store=store)) as client:
+        response = client.get("/api/gallery")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["next_cursor"] is None
+    assert {item["kind"] for item in payload["items"]} == {"image", "audio"}
+
+
+def test_run_snapshot_preserves_only_safe_gallery_reference_metadata() -> None:
+    package = _privacy_package()
+    snapshot = build_run_submission_snapshot(
+        package=package,
+        inputs={
+            "image": {
+                "source": "gallery",
+                "gallery_item_id": "item-1",
+                "kind": "image",
+                "filename": "input.png",
+                "extension": ".png",
+                "mime_type": "image/png",
+                "size_bytes": 123,
+                "width": 64,
+                "height": 64,
+                "duration_seconds": None,
+                "fps": None,
+                "content_url": "http://127.0.0.1/api/gallery/item-1/content?token=secret",
+                "thumbnail_url": "http://127.0.0.1/api/gallery/item-1/thumbnail?token=secret",
+                "path": "/private/input.png",
+            },
+        },
+        output_preferences_snapshot={},
+    )
+
+    assert snapshot.values["image"] == {
+        "source": "gallery",
+        "gallery_item_id": "item-1",
+        "kind": "image",
+        "filename": "input.png",
+        "extension": ".png",
+        "mime_type": "image/png",
+        "size_bytes": 123,
+        "width": 64,
+        "height": 64,
+        "duration_seconds": None,
+        "fps": None,
+    }
+
+
 def test_gallery_favorite_api_rejects_non_boolean_payload(tmp_path: Path) -> None:
     store = GalleryStore(tmp_path / "gallery")
     item = store.save_staged_output(_captured_output(store))

@@ -29,6 +29,176 @@
   background: var(--purple-soft);
 }
 
+.gallery-picker-modal {
+  display: grid;
+  width: min(920px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-1);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.gallery-picker-modal__header,
+.gallery-picker-modal__toolbar,
+.gallery-picker-modal__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.gallery-picker-modal__header {
+  justify-content: space-between;
+}
+
+.gallery-picker-modal__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+.gallery-picker-modal__footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 0;
+}
+
+.gallery-picker-modal__body {
+  min-height: 260px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.gallery-picker-search {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+}
+
+.gallery-picker-search svg {
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+}
+
+.gallery-picker-search input {
+  width: 100%;
+  padding-left: 36px;
+}
+
+.gallery-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.gallery-picker-card {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(46, 45, 49, 0.72);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.gallery-picker-card:hover,
+.gallery-picker-card:focus-visible,
+.gallery-picker-card--selected {
+  border-color: rgba(139, 92, 246, 0.72);
+  outline: none;
+}
+
+.gallery-picker-card--selected {
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.14);
+}
+
+.gallery-picker-card__img,
+.gallery-picker-card__placeholder {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(20, 19, 22, 0.7);
+}
+
+.gallery-picker-card__img {
+  object-fit: cover;
+}
+
+.gallery-picker-card__placeholder {
+  color: var(--text-muted);
+}
+
+.gallery-picker-card__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-picker-card__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.gallery-picker-card__meta strong,
+.gallery-picker-card__meta span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-picker-card__meta strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.gallery-picker-card__check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--primary);
+  color: white;
+}
+
+.gallery-picker-message {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.gallery-picker-message--error {
+  gap: 8px;
+  color: var(--error);
+}
+
+.gallery-picker-inline-error {
+  margin: 0 0 12px;
+  color: var(--error);
+  font-size: 12px;
+}
+
 .gallery-count-badge {
   display: inline-flex;
   align-items: center;

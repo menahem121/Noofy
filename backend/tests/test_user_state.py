@@ -134,3 +134,39 @@ def test_save_sanitizes_schema_api_credential_values(tmp_path: Path) -> None:
         "configured": True,
         "last_four": "1234",
     }
+
+
+def test_save_preserves_only_safe_gallery_reference_metadata(tmp_path: Path) -> None:
+    svc = UserStateService(tmp_path / "state")
+
+    saved = svc.save(
+        WorkflowUserState(
+            workflow_id="wf-gallery",
+            values={
+                "image": {
+                    "source": "gallery",
+                    "gallery_item_id": "item-1",
+                    "kind": "image",
+                    "filename": "input.png",
+                    "extension": ".png",
+                    "mime_type": "image/png",
+                    "size_bytes": 123,
+                    "content_url": "http://127.0.0.1/api/gallery/item-1/content?token=secret",
+                    "path": "/private/input.png",
+                },
+            },
+        ),
+    )
+
+    text = (tmp_path / "state" / "wf-gallery.json").read_text(encoding="utf-8")
+    assert "token=secret" not in text
+    assert "/private/input.png" not in text
+    assert saved.values["image"] == {
+        "source": "gallery",
+        "gallery_item_id": "item-1",
+        "kind": "image",
+        "filename": "input.png",
+        "extension": ".png",
+        "mime_type": "image/png",
+        "size_bytes": 123,
+    }

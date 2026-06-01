@@ -1193,6 +1193,30 @@ def test_cleanup_staged_files_removes_files(tmp_path: Path) -> None:
     assert "job-99" not in adapter._staged_files
 
 
+def test_pre_staged_files_are_limited_to_the_jobs_comfyui_staging_directory(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    input_dir = tmp_path / "input"
+    staging_dir = input_dir / "staging"
+    staging_dir.mkdir(parents=True)
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188",
+        models_dir,
+        comfyui_input_dir=input_dir,
+        log_store=LogStore(),
+    )
+    trusted = staging_dir / "job-99_gallery_item.png"
+    wrong_job = staging_dir / "job-100_gallery_item.png"
+    outside = tmp_path / "outside.png"
+    for path in (trusted, wrong_job, outside):
+        path.write_bytes(b"data")
+
+    assert adapter._trusted_pre_staged_files(
+        "job-99",
+        [str(trusted), str(wrong_job), str(outside)],
+    ) == [trusted]
+
+
 @pytest.mark.parametrize("status", ["completed", "failed", "canceled"])
 def test_terminal_progress_cleans_staged_files_for_terminal_statuses(
     tmp_path: Path, status: str

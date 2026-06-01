@@ -90,7 +90,7 @@ describe("DashboardInputControl", () => {
     expect(onChange).toHaveBeenCalledWith(0.75);
   });
 
-  it("shows a polished clickable upload placeholder when no image is selected", () => {
+  it("shows a split upload and Gallery chooser when no image is selected", () => {
     const onImageUpload = vi.fn();
     const { container } = render(
       <DashboardInputControl
@@ -109,10 +109,11 @@ describe("DashboardInputControl", () => {
       />,
     );
 
-    const uploadTarget = screen.getByRole("button", { name: "Click here to upload an image" });
+    const uploadTarget = screen.getByRole("button", { name: "Upload from computer" });
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     expect(fileInput).toBeInTheDocument();
     expect(fileInput).toHaveClass("dashboard-image-input__file");
+    expect(screen.getByRole("button", { name: "Choose from Gallery" })).toBeInTheDocument();
     expect(screen.queryByText(/Image not found/i)).not.toBeInTheDocument();
 
     const clickSpy = vi.spyOn(fileInput!, "click").mockImplementation(() => undefined);
@@ -159,7 +160,7 @@ describe("DashboardInputControl", () => {
     await waitFor(() => {
       expect(screen.getByAltText("Uploaded input")).toHaveAttribute("src", "blob:noofy-upload-preview");
       expect(screen.getByText("reference portrait.png")).toBeInTheDocument();
-      expect(screen.getByText("Click here to replace image")).toBeInTheDocument();
+      expect(screen.getByText("Replace image")).toBeInTheDocument();
     });
   });
 
@@ -177,7 +178,7 @@ describe("DashboardInputControl", () => {
           default: null,
           validation: {},
         }}
-        value="missing-asset.png"
+        value="12345678-1234-1234-1234-123456789abc.png"
         onChange={vi.fn()}
         onImageUpload={vi.fn()}
       />,
@@ -185,9 +186,313 @@ describe("DashboardInputControl", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Image could not be loaded")).toBeInTheDocument();
-      expect(screen.getByText("Click here to upload an image")).toBeInTheDocument();
+      expect(screen.getByText("Upload from computer")).toBeInTheDocument();
       expect(screen.queryByText(/Image not found/i)).not.toBeInTheDocument();
     });
+  });
+
+  it("selects a paged Gallery image reference without persisting media URLs", async () => {
+    const onChange = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/gallery")) {
+        expect(url).toContain("kind=image");
+        expect(url).toContain("limit=50");
+        expect(url).toContain("accepted_extensions=.png");
+        return Promise.resolve(jsonResponse({
+          total: 1,
+          next_cursor: null,
+          items: [{
+            id: "gallery-image-1",
+            kind: "image",
+            type: "image",
+            content_url: "/api/gallery/gallery-image-1/content?token=secret",
+            thumbnail_url: "/api/gallery/gallery-image-1/thumbnail?token=secret",
+            file_state: "available",
+            workflow_id: "wf",
+            workflow_title: "Workflow",
+            job_id: "job",
+            control_id: "result",
+            output_id: "image",
+            widget_title: "Result",
+            filename: "portrait.png",
+            mime_type: "image/png",
+            extension: ".png",
+            size_bytes: 123,
+            width: 64,
+            height: 64,
+            duration_seconds: null,
+            fps: null,
+            favorite: false,
+            generation_settings: {},
+          }],
+        }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from Gallery" }));
+    fireEvent.click(await screen.findByRole("button", { name: /portrait.png/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(onChange).toHaveBeenCalledWith({
+      source: "gallery",
+      gallery_item_id: "gallery-image-1",
+      kind: "image",
+      filename: "portrait.png",
+      extension: ".png",
+      mime_type: "image/png",
+      size_bytes: 123,
+      width: 64,
+      height: 64,
+      duration_seconds: null,
+      fps: null,
+    });
+    expect(JSON.stringify(onChange.mock.calls[0][0])).not.toContain("token=secret");
+    expect(createObjectUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("renders a selected Gallery image through its durable content endpoint", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={{
+          source: "gallery",
+          gallery_item_id: "gallery-image-1",
+          kind: "image",
+          filename: "portrait.png",
+        }}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByAltText("Gallery input")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/api/gallery/gallery-image-1/content"),
+    );
+  });
+
+  it("closes the Gallery picker with Escape", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ total: 0, next_cursor: null, items: [] }));
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from Gallery" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows only the Gallery loading error when the first picker request fails", async () => {
+    fetchMock.mockRejectedValue(new Error("Gallery could not be loaded."));
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from Gallery" }));
+    expect(await screen.findByText("Gallery could not be loaded.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("No compatible image items found.")).not.toBeInTheDocument();
+  });
+
+  it("filters Gallery results by workflow-specific media validation", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      expect(url).toContain("accepted_extensions=.png");
+      expect(url).toContain("accepted_mime_types=image%2Fpng");
+      expect(url).not.toContain("accepted_extensions=.jpg");
+      return Promise.resolve(jsonResponse({ total: 0, next_cursor: null, items: [] }));
+    });
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: { accepted_extensions: [".png"], accepted_mime_types: ["image/png"] },
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from Gallery" }));
+    expect(await screen.findByText("No compatible image items found.")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["load_audio", "audio", "speech.wav", ".wav", "audio/wav"],
+    ["load_video", "video", "clip.mp4", ".mp4", "video/mp4"],
+    ["load_3d", "3d", "mesh.glb", ".glb", "model/gltf-binary"],
+  ] as const)("selects a Gallery %s reference through paged backend results", async (controlType, kind, filename, extension, mimeType) => {
+    const onChange = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      expect(url).toContain(`/api/gallery?`);
+      expect(url).toContain(`kind=${encodeURIComponent(kind)}`);
+      expect(url).toContain("limit=50");
+      return Promise.resolve(jsonResponse({
+        total: 1,
+        next_cursor: null,
+        items: [{
+          id: `gallery-${kind}-1`,
+          kind,
+          type: kind,
+          content_url: `/api/gallery/gallery-${kind}-1/content?token=secret`,
+          thumbnail_url: null,
+          file_state: "available",
+          workflow_id: "wf",
+          workflow_title: "Workflow",
+          job_id: "job",
+          control_id: "result",
+          output_id: kind,
+          widget_title: "Result",
+          filename,
+          mime_type: mimeType,
+          extension,
+          size_bytes: 456,
+          width: kind === "video" ? 1920 : null,
+          height: kind === "video" ? 1080 : null,
+          duration_seconds: kind === "audio" || kind === "video" ? 2 : null,
+          fps: kind === "video" ? 24 : null,
+          favorite: false,
+          generation_settings: {},
+        }],
+      }));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: kind, type: controlType, label: "Input media", input_id: kind }}
+        input={{
+          id: kind,
+          label: "Input media",
+          control: controlType,
+          binding: { node_id: "10", input_name: "media" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+        onAudioUpload={vi.fn()}
+        onVideoUpload={vi.fn()}
+        onThreeDUpload={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose from Gallery" }));
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(filename) }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      source: "gallery",
+      gallery_item_id: `gallery-${kind}-1`,
+      kind,
+      filename,
+      extension,
+      mime_type: mimeType,
+      size_bytes: 456,
+    }));
+    expect(JSON.stringify(onChange.mock.calls[0][0])).not.toContain("token=secret");
+  });
+
+  it("does not offer Gallery selection for image masks or generic file inputs", () => {
+    const { rerender } = render(
+      <DashboardInputControl
+        control={{ id: "mask", type: "load_image_mask", label: "Mask", input_id: "mask" }}
+        input={{
+          id: "mask",
+          label: "Mask",
+          control: "load_image_mask",
+          binding: { node_id: "10", input_name: "mask" },
+          default: null,
+          validation: {},
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Choose from Gallery" })).not.toBeInTheDocument();
+
+    rerender(
+      <DashboardInputControl
+        control={{ id: "file", type: "load_file", label: "Source file", input_id: "file" }}
+        input={{
+          id: "file",
+          label: "Source file",
+          control: "load_file",
+          binding: { node_id: "10", input_name: "file" },
+          default: null,
+          validation: { accepted_extensions: [".json"], accepted_mime_types: ["application/json"] },
+        }}
+        value={null}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onFileUpload={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Choose from Gallery" })).not.toBeInTheDocument();
   });
 
   it("renders audio assets through backend media URLs with metadata and remove controls", async () => {

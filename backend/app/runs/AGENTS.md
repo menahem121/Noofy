@@ -7,6 +7,7 @@ Workflow execution as a user-facing app use case: job query, cancellation, outpu
 | File | Owns |
 |------|------|
 | `orchestrator.py` | `RunOrchestrator` — validate and submit workflow runs, register jobs, queue memory-blocked submissions |
+| `media_staging.py` | Resolve persisted dashboard media references and stage files into the active runner input workspace at submission |
 | `job_service.py` | `RunJobService` — thin job query layer: progress, cancel, fetch_output, job_logs |
 | `result_service.py` | `RunResultService` — result retrieval, progress SSE, gallery capture after completion, run-history recording |
 

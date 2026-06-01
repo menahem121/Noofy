@@ -35,6 +35,16 @@ export interface GalleryItem {
 export interface GalleryResponse {
   items: GalleryItem[];
   total: number;
+  nextCursor: string | null;
+}
+
+export interface GalleryQuery {
+  kind?: GalleryKind;
+  search?: string;
+  limit?: number;
+  cursor?: string | null;
+  acceptedExtensions?: string[];
+  acceptedMimeTypes?: string[];
 }
 
 export function galleryContentUrl(item: GalleryItem, options: { download?: boolean } = {}): string {
@@ -115,10 +125,18 @@ function normalizeGalleryItem(raw: unknown): GalleryItem {
   };
 }
 
-export async function fetchGallery(): Promise<GalleryResponse> {
-  const data = await getJson<{ items?: unknown[]; total: number }>("/gallery");
+export async function fetchGallery(query: GalleryQuery = {}): Promise<GalleryResponse> {
+  const params = new URLSearchParams();
+  if (query.kind) params.set("kind", query.kind);
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
+  for (const extension of query.acceptedExtensions ?? []) params.append("accepted_extensions", extension);
+  for (const mimeType of query.acceptedMimeTypes ?? []) params.append("accepted_mime_types", mimeType);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const data = await getJson<{ items?: unknown[]; total: number; next_cursor?: string | null }>(`/gallery${suffix}`);
   const items = Array.isArray(data.items) ? data.items : [];
-  return { items: items.map(normalizeGalleryItem), total: data.total };
+  return { items: items.map(normalizeGalleryItem), total: data.total, nextCursor: data.next_cursor ?? null };
 }
 
 export async function fetchGalleryItem(itemId: string): Promise<GalleryItem> {
@@ -131,4 +149,8 @@ export async function updateGalleryFavorite(itemId: string, favorite: boolean): 
 
 export function deleteGalleryItem(itemId: string): Promise<{ id: string; deleted: boolean }> {
   return deleteJson<{ id: string; deleted: boolean }>(`/gallery/${encodeURIComponent(itemId)}`);
+}
+
+export function galleryContentUrlById(itemId: string): string {
+  return resolveBackendUrl(`/gallery/${encodeURIComponent(itemId)}/content`, { includeToken: true });
 }

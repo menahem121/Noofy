@@ -36,6 +36,38 @@ export interface OutputThreeDMedia {
   size?: number | null;
 }
 
+export interface GalleryMediaReference {
+  source: "gallery";
+  gallery_item_id: string;
+  kind: "image" | "audio" | "video" | "3d";
+  filename: string;
+  extension?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  duration_seconds?: number | null;
+  fps?: number | null;
+}
+
+const uploadedAssetPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9_-]+)+$/i;
+
+export function isUploadedAssetValue(value: unknown): value is string {
+  return typeof value === "string" && uploadedAssetPattern.test(value);
+}
+
+export function isGalleryMediaReference(value: unknown): value is GalleryMediaReference {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.source === "gallery" &&
+    typeof record.gallery_item_id === "string" &&
+    record.gallery_item_id.trim().length > 0 &&
+    (record.kind === "image" || record.kind === "audio" || record.kind === "video" || record.kind === "3d") &&
+    typeof record.filename === "string"
+  );
+}
+
 export function audioMetadataLabel(
   format: string | null | undefined,
   mimeType: string | null | undefined,

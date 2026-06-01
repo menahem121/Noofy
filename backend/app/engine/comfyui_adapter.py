@@ -76,7 +76,8 @@ class ComfyUIEngineAdapter:
         _inputs: dict[str, Any],
         options: dict[str, Any],
     ) -> EngineJob:
-        job_id = str(uuid4())
+        requested_job_id = options.get("job_id")
+        job_id = str(requested_job_id) if isinstance(requested_job_id, str) and requested_job_id else str(uuid4())
         client_id = options.get("client_id") or f"local-ai-workflow-{uuid4()}"
         job = EngineJob(
             job_id=job_id,
@@ -95,12 +96,21 @@ class ComfyUIEngineAdapter:
             details={"client_id": client_id},
         )
 
+        pre_staged_files = self._trusted_pre_staged_files(
+            job_id,
+            options.get("_noofy_staged_files"),
+        )
+        if pre_staged_files:
+            self._staged_files[job_id] = list(pre_staged_files)
+
         if self.dashboard_assets_dir is not None:
-            graph, self._staged_files[job_id] = self._stage_assets(
+            graph, staged_files = self._stage_assets(
                 workflow_package,
                 graph,
                 job_id,
             )
+            if staged_files:
+                self._staged_files.setdefault(job_id, []).extend(staged_files)
 
         if options.get("listen_for_events", True):
             await self._start_event_listener(
@@ -822,6 +832,22 @@ class ComfyUIEngineAdapter:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def _trusted_pre_staged_files(self, job_id: str, values: Any) -> list[Path]:
+        if not isinstance(values, list):
+            return []
+        staging_dir = (self.comfyui_input_dir / "staging").resolve()
+        trusted: list[Path] = []
+        for value in values:
+            if not isinstance(value, str) or not value:
+                continue
+            try:
+                path = Path(value).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if path.parent == staging_dir and path.name.startswith(f"{job_id}_"):
+                trusted.append(path)
+        return trusted
 
     def _progress_from_history(
         self, job_id: str, history_entry: dict[str, Any]

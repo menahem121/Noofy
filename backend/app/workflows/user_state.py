@@ -121,6 +121,9 @@ def _safe_values(values: dict[str, Any], credential_input_ids: set[str]) -> dict
             if safe_credential is not None:
                 safe_values[key] = safe_credential
             continue
+        if isinstance(value, dict) and value.get("source") == "gallery":
+            safe_values[key] = _safe_gallery_media_value(value)
+            continue
         safe_values[key] = value
     return safe_values
 
@@ -132,5 +135,28 @@ def _safe_credential_value(value: Any) -> dict[str, Any] | None:
     for key in ("kind", "provider", "secret_ref", "configured", "last_four"):
         item = value.get(key)
         if item is not None and isinstance(item, (str, bool)):
+            safe[key] = item
+    return safe
+
+
+def _safe_gallery_media_value(value: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key in (
+        "source",
+        "gallery_item_id",
+        "kind",
+        "filename",
+        "extension",
+        "mime_type",
+        "size_bytes",
+        "width",
+        "height",
+        "duration_seconds",
+        "fps",
+    ):
+        if key not in value:
+            continue
+        item = value.get(key)
+        if item is None or isinstance(item, (str, int, float, bool)):
             safe[key] = item
     return safe

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from app.diagnostics import DiagnosticsSink
 from app.engine.adapter import EngineAdapter
@@ -29,6 +30,11 @@ from app.runs.credentials import (
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.bindings import package_for_input_bindings
+from app.runs.media_staging import (
+    MediaInputStagingError,
+    MediaInputStagingResolver,
+    cleanup_staged_media_files,
+)
 
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
@@ -75,6 +81,7 @@ class RunOrchestrator:
         history_service: HistoryService | None = None,
         credential_resolver: CredentialResolver | None = None,
         api_nodes_unavailable_reason: ApiNodesUnavailableReason | None = None,
+        media_staging_resolver: MediaInputStagingResolver | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -98,6 +105,7 @@ class RunOrchestrator:
         self.history_service = history_service
         self.credential_resolver = credential_resolver
         self.api_nodes_unavailable_reason = api_nodes_unavailable_reason
+        self.media_staging_resolver = media_staging_resolver
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -261,8 +269,6 @@ class RunOrchestrator:
                 )
                 return validation
 
-        graph = self.apply_input_bindings(package, runtime_inputs)
-
         if package_requires_credential_injection(package) and self.api_nodes_unavailable_reason is not None:
             unavailable_reason = await self.api_nodes_unavailable_reason(package, adapter)
             if unavailable_reason is not None:
@@ -301,7 +307,6 @@ class RunOrchestrator:
         return await self._submit_run(
             package=package,
             workflow_id=workflow_id,
-            graph=graph,
             inputs=runtime_inputs,
             options=options,
             adapter_options=options_with_credential_plan(options, credential_plan),
@@ -433,7 +438,6 @@ class RunOrchestrator:
         *,
         package: WorkflowPackage,
         workflow_id: str,
-        graph: dict[str, Any],
         inputs: dict[str, Any],
         options: dict[str, Any],
         adapter_options: dict[str, Any],
@@ -442,7 +446,40 @@ class RunOrchestrator:
         memory_decision: MemoryGovernorDecision | None,
         memory_retry_after_cleanup: bool,
         run_submission_snapshot: RunSubmissionSnapshot,
-    ) -> EngineJob:
+    ) -> EngineJob | WorkflowValidationResult:
+        job_id = str(uuid4())
+        try:
+            media_staging = (
+                self.media_staging_resolver.stage_media_inputs(
+                    package=package,
+                    inputs=inputs,
+                    runner=runner,
+                    adapter=adapter,
+                    job_id=job_id,
+                )
+                if self.media_staging_resolver is not None
+                else None
+            )
+        except MediaInputStagingError as exc:
+            self._record_run_blocked(package, str(exc))
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by media input staging",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"error": str(exc)},
+            )
+            return WorkflowValidationResult(
+                workflow_id=workflow_id,
+                valid=False,
+                errors=[str(exc)],
+            )
+        resolved_inputs = media_staging.inputs if media_staging is not None else inputs
+        adapter_options = {
+            **adapter_options,
+            "job_id": job_id,
+            "_noofy_staged_files": [str(path) for path in (media_staging.staged_files if media_staging else [])],
+        }
         self.log_store.add(
             "info",
             "Submitting workflow run",
@@ -454,7 +491,12 @@ class RunOrchestrator:
         pre_submit_snapshot: MachineMemorySnapshot | None = (
             self.memory_observer.snapshot() if self.memory_observer is not None else None
         )
-        job = await adapter.run_workflow(package, graph, inputs, adapter_options)
+        try:
+            graph = self.apply_input_bindings(package, resolved_inputs)
+            job = await adapter.run_workflow(package, graph, resolved_inputs, adapter_options)
+        except Exception:
+            cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
+            raise
         self.runner_supervisor.register_job(job.job_id, runner.runner_id)
         self.runner_supervisor.mark_runner_job_started(runner.runner_id, job.job_id)
         self.job_workflows[job.job_id] = workflow_id

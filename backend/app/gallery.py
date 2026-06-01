@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -105,6 +106,7 @@ class GalleryItem(BaseModel):
 class GalleryResponse(BaseModel):
     items: list[GalleryItem]
     total: int
+    next_cursor: str | None = None
 
 
 class GallerySaveRequest(BaseModel):
@@ -307,11 +309,59 @@ class GalleryStore:
         os.close(fd)
         return Path(path)
 
-    def list_items(self) -> GalleryResponse:
+    def list_items(
+        self,
+        *,
+        kind: str | None = None,
+        search: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        accepted_extensions: list[str] | None = None,
+        accepted_mime_types: list[str] | None = None,
+    ) -> GalleryResponse:
+        from app.workflows.media_values import gallery_item_matches_picker_filters
+
+        normalized_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
+        normalized_search = search.strip().lower() if isinstance(search, str) and search.strip() else None
+        offset = _decode_gallery_cursor(cursor)
+        query = "SELECT * FROM gallery_items"
+        clauses: list[str] = []
+        params: list[str] = []
+        if normalized_kind:
+            clauses.append("kind = ?")
+            params.append(normalized_kind)
+        if normalized_search:
+            like = f"%{normalized_search}%"
+            clauses.append(
+                "(lower(filename) LIKE ? OR lower(workflow_title) LIKE ? OR lower(widget_title) LIKE ? OR lower(generation_settings_json) LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC"
         with self._lock, closing(self._connect()) as conn:
-            rows = conn.execute("SELECT * FROM gallery_items ORDER BY created_at DESC").fetchall()
-        items = [item for row in rows if (item := self._item_from_row_or_none(row)) is not None]
-        return GalleryResponse(items=items, total=len(items))
+            rows = conn.execute(query, tuple(params)).fetchall()
+        items = [
+            item
+            for row in rows
+            if (item := self._item_from_row_or_none(row)) is not None
+            and gallery_item_matches_picker_filters(
+                item_kind=item.kind,
+                item_extension=item.extension,
+                item_mime_type=item.mime_type,
+                kind=normalized_kind,
+                accepted_extensions=accepted_extensions,
+                accepted_mime_types=accepted_mime_types,
+            )
+            and (not normalized_kind or item.file_state != "missing")
+        ]
+        if limit is None:
+            return GalleryResponse(items=items, total=len(items))
+        safe_limit = max(1, min(limit, 100))
+        page = items[offset: offset + safe_limit]
+        next_offset = offset + len(page)
+        next_cursor = _encode_gallery_cursor(next_offset) if next_offset < len(items) else None
+        return GalleryResponse(items=page, total=len(items), next_cursor=next_cursor)
 
     def items_for_job(self, job_id: str) -> list[GalleryItem]:
         with self._lock, closing(self._connect()) as conn:
@@ -1017,6 +1067,24 @@ def _safe_setting_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_safe_setting_value(item) for item in value[:50]]
     if isinstance(value, dict):
+        if value.get("source") == "gallery":
+            return {
+                key: _safe_setting_value(value[key])
+                for key in (
+                    "source",
+                    "gallery_item_id",
+                    "kind",
+                    "filename",
+                    "extension",
+                    "mime_type",
+                    "size_bytes",
+                    "width",
+                    "height",
+                    "duration_seconds",
+                    "fps",
+                )
+                if key in value
+            }
         return {
             key: "[redacted]" if _is_sensitive_key(key) else _safe_setting_value(item)
             for key, item in list(value.items())[:50] if isinstance(key, str)
@@ -1037,6 +1105,22 @@ def _redact_url_or_token_string(value: str) -> str:
         except ValueError:
             pass
     return re.sub(r"(?i)([?&](?:api[-_]?key|access[-_]?token|token|auth|authorization|secret|password)=)[^&#\s]+", r"\1[redacted]", value)
+
+
+def _encode_gallery_cursor(offset: int) -> str:
+    payload = str(max(0, offset)).encode("ascii")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_gallery_cursor(cursor: str | None) -> int:
+    if not cursor:
+        return 0
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(f"{cursor}{padding}".encode("ascii")).decode("ascii")
+        return max(0, int(raw))
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return 0
 
 
 def _looks_like_local_path(value: str) -> bool:

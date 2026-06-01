@@ -1665,6 +1665,77 @@
   display: none;
 }
 
+.dashboard-media-source-split {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(46, 45, 49, 0.72);
+}
+
+.dashboard-media-source {
+  display: flex;
+  min-height: 84px;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.dashboard-media-source--single {
+  min-height: 118px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(46, 45, 49, 0.72);
+}
+
+.dashboard-media-source--upload {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dashboard-media-source:hover,
+.dashboard-media-source:focus-visible {
+  background: rgba(55, 54, 59, 0.82);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.dashboard-media-source-split:focus-within,
+.dashboard-media-source--single:focus-visible,
+.dashboard-media-source--single:hover {
+  border-color: rgba(139, 92, 246, 0.72);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.12);
+}
+
+.dashboard-media-source:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.dashboard-media-source span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-media-source small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-media-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .field-group .dashboard-image-input__surface,
 .dashboard-image-input__surface {
   position: relative;
@@ -1692,6 +1763,10 @@
     box-shadow 160ms ease,
     background 160ms ease,
     transform 160ms ease;
+}
+
+button.dashboard-image-input__surface {
+  border: 1px dashed rgba(255, 255, 255, 0.16);
 }
 
 .dashboard-image-input--canvas .dashboard-image-input__surface {
@@ -2094,6 +2169,10 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.dashboard-file-input__selected > .dashboard-media-actions {
+  grid-column: 1 / -1;
 }
 
 .dashboard-file-input__progress {

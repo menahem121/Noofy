@@ -122,6 +122,8 @@ Gallery treats generated `image`, `video`, `audio`, `3d`, and generic `file` out
 
 Completed jobs save only final media whose `control_id -> output_id -> node_id` mapping matches a declared output widget. Uploaded dashboard inputs are never Gallery results. The background save coordinator streams each output through the backend-owned adapter path, stages it to a temporary file with disk checks, atomically finalizes it, and records per-control states such as `queued`, `saving`, `saved`, `failed`, `canceled`, `interrupted`, and `unavailable`. Concurrent Auto Save and manual Save requests reuse the same idempotent item.
 
+Compatible saved `image`, `audio`, `video`, and `3d` Gallery items can be selected as dashboard media inputs. User state stores a metadata-only Gallery reference, never a media URL or filesystem path. At run submission the backend re-resolves the Gallery item, validates its kind and package-declared extension/MIME constraints, and stages the file into the active runner input workspace. Missing or incompatible items block the run with a user-facing validation error.
+
 Output preferences are keyed by output control ID and must not assume every output is an image. Gallery metadata, sanitized manifests, and save state live in `{data_dir}/outputs/gallery/gallery.db`; full saved media lives in flat `media/` storage, and image thumbnails live in `thumbnails/`. Legacy image rows and files under `images/` migrate transactionally and remain readable. Only images are inspected with Pillow. Videos and 3D models use placeholder cards unless a backend-owned thumbnail is available, and generic files are never executed, imported, unpacked, deeply parsed, or previewed.
 
 ## Backend API Surface
@@ -150,7 +152,7 @@ Important dashboard APIs:
 - `GET/PUT /api/workflows/{id}/user-state`: read/write values and layout overrides.
 - `DELETE /api/workflows/{id}/user-state/values`: restore creator defaults.
 - `DELETE /api/workflows/{id}/user-state/layout`: reset user layout overrides.
-- `GET /api/gallery`, `GET /api/gallery/{item_id}`, `GET /api/gallery/{item_id}/content`, `GET /api/gallery/{item_id}/thumbnail`, `DELETE /api/gallery/{item_id}`, `PUT /api/gallery/{item_id}/favorite`: manage saved Gallery records and backend-owned media. `GET /api/gallery/{item_id}/image` remains a compatibility alias for older History links.
+- `GET /api/gallery`, `GET /api/gallery/{item_id}`, `GET /api/gallery/{item_id}/content`, `GET /api/gallery/{item_id}/thumbnail`, `DELETE /api/gallery/{item_id}`, `PUT /api/gallery/{item_id}/favorite`: manage saved Gallery records and backend-owned media. Gallery listing supports picker-oriented `kind`, `search`, `accepted_extensions`, `accepted_mime_types`, `limit`, and `cursor` filters. `GET /api/gallery/{item_id}/image` remains a compatibility alias for older History links.
 - `GET /api/jobs/{job_id}/gallery`, `POST /api/jobs/{job_id}/gallery/{control_id}`, `POST /api/jobs/{job_id}/gallery/{control_id}/cancel`: read per-output Gallery save state, manually save a declared completed output, or cancel an active background copy.
 
 ## Code Map
