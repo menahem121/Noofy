@@ -646,6 +646,9 @@ export interface DashboardAssetMetadata {
   width?: number;
   height?: number;
   fps?: number;
+  has_mask?: boolean;
+  source_asset_id?: string;
+  source_gallery_item_id?: string;
 }
 
 // ─── Workflow functions ───────────────────────────────────────────────────────
@@ -862,6 +865,36 @@ export async function uploadDashboardAsset(
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(
     `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/image`,
+    { method: "POST", headers, body: formData },
+  );
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  return response.json() as Promise<DashboardAssetUploadResponse>;
+}
+
+export async function copyGalleryImageToDashboardAsset(
+  workflowId: string,
+  inputId: string,
+  galleryItemId: string,
+): Promise<DashboardAssetUploadResponse> {
+  return postJson<DashboardAssetUploadResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/assets/image/from-gallery`,
+    { input_id: inputId, gallery_item_id: galleryItemId },
+  );
+}
+
+export async function uploadDashboardImageMaskAsset(
+  workflowId: string,
+  sourceAssetId: string,
+  mask: Blob,
+): Promise<DashboardAssetUploadResponse> {
+  const formData = new FormData();
+  formData.append("source_asset_id", sourceAssetId);
+  formData.append("mask", mask, "mask.png");
+  const token = getApiToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/assets/image-mask`,
     { method: "POST", headers, body: formData },
   );
   if (!response.ok) throw new Error(await apiErrorMessage(response));

@@ -110,6 +110,8 @@ interface CanvasDashboardViewProps {
   exportReview?: WorkflowExportReviewModel;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -154,6 +156,8 @@ export function CanvasDashboardView({
   exportReview,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -689,6 +693,8 @@ export function CanvasDashboardView({
                 gallerySaveByControlId={gallerySaveByControlId}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+                onImageMaskApply={onImageMaskApply}
                 onAudioUpload={onAudioUpload}
                 onVideoUpload={onVideoUpload}
                 onFileUpload={onFileUpload}
@@ -772,6 +778,8 @@ function CanvasWidgetCell({
   gallerySaveByControlId,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -800,6 +808,8 @@ function CanvasWidgetCell({
   gallerySaveByControlId?: Record<string, GallerySaveRequest>;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -873,6 +883,8 @@ function CanvasWidgetCell({
             disabled={isEditingLayout}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+            onImageMaskApply={onImageMaskApply}
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
@@ -912,6 +924,8 @@ function CanvasWidgetCell({
             disabled={isEditingLayout}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+            onImageMaskApply={onImageMaskApply}
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
@@ -941,6 +955,8 @@ function GroupedCanvasControls({
   disabled,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -965,6 +981,8 @@ function GroupedCanvasControls({
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -1027,6 +1045,8 @@ function GroupedCanvasControls({
                 disabled={disabled}
                 onChange={onChange}
                 onImageUpload={onImageUpload}
+                onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+                onImageMaskApply={onImageMaskApply}
                 onAudioUpload={onAudioUpload}
                 onVideoUpload={onVideoUpload}
                 onFileUpload={onFileUpload}
@@ -1690,6 +1710,8 @@ function InputWidgetContent({
   disabled,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -1702,6 +1724,8 @@ function InputWidgetContent({
   disabled: boolean;
   onChange: (inputId: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -1724,6 +1748,8 @@ function InputWidgetContent({
       loraBrowser={loraBrowserFor?.(control, input)}
       onChange={(value) => onChange(input.id, value)}
       onImageUpload={(file) => onImageUpload(input.id, file)}
+      onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+      onImageMaskApply={onImageMaskApply}
       onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
       onVideoUpload={(file, onProgress, signal) => onVideoUpload(input.id, file, onProgress, signal)}
       onFileUpload={onFileUpload}

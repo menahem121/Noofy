@@ -4,11 +4,13 @@ import {
   useState,
   type CSSProperties,
   type ChangeEvent,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Box, DownloadCloud, File as FileIcon, FileAudio, ImagePlus, RefreshCw, Trash2, Video, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Box, Brush, DownloadCloud, Eraser, File as FileIcon, FileAudio, ImagePlus, RefreshCw, RotateCcw, Save, Trash2, Video, X } from "lucide-react";
 
 import {
   dashboardAssetMediaUrl,
@@ -45,6 +47,8 @@ interface DashboardInputControlProps {
   loraBrowser?: LoraBrowserControlProps;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
+  onGalleryImageMaskPrepare?: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply?: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload?: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload?: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -61,6 +65,8 @@ export function DashboardInputControl({
   loraBrowser,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload = async () => undefined,
   onVideoUpload = async () => undefined,
   onFileUpload = async () => undefined,
@@ -75,7 +81,7 @@ export function DashboardInputControl({
       return (
         <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
           {description ? <small>{description}</small> : null}
-          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
         </label>
       );
     }
@@ -84,7 +90,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -92,14 +98,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}</>;
 }
 
 function renderControl(
@@ -111,6 +117,8 @@ function renderControl(
   variant: DashboardInputControlVariant,
   onChange: (value: unknown) => void,
   onImageUpload: (file: File) => Promise<void>,
+  onGalleryImageMaskPrepare: ((inputId: string, galleryItemId: string) => Promise<string>) | undefined,
+  onImageMaskApply: ((sourceAssetId: string, mask: Blob) => Promise<string>) | undefined,
   onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onVideoUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
@@ -200,12 +208,15 @@ function renderControl(
       return (
         <AssetImageInput
           value={value}
+          inputId={input.id}
           disabled={disabled}
           variant={variant}
           galleryEnabled
           validation={validation}
           onChange={onChange}
           onImageUpload={onImageUpload}
+          onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+          onImageMaskApply={onImageMaskApply}
         />
       );
 
@@ -213,12 +224,15 @@ function renderControl(
       return (
         <AssetImageInput
           value={value}
+          inputId={input.id}
           disabled={disabled}
           variant={variant}
           galleryEnabled={false}
           validation={validation}
           onChange={onChange}
           onImageUpload={onImageUpload}
+          onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+          onImageMaskApply={onImageMaskApply}
         />
       );
 
@@ -648,15 +662,25 @@ function pickerAcceptedMimeTypes(validation: Record<string, unknown>): string[] 
 
 function GallerySelectedActions({
   disabled,
+  masking = false,
+  onMask,
   onReplace,
   onRemove,
 }: {
   disabled: boolean;
+  masking?: boolean;
+  onMask?: () => void;
   onReplace: () => void;
   onRemove: () => void;
 }) {
   return (
     <div className="dashboard-media-actions">
+      {onMask ? (
+        <button className="secondary-button secondary-button--small" type="button" disabled={disabled || masking} onClick={onMask}>
+          <Brush size={14} aria-hidden="true" />
+          {masking ? "Opening" : "Mask"}
+        </button>
+      ) : null}
       <button className="secondary-button secondary-button--small" type="button" disabled={disabled} onClick={onReplace}>
         <RefreshCw size={14} aria-hidden="true" />
         Replace
@@ -669,7 +693,17 @@ function GallerySelectedActions({
   );
 }
 
+interface ImageMaskEditorState {
+  sourceAssetId: string;
+  sourceUrl: string;
+  maskUrl: string | null;
+  filename: string;
+  initializeFromAlpha: boolean;
+  revokeUrls: string[];
+}
+
 function AssetImageInput({
+  inputId,
   value,
   disabled,
   variant,
@@ -677,7 +711,10 @@ function AssetImageInput({
   validation,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
 }: {
+  inputId: string;
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
@@ -685,16 +722,33 @@ function AssetImageInput({
   validation: Record<string, unknown>;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
+  onGalleryImageMaskPrepare?: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply?: (sourceAssetId: string, mask: Blob) => Promise<string>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [originalFilename, setOriginalFilename] = useState<string | null>(null);
+  const [assetMetadata, setAssetMetadata] = useState<DashboardAssetMetadata | null>(null);
+  const [maskEditor, setMaskEditor] = useState<ImageMaskEditorState | null>(null);
+  const [maskOpening, setMaskOpening] = useState(false);
+  const [maskSaving, setMaskSaving] = useState(false);
+  const [maskError, setMaskError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const assetId = isUploadedAssetValue(value) ? value : null;
-  const galleryReference = galleryEnabled && isGalleryMediaReference(value) && value.kind === "image" ? value : null;
+  const galleryReference = isGalleryMediaReference(value) && value.kind === "image" ? value : null;
   const hasSelection = Boolean(assetId || galleryReference);
+
+  function closeMaskEditor() {
+    setMaskEditor(null);
+    setMaskError(null);
+  }
+
+  useEffect(() => {
+    return () => {
+      maskEditor?.revokeUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [maskEditor]);
 
   useEffect(() => {
     setBlobUrl((prev) => {
@@ -735,7 +789,7 @@ function AssetImageInput({
 
   useEffect(() => {
     if (!assetId) {
-      setOriginalFilename(null);
+      setAssetMetadata(null);
       setMissing(false);
       return;
     }
@@ -744,11 +798,11 @@ function AssetImageInput({
     setMissing(false);
     fetchAssetMetadata(assetId)
       .then((metadata) => {
-        if (!canceled) setOriginalFilename(metadata.original_filename);
+        if (!canceled) setAssetMetadata(metadata);
       })
       .catch(() => {
         if (!canceled) {
-          setOriginalFilename(null);
+          setAssetMetadata(null);
         }
       });
 
@@ -771,7 +825,7 @@ function AssetImageInput({
     if (!galleryEnabled) openFilePicker();
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
@@ -788,9 +842,72 @@ function AssetImageInput({
   function removeImage() {
     if (disabled) return;
     onChange(null);
-    setOriginalFilename(null);
+    setAssetMetadata(null);
     setMissing(false);
     setReplaceChoiceOpen(false);
+    closeMaskEditor();
+  }
+
+  async function openMaskEditor() {
+    if (disabled || maskOpening || !onImageMaskApply) return;
+    setMaskOpening(true);
+    setMaskError(null);
+    try {
+      if (galleryReference) {
+        if (!onGalleryImageMaskPrepare) return;
+        const stagedAssetId = await onGalleryImageMaskPrepare(inputId, galleryReference.gallery_item_id);
+        const [metadata, sourceUrl] = await Promise.all([
+          fetchAssetMetadata(stagedAssetId),
+          fetchAssetBlobUrl(stagedAssetId),
+        ]);
+        setAssetMetadata(metadata);
+        setMaskEditor({
+          sourceAssetId: stagedAssetId,
+          sourceUrl,
+          maskUrl: null,
+          filename: galleryReference.filename ?? metadata.original_filename ?? stagedAssetId,
+          initializeFromAlpha: false,
+          revokeUrls: [sourceUrl],
+        });
+        return;
+      }
+
+      if (!assetId) return;
+      const metadata = assetMetadata ?? await fetchAssetMetadata(assetId);
+      const isMaskedAsset = Boolean(metadata.has_mask && metadata.source_asset_id);
+      const sourceAssetId = isMaskedAsset ? String(metadata.source_asset_id) : assetId;
+      const sourceUrl = sourceAssetId === assetId && blobUrl ? blobUrl : await fetchAssetBlobUrl(sourceAssetId);
+      const currentMaskUrl = isMaskedAsset ? blobUrl ?? await fetchAssetBlobUrl(assetId) : null;
+      const revokeUrls = [sourceUrl, currentMaskUrl].filter((url): url is string => Boolean(url && url !== blobUrl));
+      setAssetMetadata(metadata);
+      setMaskEditor({
+        sourceAssetId,
+        sourceUrl,
+        maskUrl: currentMaskUrl,
+        filename: metadata.original_filename ?? assetId,
+        initializeFromAlpha: isMaskedAsset,
+        revokeUrls,
+      });
+    } catch (err) {
+      setMaskError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMaskOpening(false);
+    }
+  }
+
+  async function applyMask(mask: Blob) {
+    if (!maskEditor || !onImageMaskApply) return;
+    setMaskSaving(true);
+    setMaskError(null);
+    try {
+      const maskedAssetId = await onImageMaskApply(maskEditor.sourceAssetId, mask);
+      onChange(maskedAssetId);
+      closeMaskEditor();
+    } catch (err) {
+      setMaskError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMaskSaving(false);
+    }
   }
 
   const stateClass = missing
@@ -801,7 +918,10 @@ function AssetImageInput({
         ? "dashboard-image-input--loading"
         : "dashboard-image-input--empty";
   const galleryImageUrl = galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
-  const selectedFilename = galleryReference?.filename ?? originalFilename ?? assetId;
+  const selectedFilename = galleryReference?.filename ?? assetMetadata?.original_filename ?? assetId;
+  const assetMaskAvailable = Boolean(assetId && !missing && (blobUrl || assetMetadata));
+  const galleryMaskAvailable = Boolean(galleryReference && onGalleryImageMaskPrepare);
+  const maskAvailable = Boolean(onImageMaskApply && (assetMaskAvailable || galleryMaskAvailable));
 
   return (
     <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`}>
@@ -872,7 +992,15 @@ function AssetImageInput({
           onGallery={() => setGalleryOpen(true)}
         />
       )}
-      {hasSelection ? <GallerySelectedActions disabled={disabled} onReplace={() => (galleryEnabled ? setReplaceChoiceOpen((current) => !current) : openFilePicker())} onRemove={removeImage} /> : null}
+      {hasSelection ? (
+        <GallerySelectedActions
+          disabled={disabled}
+          masking={maskOpening}
+          onMask={maskAvailable ? () => void openMaskEditor() : undefined}
+          onReplace={() => (galleryEnabled ? setReplaceChoiceOpen((current) => !current) : openFilePicker())}
+          onRemove={removeImage}
+        />
+      ) : null}
       {hasSelection && replaceChoiceOpen ? (
         <MediaSourceChooser
           icon={<ImagePlus size={22} aria-hidden="true" />}
@@ -884,8 +1012,321 @@ function AssetImageInput({
           onGallery={() => setGalleryOpen(true)}
         />
       ) : null}
+      {maskError && !maskEditor ? <small className="field-error">{maskError}</small> : null}
+      {maskEditor ? (
+        <ImageMaskEditorModal
+          sourceUrl={maskEditor.sourceUrl}
+          maskUrl={maskEditor.maskUrl}
+          filename={maskEditor.filename}
+          initializeFromAlpha={maskEditor.initializeFromAlpha}
+          saving={maskSaving}
+          error={maskError}
+          onApply={applyMask}
+          onClose={closeMaskEditor}
+        />
+      ) : null}
     </div>
   );
+}
+
+function ImageMaskEditorModal({
+  sourceUrl,
+  maskUrl,
+  filename,
+  initializeFromAlpha,
+  saving,
+  error,
+  onApply,
+  onClose,
+}: {
+  sourceUrl: string;
+  maskUrl: string | null;
+  filename: string;
+  initializeFromAlpha: boolean;
+  saving: boolean;
+  error: string | null;
+  onApply: (mask: Blob) => Promise<void>;
+  onClose: () => void;
+}) {
+  const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const initialMaskRef = useRef<ImageData | null>(null);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const drawingRef = useRef(false);
+  const [tool, setTool] = useState<"brush" | "eraser">("brush");
+  const [strokeSize, setStrokeSize] = useState(36);
+  const [opacity, setOpacity] = useState(1);
+  const [ready, setReady] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let canceled = false;
+    setReady(false);
+    setLocalError(null);
+
+    async function loadCanvases() {
+      const sourceImage = await loadCanvasImage(sourceUrl);
+      if (canceled) return;
+      const width = sourceImage.naturalWidth || sourceImage.width;
+      const height = sourceImage.naturalHeight || sourceImage.height;
+      const baseCanvas = baseCanvasRef.current;
+      const maskCanvas = maskCanvasRef.current;
+      const baseContext = baseCanvas?.getContext("2d");
+      const maskContext = maskCanvas?.getContext("2d");
+      if (!baseCanvas || !maskCanvas || !baseContext || !maskContext || width <= 0 || height <= 0) {
+        throw new Error("Mask editor could not open this image.");
+      }
+
+      baseCanvas.width = width;
+      baseCanvas.height = height;
+      maskCanvas.width = width;
+      maskCanvas.height = height;
+      baseContext.clearRect(0, 0, width, height);
+      baseContext.drawImage(sourceImage, 0, 0, width, height);
+      maskContext.clearRect(0, 0, width, height);
+
+      if (initializeFromAlpha && maskUrl) {
+        const existingMaskImage = await loadCanvasImage(maskUrl);
+        if (canceled) return;
+        const maskWidth = existingMaskImage.naturalWidth || existingMaskImage.width;
+        const maskHeight = existingMaskImage.naturalHeight || existingMaskImage.height;
+        if (maskWidth !== width || maskHeight !== height) {
+          throw new Error("The saved mask does not match this image size.");
+        }
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const tempContext = tempCanvas.getContext("2d", { willReadFrequently: true });
+        if (!tempContext) throw new Error("Mask editor could not read the current mask.");
+        tempContext.drawImage(existingMaskImage, 0, 0, width, height);
+        const imageData = tempContext.getImageData(0, 0, width, height);
+        for (let index = 0; index < imageData.data.length; index += 4) {
+          const storedAlpha = imageData.data[index + 3];
+          imageData.data[index] = 139;
+          imageData.data[index + 1] = 92;
+          imageData.data[index + 2] = 246;
+          imageData.data[index + 3] = 255 - storedAlpha;
+        }
+        maskContext.putImageData(imageData, 0, 0);
+      }
+
+      initialMaskRef.current = maskContext.getImageData(0, 0, width, height);
+      setReady(true);
+    }
+
+    loadCanvases().catch((err) => {
+      if (!canceled) setLocalError(err instanceof Error ? err.message : String(err));
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, [initializeFromAlpha, maskUrl, sourceUrl]);
+
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !saving) onClose();
+    }
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [onClose, saving]);
+
+  function pointFromEvent(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  }
+
+  function drawStroke(from: { x: number; y: number }, to: { x: number; y: number }) {
+    const canvas = maskCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.save();
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = strokeSize;
+    if (tool === "eraser") {
+      context.globalCompositeOperation = "destination-out";
+      context.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
+      context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
+    } else {
+      context.globalCompositeOperation = "source-over";
+      context.strokeStyle = `rgba(139, 92, 246, ${opacity})`;
+      context.fillStyle = `rgba(139, 92, 246, ${opacity})`;
+    }
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+    context.beginPath();
+    context.arc(to.x, to.y, strokeSize / 2, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!ready || saving) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = pointFromEvent(event);
+    if (!point) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    lastPointRef.current = point;
+    drawStroke(point, point);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current || !ready || saving) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextPoint = pointFromEvent(event);
+    const lastPoint = lastPointRef.current;
+    if (!nextPoint || !lastPoint) return;
+    drawStroke(lastPoint, nextPoint);
+    lastPointRef.current = nextPoint;
+  }
+
+  function stopDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    drawingRef.current = false;
+    lastPointRef.current = null;
+  }
+
+  function clearMask() {
+    const canvas = maskCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function resetMask() {
+    const canvas = maskCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    const initialMask = initialMaskRef.current;
+    if (!canvas || !context || !initialMask) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.putImageData(initialMask, 0, 0);
+  }
+
+  async function saveMask() {
+    const canvas = maskCanvasRef.current;
+    if (!canvas || !ready) return;
+    const blob = await canvasToPngBlob(canvas);
+    await onApply(blob);
+  }
+
+  return createPortal(
+    <div className="modal-backdrop mask-editor-backdrop" role="dialog" aria-modal="true" aria-labelledby="mask-editor-title">
+      <section className="mask-editor">
+        <header className="mask-editor__header">
+          <div>
+            <p className="eyebrow">Input image</p>
+            <h2 id="mask-editor-title">Mask</h2>
+            <p>{filename}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close" disabled={saving} onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="mask-editor__body">
+          <div className="mask-editor__stage" aria-busy={!ready}>
+            <canvas className="mask-editor__canvas mask-editor__canvas--image" ref={baseCanvasRef} />
+            <canvas
+              className="mask-editor__canvas mask-editor__canvas--mask"
+              ref={maskCanvasRef}
+              aria-label="Mask drawing area"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={stopDrawing}
+              onPointerCancel={stopDrawing}
+              onPointerLeave={stopDrawing}
+            />
+            {!ready ? <span className="mask-editor__loading">Loading image...</span> : null}
+          </div>
+
+          <aside className="mask-editor__tools">
+            <div className="mask-editor__tool-buttons" role="group" aria-label="Mask tool">
+              <button className={`secondary-button secondary-button--small${tool === "brush" ? " is-active" : ""}`} type="button" disabled={!ready || saving} onClick={() => setTool("brush")}>
+                <Brush size={14} aria-hidden="true" />
+                Brush
+              </button>
+              <button className={`secondary-button secondary-button--small${tool === "eraser" ? " is-active" : ""}`} type="button" disabled={!ready || saving} onClick={() => setTool("eraser")}>
+                <Eraser size={14} aria-hidden="true" />
+                Eraser
+              </button>
+            </div>
+
+            <label className="mask-editor__slider">
+              <span>Stroke size</span>
+              <input type="range" min={2} max={160} step={1} value={strokeSize} disabled={!ready || saving} onChange={(event) => setStrokeSize(Number(event.target.value))} />
+              <output>{strokeSize}px</output>
+            </label>
+
+            <label className="mask-editor__slider">
+              <span>Mask strength</span>
+              <input type="range" min={0.05} max={1} step={0.05} value={opacity} disabled={!ready || saving} onChange={(event) => setOpacity(Number(event.target.value))} />
+              <output>{Math.round(opacity * 100)}%</output>
+            </label>
+
+            <div className="mask-editor__tool-buttons">
+              <button className="secondary-button secondary-button--small" type="button" disabled={!ready || saving} onClick={clearMask}>
+                Clear mask
+              </button>
+              <button className="secondary-button secondary-button--small" type="button" disabled={!ready || saving} onClick={resetMask}>
+                <RotateCcw size={14} aria-hidden="true" />
+                Reset mask
+              </button>
+            </div>
+
+            {localError || error ? <small className="field-error">{localError ?? error}</small> : null}
+          </aside>
+        </div>
+
+        <footer className="mask-editor__footer">
+          <button className="secondary-button" type="button" disabled={saving} onClick={onClose}>
+            Close
+          </button>
+          <button className="primary-button" type="button" disabled={!ready || saving || Boolean(localError)} onClick={() => void saveMask()}>
+            <Save size={16} aria-hidden="true" />
+            {saving ? "Saving" : "Apply mask"}
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function loadCanvasImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Image could not be loaded."));
+    image.src = url;
+  });
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Mask image could not be saved."));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
 }
 
 function AssetAudioInput({

@@ -10,6 +10,134 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+function mockMaskEditorCanvas() {
+  const calls: string[] = [];
+  const contexts = new WeakMap<HTMLCanvasElement, any>();
+  vi.stubGlobal("Image", class {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    naturalWidth = 2;
+    naturalHeight = 1;
+    width = 2;
+    height = 1;
+
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 50,
+    width: 100,
+    height: 50,
+    toJSON: () => ({}),
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "hasPointerCapture", {
+    configurable: true,
+    value: vi.fn(() => true),
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "setPointerCapture", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "releasePointerCapture", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function getContextMock(this: HTMLCanvasElement) {
+    const existing = contexts.get(this);
+    if (existing) return existing;
+    const context: any = {
+      lastStyle: "",
+      clearRect: vi.fn(() => calls.push("clear")),
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+        colorSpace: "srgb",
+      })),
+      putImageData: vi.fn(() => calls.push("reset")),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(() => calls.push(`stroke:${context.lastStyle}`)),
+      arc: vi.fn(),
+      fill: vi.fn(() => calls.push(`fill:${context.lastStyle}`)),
+      set strokeStyle(value: string) {
+        context.lastStyle = value;
+      },
+      get strokeStyle() {
+        return context.lastStyle;
+      },
+      set fillStyle(value: string) {
+        context.lastStyle = value;
+      },
+      get fillStyle() {
+        return context.lastStyle;
+      },
+      lineCap: "round",
+      lineJoin: "round",
+      lineWidth: 1,
+      globalCompositeOperation: "source-over",
+    };
+    contexts.set(this, context);
+    return context;
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function toBlobMock(this: HTMLCanvasElement, callback, type) {
+    const context = contexts.get(this);
+    callback(new Blob([context?.lastStyle ?? ""], { type: type ?? "image/png" }));
+  });
+  return { calls };
+}
+
+function renderEditableImageWithMask({
+  onImageMaskApply,
+  onChange,
+}: {
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
+  onChange: (value: unknown) => void;
+}) {
+  mockMaskEditorCanvas();
+  const fetchMock = vi.mocked(fetch);
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/metadata")) {
+      return Promise.resolve(jsonResponse({
+        asset_id: "12345678-1234-1234-1234-123456789abc.png",
+        original_filename: "reference.png",
+        content_type: "image/png",
+        kind: "image",
+      }));
+    }
+    return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+  });
+
+  return render(
+    <DashboardInputControl
+      control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+      input={{
+        id: "image",
+        label: "Input image",
+        control: "load_image",
+        binding: { node_id: "10", input_name: "image" },
+        default: null,
+        validation: {},
+      }}
+      value="12345678-1234-1234-1234-123456789abc.png"
+      onChange={onChange}
+      onImageUpload={vi.fn()}
+      onImageMaskApply={onImageMaskApply}
+    />,
+  );
+}
+
 describe("DashboardInputControl", () => {
   const fetchMock = vi.fn();
   const createObjectUrlMock = vi.fn(() => "blob:noofy-upload-preview");
@@ -28,6 +156,7 @@ describe("DashboardInputControl", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     createObjectUrlMock.mockClear();
@@ -164,6 +293,159 @@ describe("DashboardInputControl", () => {
     });
   });
 
+  it.each(["load_image", "load_image_mask"] as const)("shows Mask for editable %s assets", async (controlType) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(jsonResponse({
+          asset_id: "12345678-1234-1234-1234-123456789abc.png",
+          original_filename: "reference.png",
+          content_type: "image/png",
+          kind: "image",
+        }));
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: controlType, label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: controlType,
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onImageMaskApply={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Mask" })).toBeInTheDocument();
+  });
+
+  it.each(["load_image", "load_image_mask"] as const)("copies a selected Gallery image before opening the mask editor for %s", async (controlType) => {
+    mockMaskEditorCanvas();
+    const prepareGalleryMask = vi.fn().mockResolvedValue("22222222-2222-2222-2222-222222222222.png");
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(jsonResponse({
+          asset_id: "22222222-2222-2222-2222-222222222222.png",
+          original_filename: "portrait.png",
+          content_type: "image/png",
+          kind: "image",
+        }));
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: controlType, label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: controlType,
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value={{
+          source: "gallery",
+          gallery_item_id: "gallery-image-1",
+          kind: "image",
+          filename: "portrait.png",
+        }}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onGalleryImageMaskPrepare={prepareGalleryMask}
+        onImageMaskApply={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mask" }));
+
+    await waitFor(() => {
+      expect(prepareGalleryMask).toHaveBeenCalledWith("image", "gallery-image-1");
+      expect(screen.getByRole("dialog", { name: "Mask" })).toBeInTheDocument();
+    });
+  });
+
+  it("applies soft mask opacity and updates the input value to the masked asset", async () => {
+    const onChange = vi.fn();
+    const onImageMaskApply = vi.fn(async (_sourceAssetId: string, mask: Blob) => {
+      expect(await mask.text()).toContain("0.5");
+      return "33333333-3333-3333-3333-333333333333.png";
+    });
+    const { container } = renderEditableImageWithMask({
+      onImageMaskApply,
+      onChange,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
+    await screen.findByRole("dialog", { name: "Mask" });
+    fireEvent.change(screen.getByLabelText("Mask strength"), { target: { value: "0.5" } });
+    const maskCanvas = container.ownerDocument.querySelector(".mask-editor__canvas--mask") as HTMLCanvasElement;
+    fireEvent.pointerDown(maskCanvas, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerUp(maskCanvas, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Apply mask" }));
+
+    await waitFor(() => {
+      expect(onImageMaskApply).toHaveBeenCalledWith("12345678-1234-1234-1234-123456789abc.png", expect.any(Blob));
+      expect(onChange).toHaveBeenCalledWith("33333333-3333-3333-3333-333333333333.png");
+      expect(screen.queryByRole("dialog", { name: "Mask" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("clears and resets the mask canvas", async () => {
+    const canvasMock = mockMaskEditorCanvas();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(jsonResponse({
+          asset_id: "12345678-1234-1234-1234-123456789abc.png",
+          original_filename: "reference.png",
+          content_type: "image/png",
+          kind: "image",
+          has_mask: true,
+          source_asset_id: "11111111-1111-1111-1111-111111111111.png",
+        }));
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onImageMaskApply={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
+    await screen.findByRole("dialog", { name: "Mask" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear mask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset mask" }));
+
+    expect(canvasMock.calls).toContain("clear");
+    expect(canvasMock.calls).toContain("reset");
+  });
+
   it("shows a recoverable missing-asset state only when a selected asset cannot load", async () => {
     fetchMock.mockRejectedValue(new Error("missing asset"));
 
@@ -181,6 +463,7 @@ describe("DashboardInputControl", () => {
         value="12345678-1234-1234-1234-123456789abc.png"
         onChange={vi.fn()}
         onImageUpload={vi.fn()}
+        onImageMaskApply={vi.fn()}
       />,
     );
 
@@ -188,6 +471,7 @@ describe("DashboardInputControl", () => {
       expect(screen.getByText("Image could not be loaded")).toBeInTheDocument();
       expect(screen.getByText("Upload from computer")).toBeInTheDocument();
       expect(screen.queryByText(/Image not found/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Mask" })).not.toBeInTheDocument();
     });
   });
 

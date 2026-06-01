@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import (
     DashboardAssetServiceDep,
     DashboardAuthoringServiceDep,
+    GalleryStoreDep,
     RunOrchestratorDep,
     RunJobServiceDep,
     UserStateServiceDep,
@@ -32,6 +33,7 @@ from app.workflows.authoring import DashboardAuthoringError
 from app.workflows.exporter import WorkflowExportError
 from app.workflows.importer import NoofyImportError
 from app.workflows.library import WorkflowMetadataUpdate
+from app.workflows.media_values import media_metadata_matches_input
 from app.workflows.user_state import WorkflowUserState
 
 router = APIRouter()
@@ -44,6 +46,11 @@ class WorkflowExportRequest(BaseModel):
 
 class WorkflowImportCommitRequest(BaseModel):
     duplicate_action: str | None = Field(default=None)
+
+
+class GalleryImageAssetCopyRequest(BaseModel):
+    input_id: str
+    gallery_item_id: str
 
 
 # ─── Workflow library ────────────────────────────────────────────────────────
@@ -630,6 +637,74 @@ async def upload_dashboard_asset(
     original_filename = image.filename or "upload"
     try:
         return asset_service.store(data, content_type, original_filename)
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/assets/image/from-gallery")
+async def copy_gallery_image_to_dashboard_assets(
+    workflow_id: str,
+    request: GalleryImageAssetCopyRequest,
+    asset_service: DashboardAssetServiceDep,
+    library: WorkflowLibraryServiceDep,
+    gallery_store: GalleryStoreDep,
+):
+    try:
+        package = library.workflow_loader.get_package(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    workflow_input = next((candidate for candidate in package.inputs if candidate.id == request.input_id), None)
+    if workflow_input is None:
+        raise HTTPException(status_code=422, detail=f"Workflow input '{request.input_id}' does not exist.")
+    if workflow_input.control not in {"load_image", "load_image_mask"}:
+        raise HTTPException(status_code=422, detail=f"Workflow input '{request.input_id}' is not an image input.")
+
+    item = gallery_store.get_item(request.gallery_item_id)
+    source_path = gallery_store.content_path(request.gallery_item_id)
+    if item is None or source_path is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found.")
+    if item.kind != "image" or item.file_state != "available":
+        raise HTTPException(status_code=422, detail="The selected Gallery item is not an available image.")
+    if not media_metadata_matches_input(
+        workflow_input,
+        kind=item.kind,
+        extension=item.extension,
+        mime_type=item.mime_type,
+    ):
+        raise HTTPException(status_code=422, detail="The selected Gallery item type is not supported by this input.")
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="Gallery item file is missing.")
+
+    try:
+        return asset_service.store_image_from_file(
+            source_path,
+            item.mime_type,
+            item.filename,
+            source_gallery_item_id=item.id,
+        )
+    except AssetUploadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/assets/image-mask")
+async def upload_dashboard_image_mask_asset(
+    workflow_id: str,
+    asset_service: DashboardAssetServiceDep,
+    source_asset_id: str = Form(...),
+    mask: UploadFile = File(...),
+):
+    data = await mask.read()
+    content_type = mask.content_type or "application/octet-stream"
+    original_filename = mask.filename or "mask.png"
+    try:
+        return asset_service.store_masked_image(
+            source_asset_id=source_asset_id,
+            mask_data=data,
+            mask_content_type=content_type,
+            original_filename=original_filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AssetUploadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

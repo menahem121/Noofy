@@ -28,9 +28,9 @@ const VIOLATION_PATTERNS = [
   },
   {
     label: "fetch() to ComfyUI-internal endpoint bypassing /api/",
-    // ComfyUI-only paths: /prompt /queue /history /object_info /system_stats /upload/image
+    // ComfyUI-only paths: /prompt /queue /history /object_info /system_stats /upload/image /upload/mask
     // Flag only when used directly in fetch(), not prefixed by /api/
-    pattern: /fetch\s*\(\s*[`"'](?!\/api\/)(\/prompt|\/queue|\/history|\/object_info|\/system_stats|\/upload\/image)\b/,
+    pattern: /fetch\s*\(\s*[`"'](?!\/api\/)(\/prompt|\/queue|\/history|\/object_info|\/system_stats|\/upload\/image|\/upload\/mask)\b/,
   },
 ];
 

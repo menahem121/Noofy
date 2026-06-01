@@ -19,6 +19,7 @@ import {
 import {
   cancelJob,
   cancelModelDownload,
+  copyGalleryImageToDashboardAsset,
   createJobEventsUrl,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
@@ -48,6 +49,7 @@ import {
   uploadDashboardAsset,
   uploadDashboardAudioAsset,
   uploadDashboardFileAsset,
+  uploadDashboardImageMaskAsset,
   uploadDashboardVideoAsset,
   uploadDashboardThreeDAsset,
   validateWorkflow,
@@ -734,6 +736,17 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     }
   }
 
+  async function handleGalleryImageMaskPrepare(inputId: string, galleryItemId: string) {
+    const { asset_id } = await copyGalleryImageToDashboardAsset(workflowId, inputId, galleryItemId);
+    setInputValue(inputId, asset_id);
+    return asset_id;
+  }
+
+  async function handleImageMaskApply(sourceAssetId: string, mask: Blob) {
+    const { asset_id } = await uploadDashboardImageMaskAsset(workflowId, sourceAssetId, mask);
+    return asset_id;
+  }
+
   async function handleAudioUpload(inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) {
     const { asset_id } = await uploadDashboardAudioAsset(workflowId, file, onProgress, signal);
     setInputValue(inputId, asset_id);
@@ -1343,6 +1356,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
           exportReview={exportReview}
           onChange={(inputId, value) => setInputValue(inputId, value)}
           onImageUpload={handleImageUpload}
+          onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
+          onImageMaskApply={handleImageMaskApply}
           onAudioUpload={handleAudioUpload}
           onVideoUpload={handleVideoUpload}
           onFileUpload={handleFileUpload}
@@ -1405,6 +1420,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
               inputValues={inputValues}
               onChange={(id, value) => setInputValue(id, value)}
               onImageUpload={handleImageUpload}
+              onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
+              onImageMaskApply={handleImageMaskApply}
               onAudioUpload={handleAudioUpload}
               onVideoUpload={handleVideoUpload}
               onFileUpload={handleFileUpload}
@@ -1669,6 +1686,8 @@ function DashboardInputControls({
   inputValues,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -1680,6 +1699,8 @@ function DashboardInputControls({
   inputValues: Record<string, unknown>;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -1704,6 +1725,8 @@ function DashboardInputControls({
                     grouped
                     onChange={onChange}
                     onImageUpload={onImageUpload}
+                    onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+                    onImageMaskApply={onImageMaskApply}
                     onAudioUpload={onAudioUpload}
                     onVideoUpload={onVideoUpload}
                     onFileUpload={onFileUpload}
@@ -1723,6 +1746,8 @@ function DashboardInputControls({
             inputValues={inputValues}
             onChange={onChange}
             onImageUpload={onImageUpload}
+            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+            onImageMaskApply={onImageMaskApply}
             onAudioUpload={onAudioUpload}
             onVideoUpload={onVideoUpload}
             onFileUpload={onFileUpload}
@@ -1742,6 +1767,8 @@ function ClassicDashboardInputControl({
   grouped = false,
   onChange,
   onImageUpload,
+  onGalleryImageMaskPrepare,
+  onImageMaskApply,
   onAudioUpload,
   onVideoUpload,
   onFileUpload,
@@ -1754,6 +1781,8 @@ function ClassicDashboardInputControl({
   grouped?: boolean;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
+  onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
+  onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onAudioUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onVideoUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
@@ -1784,6 +1813,8 @@ function ClassicDashboardInputControl({
             loraBrowser={loraBrowserFor?.(control, input)}
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
+            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+            onImageMaskApply={onImageMaskApply}
             onAudioUpload={(file, onProgress, signal) => onAudioUpload(input.id, file, onProgress, signal)}
             onVideoUpload={(file, onProgress, signal) => onVideoUpload(input.id, file, onProgress, signal)}
             onFileUpload={onFileUpload}

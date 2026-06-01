@@ -108,6 +108,154 @@ class DashboardAssetService:
 
         return {"asset_id": asset_id, "original_filename": original_filename}
 
+    def store_image_from_file(
+        self,
+        source_path: Path,
+        content_type: str | None,
+        original_filename: str,
+        *,
+        source_gallery_item_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            data = source_path.read_bytes()
+        except OSError as exc:
+            raise AssetUploadError("Image file could not be read.") from exc
+
+        normalized_content_type = _normalized_image_content_type(content_type, original_filename)
+        metadata = self._validated_image_metadata(data, normalized_content_type)
+        ext = _safe_ext(metadata["content_type"])
+        asset_id = f"{uuid.uuid4()}{ext}"
+        asset_path = self._dir / asset_id
+        meta_path = self._dir / f"{asset_id}.meta.json"
+        record = {
+            "asset_id": asset_id,
+            "kind": "image",
+            "original_filename": _safe_original_filename(original_filename),
+            "content_type": metadata["content_type"],
+            "size": len(data),
+            "format": ext.removeprefix("."),
+            "width": metadata["width"],
+            "height": metadata["height"],
+        }
+        if source_gallery_item_id:
+            record["source_gallery_item_id"] = source_gallery_item_id
+
+        self._dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_bytes(asset_path, data)
+        _atomic_write_json(meta_path, record)
+        if self.log_store is not None:
+            self.log_store.add(
+                "info",
+                "Stored dashboard image asset",
+                "workflow.assets",
+                details={
+                    "asset_id": asset_id,
+                    "content_type": record["content_type"],
+                    "size": len(data),
+                    "source_gallery_item_id": source_gallery_item_id,
+                },
+            )
+        return record
+
+    def store_masked_image(
+        self,
+        *,
+        source_asset_id: str,
+        mask_data: bytes,
+        mask_content_type: str,
+        original_filename: str = "mask.png",
+    ) -> dict[str, Any]:
+        safe_source_id = _validate_asset_id(source_asset_id)
+        source_path = self.asset_path(safe_source_id)
+        if not source_path.exists():
+            raise AssetUploadError("Source image asset was not found.")
+
+        if len(mask_data) > MAX_ASSET_BYTES:
+            raise AssetUploadError("Mask exceeds the 25 MB size limit.")
+        if _normalized_image_content_type(mask_content_type, original_filename) != "image/png":
+            raise AssetUploadError("Mask must be a PNG image.")
+        if _detect_image_content_type(mask_data) != "image/png":
+            raise AssetUploadError("Mask content does not appear to be a PNG image.")
+
+        try:
+            with Image.open(source_path) as source_image:
+                source_rgba = source_image.convert("RGBA")
+            with Image.open(BytesIO(mask_data)) as mask_image:
+                mask_rgba = mask_image.convert("RGBA")
+        except (OSError, UnidentifiedImageError) as exc:
+            raise AssetUploadError("Source image or mask could not be opened.") from exc
+
+        if source_rgba.size != mask_rgba.size:
+            raise AssetUploadError("Mask dimensions must match the source image.")
+
+        mask_alpha = mask_rgba.getchannel("A")
+        output_alpha = mask_alpha.point(lambda value: 255 - value)
+        output_image = source_rgba.copy()
+        output_image.putalpha(output_alpha)
+
+        output = BytesIO()
+        output_image.save(output, format="PNG", compress_level=4)
+        data = output.getvalue()
+
+        source_metadata = self.metadata(safe_source_id)
+        root_source_id = source_metadata.get("source_asset_id")
+        if not isinstance(root_source_id, str) or not root_source_id.strip():
+            root_source_id = safe_source_id
+
+        record = {
+            "asset_id": f"{uuid.uuid4()}.png",
+            "kind": "image",
+            "original_filename": _masked_original_filename(source_metadata.get("original_filename"), safe_source_id),
+            "content_type": "image/png",
+            "size": len(data),
+            "format": "png",
+            "width": output_image.width,
+            "height": output_image.height,
+            "has_mask": True,
+            "source_asset_id": root_source_id,
+        }
+        source_gallery_item_id = source_metadata.get("source_gallery_item_id")
+        if isinstance(source_gallery_item_id, str) and source_gallery_item_id.strip():
+            record["source_gallery_item_id"] = source_gallery_item_id
+
+        self._dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_bytes(self._dir / record["asset_id"], data)
+        _atomic_write_json(self._dir / f"{record['asset_id']}.meta.json", record)
+        if self.log_store is not None:
+            self.log_store.add(
+                "info",
+                "Stored dashboard masked image asset",
+                "workflow.assets",
+                details={
+                    "asset_id": record["asset_id"],
+                    "source_asset_id": root_source_id,
+                    "source_gallery_item_id": record.get("source_gallery_item_id"),
+                    "width": output_image.width,
+                    "height": output_image.height,
+                    "size": len(data),
+                },
+            )
+        return record
+
+    def _validated_image_metadata(self, data: bytes, content_type: str) -> dict[str, Any]:
+        if len(data) > MAX_ASSET_BYTES:
+            raise AssetUploadError("File exceeds the 25 MB size limit.")
+        if content_type not in ALLOWED_MIME_TYPES:
+            raise AssetUploadError(f"File type '{content_type}' is not allowed.")
+        detected = _detect_image_content_type(data)
+        if detected is None:
+            raise AssetUploadError("File does not appear to be a valid image.")
+        if detected != content_type:
+            raise AssetUploadError(f"File content does not match '{content_type}'.")
+        try:
+            with Image.open(BytesIO(data)) as image:
+                image.verify()
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+        except (OSError, UnidentifiedImageError) as exc:
+            raise AssetUploadError("File does not appear to be a valid image.") from exc
+        return {"content_type": detected, "width": width, "height": height}
+
     def store_audio_stream(
         self,
         source: BinaryIO,
@@ -462,6 +610,22 @@ class DashboardAssetService:
                     metadata["format"] = raw["format"]
                 if isinstance(raw.get("extension"), str):
                     metadata["extension"] = raw["extension"]
+            elif raw.get("kind") == "image":
+                metadata["kind"] = "image"
+                if isinstance(raw.get("size"), int):
+                    metadata["size"] = raw["size"]
+                if isinstance(raw.get("format"), str):
+                    metadata["format"] = raw["format"]
+                if isinstance(raw.get("width"), int):
+                    metadata["width"] = raw["width"]
+                if isinstance(raw.get("height"), int):
+                    metadata["height"] = raw["height"]
+                if isinstance(raw.get("has_mask"), bool):
+                    metadata["has_mask"] = raw["has_mask"]
+                if isinstance(raw.get("source_asset_id"), str):
+                    metadata["source_asset_id"] = raw["source_asset_id"]
+                if isinstance(raw.get("source_gallery_item_id"), str):
+                    metadata["source_gallery_item_id"] = raw["source_gallery_item_id"]
         return metadata
 
     def asset_path(self, asset_id: str) -> Path:
@@ -488,6 +652,22 @@ def _safe_ext(content_type: str) -> str:
         "image/gif": ".gif",
     }
     return mapping.get(content_type, ".bin")
+
+
+def _normalized_image_content_type(content_type: str | None, original_filename: str) -> str:
+    normalized = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if normalized != "application/octet-stream":
+        return normalized
+    guessed, _ = mimetypes.guess_type(original_filename)
+    return (guessed or normalized).lower()
+
+
+def _masked_original_filename(original_filename: Any, fallback_asset_id: str) -> str:
+    raw = original_filename if isinstance(original_filename, str) and original_filename.strip() else fallback_asset_id
+    safe = _safe_original_filename(raw)
+    path = Path(safe)
+    stem = path.stem or "image"
+    return f"{stem}-mask.png"
 
 
 def _normalized_audio_content_type(content_type: str, original_filename: str) -> str:

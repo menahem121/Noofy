@@ -1,17 +1,21 @@
 """Tests for DashboardAssetService."""
 import json
 import struct
+import uuid
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import app.workflows.assets as assets_module
 from app.diagnostics import LogStore
+from app.gallery import CapturedGalleryOutput, GalleryStore
 from app.main import create_app
 from app.workflows.assets import AssetUploadError, DashboardAssetService
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import InputBinding, WorkflowInput, WorkflowMetadata, WorkflowPackage
 
 
 class FakeEngineService:
@@ -59,6 +63,14 @@ def _make_png(width: int = 1, height: int = 1) -> bytes:
         + chunk(b"IDAT", idat_data)
         + chunk(b"IEND", b"")
     )
+
+
+def _png_from_pixels(width: int, height: int, pixels: list[tuple[int, int, int, int]]) -> bytes:
+    image = Image.new("RGBA", (width, height))
+    image.putdata(pixels)
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 PNG_BYTES = _make_png()
@@ -147,6 +159,117 @@ def test_metadata_returns_original_filename(tmp_path: Path) -> None:
         "original_filename": "portrait.png",
         "content_type": "image/png",
     }
+
+
+def test_store_masked_image_inverts_alpha_and_preserves_rgb(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    source = svc.store(
+        _png_from_pixels(2, 1, [(10, 20, 30, 255), (40, 50, 60, 255)]),
+        "image/png",
+        "source.png",
+    )
+    mask = _png_from_pixels(2, 1, [(0, 0, 0, 255), (0, 0, 0, 0)])
+
+    result = svc.store_masked_image(
+        source_asset_id=source["asset_id"],
+        mask_data=mask,
+        mask_content_type="image/png",
+    )
+
+    with Image.open(svc.asset_path(result["asset_id"])) as image:
+        assert list(image.convert("RGBA").getdata()) == [(10, 20, 30, 0), (40, 50, 60, 255)]
+    metadata = svc.metadata(result["asset_id"])
+    assert metadata["has_mask"] is True
+    assert metadata["source_asset_id"] == source["asset_id"]
+
+
+def test_store_masked_image_blank_mask_outputs_opaque_alpha(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    source = svc.store(
+        _png_from_pixels(1, 1, [(12, 34, 56, 255)]),
+        "image/png",
+        "source.png",
+    )
+    blank_mask = _png_from_pixels(1, 1, [(0, 0, 0, 0)])
+
+    result = svc.store_masked_image(
+        source_asset_id=source["asset_id"],
+        mask_data=blank_mask,
+        mask_content_type="image/png",
+    )
+
+    with Image.open(svc.asset_path(result["asset_id"])) as image:
+        assert image.convert("RGBA").getpixel((0, 0)) == (12, 34, 56, 255)
+
+
+def test_store_masked_image_preserves_soft_mask_alpha(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    source = svc.store(
+        _png_from_pixels(1, 1, [(90, 80, 70, 255)]),
+        "image/png",
+        "source.png",
+    )
+    soft_mask = _png_from_pixels(1, 1, [(0, 0, 0, 128)])
+
+    result = svc.store_masked_image(
+        source_asset_id=source["asset_id"],
+        mask_data=soft_mask,
+        mask_content_type="image/png",
+    )
+
+    with Image.open(svc.asset_path(result["asset_id"])) as image:
+        assert image.convert("RGBA").getpixel((0, 0)) == (90, 80, 70, 127)
+
+
+def test_store_masked_image_ignores_source_transparency_without_submitted_mask(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    source = svc.store(
+        _png_from_pixels(1, 1, [(5, 6, 7, 0)]),
+        "image/png",
+        "transparent-source.png",
+    )
+    blank_mask = _png_from_pixels(1, 1, [(0, 0, 0, 0)])
+
+    result = svc.store_masked_image(
+        source_asset_id=source["asset_id"],
+        mask_data=blank_mask,
+        mask_content_type="image/png",
+    )
+
+    with Image.open(svc.asset_path(result["asset_id"])) as image:
+        assert image.convert("RGBA").getpixel((0, 0)) == (5, 6, 7, 255)
+
+
+def test_store_masked_image_rejects_dimension_mismatch(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    source = svc.store(
+        _png_from_pixels(2, 1, [(1, 2, 3, 255), (4, 5, 6, 255)]),
+        "image/png",
+        "source.png",
+    )
+    wrong_size_mask = _png_from_pixels(1, 1, [(0, 0, 0, 255)])
+
+    with pytest.raises(AssetUploadError, match="dimensions"):
+        svc.store_masked_image(
+            source_asset_id=source["asset_id"],
+            mask_data=wrong_size_mask,
+            mask_content_type="image/png",
+        )
+
+
+def test_store_masked_image_rejects_missing_or_invalid_source_asset(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    mask = _png_from_pixels(1, 1, [(0, 0, 0, 255)])
+
+    with pytest.raises(ValueError, match="Invalid asset_id"):
+        svc.store_masked_image(source_asset_id="../source.png", mask_data=mask, mask_content_type="image/png")
+
+    with pytest.raises(AssetUploadError, match="not found"):
+        svc.store_masked_image(
+            source_asset_id=f"{uuid.uuid4()}.png",
+            mask_data=mask,
+            mask_content_type="image/png",
+        )
 
 
 def test_store_audio_stream_returns_metadata(tmp_path: Path) -> None:
@@ -489,6 +612,61 @@ def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -
     assert (tmp_path / "assets" / body["asset_id"]).exists()
 
 
+@pytest.mark.parametrize("control", ["load_image", "load_image_mask"])
+def test_copy_gallery_image_to_dashboard_asset_route_stages_asset_before_mask_editing(tmp_path: Path, control: str) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    gallery_store = GalleryStore(tmp_path / "gallery")
+    gallery_item = _gallery_item(gallery_store, filename="gallery-source.png", mime_type="image/png", data=PNG_BYTES)
+    package = _package([
+        WorkflowInput(id="input_image", label="Input image", control=control, binding=InputBinding(node_id="1", input_name="image")),
+    ])
+
+    with TestClient(
+        create_app(
+            engine_service=FakeEngineService(package),
+            asset_service=asset_service,
+            gallery_store=gallery_store,
+        )
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf/assets/image/from-gallery",
+            json={"input_id": "input_image", "gallery_item_id": gallery_item.id},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"].endswith(".png")
+    assert (tmp_path / "assets" / body["asset_id"]).read_bytes() == PNG_BYTES
+    metadata = asset_service.metadata(body["asset_id"])
+    assert metadata["kind"] == "image"
+    assert metadata["source_gallery_item_id"] == gallery_item.id
+
+
+def test_copy_gallery_image_to_dashboard_asset_route_requires_available_gallery_file(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    gallery_store = GalleryStore(tmp_path / "gallery")
+    gallery_item = _gallery_item(gallery_store, filename="gallery-source.png", mime_type="image/png", data=PNG_BYTES)
+    gallery_store.content_path(gallery_item.id).unlink()
+    package = _package([
+        WorkflowInput(id="input_image", label="Input image", control="load_image", binding=InputBinding(node_id="1", input_name="image")),
+    ])
+
+    with TestClient(
+        create_app(
+            engine_service=FakeEngineService(package),
+            asset_service=asset_service,
+            gallery_store=gallery_store,
+        )
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf/assets/image/from-gallery",
+            json={"input_id": "input_image", "gallery_item_id": gallery_item.id},
+        )
+
+    assert response.status_code == 422
+    assert "available image" in response.json()["detail"]
+
+
 def test_upload_dashboard_audio_asset_route_streams_file(tmp_path: Path) -> None:
     asset_service = DashboardAssetService(tmp_path / "assets")
     with TestClient(
@@ -657,3 +835,47 @@ def test_dashboard_asset_routes_allow_query_token_for_media_elements(
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
     assert response.content == WAV_BYTES
+
+
+def _package(inputs: list[WorkflowInput]) -> WorkflowPackage:
+    return WorkflowPackage(
+        metadata=WorkflowMetadata(id="wf", name="Workflow", version="1"),
+        engine="comfyui",
+        comfyui_graph={},
+        inputs=inputs,
+    )
+
+
+def _gallery_item(
+    store: GalleryStore,
+    *,
+    filename: str,
+    mime_type: str,
+    data: bytes,
+):
+    staged = store.create_staging_path()
+    staged.write_bytes(data)
+    return store.save_staged_output(
+        CapturedGalleryOutput(
+            idempotency_key=f"test|{filename}",
+            created_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
+            workflow_id="wf",
+            workflow_title="Workflow",
+            job_id="job",
+            control_id="result",
+            output_id="image",
+            node_id="9",
+            widget_title="Result",
+            kind="image",
+            staged_path=staged,
+            source_filename=filename,
+            source_mime_type=mime_type,
+            extension=Path(filename).suffix,
+            size_bytes=len(data),
+            width=None,
+            height=None,
+            duration_seconds=None,
+            fps=None,
+            generation_settings={},
+        )
+    )
