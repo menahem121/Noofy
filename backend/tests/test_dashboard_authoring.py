@@ -925,6 +925,68 @@ def test_get_bindable_inputs_keeps_comfyui_lora_nodes_as_lora_loader_when_option
     }
 
 
+def test_get_bindable_inputs_filters_model_options_dynamically(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "authoring_filter"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": "authoring_filter", "name": "Authoring Filter", "version": "1.0.0"},
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "checkpoints",
+                        "filename": "base-sdxl.safetensors",
+                        "node_id": "4",
+                        "node_type": "CheckpointLoaderSimple",
+                        "input_name": "ckpt_name",
+                        "model_type": "checkpoint",
+                        "architecture_family": "sdxl",
+                    }
+                ],
+                "comfyui_graph": {
+                    "4": {
+                        "class_type": "CheckpointLoaderSimple",
+                        "inputs": {"ckpt_name": "base-sdxl.safetensors"},
+                    }
+                },
+                "inputs": [],
+                "outputs": [],
+                "dashboard": {"version": "0.1.0", "status": "not_configured", "sections": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    loader = WorkflowPackageLoader(packages_dir)
+    service = DashboardAuthoringService(
+        workflow_store_dir=packages_dir,
+        workflow_loader=loader,
+        log_store=LogStore(),
+    )
+
+    result = service.get_bindable_inputs(
+        "authoring_filter",
+        object_info={
+            "CheckpointLoaderSimple": {
+                "input": {
+                    "required": {
+                        "ckpt_name": [
+                            ["base-sdxl.safetensors", "DreamshaperXL.safetensors", "FLUX.dev.safetensors"],
+                            {"tooltip": "Checkpoint to load."},
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    ckpt_input = result["nodes"][0]["inputs"][0]
+    assert ckpt_input["options"] == ["base-sdxl.safetensors", "DreamshaperXL.safetensors"]
+    assert ckpt_input["architecture_filter"]["hidden_options"] == ["FLUX.dev.safetensors"]
+    assert loader.get_package("authoring_filter").inputs == []
+
+
 def test_save_dashboard_for_bundled_workflow_writes_user_override(tmp_path: Path) -> None:
     """Bundled source files stay read-only, but users can customize dashboards."""
     bundled_root = Path("app/workflows/packages")

@@ -1084,6 +1084,70 @@ describe("DashboardInputControl", () => {
     expect(Array.from(select.options).map((option) => option.value)).toEqual(["None", "existing.safetensors"]);
   });
 
+  it("does not reinsert an architecture-hidden selected LoRA option", async () => {
+    const onChange = vi.fn();
+    render(
+      <DashboardInputControl
+        control={{ id: "style_lora", type: "lora_loader", label: "Style LoRA", input_id: "style_lora" }}
+        input={{
+          id: "style_lora",
+          label: "Style LoRA",
+          control: "lora_loader",
+          binding: { node_id: "12", input_name: "lora_name" },
+          default: "None",
+          validation: {
+            options: ["None", "style-sdxl.safetensors"],
+            architecture_filter: {
+              category: "loras",
+              target_family: "sdxl",
+              hidden_options: ["flux-style.safetensors"],
+            },
+          },
+        }}
+        value="flux-style.safetensors"
+        loraBrowser={{ enabled: true, onOpen: vi.fn() }}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const select = screen.getByDisplayValue("None") as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(["None", "style-sdxl.safetensors"]);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("None"));
+  });
+
+  it("still preserves non-hidden selected select values that are absent from options", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "model", type: "select", label: "Model", input_id: "model" }}
+        input={{
+          id: "model",
+          label: "Model",
+          control: "select",
+          binding: { node_id: "4", input_name: "ckpt_name" },
+          default: "base.safetensors",
+          validation: {
+            options: ["base.safetensors"],
+            architecture_filter: {
+              category: "checkpoints",
+              target_family: "sdxl",
+              hidden_options: ["flux.safetensors"],
+            },
+          },
+        }}
+        value="custom-unknown.safetensors"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const select = screen.getByDisplayValue("custom-unknown.safetensors") as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([
+      "base.safetensors",
+      "custom-unknown.safetensors",
+    ]);
+  });
+
   it("renders selected generic file metadata and supports remove", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       asset_id: "asset.json",

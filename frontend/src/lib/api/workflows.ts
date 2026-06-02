@@ -477,6 +477,9 @@ export interface RequiredModelDef {
   checksum?: string | null;
   model_type?: string | null;
   size_bytes?: number | null;
+  architecture_family?: string | null;
+  architecture_family_confidence?: string | null;
+  architecture_family_source?: string | null;
 }
 
 export interface DashboardControlDef {

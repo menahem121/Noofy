@@ -65,6 +65,9 @@ class RequiredModel(BaseModel):
     bundled: bool = False
     asset_ownership: AssetOwnership = AssetOwnership.EXTERNAL_REFERENCE
     identity_warnings: list[str] = Field(default_factory=list)
+    architecture_family: str | None = None
+    architecture_family_confidence: str | None = None
+    architecture_family_source: str | None = None
 
 
 class InputBinding(BaseModel):

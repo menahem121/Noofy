@@ -323,6 +323,9 @@ def _fill_required_model_identity_from_lock(model: dict[str, Any], locked: dict[
     sha256 = locked.get("sha256")
     size_bytes = locked.get("size_bytes")
     source_urls = locked.get("source_urls")
+    architecture_family = locked.get("architecture_family")
+    architecture_family_confidence = locked.get("architecture_family_confidence")
+    architecture_family_source = locked.get("architecture_family_source")
 
     if isinstance(sha256, str) and not model.get("checksum"):
         model["checksum"] = sha256 if sha256.startswith("sha256:") else f"sha256:{sha256}"
@@ -333,6 +336,20 @@ def _fill_required_model_identity_from_lock(model: dict[str, Any], locked: dict[
         if urls:
             model["source_urls"] = urls
             model.setdefault("source_url", urls[0])
+    if isinstance(architecture_family, str) and architecture_family.strip() and not model.get("architecture_family"):
+        model["architecture_family"] = architecture_family
+    if (
+        isinstance(architecture_family_confidence, str)
+        and architecture_family_confidence.strip()
+        and not model.get("architecture_family_confidence")
+    ):
+        model["architecture_family_confidence"] = architecture_family_confidence
+    if (
+        isinstance(architecture_family_source, str)
+        and architecture_family_source.strip()
+        and not model.get("architecture_family_source")
+    ):
+        model["architecture_family_source"] = architecture_family_source
 
     has_checksum = isinstance(model.get("checksum"), str) and bool(str(model.get("checksum")).strip())
     has_size = isinstance(model.get("size_bytes"), int) and model.get("size_bytes") > 0

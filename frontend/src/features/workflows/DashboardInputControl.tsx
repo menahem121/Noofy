@@ -444,13 +444,22 @@ function ModelSelect({
   onChange: (value: unknown) => void;
 }) {
   const rawSelectedValue = typeof value === "string" || typeof value === "number" ? String(value) : "";
-  const selectedValue = rawSelectedValue || leadingOptions[0] || "";
+  const hiddenOptions = hiddenArchitectureOptions(validation);
+  const rawSelectedHidden = rawSelectedValue ? hiddenOptions.has(rawSelectedValue) : false;
+  const fallbackValue = leadingOptions[0] || firstVisibleOption(validation, hiddenOptions) || extraOptions.find((option) => !hiddenOptions.has(option)) || "";
+  const selectedValue = rawSelectedHidden ? fallbackValue : rawSelectedValue || fallbackValue;
   const options = mergeOptions(
     leadingOptions,
     Array.isArray(validation.options) ? (validation.options as string[]) : [],
     extraOptions,
     selectedValue,
+    hiddenOptions,
   );
+  useEffect(() => {
+    if (rawSelectedHidden && selectedValue && rawSelectedValue !== selectedValue) {
+      onChange(selectedValue);
+    }
+  }, [onChange, rawSelectedHidden, rawSelectedValue, selectedValue]);
   return (
     <select
       className={className}
@@ -516,15 +525,31 @@ function mergeOptions(
   options: string[],
   extraOptions: string[] = [],
   selectedValue: string,
+  hiddenOptions: Set<string> = new Set(),
 ): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
   for (const option of [...leadingOptions, ...options, ...extraOptions, selectedValue]) {
-    if (!option || seen.has(option)) continue;
+    if (!option || seen.has(option) || hiddenOptions.has(option)) continue;
     seen.add(option);
     merged.push(option);
   }
   return merged;
+}
+
+function hiddenArchitectureOptions(validation: Record<string, unknown>): Set<string> {
+  const filter = validation.architecture_filter;
+  if (!filter || typeof filter !== "object") return new Set();
+  const hidden = (filter as Record<string, unknown>).hidden_options;
+  if (!Array.isArray(hidden)) return new Set();
+  return new Set(hidden.filter((option): option is string => typeof option === "string"));
+}
+
+function firstVisibleOption(validation: Record<string, unknown>, hiddenOptions: Set<string>): string | undefined {
+  if (!Array.isArray(validation.options)) return undefined;
+  return (validation.options as unknown[]).find(
+    (option): option is string => typeof option === "string" && Boolean(option) && !hiddenOptions.has(option),
+  );
 }
 
 function ApiCredentialInput({

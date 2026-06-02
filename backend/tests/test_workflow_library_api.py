@@ -301,6 +301,198 @@ def _native_run_service(tmp_path: Path) -> tuple[EngineService, str]:
     return service, "native_run"
 
 
+def _workflow_library_service_for_package(tmp_path: Path, package_payload: dict[str, Any]) -> WorkflowLibraryService:
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / package_payload["metadata"]["id"]
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(json.dumps(package_payload), encoding="utf-8")
+    loader = WorkflowPackageLoader(packages_dir)
+    return WorkflowLibraryService(
+        loader,
+        FakeAvailabilityService(),
+        LogStore(),
+    )
+
+
+def test_workflow_package_payload_filters_known_architecture_mismatches_without_mutating_schema(
+    tmp_path: Path,
+) -> None:
+    package_payload = {
+        "metadata": {"id": "sdxl_filter", "name": "SDXL Filter", "version": "1.0.0"},
+        "engine": "comfyui",
+        "required_models": [
+            {
+                "folder": "checkpoints",
+                "filename": "SDXL_base.safetensors",
+                "node_id": "4",
+                "node_type": "CheckpointLoaderSimple",
+                "input_name": "ckpt_name",
+                "model_type": "checkpoint",
+                "architecture_family": "sdxl",
+                "architecture_family_confidence": "high",
+                "architecture_family_source": "test",
+            }
+        ],
+        "comfyui_graph": {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "SDXL_base.safetensors"},
+            }
+        },
+        "inputs": [
+            {
+                "id": "model",
+                "label": "Model",
+                "control": "select",
+                "binding": {"node_id": "4", "input_name": "ckpt_name"},
+                "default": "SDXL_base.safetensors",
+                "validation": {
+                    "options": [
+                        "SDXL_base.safetensors",
+                        "DreamshaperXL.safetensors",
+                        "FLUX.dev.safetensors",
+                        "unknown-style.safetensors",
+                    ]
+                },
+            }
+        ],
+        "outputs": [],
+        "dashboard": {"version": "0.1.0", "status": "configured", "sections": []},
+    }
+    service = _workflow_library_service_for_package(tmp_path, package_payload)
+
+    response = service.workflow_package_payload("sdxl_filter")
+
+    filtered_input = response["inputs"][0]
+    assert filtered_input["validation"]["options"] == [
+        "SDXL_base.safetensors",
+        "DreamshaperXL.safetensors",
+        "unknown-style.safetensors",
+    ]
+    assert filtered_input["validation"]["architecture_filter"]["hidden_options"] == [
+        "FLUX.dev.safetensors"
+    ]
+    stored_package = service.workflow_loader.get_package("sdxl_filter")
+    assert stored_package.inputs[0].validation["options"] == [
+        "SDXL_base.safetensors",
+        "DreamshaperXL.safetensors",
+        "FLUX.dev.safetensors",
+        "unknown-style.safetensors",
+    ]
+
+
+def test_workflow_package_payload_filters_loras_from_upstream_base_model(tmp_path: Path) -> None:
+    package_payload = {
+        "metadata": {"id": "lora_filter", "name": "LoRA Filter", "version": "1.0.0"},
+        "engine": "comfyui",
+        "required_models": [
+            {
+                "folder": "checkpoints",
+                "filename": "base-sdxl.safetensors",
+                "node_id": "4",
+                "node_type": "CheckpointLoaderSimple",
+                "input_name": "ckpt_name",
+                "model_type": "checkpoint",
+                "architecture_family": "sdxl",
+            },
+            {
+                "folder": "loras",
+                "filename": "style-sdxl.safetensors",
+                "node_id": "12",
+                "node_type": "LoraLoader",
+                "input_name": "lora_name",
+                "model_type": "lora",
+            },
+        ],
+        "comfyui_graph": {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base-sdxl.safetensors"}},
+            "12": {
+                "class_type": "LoraLoader",
+                "inputs": {"model": ["4", 0], "clip": ["4", 1], "lora_name": "style-sdxl.safetensors"},
+            },
+        },
+        "inputs": [
+            {
+                "id": "style",
+                "label": "Style",
+                "control": "lora_loader",
+                "binding": {"node_id": "12", "input_name": "lora_name"},
+                "default": "None",
+                "validation": {"options": ["None", "style-sdxl.safetensors", "flux-style.safetensors"]},
+            }
+        ],
+        "outputs": [],
+        "dashboard": {"version": "0.1.0", "status": "configured", "sections": []},
+    }
+    service = _workflow_library_service_for_package(tmp_path, package_payload)
+
+    response = service.workflow_package_payload("lora_filter")
+
+    assert response["inputs"][0]["validation"]["options"] == ["None", "style-sdxl.safetensors"]
+    assert response["inputs"][0]["validation"]["architecture_filter"]["target_family"] == "sdxl"
+    assert response["inputs"][0]["validation"]["architecture_filter"]["hidden_options"] == [
+        "flux-style.safetensors"
+    ]
+
+
+def test_workflow_package_payload_leaves_unknown_targets_and_unrelated_categories_unfiltered(
+    tmp_path: Path,
+) -> None:
+    package_payload = {
+        "metadata": {"id": "unknown_filter", "name": "Unknown Filter", "version": "1.0.0"},
+        "engine": "comfyui",
+        "required_models": [
+            {
+                "folder": "checkpoints",
+                "filename": "mystery.safetensors",
+                "node_id": "4",
+                "node_type": "CheckpointLoaderSimple",
+                "input_name": "ckpt_name",
+                "model_type": "checkpoint",
+            },
+            {
+                "folder": "vae",
+                "filename": "vae-sdxl.safetensors",
+                "node_id": "5",
+                "node_type": "VAELoader",
+                "input_name": "vae_name",
+                "model_type": "vae",
+                "architecture_family": "sdxl",
+            },
+        ],
+        "comfyui_graph": {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "mystery.safetensors"}},
+            "5": {"class_type": "VAELoader", "inputs": {"vae_name": "vae-sdxl.safetensors"}},
+        },
+        "inputs": [
+            {
+                "id": "model",
+                "label": "Model",
+                "control": "select",
+                "binding": {"node_id": "4", "input_name": "ckpt_name"},
+                "default": "mystery.safetensors",
+                "validation": {"options": ["mystery.safetensors", "FLUX.dev.safetensors"]},
+            },
+            {
+                "id": "vae",
+                "label": "VAE",
+                "control": "select",
+                "binding": {"node_id": "5", "input_name": "vae_name"},
+                "default": "vae-sdxl.safetensors",
+                "validation": {"options": ["vae-sdxl.safetensors", "vae-flux.safetensors"]},
+            },
+        ],
+        "outputs": [],
+        "dashboard": {"version": "0.1.0", "status": "configured", "sections": []},
+    }
+    service = _workflow_library_service_for_package(tmp_path, package_payload)
+
+    response = service.workflow_package_payload("unknown_filter")
+
+    assert response["inputs"][0]["validation"] == {"options": ["mystery.safetensors", "FLUX.dev.safetensors"]}
+    assert response["inputs"][1]["validation"] == {"options": ["vae-sdxl.safetensors", "vae-flux.safetensors"]}
+
+
 def _hardware_warning_service(
     tmp_path: Path,
     *,

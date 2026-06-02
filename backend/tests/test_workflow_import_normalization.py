@@ -24,6 +24,9 @@ def test_normalize_models_preserves_identity_evidence() -> None:
                     "source_urls": ["https://example.test/demo.safetensors"],
                     "sha256": "a" * 64,
                     "size_bytes": 123,
+                    "architecture_family": "sdxl",
+                    "architecture_family_confidence": "high",
+                    "architecture_family_source": "exporter",
                 }
             ]
         }
@@ -31,6 +34,9 @@ def test_normalize_models_preserves_identity_evidence() -> None:
 
     assert models[0].checksum == "sha256:" + "a" * 64
     assert models[0].identity_verified_by_exporter is True
+    assert models[0].architecture_family == "sdxl"
+    assert models[0].architecture_family_confidence == "high"
+    assert models[0].architecture_family_source == "exporter"
 
 
 def test_normalize_models_accepts_single_source_url_string() -> None:
