@@ -154,6 +154,33 @@
   color: var(--warning);
 }
 
+.canvas-action-cluster__reason-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-action-cluster__reason-content strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.canvas-action-cluster__reason-content span {
+  min-width: 0;
+}
+
+.canvas-action-cluster__reason .memory-status-developer-details {
+  max-width: 300px;
+  margin-top: 4px;
+}
+
+.canvas-action-cluster__reason .memory-status-developer-details pre {
+  max-height: 120px;
+  font-size: 10.5px;
+}
+
 .canvas-dashboard__surface--editing .layout-canvas-widget--run {
   cursor: grab;
   user-select: none;

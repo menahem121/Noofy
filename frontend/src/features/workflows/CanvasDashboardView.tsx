@@ -75,8 +75,10 @@ export interface CanvasRunState {
   isRunning: boolean;
   canRun: boolean;
   canCancel: boolean;
+  statusTitle?: string | null;
   disabledReason?: string | null;
   disabledActionLabel?: string | null;
+  developerDetails?: string | null;
 }
 
 export interface CanvasActionBarPosition {
@@ -637,7 +639,16 @@ export function CanvasDashboardView({
               {!runState.canRun && runState.disabledReason ? (
                 <div className="canvas-action-cluster__reason" id="canvas-run-disabled-reason" role="status">
                   <AlertCircle size={14} aria-hidden="true" />
-                  <span>{runState.disabledReason}</span>
+                  <div className="canvas-action-cluster__reason-content">
+                    {runState.statusTitle ? <strong>{runState.statusTitle}</strong> : null}
+                    <span>{runState.disabledReason}</span>
+                    {runState.developerDetails ? (
+                      <details className="memory-status-developer-details">
+                        <summary>Developer details</summary>
+                        <pre>{runState.developerDetails}</pre>
+                      </details>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
               {!runState.canRun && runState.disabledActionLabel && onDisabledRunAction ? (

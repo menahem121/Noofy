@@ -233,10 +233,12 @@ export function WorkflowRunPage({
   const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
   const runtimeProgress = progressFromWorkflowRuntime(workflowRuntime);
   const displayedProgress = state.progress ?? runtimeProgress;
+  const hasTerminalProgress = Boolean(displayedProgress?.status && terminalStatuses.has(displayedProgress.status));
+  const activeJobStatus = state.result || hasTerminalProgress ? null : state.job?.status;
   const activeRuntimeJobId = workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
   const isRunning = isSubmittingRun || isActiveWorkflowProgress(displayedProgress);
-  const isWaitingForMemory = state.job?.status === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
-  const isBlockedByMemory = state.job?.status === "blocked_by_memory";
+  const isWaitingForMemory = activeJobStatus === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
+  const isBlockedByMemory = activeJobStatus === "blocked_by_memory";
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
   const outputAudios = useMemo(() => extractAudioOutputs(state.result), [state.result]);
   const outputVideos = useMemo(() => extractVideoOutputs(state.result), [state.result]);
@@ -1030,7 +1032,9 @@ export function WorkflowRunPage({
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
     : null;
-  const memoryStatus = state.result ? null : state.job?.memory_status ?? null;
+  const memoryStatus = state.result || hasTerminalProgress ? null : state.job?.memory_status ?? null;
+  const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
+  const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
     runtimeStatus.backendStatus === "reachable" &&
@@ -1059,6 +1063,7 @@ export function WorkflowRunPage({
         isRunning,
         isWaitingForMemory,
         loading: state.loading,
+        memoryStatus,
         missingModels,
         modelSummaryReady: activeModelSummary?.ready_to_run,
         validation: activeValidation,
@@ -1276,8 +1281,14 @@ export function WorkflowRunPage({
         <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
           <AlertCircle size={16} aria-hidden="true" />
           <div>
-            <strong>{memoryStatusTitle(memoryStatus.state)}</strong>
-            <span>{memoryStatus.message}</span>
+            <strong>{memoryNotice?.title ?? memoryStatusTitle(memoryStatus.state)}</strong>
+            <span>{memoryNotice?.message ?? memoryStatus.message}</span>
+            {memoryDiagnostics ? (
+              <details className="memory-status-developer-details">
+                <summary>Developer details</summary>
+                <pre>{memoryDiagnostics}</pre>
+              </details>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -1392,8 +1403,10 @@ export function WorkflowRunPage({
             isRunning,
             canRun,
             canCancel,
+            statusTitle: memoryNotice?.title ?? null,
             disabledReason: runDisabledReason,
             disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
+            developerDetails: memoryDiagnostics,
           }}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
@@ -1497,7 +1510,7 @@ export function WorkflowRunPage({
           <div className="panel-heading">
             <div>
               <h2>Preview</h2>
-              <p>{progressMessage(displayedProgress, state.result)}</p>
+              <p>{progressMessage(displayedProgress, state.result, memoryStatus)}</p>
             </div>
             {state.validation?.valid ? (
               <span className="mini-status">
@@ -2210,10 +2223,11 @@ function preparationPhaseStatusLabel(status: PreparationPhaseStatus) {
   }
 }
 
-function progressMessage(progress: JobProgress | null, result: JobResult | null) {
+function progressMessage(progress: JobProgress | null, result: JobResult | null, memoryStatus: MemoryStatus | null = null) {
   if (result?.status === "completed") return "Result saved by the local workflow.";
   if (result?.status === "failed") return "The local engine could not finish this run.";
   if (progress?.status === "canceled") return "Run canceled.";
+  if (memoryStatus) return memoryStatusDisplay(memoryStatus).message;
   if (progress?.status === "running") return progress.message ?? "Generating image...";
   if (progress?.status === "queued") return progress.message ?? "Preparing workflow...";
   if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for memory.";
@@ -2333,12 +2347,123 @@ function sectionId(title: string) {
 }
 
 function memoryStatusTitle(state: string) {
-  if (state === "waiting_for_gpu" || state === "waiting_for_active_workflow") return "Waiting for the GPU";
-  if (state === "freeing_memory" || state === "freeing_previous_models" || state === "unloading_previous_workflow" || state === "waiting_for_memory_release") return "Freeing memory";
-  if (state === "retrying_after_memory_cleanup") return "Trying again";
-  if (state === "blocked_by_memory" || state === "memory_cleanup_failed" || state === "blocked_external_pressure" || state === "blocked_exceeds_capacity" || state === "blocked_unattributed_pressure") return "Not enough memory";
-  if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") return "Ready to relaunch";
-  return "Memory status";
+  return memoryStatusFallback(state).title;
+}
+
+interface MemoryStatusDisplay {
+  title: string;
+  message: string;
+}
+
+function memoryStatusDisplay(status: MemoryStatus): MemoryStatusDisplay {
+  const fallback = memoryStatusFallback(status.state);
+  const backendMessage = typeof status.message === "string" ? status.message.trim() : "";
+  return {
+    title: fallback.title,
+    message: shouldUseMemoryStatusFallbackMessage(status.state, backendMessage) ? fallback.message : backendMessage,
+  };
+}
+
+function memoryStatusFallback(state: string): MemoryStatusDisplay {
+  if (state === "waiting_for_gpu") {
+    return {
+      title: "Waiting for the GPU",
+      message: "Noofy will start this run when the GPU is available.",
+    };
+  }
+  if (state === "waiting_for_active_workflow") {
+    return {
+      title: "Waiting for another run",
+      message: "Noofy will start this workflow after the active run finishes.",
+    };
+  }
+  if (state === "freeing_previous_models") {
+    return {
+      title: "Freeing previous models",
+      message: "Noofy is unloading idle models so this workflow has enough room to start.",
+    };
+  }
+  if (state === "unloading_previous_workflow") {
+    return {
+      title: "Unloading previous workflow",
+      message: "Noofy is clearing the previous workflow before starting this one.",
+    };
+  }
+  if (state === "freeing_memory" || state === "waiting_for_memory_release") {
+    return {
+      title: "Freeing memory",
+      message: "Noofy asked the local engine to release memory and is waiting to confirm it.",
+    };
+  }
+  if (state === "retrying_after_memory_cleanup") {
+    return {
+      title: "Retrying after memory cleanup",
+      message: "Noofy freed memory and is trying this workflow one more time.",
+    };
+  }
+  if (state === "memory_cleanup_failed") {
+    return {
+      title: "Memory cleanup did not finish",
+      message: "Noofy tried to free memory, but could not confirm that enough was released.",
+    };
+  }
+  if (state === "blocked_external_pressure") {
+    return {
+      title: "Other GPU work is using memory",
+      message: "Another process is using GPU memory that Noofy cannot reclaim.",
+    };
+  }
+  if (state === "blocked_exceeds_capacity") {
+    return {
+      title: "Workflow exceeds this machine's memory",
+      message: "This workflow appears to need more RAM or VRAM than this machine can safely provide.",
+    };
+  }
+  if (state === "blocked_unattributed_pressure") {
+    return {
+      title: "Memory is in use but not reclaimable",
+      message: "Noofy sees memory pressure, but cannot safely attribute enough of it to memory it owns.",
+    };
+  }
+  if (state === "blocked_by_memory") {
+    return {
+      title: "Memory unavailable",
+      message: "Noofy cannot safely start this workflow with the memory available right now.",
+    };
+  }
+  if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") {
+    return {
+      title: "Ready to relaunch",
+      message: "Noofy can reuse the warm runner for this workflow.",
+    };
+  }
+  return {
+    title: "Memory status",
+    message: "Noofy is checking memory before starting this workflow.",
+  };
+}
+
+function shouldUseMemoryStatusFallbackMessage(state: string, backendMessage: string) {
+  if (!backendMessage) return true;
+  const normalized = backendMessage.toLowerCase();
+  if (state === "blocked_by_memory") return false;
+  return (
+    normalized === "not enough memory" ||
+    normalized.includes("not enough memory is available") ||
+    normalized.includes("needs more memory than noofy can safely use")
+  );
+}
+
+function memoryStatusDeveloperDetails(job: EngineJob | null) {
+  if (!job?.memory_status && !job?.memory_decision) return null;
+  const details = {
+    job_id: job?.job_id ?? null,
+    queue_id: job?.queue_id ?? job?.memory_status?.queue_id ?? null,
+    status: job?.status ?? null,
+    memory_status: job?.memory_status ?? null,
+    memory_decision: job?.memory_decision ?? null,
+  };
+  return JSON.stringify(details, null, 2);
 }
 
 function memoryNoticeClass(status: MemoryStatus) {
@@ -2354,6 +2479,7 @@ interface RunDisabledReasonInput {
   isRunning: boolean;
   isWaitingForMemory: boolean;
   loading: boolean;
+  memoryStatus: MemoryStatus | null;
   missingModels: Array<{ filename: string }>;
   modelSummaryReady: boolean | undefined;
   validation: WorkflowValidationResult | null;
@@ -2368,14 +2494,17 @@ function workflowRunDisabledReason({
   isRunning,
   isWaitingForMemory,
   loading,
+  memoryStatus,
   missingModels,
   modelSummaryReady,
   validation,
   workflowStatus,
 }: RunDisabledReasonInput): string {
-  if (isRunning) return "This workflow is already running.";
-  if (isBlockedByMemory) return "Not enough memory is available for this run.";
+  if (isBlockedByMemory && memoryStatus) return memoryStatusDisplay(memoryStatus).message;
+  if (isBlockedByMemory) return "Noofy cannot safely start this workflow with the memory available right now.";
+  if (isWaitingForMemory && memoryStatus) return memoryStatusDisplay(memoryStatus).message;
   if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
+  if (isRunning) return "This workflow is already running.";
   if (backendKnownUnreachable) return "The local app service is offline.";
   if (engineKnownUnavailable) return "The ComfyUI engine is not ready yet.";
   if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {

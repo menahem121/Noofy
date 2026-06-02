@@ -43,6 +43,11 @@ the lifecycle foundation expected for production work:
 - third P2 runtime-option slice: submitted precision and VRAM mode options are
   normalized, included in runtime estimate diagnostics, and applied to
   heuristic VRAM estimates
+- first P3 frontend memory-state slice: the workflow run page and default
+  canvas run view now render distinct user-facing copy for queueing, cleanup,
+  retry, cleanup failure, external pressure, capacity failure, and unattributed
+  pressure; generic backend "not enough memory" messages are replaced with the
+  more precise `memory_status.state` copy where safe
 
 Ownership after P0/P1:
 
@@ -66,7 +71,7 @@ Ownership after P0/P1:
 | Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted. P2 now semantically extracts width/height, batch, frame count, workflow type, precision, and VRAM mode into heuristic estimates. P2 still needs selected model/LoRA semantics and declared bindings. | Implement publisher-declared memory-affecting bindings and richer model/runtime-option extraction. |
 | Low free VRAM from an idle Noofy runner caused immediate blocking. | fixed | `runtime/memory`, `runtime/runners` | Idle Noofy-owned memory is treated as reclaimable and cleanup waits for observed release before admission continues. | Improve attribution of idle/resident memory where platform signals allow it. |
 | Active workflow followed by another run could block or be killed. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Active work queues by default; cleanup skips active runners. | Refine queueing so unrelated CPU-only/light work does not always wait behind GPU-heavy work. |
-| `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. Frontend still needs more distinct copy. | P3 UX polish for each backend memory state. |
+| `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. The workflow run page and canvas run view now render distinct copy from `memory_status.state`. | Continue P3 polish across any remaining surfaces and next-step copy. |
 | Workflow queue required manual handoff and could strand records. | fixed | `runs/lifecycle_service` | Dispatch wakes automatically and processes eligible queue records before runner-start drains. | Continue to keep queue state observable in diagnostics. |
 | Runner-start queue could strand records behind active work. | fixed | `runtime/runners/lifecycle_service`, `runs/lifecycle_service` | Runner-start draining is tied to run dispatch and runner state-change notifications. | No immediate follow-up beyond real-runner validation. |
 | Queue record could be removed before successful adapter submission. | fixed | `runs/queue_service`, `runs/orchestrator` | Records stay active through handoff and submission; terminal aliases are retained in a bounded ledger. | No immediate follow-up. |
@@ -79,7 +84,7 @@ Ownership after P0/P1:
 | Terminal polling could call the adapter again after a cached terminal outcome. | fixed | `runs/result_service`, `runs/job_service` | Cached terminal outcomes are returned through result/progress paths. | No immediate follow-up. |
 | Core warm residency could be cleared before observed release. | fixed | `runtime/memory/service`, `runtime/runners/supervisor` | Core residency is cleared only after release polling confirms safe memory. Timeout/unavailable marks `release_failed`. | Validate with real CUDA `/free` and PyTorch allocator behavior. |
 | `/free` HTTP success was treated as actual release. | fixed | `runtime/memory/memory_governor`, `runtime/memory/service` | `/free` is now only an acknowledgment; async polling confirms release or fails closed. | Real hardware `/free` timeline validation remains. |
-| Cleanup failure was reported only as generic `blocked_by_memory`. | fixed | `runtime/memory/service`, API models | Compatibility `EngineJob.status` can remain `blocked_by_memory`, but `memory_status.state` reports `memory_cleanup_failed`. | P3 UI must avoid collapsing this into generic capacity failure. |
+| Cleanup failure was reported only as generic `blocked_by_memory`. | fixed | `runtime/memory/service`, API models, frontend | Compatibility `EngineJob.status` can remain `blocked_by_memory`, but `memory_status.state` reports `memory_cleanup_failed`; the workflow run page and canvas run view show cleanup failure separately from capacity failure. | Continue P3 polish outside the run page as needed. |
 | Local learning reused stale descriptor peaks for sampled jobs. | fixed | `engine/memory_observation` | Sampled jobs learn selected job-window peaks or no peak evidence; descriptor fallback is not used when a sampled job lacks selected peak evidence. | No immediate follow-up. |
 | Later larger runs might not raise runner/profile peak evidence. | fixed | `engine/memory_observation`, `runtime/runners/supervisor`, `LocalMemoryLearningStore` | Runner descriptor peaks and local summaries update as maxima and dedupe by non-null job ID. | P2 semantic profile extraction still needed so larger profiles are classified reliably. |
 | Custom-node workflows could appear as ordinary low-risk heuristic runs. | partially fixed | `runtime/memory` | Custom-node count/types are now included in workflow estimates and developer diagnostics, non-local confidence is lowered, and heuristic estimates use a conservative safety factor. The implementation does not yet classify individual custom-node memory behavior or private caches. | Add publisher/dashboard declarations and richer custom-node/cache validation. |
@@ -263,25 +268,31 @@ incrementally as natural domain seams become clear.
 Backend memory states are now distinct. P3 should make the UI and product copy
 equally distinct.
 
-Polish needed:
+Completed initial slice:
 
-- distinct UI messages for `waiting_for_active_workflow`
-- distinct UI messages for `freeing_previous_models`
-- distinct UI messages for `unloading_previous_workflow`
-- distinct UI messages for `retrying_after_memory_cleanup`
-- distinct UI messages for `memory_cleanup_failed`
-- distinct UI messages for `blocked_external_pressure`
-- distinct UI messages for `blocked_exceeds_capacity`
-- distinct UI messages for `blocked_unattributed_pressure`
-- avoid collapsing cleanup failure and true capacity failure into generic
-  "Not enough memory"
-- explain when Noofy is queueing, freeing memory, retrying, or blocked by
-  external pressure
+- workflow run page and default canvas run view render distinct messages for
+  `waiting_for_active_workflow`, `freeing_previous_models`,
+  `unloading_previous_workflow`, `retrying_after_memory_cleanup`,
+  `memory_cleanup_failed`, `blocked_external_pressure`,
+  `blocked_exceeds_capacity`, and `blocked_unattributed_pressure`
+- generic backend "not enough memory" messages are replaced with state-specific
+  copy for these precise states
+- cleanup failure and true capacity failure are no longer collapsed in the run
+  page or canvas run controls
+- advanced users can expand developer details with the job ID, queue ID,
+  compatibility status, memory status, and memory decision payload
+
+Remaining polish needed:
+
+- review any secondary frontend surfaces that display job/progress/result memory
+  states and align them with the same copy map
+- add more user-friendly next steps for queueing, freeing memory, retrying, and
+  blocked external pressure
 - show user-friendly next steps without overpromising that Noofy can reclaim
   memory it does not own
-- expose developer-details diagnostics for advanced troubleshooting, including
-  decision ID, estimate source, signal quality, cleanup timeline, runner
-  ownership summary, and release-check reason
+- expand developer-details diagnostics when backend payloads expose decision ID,
+  estimate source, signal quality, cleanup timeline, runner ownership summary,
+  and release-check reason
 
 ## Hardware And Real-World Validation Still Required
 

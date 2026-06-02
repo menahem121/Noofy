@@ -381,9 +381,13 @@ function mockConfiguredDashboardFetch(
   fetchMock: ReturnType<typeof vi.fn>,
   runtimeResponse: unknown | (() => unknown) = readyRuntime,
   packageData: unknown = configuredPackageData,
+  runResponse: unknown | ((init?: RequestInit) => unknown) | null = null,
+  extraHandler: ((url: string, init?: RequestInit) => Response | Promise<Response> | undefined) | null = null,
 ) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    const extraResponse = extraHandler?.(url, init);
+    if (extraResponse) return Promise.resolve(extraResponse);
     if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
     if (url.endsWith("/api/runtime")) {
       const response = typeof runtimeResponse === "function" ? runtimeResponse() : runtimeResponse;
@@ -405,6 +409,10 @@ function mockConfiguredDashboardFetch(
     }
     if (url.endsWith("/api/workflows/text_to_image_v0/dashboard") && init?.method === "PUT") {
       return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", status: "configured", valid: true }));
+    }
+    if (url.endsWith("/api/workflows/text_to_image_v0/run") && runResponse !== null) {
+      const response = typeof runResponse === "function" ? runResponse(init) : runResponse;
+      return Promise.resolve(jsonResponse(response));
     }
     if (url.endsWith("/api/workflows/text_to_image_v0/user-state/values") && init?.method === "DELETE") {
       return Promise.resolve(
@@ -898,7 +906,9 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     await waitForReadyStatus();
-    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
 
     expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
     expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
@@ -938,7 +948,9 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     await waitForReadyStatus();
-    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
 
     const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
@@ -1379,52 +1391,135 @@ describe("WorkflowRunPage", () => {
     ).toBe(false);
   });
 
-  it("shows a blocked memory state", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-
-      if (url.endsWith("/api/runtime")) {
-        return Promise.resolve(jsonResponse(readyRuntime));
-      }
-
-      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
-        return Promise.resolve(jsonResponse(workflowStatus));
-      }
-
-      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
-        return Promise.resolve(jsonResponse(validWorkflow));
-      }
-
-      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
-        return Promise.resolve(
-          jsonResponse({
-            job_id: "blocked-memory-text_to_image_v0",
-            workflow_id: "text_to_image_v0",
-            engine: "noofy",
-            status: "blocked_by_memory",
-            message: "This workflow needs more memory than Noofy can safely use right now.",
-            memory_status: {
-              state: "blocked_by_memory",
-              message: "This workflow needs more memory than Noofy can safely use right now.",
-              risk_level: "high",
-              queue_id: null,
-              can_cancel: true,
-              can_retry_after_cleanup: false,
-            },
-          }),
-        );
-      }
-
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
+  it.each([
+    {
+      state: "waiting_for_active_workflow",
+      status: "queued_pending_memory",
+      title: "Waiting for another run",
+      message: "Noofy will start this workflow after the active run finishes.",
+    },
+    {
+      state: "freeing_previous_models",
+      status: "queued_pending_memory",
+      title: "Freeing previous models",
+      message: "Noofy is unloading idle models so this workflow has enough room to start.",
+    },
+    {
+      state: "unloading_previous_workflow",
+      status: "queued_pending_memory",
+      title: "Unloading previous workflow",
+      message: "Noofy is clearing the previous workflow before starting this one.",
+    },
+    {
+      state: "retrying_after_memory_cleanup",
+      status: "queued_pending_memory",
+      title: "Retrying after memory cleanup",
+      message: "Noofy freed memory and is trying this workflow one more time.",
+    },
+    {
+      state: "memory_cleanup_failed",
+      status: "blocked_by_memory",
+      title: "Memory cleanup did not finish",
+      message: "Noofy tried to free memory, but could not confirm that enough was released.",
+    },
+    {
+      state: "blocked_external_pressure",
+      status: "blocked_by_memory",
+      title: "Other GPU work is using memory",
+      message: "Another process is using GPU memory that Noofy cannot reclaim.",
+    },
+    {
+      state: "blocked_exceeds_capacity",
+      status: "blocked_by_memory",
+      title: "Workflow exceeds this machine's memory",
+      message: "This workflow appears to need more RAM or VRAM than this machine can safely provide.",
+    },
+    {
+      state: "blocked_unattributed_pressure",
+      status: "blocked_by_memory",
+      title: "Memory is in use but not reclaimable",
+      message: "Noofy sees memory pressure, but cannot safely attribute enough of it to memory it owns.",
+    },
+  ])("shows distinct memory copy for $state", async ({ state, status, title, message }) => {
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, {
+      job_id: `memory-${state}`,
+      workflow_id: "text_to_image_v0",
+      engine: "noofy",
+      status,
+      message: "Not enough memory is available for this run.",
+      memory_decision: {
+        action: status === "blocked_by_memory" ? "blocked_by_memory" : "queue_pending_memory",
+        reason_code: "test_memory_state",
+      },
+      memory_status: {
+        state,
+        message: "Not enough memory is available for this run.",
+        risk_level: "high",
+        queue_id: status === "queued_pending_memory" ? `memory-${state}` : null,
+        can_cancel: status === "queued_pending_memory",
+        can_retry_after_cleanup: state === "retrying_after_memory_cleanup",
+      },
     });
 
     renderRunPage();
 
     await waitForReadyStatus();
-    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
 
-    expect(await screen.findByText("Not enough memory")).toBeInTheDocument();
-    expect(screen.getAllByText("This workflow needs more memory than Noofy can safely use right now.").length).toBeGreaterThan(0);
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Not enough memory")).not.toBeInTheDocument();
+    expect(screen.getByText("Developer details")).toBeInTheDocument();
+    expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
+  });
+
+  it("clears queued memory copy after cancellation", async () => {
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        job_id: "memory-cancel",
+        workflow_id: "text_to_image_v0",
+        engine: "noofy",
+        status: "queued_pending_memory",
+        message: "Not enough memory is available for this run.",
+        memory_status: {
+          state: "freeing_previous_models",
+          message: "Not enough memory is available for this run.",
+          risk_level: "high",
+          queue_id: "memory-cancel",
+          can_cancel: true,
+          can_retry_after_cleanup: false,
+        },
+      },
+      (url) => {
+        if (!url.endsWith("/api/jobs/memory-cancel/cancel")) return undefined;
+        return jsonResponse({
+          job_id: "memory-cancel",
+          status: "canceled",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Run canceled.",
+        });
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    expect(await screen.findByText("Freeing previous models")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /cancel run/i }));
+
+    await waitFor(() => expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
   });
 
   it("cancels a running job", async () => {

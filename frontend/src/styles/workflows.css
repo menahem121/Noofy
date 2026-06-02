@@ -597,6 +597,29 @@
   white-space: pre-wrap;
 }
 
+.memory-status-developer-details {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.memory-status-developer-details summary {
+  cursor: pointer;
+}
+
+.memory-status-developer-details pre {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
 .workflow-action-menu {
   position: relative;
 }
