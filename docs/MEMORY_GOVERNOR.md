@@ -1,6 +1,6 @@
 # Memory Governor
 
-Date: 2026-05-06
+Date: 2026-06-02
 
 Status: current architecture/reference with remaining hardware-validation notes.
 
@@ -105,9 +105,12 @@ isolated runners, unload idle core model/cache memory, wait for bounded memory
 release, and retry the same workflow once. It does not retry non-memory failures
 or repeat memory retries forever.
 
-`/free` HTTP success is only an acknowledgment. Noofy polls RAM/VRAM
-asynchronously with adaptive intervals until release is observed or the
-configured timeout expires. The defaults are:
+`/free` HTTP success is only an acknowledgment. Noofy records a pre-cleanup
+baseline and polls RAM/VRAM asynchronously with adaptive intervals until
+release is observed or the configured timeout expires. Isolated runner
+eviction requires a confirmed stopped process plus safe observed memory. Core
+`/free` cleanup requires an actual observed RAM/VRAM increase from the
+pre-cleanup baseline before residency is cleared. The defaults are:
 
 - `NOOFY_MEMORY_RELEASE_TIMEOUT_SECONDS=8`
 - `NOOFY_MEMORY_RELEASE_INITIAL_POLL_INTERVAL_SECONDS=0.1`

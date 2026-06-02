@@ -452,7 +452,10 @@ class RunOrchestrator:
         if memory_decision is None:
             return None
         if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
-            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            self.runner_supervisor.rollback_runner_reservation(
+                reservation_token,
+                notify_state_change=False,
+            )
             queued = self.workflow_run_queue_service.enqueue(
                 workflow_id=workflow_id,
                 inputs=inputs,
@@ -485,7 +488,10 @@ class RunOrchestrator:
                 memory_status=self.memory_status_payload(memory_decision, queue_id=queued.queue_id),
             )
         if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
-            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            self.runner_supervisor.rollback_runner_reservation(
+                reservation_token,
+                notify_state_change=False,
+            )
             self.record_memory_metric("workflow_run_blocked_by_memory")
             self._record_run_blocked_by_workflow_id(workflow_id, memory_decision.user_message)
             self.log_store.add(
@@ -509,7 +515,10 @@ class RunOrchestrator:
                 memory_status=self.memory_status_payload(memory_decision),
             )
         if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
-            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            self.runner_supervisor.rollback_runner_reservation(
+                reservation_token,
+                notify_state_change=False,
+            )
             return await self.evict_idle_runners(memory_decision)
         return None
 
@@ -683,7 +692,7 @@ class RunOrchestrator:
             workflow_id=workflow_id,
             details={"queue_id": queued.queue_id, "runner_id": runner.runner_id},
         )
-        if self.request_run_dispatch is not None:
+        if self.request_run_dispatch is not None and queue_id is None:
             self.request_run_dispatch("submission_reservation_busy")
         return EngineJob(
             job_id=queued.queue_id,

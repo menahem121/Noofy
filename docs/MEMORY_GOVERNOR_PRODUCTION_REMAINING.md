@@ -23,8 +23,10 @@ the lifecycle foundation expected for production work:
 - finalize-once terminal handling for polling, SSE, terminal hints, watchers,
   retry, local learning, history, gallery scheduling, runner release, and queue
   drain notifications
-- adaptive async `/free` release polling with timeout and timeline diagnostics
-- core warm residency retained until observed release is confirmed
+- adaptive async `/free` release polling with timeout, pre-cleanup baseline,
+  and timeline diagnostics
+- core warm residency retained until an actual RAM/VRAM increase is observed
+  from the pre-cleanup baseline
 - observer-unavailable cleanup fails closed instead of claiming release
 - job-specific peak learning, input-profile buckets, and observation dedupe
 - prompt and seed edits treated as memory-neutral when identified as text/seed
@@ -48,6 +50,10 @@ the lifecycle foundation expected for production work:
   retry, cleanup failure, external pressure, capacity failure, and unattributed
   pressure; generic backend "not enough memory" messages are replaced with the
   more precise `memory_status.state` copy where safe
+- first real CUDA validation pass: the managed NVIDIA A10G harness now covers
+  allocator telemetry, model-free warm prompt/seed reruns, profile-changing
+  reruns, rapid queue handoff, queued cancellation, isolated runner eviction,
+  observed VRAM release, and managed-runner shutdown
 
 Ownership after P0/P1:
 
@@ -72,18 +78,18 @@ Ownership after P0/P1:
 | Low free VRAM from an idle Noofy runner caused immediate blocking. | fixed | `runtime/memory`, `runtime/runners` | Idle Noofy-owned memory is treated as reclaimable and cleanup waits for observed release before admission continues. | Improve attribution of idle/resident memory where platform signals allow it. |
 | Active workflow followed by another run could block or be killed. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Active work queues by default; cleanup skips active runners. | Refine queueing so unrelated CPU-only/light work does not always wait behind GPU-heavy work. |
 | `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. The workflow run page and canvas run view now render distinct copy from `memory_status.state`. | Continue P3 polish across any remaining surfaces and next-step copy. |
-| Workflow queue required manual handoff and could strand records. | fixed | `runs/lifecycle_service` | Dispatch wakes automatically and processes eligible queue records before runner-start drains. | Continue to keep queue state observable in diagnostics. |
+| Workflow queue required manual handoff and could strand records. | fixed | `runs/lifecycle_service` | Dispatch wakes automatically and processes eligible queue records before runner-start drains. Real CUDA validation also removed a self-wake loop caused by reservation rollback bookkeeping. | Continue to keep queue state observable in diagnostics. |
 | Runner-start queue could strand records behind active work. | fixed | `runtime/runners/lifecycle_service`, `runs/lifecycle_service` | Runner-start draining is tied to run dispatch and runner state-change notifications. | No immediate follow-up beyond real-runner validation. |
 | Queue record could be removed before successful adapter submission. | fixed | `runs/queue_service`, `runs/orchestrator` | Records stay active through handoff and submission; terminal aliases are retained in a bounded ledger. | No immediate follow-up. |
 | Queue ID to job ID alias could break progress, result, output, logs, SSE, or cancel. | fixed | `runs/job_service`, `runs/result_service`, `runs/queue_service` | Public queue IDs resolve to canonical submitted jobs after submission and remain available while retained. | Consider persistence if queue/result aliases must survive backend restart. |
-| Requeue could busy-loop. | fixed | `runs/queue_service`, `runs/lifecycle_service` | Requeues use attempt counts, one attempt per dispatch epoch, max records per wake, backoff, and failure after repeated transient handoff failures. | No immediate follow-up. |
-| Two rapid Run clicks could both submit to the same runner. | fixed | `runtime/runners/supervisor`, `runs/orchestrator` | Submission reservations are atomic and serialize handoff. | Validate against real UI/backend double-click timing. |
+| Requeue could busy-loop. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Requeues use attempt counts, one attempt per dispatch epoch, max records per wake, backoff, and failure after repeated transient handoff failures. A real A10G pass found and fixed immediate self-wakes from queued handoff and reservation rollback bookkeeping. | No immediate follow-up. |
+| Two rapid Run clicks could both submit to the same runner. | fixed | `runtime/runners/supervisor`, `runs/orchestrator` | Submission reservations are atomic and serialize handoff. Busy bound isolated runners remain selected instead of falling back to the core adapter. Real A10G validation confirms queued alias handoff. | Validate through the packaged desktop UI as a final product check. |
 | Cleanup could unload a runner reserved by another request. | fixed | `runtime/runners/supervisor`, `runtime/memory/service` | Cleanup uses eviction reservations and rechecks active/reserved state. | No immediate follow-up. |
 | Cancellation could lose the race during `adapter.run_workflow(...)`. | fixed | `runs/job_service`, `runs/orchestrator`, `runtime/runners/supervisor` | Cancellation requests during adapter submission wait for canonical job registration, then cancel the submitted job through the alias. | No immediate follow-up. |
 | Terminal finalization could run twice. | fixed | `runs/result_service` | Per-job async locks and cached terminal outcomes guard sampling completion, learning, retry, history, gallery, runner release, and dispatch notifications. | No immediate follow-up. |
 | Terminal polling could call the adapter again after a cached terminal outcome. | fixed | `runs/result_service`, `runs/job_service` | Cached terminal outcomes are returned through result/progress paths. | No immediate follow-up. |
-| Core warm residency could be cleared before observed release. | fixed | `runtime/memory/service`, `runtime/runners/supervisor` | Core residency is cleared only after release polling confirms safe memory. Timeout/unavailable marks `release_failed`. | Validate with real CUDA `/free` and PyTorch allocator behavior. |
-| `/free` HTTP success was treated as actual release. | fixed | `runtime/memory/memory_governor`, `runtime/memory/service` | `/free` is now only an acknowledgment; async polling confirms release or fails closed. | Real hardware `/free` timeline validation remains. |
+| Core warm residency could be cleared before observed release. | fixed | `runtime/memory/service`, `runtime/runners/supervisor` | Core residency is cleared only after release polling observes an actual RAM/VRAM increase from the pre-cleanup baseline. Timeout/unavailable marks `release_failed`. | Validate with a real loaded CUDA model and delayed core `/free`. |
+| `/free` HTTP success was treated as actual release. | fixed | `runtime/memory/memory_governor`, `runtime/memory/service` | `/free` is now only an acknowledgment; async polling distinguishes safe observed capacity from an actual memory increase and fails closed for unproven core release. | Real loaded-model `/free` timeline validation remains. |
 | Cleanup failure was reported only as generic `blocked_by_memory`. | fixed | `runtime/memory/service`, API models, frontend | Compatibility `EngineJob.status` can remain `blocked_by_memory`, but `memory_status.state` reports `memory_cleanup_failed`; the workflow run page and canvas run view show cleanup failure separately from capacity failure. | Continue P3 polish outside the run page as needed. |
 | Local learning reused stale descriptor peaks for sampled jobs. | fixed | `engine/memory_observation` | Sampled jobs learn selected job-window peaks or no peak evidence; descriptor fallback is not used when a sampled job lacks selected peak evidence. | No immediate follow-up. |
 | Later larger runs might not raise runner/profile peak evidence. | fixed | `engine/memory_observation`, `runtime/runners/supervisor`, `LocalMemoryLearningStore` | Runner descriptor peaks and local summaries update as maxima and dedupe by non-null job ID. | P2 semantic profile extraction still needed so larger profiles are classified reliably. |
@@ -94,7 +100,7 @@ Ownership after P0/P1:
 | Compatibility helpers for unreleased internals could outlive the migration. | partially fixed | `EngineService`, tests, API/dependency wiring | Some migration proxies remain for compatibility while callers move to domain services. | Retire proxies when call sites are migrated. |
 | CPU-only/lightweight work may wait behind unrelated GPU-heavy work. | remaining | `runtime/memory`, `runtime/runners`, `runs/lifecycle_service` | Current default queues behind active Noofy work conservatively. | P2 active queueing policy refinement. |
 | Process compatibility, model residency, and execution profile are not fully separated. | remaining | `runtime/runners`, `runtime/memory`, workflow packages | Current compatibility keys and input profiles are useful but not expressive enough for smarter cross-workflow warm reuse. | P2 signature decomposition. |
-| Hardware-independent tests cannot prove real GPU allocator behavior. | deferred | validation/docs, platform observers, runner probe | Automated tests cover logic and mocks; production confidence needs real hardware validation. | See hardware validation section. |
+| Hardware-independent tests cannot prove real GPU allocator behavior. | partially fixed | validation/docs, platform observers, runner probe | A model-free NVIDIA A10G harness now validates real CUDA allocator telemetry, queue handoff, cancellation, isolated stop, observed release, and shutdown. Large-model and platform-specific confidence still needs hardware work. | See hardware validation section. |
 
 ## Remaining P2 Work
 
@@ -300,17 +306,33 @@ Current automated tests are intentionally hardware-independent. They verify
 policy, queueing, cleanup state, aliases, finalization, learning, and mocked
 platform signals, but they do not prove every real GPU allocator behavior.
 
-Required validation items:
+Completed NVIDIA A10G model-free pass on 2026-06-02:
+
+- managed CUDA PyTorch runner startup with PyTorch `2.12.0+cu130`
+- real 256 MB PyTorch CUDA allocator probe
+- NVML process attribution, process-tree RSS, runner allocator telemetry, and
+  `before_submit`, `workflow_execution`, and `after_completion` sampling
+- prompt-only and seed-only reruns reuse the same warm isolated runner and
+  memory-profile fingerprint
+- resolution and batch changes produce a separate memory-profile fingerprint
+- rapid concurrent Run submissions queue and hand off automatically through
+  the queue ID alias with bounded state-driven attempts
+- queued cancellation does not submit the canceled record or terminate the
+  active job
+- isolated runner eviction confirms stopped status and an NVML free-VRAM
+  increase from 22,331 MB to 22,589 MB
+- managed runner PID is absent after backend shutdown
+
+Still required:
 
 - NVIDIA CUDA large-model warm run
-- prompt-only and seed-only rerun with real VRAM residency
-- `/free` timeline with delayed release
+- prompt-only and seed-only rerun with substantial real model VRAM residency
+- core `/free` timeline with delayed release from a loaded model
 - PyTorch allocated and reserved memory after `/free`
 - external GPU pressure from another process
 - custom-node private cache behavior after `/free`
 - orphan child process cleanup after runner stop/eviction
-- rapid double-click on a real backend and runner
-- queued handoff on a real runner
+- packaged desktop UI rapid double-click against a real backend and runner
 - Windows GPU process attribution
 - Apple Silicon large-model MPS pressure
 - Linux PSI behavior under real memory pressure

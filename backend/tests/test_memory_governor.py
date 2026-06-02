@@ -825,6 +825,29 @@ async def test_wait_for_memory_release_async_records_pending_drop_and_unavailabl
     assert unavailable.timeline[-1]["state"] == "observer_unavailable"
 
 
+@pytest.mark.anyio
+async def test_wait_for_memory_release_async_requires_observed_drop_when_requested() -> None:
+    baseline = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=8_000,
+        memory_pressure=MemoryPressureLevel.LOW,
+    )
+    result = await wait_for_memory_release_async(
+        _SequenceMemoryObserver([baseline]),
+        required_free_vram_mb=6_000,
+        baseline_snapshot=baseline,
+        require_observed_drop=True,
+        timeout_seconds=0,
+    )
+
+    assert result.status is MemoryReleaseStatus.TIMEOUT
+    assert result.timeline[-1]["state"] == "timeout"
+    assert not any(
+        event["state"] == "observed_memory_drop"
+        for event in result.timeline
+    )
+
+
 def test_memory_release_satisfied_requires_margin_and_low_pressure() -> None:
     assert (
         memory_release_satisfied(

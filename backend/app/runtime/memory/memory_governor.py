@@ -1766,13 +1766,43 @@ async def wait_for_memory_release_async(
     *,
     required_free_vram_mb: int | None = None,
     required_free_ram_mb: int | None = None,
+    baseline_snapshot: MachineMemorySnapshot | None = None,
+    require_observed_drop: bool = False,
     timeout_seconds: float = 8,
     initial_poll_interval_seconds: float = 0.1,
     max_poll_interval_seconds: float = 1.0,
 ) -> MemoryReleaseCheckResult:
     """Adaptively poll after cleanup acknowledgment without blocking the loop."""
     snapshots: list[MachineMemorySnapshot] = []
-    timeline: list[dict[str, Any]] = [{"state": "release_requested"}]
+    timeline: list[dict[str, Any]] = [
+        {
+            "state": "release_requested",
+            "baseline_free_vram_mb": baseline_snapshot.free_vram_mb
+            if baseline_snapshot is not None
+            else None,
+            "baseline_free_ram_mb": baseline_snapshot.free_ram_mb
+            if baseline_snapshot is not None
+            else None,
+            "require_observed_drop": require_observed_drop,
+        }
+    ]
+    if require_observed_drop and (
+        baseline_snapshot is None or not baseline_snapshot.available
+    ):
+        timeline.append(
+            {
+                "state": "observer_unavailable",
+                "error": "memory_release_baseline_unavailable",
+            }
+        )
+        return MemoryReleaseCheckResult(
+            status=MemoryReleaseStatus.UNAVAILABLE,
+            required_free_vram_mb=required_free_vram_mb,
+            required_free_ram_mb=required_free_ram_mb,
+            snapshots=snapshots,
+            timeline=timeline,
+            reason_code="memory_release_baseline_unavailable",
+        )
     started = time.monotonic()
     interval = max(0.001, initial_poll_interval_seconds)
     previous_free_vram_mb: int | None = None
@@ -1790,14 +1820,25 @@ async def wait_for_memory_release_async(
                 timeline=timeline,
                 reason_code="memory_snapshot_unavailable",
             )
-        if memory_release_satisfied(
+        memory_drop_observed = _free_memory_increased(
+            snapshot,
+            baseline_snapshot=baseline_snapshot,
+            previous_free_vram_mb=previous_free_vram_mb,
+            previous_free_ram_mb=previous_free_ram_mb,
+        )
+        safe_memory_observed = memory_release_satisfied(
             snapshot,
             required_free_vram_mb=required_free_vram_mb,
             required_free_ram_mb=required_free_ram_mb,
+        )
+        if safe_memory_observed and (
+            not require_observed_drop or memory_drop_observed
         ):
             timeline.append(
                 {
-                    "state": "observed_memory_drop",
+                    "state": "observed_memory_drop"
+                    if memory_drop_observed
+                    else "observed_safe_memory",
                     "free_vram_mb": snapshot.free_vram_mb,
                     "free_ram_mb": snapshot.free_ram_mb,
                 }
@@ -1834,18 +1875,11 @@ async def wait_for_memory_release_async(
                 "free_ram_mb": snapshot.free_ram_mb,
             }
         )
-        memory_increased = (
-            previous_free_vram_mb is not None
-            and snapshot.free_vram_mb is not None
-            and snapshot.free_vram_mb > previous_free_vram_mb
-        ) or (
-            previous_free_ram_mb is not None
-            and snapshot.free_ram_mb is not None
-            and snapshot.free_ram_mb > previous_free_ram_mb
-        )
         timeline.append(
             {
-                "state": "partial_release" if memory_increased else "still_reserved_or_allocated",
+                "state": "partial_release"
+                if memory_drop_observed
+                else "still_reserved_or_allocated",
                 "free_vram_mb": snapshot.free_vram_mb,
                 "free_ram_mb": snapshot.free_ram_mb,
             }
@@ -1854,6 +1888,38 @@ async def wait_for_memory_release_async(
         previous_free_ram_mb = snapshot.free_ram_mb
         await asyncio.sleep(min(interval, max(0, timeout_seconds - elapsed)))
         interval = min(max_poll_interval_seconds, interval * 2)
+
+
+def _free_memory_increased(
+    snapshot: MachineMemorySnapshot,
+    *,
+    baseline_snapshot: MachineMemorySnapshot | None,
+    previous_free_vram_mb: int | None,
+    previous_free_ram_mb: int | None,
+) -> bool:
+    if (
+        baseline_snapshot is not None
+        and baseline_snapshot.free_vram_mb is not None
+        and snapshot.free_vram_mb is not None
+    ):
+        return snapshot.free_vram_mb > baseline_snapshot.free_vram_mb
+    return any(
+        current is not None and reference is not None and current > reference
+        for current, reference in [
+            (
+                snapshot.free_vram_mb,
+                baseline_snapshot.free_vram_mb
+                if baseline_snapshot is not None
+                else previous_free_vram_mb,
+            ),
+            (
+                snapshot.free_ram_mb,
+                baseline_snapshot.free_ram_mb
+                if baseline_snapshot is not None
+                else previous_free_ram_mb,
+            ),
+        ]
+    )
 
 
 def memory_release_satisfied(

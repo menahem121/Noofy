@@ -112,6 +112,13 @@ class _CustomNodeMemoryUncertainty:
         }
 
 
+@dataclass(frozen=True)
+class _PendingMemoryRelease:
+    reservation_tokens: list[str] = field(default_factory=list)
+    baseline_snapshot: MachineMemorySnapshot | None = None
+    require_observed_drop: bool = False
+
+
 class MemoryGovernorService:
     """Stateful memory admission, retry, and sampling orchestration.
 
@@ -149,7 +156,7 @@ class MemoryGovernorService:
         self._memory_retry_roots: dict[str, str] = {}
         self._memory_retry_attempted_roots: set[str] = set()
         self._memory_governor_metrics: dict[str, int] = {}
-        self._pending_release_reservations: dict[str, list[str]] = {}
+        self._pending_memory_releases: dict[str, _PendingMemoryRelease] = {}
         self.memory_observation = MemoryObservationCoordinator(
             runner_supervisor=runner_supervisor,
             log_store=log_store,
@@ -388,7 +395,11 @@ class MemoryGovernorService:
         self,
         decision: MemoryGovernorDecision,
     ):
-        reservation_tokens = self._pending_release_reservations.pop(decision.decision_id, [])
+        pending_release = self._pending_memory_releases.pop(
+            decision.decision_id,
+            _PendingMemoryRelease(),
+        )
+        reservation_tokens = pending_release.reservation_tokens
         if self.memory_observer is None:
             release_check = MemoryReleaseCheckResult(
                 status=MemoryReleaseStatus.UNAVAILABLE,
@@ -416,6 +427,8 @@ class MemoryGovernorService:
             self.memory_observer,
             required_free_vram_mb=required_free_vram_mb,
             required_free_ram_mb=required_free_ram_mb,
+            baseline_snapshot=pending_release.baseline_snapshot,
+            require_observed_drop=pending_release.require_observed_drop,
             timeout_seconds=settings.memory_release_timeout_seconds,
             initial_poll_interval_seconds=settings.memory_release_initial_poll_interval_seconds,
             max_poll_interval_seconds=settings.memory_release_max_poll_interval_seconds,
@@ -484,7 +497,25 @@ class MemoryGovernorService:
     ) -> bool:
         """Release idle Noofy-owned memory without terminating active work."""
         reservation_tokens: list[str] = []
-        for runner_id in runner_ids if runner_ids is not None else decision.evict_runner_ids:
+        baseline_snapshot = (
+            self.memory_observer.snapshot()
+            if self.memory_observer is not None
+            else None
+        )
+        require_observed_drop = False
+        cleanup_runner_ids = list(
+            runner_ids if runner_ids is not None else decision.evict_runner_ids
+        )
+        # Stop isolated processes first. If core cleanup is also requested,
+        # refresh its baseline after those releases so `/free` must prove its
+        # own additional drop rather than borrowing an isolated-runner delta.
+        cleanup_runner_ids.sort(
+            key=lambda runner_id: (
+                self.runner_supervisor.get_runner(runner_id).kind
+                is RunnerKind.CORE_COMFYUI
+            )
+        )
+        for runner_id in cleanup_runner_ids:
             runner = self.runner_supervisor.get_runner(runner_id)
             if _runner_is_active(runner):
                 self.log_store.add(
@@ -511,6 +542,12 @@ class MemoryGovernorService:
                 self._finalize_release_reservations(reservation_tokens, released=False)
                 return False
             if runner.kind is RunnerKind.CORE_COMFYUI:
+                require_observed_drop = True
+                baseline_snapshot = (
+                    self.memory_observer.snapshot()
+                    if self.memory_observer is not None
+                    else None
+                )
                 adapter = self.runner_supervisor.get_adapter(runner_id)
                 release_memory = getattr(adapter, "release_memory", None)
                 if not callable(release_memory):
@@ -599,7 +636,11 @@ class MemoryGovernorService:
                     "reason": decision.reason_code,
                 },
             )
-        self._pending_release_reservations[decision.decision_id] = reservation_tokens
+        self._pending_memory_releases[decision.decision_id] = _PendingMemoryRelease(
+            reservation_tokens=reservation_tokens,
+            baseline_snapshot=baseline_snapshot,
+            require_observed_drop=require_observed_drop,
+        )
         return True
 
     async def _stop_idle_runners_for_memory_retry(

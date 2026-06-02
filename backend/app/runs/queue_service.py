@@ -199,6 +199,7 @@ class WorkflowRunQueueService:
                     "last_reason": reason,
                     "transient_failure_count": failure_count,
                     "next_eligible_at": backoff,
+                    "reservation_token": None,
                     "updated_at": _now_iso(),
                 }
             )
@@ -219,6 +220,7 @@ class WorkflowRunQueueService:
                 update={
                     "status": WorkflowRunQueueStatus.SUBMITTED,
                     "submitted_job_id": job_id,
+                    "reservation_token": None,
                     "updated_at": _now_iso(),
                 }
             )
@@ -312,7 +314,12 @@ class WorkflowRunQueueService:
         reason: str | None,
     ) -> WorkflowRunQueueRecord:
         updated = record.model_copy(
-            update={"status": status, "last_reason": reason or record.last_reason, "updated_at": _now_iso()}
+            update={
+                "status": status,
+                "last_reason": reason or record.last_reason,
+                "reservation_token": None,
+                "updated_at": _now_iso(),
+            }
         )
         self._records[record.queue_id] = updated
         if record.queue_id not in self._terminal_queue_id_set:

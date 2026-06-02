@@ -342,18 +342,16 @@ class RunnerSupervisor:
     def acquire_runner(self, workflow_package: object) -> RunnerDescriptor:
         """Return the runner that should host `workflow_package`.
 
-        A workflow can be explicitly bound to a ready runner. If no binding
-        exists, or the bound runner is not ready, the core runner remains the
-        conservative fallback so existing behavior stays unchanged.
+        A workflow can be explicitly bound to a resident runner. Busy transient
+        states stay bound so a second submission queues behind the same runner
+        instead of leaking onto the core fallback. If no binding exists, or the
+        bound runner is genuinely unavailable, the core runner remains the
+        conservative fallback.
         """
         workflow_id = self._workflow_id(workflow_package)
         if workflow_id is not None:
             bound_runner = self.runner_for_workflow(workflow_id)
-            if bound_runner is not None and bound_runner.status in {
-                RunnerStatus.READY,
-                RunnerStatus.IDLE,
-                RunnerStatus.IDLE_WARM,
-            }:
+            if bound_runner is not None and _runner_is_resident(bound_runner):
                 return bound_runner
         return self.core_runner()
 
@@ -488,7 +486,12 @@ class RunnerSupervisor:
         self._notify_state_change("runner_memory_release_failed")
         return updated
 
-    def rollback_runner_reservation(self, token: str) -> RunnerDescriptor | None:
+    def rollback_runner_reservation(
+        self,
+        token: str,
+        *,
+        notify_state_change: bool = True,
+    ) -> RunnerDescriptor | None:
         with self._lock:
             reservation = self._reservations.pop(token, None)
             if reservation is None:
@@ -502,7 +505,8 @@ class RunnerSupervisor:
                 }
             )
             self._descriptors[reservation.runner_id] = updated
-        self._notify_state_change("runner_reservation_rolled_back")
+        if notify_state_change:
+            self._notify_state_change("runner_reservation_rolled_back")
         return updated
 
     def cancel_pre_submission_reservation(self, token: str) -> bool:
@@ -1060,6 +1064,8 @@ def _runner_is_resident(runner: RunnerDescriptor) -> bool:
         RunnerStatus.READY,
         RunnerStatus.IDLE,
         RunnerStatus.IDLE_WARM,
+        RunnerStatus.RESERVING,
+        RunnerStatus.SUBMITTING,
         RunnerStatus.RUNNING,
         RunnerStatus.QUEUED,
         RunnerStatus.QUEUED_PENDING_SWITCH,

@@ -47,6 +47,16 @@ The validation command:
 - prepares an isolated runner workspace through `CapsuleInstaller`
 - starts the managed runner through `RunnerProcessSupervisor`
 - runs a real model-free ComfyUI workflow through the backend run path
+- reruns after prompt-only and seed-only edits and confirms warm runner reuse
+  without creating a new memory-profile bucket
+- reruns after resolution and batch changes and confirms a separate profile
+  bucket with extracted estimate features
+- performs rapid concurrent Run submissions and confirms bounded automatic
+  queue handoff through the public queue ID alias
+- cancels a queued second run while the active run completes normally
+- evicts the idle isolated runner, polls for release, and records the observed
+  NVML VRAM increase
+- checks that the validated managed runner PID is gone after backend shutdown
 - records Memory Governor diagnostics, local learning, process-tree RSS, NVML
   per-process VRAM attribution, and sample windows
 
@@ -57,6 +67,33 @@ Useful fields in the JSON output:
 - `memory_sampling_finish.sample_windows_observed`: lifecycle windows observed
 - `memory_sampling_finish.attribution_sources`: process/NVML/allocator sources
 - `local_memory_summaries`: local learning stored for the validation workflow
+- `p0_p1_lifecycle`: warm reruns, profile split, rapid queue handoff, queued
+  cancellation, and isolated release-polling results
+- `post_shutdown_cuda_processes`: managed-runner shutdown check
 
 Model loading is not meaningfully validated by the default workflow because it
 uses only `EmptyImage -> SaveImage` and no model files.
+
+## Latest A10G Pass
+
+On 2026-06-02, the checked-in harness passed on an NVIDIA A10G with 23,028 MB
+VRAM, NVIDIA driver `595.71.05`, and managed PyTorch `2.12.0+cu130`.
+
+Observed highlights:
+
+- standalone allocator probe recorded a real 256 MB CUDA allocation
+- prompt-only and seed-only reruns reused the same warm isolated runner and
+  memory-profile fingerprint
+- resolution and batch changes produced a different profile fingerprint
+- rapid double-click handoff submitted automatically under the queue alias with
+  three bounded, state-driven handoff attempts and no transient submission
+  failure
+- queued cancellation completed without submitting the canceled record
+- isolated runner eviction increased free VRAM from 22,331 MB to 22,589 MB and
+  recorded `release_requested -> observed_memory_drop`
+- the managed runner PID was absent after shutdown
+
+This does not replace the pending large-model CUDA pass. A real checkpoint or
+other substantial model is still needed to validate large warm residency,
+delayed core `/free`, allocator reserved-memory behavior after `/free`, and
+private custom-node caches.

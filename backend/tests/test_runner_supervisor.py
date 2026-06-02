@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +11,7 @@ from app.diagnostics import LogStore
 from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
+from app.runtime.memory import service as memory_service_module
 from app.runtime.memory.memory_governor import (
     BackendAllocatorMemorySample,
     GpuProcessMemorySample,
@@ -17,9 +19,13 @@ from app.runtime.memory.memory_governor import (
     MachineMemorySnapshot,
     MemoryAttributionQuality,
     MemoryBackend,
+    MemoryDecisionAction,
+    MemoryGovernorDecision,
     MemoryPressureLevel,
+    MemoryReleaseStatus,
     MemorySampleWindow,
     ProcessTreeMemorySample,
+    WorkflowMemoryEstimate,
 )
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
@@ -486,6 +492,22 @@ def test_supervisor_acquires_warm_bound_workflow_runner() -> None:
     assert supervisor.acquire_runner(package).runner_id == "isolated-1"
 
 
+@pytest.mark.parametrize(
+    "status",
+    [RunnerStatus.RESERVING, RunnerStatus.SUBMITTING, RunnerStatus.RUNNING],
+)
+def test_supervisor_keeps_busy_workflow_bound_to_isolated_runner(status: RunnerStatus) -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    descriptor = _isolated_descriptor(status=status)
+    supervisor.upsert_runner(descriptor, RecordingAdapter())
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
+
+    assert supervisor.acquire_runner(package).runner_id == "isolated-1"
+
+
 def test_supervisor_falls_back_to_core_when_bound_runner_is_not_ready() -> None:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
@@ -823,6 +845,19 @@ class StaticMemoryObserver:
         return self.snapshot_value
 
 
+class ReleaseAwareMemoryObserver:
+    def __init__(self, adapter: RecordingAdapter) -> None:
+        self.adapter = adapter
+
+    def snapshot(self) -> MachineMemorySnapshot:
+        return MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=10_000 if self.adapter.release_memory_calls else 8_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+
+
 class SequenceMemoryObserver:
     def __init__(self, snapshots: list[MachineMemorySnapshot]) -> None:
         self.snapshots = snapshots
@@ -942,6 +977,41 @@ def _build_service(
         runner_memory_telemetry_reader=runner_memory_telemetry_reader,
     )
     return service, supervisor
+
+
+def test_existing_workflow_queue_wait_does_not_request_immediate_redispatch() -> None:
+    service, supervisor = _build_service(RecordingAdapter())
+    reasons: list[str] = []
+    service.run_orchestrator.request_run_dispatch = reasons.append
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
+    snapshot = service.run_orchestrator._run_submission_snapshot(
+        package=package,
+        inputs={},
+        output_preferences_snapshot=None,
+        run_submission_snapshot=None,
+    )
+    runner = supervisor.core_runner()
+
+    queued = service.run_orchestrator._runner_reservation_wait_job(
+        workflow_id="text_to_image_v0",
+        inputs={},
+        options={},
+        runner=runner,
+        run_submission_snapshot=snapshot,
+        queue_id=None,
+    )
+    assert reasons == ["submission_reservation_busy"]
+
+    reasons.clear()
+    service.run_orchestrator._runner_reservation_wait_job(
+        workflow_id="text_to_image_v0",
+        inputs={},
+        options={},
+        runner=runner,
+        run_submission_snapshot=snapshot,
+        queue_id=queued.queue_id,
+    )
+    assert reasons == []
 
 
 def test_memory_input_profile_ignores_prompt_and_seed_but_keeps_memory_changing_inputs() -> None:
@@ -1727,6 +1797,18 @@ async def test_workflow_run_releases_incompatible_warm_core_memory_then_submits(
                 MachineMemorySnapshot(
                     backend=MemoryBackend.CUDA,
                     total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
                     free_vram_mb=10_000,
                     memory_pressure=MemoryPressureLevel.LOW,
                 ),
@@ -1803,6 +1885,87 @@ async def test_core_residency_is_retained_when_cleanup_observer_becomes_unavaila
     assert adapter.run_calls == []
     assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
     assert supervisor.core_runner().last_workflow_id == "workflow-a"
+
+
+@pytest.mark.anyio
+async def test_mixed_cleanup_refreshes_core_baseline_after_isolated_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = RecordingAdapter()
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingStopCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingStopCoordinator(supervisor)
+        return coordinator
+
+    service, supervisor = _build_service(
+        adapter,
+        runner_process_coordinator_factory=coordinator_factory,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=8_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=8_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="idle-heavy",
+            status=RunnerStatus.IDLE_WARM,
+        ),
+        RecordingAdapter(),
+    )
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="mixed_cleanup_validation",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID, "idle-heavy"],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=100,
+            estimated_peak_ram_mb=100,
+        ),
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="mixed_cleanup_test",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(decision)
+
+    assert coordinator is not None
+    assert coordinator.stopped_runner_ids == ["idle-heavy"]
+    assert cleaned_up is True
+    assert adapter.release_memory_calls == 1
+    assert release.status is MemoryReleaseStatus.TIMEOUT
+    assert release.timeline[0]["baseline_free_vram_mb"] == 8_000
+    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
 
 
 @pytest.mark.anyio
@@ -2173,14 +2336,7 @@ async def test_get_result_retries_once_after_memory_cleanup(tmp_path: Path) -> N
     service, _ = _build_service(
         adapter,
         memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
-        memory_observer=StaticMemoryObserver(
-            MachineMemorySnapshot(
-                backend=MemoryBackend.CUDA,
-                total_vram_mb=12_000,
-                free_vram_mb=8_000,
-                memory_pressure=MemoryPressureLevel.LOW,
-            )
-        ),
+        memory_observer=ReleaseAwareMemoryObserver(adapter),
     )
 
     job = await service.run_workflow("text_to_image_v0", inputs={"prompt": "hello"}, options={})
@@ -2211,14 +2367,7 @@ async def test_get_result_does_not_repeat_memory_retry(tmp_path: Path) -> None:
     service, _ = _build_service(
         adapter,
         memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
-        memory_observer=StaticMemoryObserver(
-            MachineMemorySnapshot(
-                backend=MemoryBackend.CUDA,
-                total_vram_mb=12_000,
-                free_vram_mb=8_000,
-                memory_pressure=MemoryPressureLevel.LOW,
-            )
-        ),
+        memory_observer=ReleaseAwareMemoryObserver(adapter),
     )
 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
@@ -2301,6 +2450,7 @@ async def test_run_workflow_queues_behind_active_noofy_job_even_when_margin_is_a
     supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    await asyncio.sleep(0.05)
 
     assert isinstance(job, EngineJob)
     assert job.status == "queued_pending_memory"
@@ -2312,6 +2462,9 @@ async def test_run_workflow_queues_behind_active_noofy_job_even_when_margin_is_a
     assert job.memory_status["state"] == "waiting_for_active_workflow"
     assert selected_adapter.run_calls == []
     assert supervisor.job_registry.snapshot() == {}
+    queued = service.workflow_run_queue_service.get(job.queue_id)
+    assert queued is not None
+    assert queued.attempt_count == 0
 
 
 @pytest.mark.anyio

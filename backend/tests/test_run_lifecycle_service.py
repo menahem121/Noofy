@@ -75,12 +75,16 @@ def test_workflow_queue_uses_uuid_alias_and_same_id_requeue() -> None:
 
     claimed = queue.claim_next(dispatch_epoch=1)
     assert claimed is not None
+    queue.set_reservation(claimed.queue_id, "runner-reservation-1")
     requeued = queue.requeue(claimed.queue_id, reason="active_workflow", transient=False)
     assert requeued is not None
     assert requeued.queue_id == record.queue_id
+    assert requeued.reservation_token is None
 
+    queue.set_reservation(record.queue_id, "runner-reservation-2")
     submitted = queue.mark_submitted(record.queue_id, job_id="job-1")
     assert submitted is not None
+    assert submitted.reservation_token is None
     assert queue.resolve(record.queue_id).job_id == "job-1"
     assert queue.resolve("job-1").queue_id == record.queue_id
     queue.mark_terminal("job-1")
