@@ -8,6 +8,7 @@ explicit while the workflow-run queue remains in runs/.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import settings
@@ -54,6 +55,38 @@ from app.workflows.model_grouping import total_required_model_size_bytes
 from app.workflows.package import WorkflowPackage
 
 RunWorkflow = Callable[..., Awaitable[Any]]
+
+
+@dataclass(frozen=True)
+class _RunEstimateFeatures:
+    resolution_width: int | None = None
+    resolution_height: int | None = None
+    batch_size: int | None = None
+    frame_count: int | None = None
+    workflow_type: str | None = None
+    sources: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def effective_batch_size(self) -> int:
+        batch_size = self.batch_size or 1
+        if self.frame_count is None or self.frame_count <= 1:
+            return batch_size
+        return max(1, batch_size * self.frame_count)
+
+    @property
+    def empty(self) -> bool:
+        return not self.sources and self.workflow_type is None
+
+    def diagnostic_details(self) -> dict[str, Any]:
+        return {
+            "resolution_width": self.resolution_width,
+            "resolution_height": self.resolution_height,
+            "batch_size": self.batch_size,
+            "frame_count": self.frame_count,
+            "effective_batch_size": self.effective_batch_size,
+            "workflow_type": self.workflow_type,
+            "sources": self.sources,
+        }
 
 
 class MemoryGovernorService:
@@ -213,6 +246,8 @@ class MemoryGovernorService:
         package: WorkflowPackage,
         workflow_id: str,
         runner: Any,
+        inputs: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
         input_profile_fingerprint: str | None = None,
         memory_retry_after_cleanup: bool = False,
     ) -> MemoryGovernorDecision | None:
@@ -225,6 +260,7 @@ class MemoryGovernorService:
             machine_snapshot=machine_snapshot,
             input_profile_fingerprint=input_profile_fingerprint,
         )
+        estimate_features = _run_estimate_features(package, inputs or {}, options or {})
         estimate = build_workflow_memory_estimate(
             WorkflowMemoryEstimateRequest(
                 workflow_id=workflow_id,
@@ -239,6 +275,10 @@ class MemoryGovernorService:
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb,
                 required_model_size_mb=_required_model_size_mb_from_package(package),
+                resolution_width=estimate_features.resolution_width,
+                resolution_height=estimate_features.resolution_height,
+                batch_size=estimate_features.effective_batch_size,
+                workflow_type=estimate_features.workflow_type,
             )
         )
         resident_runners = []
@@ -260,6 +300,15 @@ class MemoryGovernorService:
                 resident_runners=resident_runners,
             )
         )
+        if not estimate_features.empty:
+            decision = decision.model_copy(
+                update={
+                    "developer_details": {
+                        **decision.developer_details,
+                        "runtime_estimate_features": estimate_features.diagnostic_details(),
+                    }
+                }
+            )
         record_memory_governor_decision(self.log_store, decision)
         self.record_metric(f"workflow_run_decision_{decision.action.value}")
         if (
@@ -741,6 +790,165 @@ def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None
     if total_size_bytes <= 0:
         return None
     return max(1, total_size_bytes // (1024 * 1024))
+
+
+def _run_estimate_features(
+    package: WorkflowPackage,
+    inputs: dict[str, Any],
+    options: dict[str, Any],
+) -> _RunEstimateFeatures:
+    values = list(_iter_runtime_feature_values(package, inputs, options))
+    width = _first_int_feature(values, feature="width")
+    height = _first_int_feature(values, feature="height")
+    batch_size = _first_int_feature(values, feature="batch")
+    frame_count = _first_int_feature(values, feature="frames")
+    workflow_type = _infer_workflow_type(package)
+    sources: dict[str, str] = {}
+    for name, feature in [
+        ("resolution_width", width),
+        ("resolution_height", height),
+        ("batch_size", batch_size),
+        ("frame_count", frame_count),
+    ]:
+        if feature is not None:
+            sources[name] = feature[1]
+    if workflow_type is not None:
+        sources["workflow_type"] = "package_metadata_or_graph"
+    return _RunEstimateFeatures(
+        resolution_width=width[0] if width is not None else None,
+        resolution_height=height[0] if height is not None else None,
+        batch_size=batch_size[0] if batch_size is not None else None,
+        frame_count=frame_count[0] if frame_count is not None else None,
+        workflow_type=workflow_type,
+        sources=sources,
+    )
+
+
+def _iter_runtime_feature_values(
+    package: WorkflowPackage,
+    inputs: dict[str, Any],
+    options: dict[str, Any],
+):
+    for workflow_input in package.inputs:
+        value, source = _workflow_input_value(package, workflow_input, inputs)
+        if value is None:
+            continue
+        node = package.comfyui_graph.get(workflow_input.binding.node_id)
+        class_type = node.get("class_type") if isinstance(node, dict) else None
+        yield (
+            {
+                workflow_input.id,
+                workflow_input.binding.input_name,
+                workflow_input.control,
+                str(class_type or ""),
+            },
+            value,
+            source,
+        )
+    for option_name, value in options.items():
+        yield ({str(option_name)}, value, f"option:{option_name}")
+    for node_id, node in package.comfyui_graph.items():
+        if not isinstance(node, dict):
+            continue
+        node_inputs = node.get("inputs")
+        if not isinstance(node_inputs, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        for input_name, value in node_inputs.items():
+            yield ({str(input_name), class_type}, value, f"graph:{node_id}.{input_name}")
+
+
+def _workflow_input_value(
+    package: WorkflowPackage,
+    workflow_input: Any,
+    inputs: dict[str, Any],
+) -> tuple[Any, str]:
+    if workflow_input.id in inputs:
+        return inputs[workflow_input.id], f"input:{workflow_input.id}"
+    if workflow_input.default is not None:
+        return workflow_input.default, f"default:{workflow_input.id}"
+    node = package.comfyui_graph.get(workflow_input.binding.node_id)
+    node_inputs = node.get("inputs") if isinstance(node, dict) else None
+    if isinstance(node_inputs, dict) and workflow_input.binding.input_name in node_inputs:
+        return (
+            node_inputs[workflow_input.binding.input_name],
+            f"graph:{workflow_input.binding.node_id}.{workflow_input.binding.input_name}",
+        )
+    return None, f"input:{workflow_input.id}"
+
+
+def _first_int_feature(values, *, feature: str) -> tuple[int, str] | None:
+    for raw_names, value, source in values:
+        names = {_normalize_feature_name(name) for name in raw_names if name}
+        if not _names_match_feature(names, feature):
+            continue
+        parsed = _positive_int(value)
+        if parsed is not None:
+            return parsed, source
+    return None
+
+
+def _names_match_feature(names: set[str], feature: str) -> bool:
+    if feature == "width":
+        return any(name == "width" or name.endswith("_width") for name in names)
+    if feature == "height":
+        return any(name == "height" or name.endswith("_height") for name in names)
+    if feature == "batch":
+        return any(
+            name in {"batch", "batch_size", "num_images", "image_count", "latent_count"}
+            or name.endswith("_batch_size")
+            for name in names
+        )
+    if feature == "frames":
+        return any(
+            name in {"frames", "frame_count", "num_frames", "video_frames"}
+            or name.endswith("_frame_count")
+            or name.endswith("_frames")
+            for name in names
+        )
+    return False
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 1 else None
+
+
+def _infer_workflow_type(package: WorkflowPackage) -> str | None:
+    tokens = [
+        package.metadata.id,
+        package.metadata.name,
+        package.metadata.display_name or "",
+        package.metadata.category,
+        *package.metadata.tags,
+    ]
+    graph_types = [
+        str(node.get("class_type") or "")
+        for node in package.comfyui_graph.values()
+        if isinstance(node, dict)
+    ]
+    normalized = " ".join(_normalize_feature_name(value) for value in [*tokens, *graph_types])
+    if "controlnet" in normalized:
+        return "controlnet"
+    if "upscale" in normalized or "upscaler" in normalized:
+        return "upscale"
+    if any(token in normalized for token in ["video", "animate", "svd", "ltxv"]):
+        return "video"
+    if "img2img" in normalized or "loadimage" in normalized or "vaeencode" in normalized:
+        return "img2img"
+    if "emptylatentimage" in normalized and "ksampler" in normalized:
+        return "txt2img"
+    return None
+
+
+def _normalize_feature_name(value: Any) -> str:
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return "".join(ch for ch in normalized if ch.isalnum() or ch == "_")
 
 
 def _observed_hardware_int(package: WorkflowPackage, key: str) -> int | None:

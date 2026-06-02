@@ -1041,6 +1041,60 @@ def test_memory_input_profile_keeps_string_fields_that_are_not_prompt_text() -> 
     assert model_changed != base
 
 
+@pytest.mark.anyio
+async def test_workflow_run_memory_estimate_uses_runtime_dimensions_and_graph_batch_defaults() -> None:
+    model = ModelInfo(
+        folder="checkpoints",
+        filename="v1-5-pruned-emaonly-fp16.safetensors",
+    )
+    memory_snapshot = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=24_000,
+            free_vram_mb=20_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    small_service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=memory_snapshot,
+    )
+    large_service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=memory_snapshot,
+    )
+
+    small = await small_service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "width": 512, "height": 512},
+        options={},
+    )
+    large = await large_service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "width": 1024, "height": 1024},
+        options={},
+    )
+
+    assert isinstance(small, EngineJob)
+    assert isinstance(large, EngineJob)
+    assert small.memory_decision is not None
+    assert large.memory_decision is not None
+    small_estimate = small.memory_decision["workflow_estimate"]
+    large_estimate = large.memory_decision["workflow_estimate"]
+    small_features = small.memory_decision["developer_details"]["runtime_estimate_features"]
+
+    assert small_estimate["source"] == "heuristic"
+    assert large_estimate["source"] == "heuristic"
+    assert large_estimate["estimated_peak_vram_mb"] > small_estimate["estimated_peak_vram_mb"]
+    assert small_features["resolution_width"] == 512
+    assert small_features["resolution_height"] == 512
+    assert small_features["batch_size"] == 1
+    assert small_features["workflow_type"] == "txt2img"
+    assert small_features["sources"]["resolution_width"] == "input:width"
+    assert small_features["sources"]["resolution_height"] == "input:height"
+    assert small_features["sources"]["batch_size"] == "graph:5.batch_size"
+
+
 def test_engine_service_runner_lease_round_trip_uses_bound_runner() -> None:
     service, supervisor = _build_service(RecordingAdapter())
     supervisor.upsert_runner(

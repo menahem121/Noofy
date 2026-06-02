@@ -2602,6 +2602,8 @@ def _workflow_type_heuristic_factor(workflow_type: str | None) -> float:
     normalized = workflow_type.lower().replace("-", "_")
     if "controlnet" in normalized or "img2img" in normalized:
         return 1.2
+    if "video" in normalized or "animate" in normalized:
+        return 1.25
     if "upscale" in normalized or "post" in normalized:
         return 0.8
     return 1.0

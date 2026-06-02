@@ -1012,11 +1012,22 @@ def test_build_workflow_memory_estimate_adjusts_heuristic_by_workflow_type() -> 
             workflow_type="upscale",
         )
     )
+    video = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-video",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            workflow_type="video",
+        )
+    )
 
     assert base.estimated_peak_vram_mb is not None
     assert controlnet.estimated_peak_vram_mb is not None
     assert upscale.estimated_peak_vram_mb is not None
+    assert video.estimated_peak_vram_mb is not None
     assert controlnet.estimated_peak_vram_mb > base.estimated_peak_vram_mb
+    assert video.estimated_peak_vram_mb > base.estimated_peak_vram_mb
     assert upscale.estimated_peak_vram_mb < base.estimated_peak_vram_mb
 
 

@@ -33,6 +33,9 @@ the lifecycle foundation expected for production work:
 - explicit cleanup and blocking states in backend payloads, including
   `memory_cleanup_failed`, `blocked_external_pressure`,
   `blocked_exceeds_capacity`, and `blocked_unattributed_pressure`
+- first P2 estimate-enrichment slice: submitted width/height, graph/default
+  batch size, frame count as effective batch multiplier, and inferred workflow
+  type now feed the existing heuristic estimate and developer diagnostics
 
 Ownership after P0/P1:
 
@@ -53,7 +56,7 @@ Ownership after P0/P1:
 | Same workflow rerun double-counted the warm runner's resident VRAM. | fixed | `runtime/memory`, `runs/orchestrator` | Same-workflow warm reuse no longer subtracts the full peak again for compatible resident state. | Broaden warm reuse in P2 for different workflows sharing the same resident model set. |
 | Prompt-only edits created a new memory bucket. | fixed | `engine/memory_observation`, `runs/orchestrator` | Text prompt controls are treated as memory-neutral when bindings identify them as prompt/text fields. | Add publisher/dashboard-declared memory-affecting metadata so unusual controls are classified explicitly. |
 | Seed-only edits created a new memory bucket. | fixed | `engine/memory_observation`, workflow package bindings | Seed widgets are treated as memory-neutral. | Same metadata follow-up as prompt controls for packages with custom seed controls. |
-| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted, so resolution/batch/model-like values can split buckets. P2 still needs semantic extraction and declared bindings. | Implement input-value-aware estimate enrichment and publisher-declared memory-affecting bindings. |
+| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted, and the first P2 slice semantically extracts width/height, batch, frame count, and workflow type into heuristic estimates. P2 still needs selected model/LoRA/precision semantics and declared bindings. | Implement publisher-declared memory-affecting bindings and richer model/runtime-option extraction. |
 | Low free VRAM from an idle Noofy runner caused immediate blocking. | fixed | `runtime/memory`, `runtime/runners` | Idle Noofy-owned memory is treated as reclaimable and cleanup waits for observed release before admission continues. | Improve attribution of idle/resident memory where platform signals allow it. |
 | Active workflow followed by another run could block or be killed. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Active work queues by default; cleanup skips active runners. | Refine queueing so unrelated CPU-only/light work does not always wait behind GPU-heavy work. |
 | `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. Frontend still needs more distinct copy. | P3 UX polish for each backend memory state. |
@@ -87,12 +90,22 @@ admission decisions on top of the now-stable lifecycle.
 
 ### Input-Value-Aware Memory Estimates
 
-Implement semantic extraction of memory-affecting values from workflow packages,
-dashboard controls, and run options:
+Initial slice completed:
 
-- image dimensions and generated image size
-- batch size, iteration count, and latent count
-- video frame count, FPS-related frame windows, and clip/image sequence length
+- submitted width/height values are extracted from workflow/dashboard bindings
+- graph and workflow input defaults are used when submitted values are absent
+- batch size is extracted from submitted values, defaults, or graph inputs
+- frame count is extracted and used as an effective batch multiplier
+- workflow type is inferred from package metadata and graph node types
+- extracted features are recorded in Memory Governor developer diagnostics
+
+Remaining semantic extraction work:
+
+- image dimensions beyond simple width/height pairs, including generated image
+  size and media-derived dimensions
+- iteration count and latent count beyond batch size
+- FPS-related frame windows and clip/image sequence length beyond simple frame
+  count
 - selected checkpoint/model, refiner, VAE, encoder, ControlNet, IPAdapter, and
   other model-bearing inputs
 - selected LoRAs and LoRA strength sets when they affect model residency or

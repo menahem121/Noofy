@@ -348,6 +348,8 @@ class RunOrchestrator:
                 package=package,
                 workflow_id=workflow_id,
                 runner=runner,
+                inputs=runtime_inputs,
+                options=options,
                 input_profile_fingerprint=input_profile_fingerprint,
                 memory_retry_after_cleanup=memory_retry_after_cleanup,
             )
