@@ -1676,6 +1676,46 @@ def test_memory_admission_reuses_same_runner_model_residency_for_changed_executi
     assert ownership["same_warm_runner_model_residency_signature"] == "sha256:model-a"
 
 
+def test_memory_admission_reuses_same_runner_model_residency_even_under_high_pressure() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
+            creator_observed_peak_vram_mb=6000,
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-a",
+        )
+    )
+    warm_core = RunnerMemorySnapshot(
+        runner_id="core",
+        kind=RunnerKind.CORE_COMFYUI,
+        memory_class=RunnerMemoryClass.GPU_HEAVY,
+        status=RunnerStatus.IDLE_WARM,
+        last_workflow_id="workflow-a",
+        model_residency_signature="sha256:model-a",
+        execution_profile_signature="sha256:execution-a",
+        observed_idle_vram_mb=6000,
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            selected_runner=warm_core,
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.REUSE_RUNNER
+    assert decision.reason_code == "same_runner_model_residency_reuse"
+    assert decision.evict_runner_ids == []
+    assert decision.developer_details["same_runner_incremental_estimated_vram_mb"] == 0
+
+
 def test_memory_admission_accounts_for_incremental_execution_growth_on_same_runner() -> None:
     estimate = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(
@@ -1840,6 +1880,100 @@ def test_memory_admission_preserves_useful_base_residency_when_lora_is_obsolete(
     assert "per_lora_cleanup_unsupported" in candidates["runner-base"]["reasons"]
     assert candidates["runner-base"]["useful_overlap_score"] > candidates["runner-unrelated"]["useful_overlap_score"]
     assert pressure["precise_cleanup"]["per_lora_unload"] == "unsupported_by_current_adapter"
+
+
+def test_same_runner_lora_change_delegates_intra_runner_reuse_to_comfyui() -> None:
+    requested_payload = _model_payload(
+        models=[("checkpoint", "base.safetensors"), ("vae", "main.vae.safetensors")],
+        loras=["new-style.safetensors"],
+    )
+    warm_runner = _runner(
+        "core",
+        RunnerMemoryClass.GPU_HEAVY,
+        kind=RunnerKind.CORE_COMFYUI,
+        status=RunnerStatus.IDLE_WARM,
+        idle_vram_mb=6000,
+        model_payload=_model_payload(
+            models=[("checkpoint", "base.safetensors"), ("vae", "main.vae.safetensors")],
+            loras=["old-style.safetensors"],
+        ),
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=WorkflowMemoryEstimate(
+                workflow_id="workflow-b",
+                memory_class=RunnerMemoryClass.GPU_HEAVY,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                estimated_peak_vram_mb=5000,
+                model_residency_signature="sha256:new-lora",
+                model_residency_payload=requested_payload,
+            ),
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            selected_runner=warm_runner,
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.REUSE_RUNNER
+    assert decision.reason_code == "same_runner_comfyui_managed_model_reuse"
+    assert decision.evict_runner_ids == []
+    details = decision.developer_details
+    assert details["comfyui_delegated_intra_runner_model_reuse"] is True
+    assert details["same_runner_model_residency_reuse"] is False
+    assert details["useful_overlap_reasons"] == ["same_checkpoint", "same_vae"]
+    assert details["custom_node_memory_uncertain"] is False
+
+
+def test_same_runner_changed_model_without_useful_overlap_uses_cleanup_policy() -> None:
+    requested_payload = _model_payload(
+        models=[("checkpoint", "new-base.safetensors")],
+        loras=["new-style.safetensors"],
+    )
+    warm_runner = _runner(
+        "core",
+        RunnerMemoryClass.GPU_HEAVY,
+        kind=RunnerKind.CORE_COMFYUI,
+        status=RunnerStatus.IDLE_WARM,
+        idle_vram_mb=6000,
+        model_payload=_model_payload(
+            models=[("checkpoint", "old-base.safetensors")],
+            loras=["old-style.safetensors"],
+        ),
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=WorkflowMemoryEstimate(
+                workflow_id="workflow-b",
+                memory_class=RunnerMemoryClass.GPU_HEAVY,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                estimated_peak_vram_mb=5000,
+                model_residency_signature="sha256:new-base",
+                model_residency_payload=requested_payload,
+            ),
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            selected_runner=warm_runner,
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.EVICT_THEN_START
+    assert decision.reason_code == "memory_pressure_high"
+    assert decision.evict_runner_ids == ["core"]
+    assert "same_runner_comfyui_managed_reuse" not in decision.developer_details
+    pressure = decision.developer_details["residency_pressure"]
+    assert pressure["selected_cleanup_modes"] == ["runner_free"]
 
 
 def test_memory_admission_queued_demand_adds_reuse_value_before_cleanup() -> None:
@@ -2070,6 +2204,7 @@ def _runner(
     runner_id: str,
     memory_class: RunnerMemoryClass,
     *,
+    kind: RunnerKind = RunnerKind.ISOLATED_COMFYUI,
     confidence: RunnerMemoryEstimateConfidence = RunnerMemoryEstimateConfidence.MEDIUM,
     source: RunnerMemoryEstimateSource = RunnerMemoryEstimateSource.LOCAL_OBSERVED,
     status: RunnerStatus = RunnerStatus.IDLE_WARM,
@@ -2080,6 +2215,7 @@ def _runner(
 ) -> RunnerMemorySnapshot:
     return RunnerMemorySnapshot(
         runner_id=runner_id,
+        kind=kind,
         memory_class=memory_class,
         memory_estimate_confidence=confidence,
         memory_estimate_source=source,

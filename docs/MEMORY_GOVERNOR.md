@@ -100,6 +100,17 @@ runners are useful for diagnostics and scheduling, but Noofy does not assume
 loaded model memory can be shared or reused across ComfyUI processes,
 dependency environments, or devices.
 
+When the selected ComfyUI runner is the same compatible process and the
+requested workflow still overlaps useful resident model objects, Noofy
+delegates intra-runner reuse to ComfyUI instead of forcing global cleanup.
+ComfyUI keeps prompt/output caches across runs, invalidates nodes whose input
+signatures changed, reuses cached checkpoint/encoder/VAE outputs when their
+inputs did not change, and lets its model manager reuse or replace loaded
+model-patcher clones as needed. A LoRA change should therefore be allowed to
+flow through the same runner when the base model remains useful; Noofy observes
+the result and uses cleanup/retry only if memory pressure proves the normal
+engine path was not enough.
+
 When the execution profile changes on the same runner, admission compares the
 new estimated peak against the runner's resident memory evidence and checks the
 incremental RAM/VRAM pressure where possible. This avoids double-counting the
@@ -134,7 +145,9 @@ or model modifiers lower reuse value only when no active, queued, or open work
 still needs them. For V1, the proven ComfyUI cleanup modes are runner-level
 `/free` for the core runner and isolated runner eviction. Precise per-LoRA or
 per-model cleanup is a future adapter capability, not a guaranteed ComfyUI
-feature.
+feature. Runner-level cleanup is a fallback for proven pressure, release
+failure, incompatible runners, or low-reuse idle residency; it is not used to
+preempt normal same-runner ComfyUI model reuse.
 
 `/free` HTTP success is only an acknowledgment. Noofy records a pre-cleanup
 baseline and polls RAM/VRAM asynchronously with adaptive intervals until
@@ -199,6 +212,9 @@ reclaimable, the ComfyUI adapter requests model unload and allocator-cache
 release while leaving the trusted process alive. Noofy does not assume a
 specific LoRA or model can be unloaded by reference unless the active adapter
 explicitly exposes that capability and release is confirmed by observation.
+Noofy also avoids calling global `/free` merely because a same-runner LoRA or
+model-modifier input changed while useful base-model residency still overlaps
+the request.
 Runtime Isolation, not the Memory Governor, owns dependency-conflict boundaries.
 
 ## Platform Policy

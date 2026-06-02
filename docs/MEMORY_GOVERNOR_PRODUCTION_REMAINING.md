@@ -60,8 +60,9 @@ the lifecycle foundation expected for production work:
 - sixth P2 residency-pressure slice: cleanup planning now scores useful
   overlap before reclaiming idle residency, including same checkpoint, VAE,
   encoder, ControlNet/IPAdapter, LoRA set, open leases, queued demand, recent
-  use, and reload-cost estimate; V1 cleanup capabilities are explicit and the
-  proven ComfyUI modes remain runner-level `/free` and isolated runner eviction
+  use, and reload-cost estimate; same-runner useful-overlap changes delegate
+  intra-runner reuse to ComfyUI first, while V1 fallback cleanup capabilities
+  remain runner-level `/free` and isolated runner eviction
 - first P3 frontend memory-state slice: the workflow run page and default
   canvas run view now render distinct user-facing copy for queueing, cleanup,
   retry, cleanup failure, external pressure, capacity failure, and unattributed
@@ -298,6 +299,9 @@ Implemented V1 behavior:
 - candidate diagnostics expose reuse value and useful overlap, including same
   checkpoint, VAE, encoder, ControlNet/IPAdapter, LoRA set, open lease, queued
   demand, recent use, reload-cost estimate, and reclaim estimate
+- same-runner compatible execution with useful model overlap is preferred before
+  runner-level cleanup, so ComfyUI can reuse cached checkpoint/encoder/VAE
+  outputs and replace changed LoRA/model-modifier branches internally
 - fully unreferenced or low-reuse idle residency is reclaimed before
   open-view, queued-needed, or useful-overlap residency when it can satisfy the
   pressure
@@ -480,6 +484,9 @@ Validation notes should record:
 
 - ComfyUI `/free` is asynchronous and best-effort.
 - `/free` cannot guarantee private custom-node caches are released.
+- Global `/free` clears broad ComfyUI model/cache state. Noofy should not use it
+  just because a same-runner LoRA/model-modifier changed while useful
+  base-model residency still overlaps the requested workflow.
 - Precise per-LoRA/per-model cleanup is a future adapter capability, not a
   guaranteed ComfyUI feature. In V1, Noofy only claims runner-level `/free` and
   isolated runner eviction unless an adapter proves a safer mode without

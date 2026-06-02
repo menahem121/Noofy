@@ -1616,7 +1616,6 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
 
     if (
         not active_runners
-        and machine.memory_pressure is not MemoryPressureLevel.HIGH
         and _selected_runner_reuse_allowed(selected_runner, estimate)
         and _same_runner_reuse_incremental_margin_ok(
             machine,
@@ -1673,6 +1672,37 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
                     selected_runner,
                     estimate,
                 ),
+            },
+        )
+
+    comfyui_delegated_reuse = _same_runner_comfyui_managed_reuse_details(
+        selected_runner,
+        estimate,
+        machine,
+    )
+    if not active_runners and comfyui_delegated_reuse is not None:
+        return _decision(
+            MemoryDecisionAction.REUSE_RUNNER,
+            MemoryRiskLevel.MEDIUM
+            if machine.memory_pressure is MemoryPressureLevel.HIGH
+            else MemoryRiskLevel.LOW,
+            "same_runner_comfyui_managed_model_reuse",
+            "This workflow can reuse useful models already loaded in the same runner.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            selected_runner=selected_runner,
+            can_retry_after_cleanup=True,
+            developer_details={
+                "warm_runner_reuse": True,
+                "same_runner_comfyui_managed_reuse": True,
+                "same_runner_model_residency_reuse": False,
+                "comfyui_delegated_intra_runner_model_reuse": True,
+                **comfyui_delegated_reuse,
             },
         )
 
@@ -3073,6 +3103,91 @@ def _selected_runner_reuse_allowed(
         if estimate.local_evidence.successful_runs > 0:
             return True
     return _runner_resident_vram_mb(runner) is not None
+
+
+def _same_runner_comfyui_managed_reuse_details(
+    runner: RunnerMemorySnapshot | None,
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+) -> dict[str, Any] | None:
+    if runner is None or _runner_snapshot_is_active(runner):
+        return None
+    if runner.status not in {
+        RunnerStatus.READY,
+        RunnerStatus.IDLE,
+        RunnerStatus.IDLE_WARM,
+        RunnerStatus.CO_RESIDENT,
+    }:
+        return None
+    if estimate.recent_memory_error:
+        return None
+    if not runner.model_residency_payload or not estimate.model_residency_payload:
+        return None
+    if _same_runner_model_residency_matches(runner, estimate):
+        return None
+    runner_sets = _model_residency_sets(runner.model_residency_payload)
+    requested_sets = _model_residency_sets(estimate.model_residency_payload)
+    overlap_score, overlap_reasons = _useful_overlap_score(
+        runner_sets,
+        requested_sets,
+    )
+    model_overlap_reasons = [
+        reason
+        for reason in overlap_reasons
+        if reason not in {"same_lora", "same_lora_set"}
+    ]
+    if not model_overlap_reasons:
+        return None
+    capacity_reason = _same_runner_delegated_reuse_capacity_blocker(
+        runner,
+        estimate,
+        machine,
+    )
+    if capacity_reason is not None:
+        return None
+    return {
+        "useful_overlap_score": overlap_score,
+        "useful_overlap_reasons": overlap_reasons,
+        "model_overlap_reasons": model_overlap_reasons,
+        "runner_model_residency_signature": runner.model_residency_signature,
+        "requested_model_residency_signature": estimate.model_residency_signature,
+        "runner_model_residency_payload": runner.model_residency_payload,
+        "requested_model_residency_payload": estimate.model_residency_payload,
+        "runner_resident_vram_mb": _runner_resident_vram_mb(runner),
+        "runner_resident_ram_mb": _runner_resident_ram_mb(runner),
+        "custom_node_count": estimate.custom_node_count,
+        "custom_node_types": list(estimate.custom_node_types),
+        "custom_node_memory_uncertain": estimate.custom_node_count > 0,
+        "capacity_blocker": capacity_reason,
+        "boundary": (
+            "Noofy manages runner-level pressure; same-runner model and LoRA "
+            "reuse is delegated to ComfyUI's prompt cache and model manager."
+        ),
+    }
+
+
+def _same_runner_delegated_reuse_capacity_blocker(
+    runner: RunnerMemorySnapshot,
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+) -> str | None:
+    resident_vram_mb = _runner_resident_vram_mb(runner) or 0
+    if (
+        machine.total_vram_mb is not None
+        and estimate.estimated_peak_vram_mb is not None
+        and estimate.estimated_peak_vram_mb
+        > machine.total_vram_mb + resident_vram_mb
+    ):
+        return "estimated_vram_exceeds_total_plus_resident_overlap"
+    resident_ram_mb = _runner_resident_ram_mb(runner) or 0
+    if (
+        machine.total_ram_mb is not None
+        and estimate.estimated_peak_ram_mb is not None
+        and estimate.estimated_peak_ram_mb
+        > machine.total_ram_mb + resident_ram_mb
+    ):
+        return "estimated_ram_exceeds_total_plus_resident_overlap"
+    return None
 
 
 def _same_runner_model_residency_matches(
