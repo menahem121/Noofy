@@ -41,7 +41,9 @@ The Models page is an app-management surface. The frontend calls Noofy backend
 model endpoints only; it must not call ComfyUI `/models`, Hugging Face, or
 Civitai directly. The backend owns source labels, ownership labels, delete
 eligibility, path containment, tag persistence, provider credentials, and
-verified download transactions.
+verified download transactions. Engine-visible model rows are best-effort
+enrichment; the inventory must stay responsive when the active engine is cold,
+unreachable, or slow.
 
 ## Job Lifecycle
 

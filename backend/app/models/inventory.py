@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
@@ -53,6 +54,7 @@ MODEL_ASSET_SUFFIXES = {
     ".safetensors",
     ".tflite",
 }
+ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS = 1.5
 
 
 class ModelInventoryService:
@@ -64,11 +66,16 @@ class ModelInventoryService:
         tag_store: ModelTagStore,
         ownership_store: ModelOwnershipStore,
         log_store: DiagnosticsSink | None = None,
+        engine_visible_models_timeout_seconds: float = ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS,
     ) -> None:
         self.engine_service = engine_service
         self.model_folder_service = model_folder_service
         self.tag_store = tag_store
         self.ownership_store = ownership_store
+        self.engine_visible_models_timeout_seconds = max(
+            0.0,
+            engine_visible_models_timeout_seconds,
+        )
         self.import_service = ModelImportService(
             model_folder_service=model_folder_service,
             ownership_store=ownership_store,
@@ -225,8 +232,28 @@ class ModelInventoryService:
             return
         list_available_models = cast(Callable[[], Awaitable[list[object]]], list_available)
         try:
-            models = await list_available_models()
+            models = await asyncio.wait_for(
+                list_available_models(),
+                timeout=self.engine_visible_models_timeout_seconds,
+            )
+        except TimeoutError:
+            if self.log_store is not None:
+                self.log_store.add(
+                    "warning",
+                    "Skipped slow engine-visible model enrichment",
+                    "models.inventory",
+                    details={
+                        "timeout_seconds": self.engine_visible_models_timeout_seconds,
+                    },
+                )
+            return
         except Exception:
+            if self.log_store is not None:
+                self.log_store.add(
+                    "warning",
+                    "Skipped unavailable engine-visible model enrichment",
+                    "models.inventory",
+                )
             return
         for model in models:
             if not isinstance(model, ModelInfo):
@@ -271,7 +298,11 @@ class ModelInventoryService:
             return
         for package in _global_inventory_relevant_workflow_packages(workflow_loader):
             try:
-                summary = availability_service.summarize(package)
+                summary = availability_service.summarize(
+                    package,
+                    deep_search=False,
+                    verify_hashes=False,
+                )
             except Exception:
                 continue
             for item in summary.models:

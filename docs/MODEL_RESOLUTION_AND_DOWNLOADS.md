@@ -59,9 +59,11 @@ The Models page is backed by Noofy API endpoints, not by direct ComfyUI calls.
 
 - `GET /api/models` — returns a UI-ready inventory with summary counts, active
   model folders, persisted model tags, local files from the Noofy Models folder,
-  read-only files from the optional external ComfyUI models folder, engine-visible
-  fallback rows, and missing model requirements from installed workflows. Each
-  row includes stable `model_key`, source, ownership (`noofy_downloaded`,
+  read-only files from the optional external ComfyUI models folder,
+  best-effort engine-visible fallback rows, and missing model requirements from
+  installed workflows. Engine-visible enrichment is skipped when the active
+  engine is slow or unavailable so the page can still load from backend-owned
+  sources. Each row includes stable `model_key`, source, ownership (`noofy_downloaded`,
   `noofy_imported`, `noofy_local`, `external_reference`, `engine_reference`, or
   `workflow_requirement`), `can_delete`, workflow usage, download references,
   and persisted tag IDs. `can_delete` is true only for `noofy_downloaded` and

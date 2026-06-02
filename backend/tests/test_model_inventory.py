@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 from app.diagnostics import LogStore
 from app.engine.models import ModelInfo
 from app.main import create_app
-from app.models.inventory import ModelDownloadStartRequest, ModelOwnershipStore, ModelTagStore
+from app.models.inventory import (
+    ModelDownloadStartRequest,
+    ModelInventoryService,
+    ModelOwnershipStore,
+    ModelTagStore,
+)
 from app.models.downloads import ModelDownloadJobService
 from app.models.folders import ModelFolderSettingsService, ModelFolderSettingsStore, ModelFolderUpdateRequest
 from app.workflows.model_availability import ModelAvailabilityService
@@ -78,6 +83,12 @@ class FakeEngineService:
 
     async def shutdown(self) -> None:
         return None
+
+
+class SlowEngineVisibleModelsService(FakeEngineService):
+    async def list_available_models(self) -> list[ModelInfo]:
+        await asyncio.sleep(5)
+        return [ModelInfo(folder="vae", filename="slow-engine-only.safetensors")]
 
 
 def _client(
@@ -163,6 +174,85 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert "configs/v1-inference.yaml" not in by_key
     assert "configs/anything_v3.yaml" not in by_key
     assert "configs/engine-config.yaml" not in by_key
+
+
+def test_models_inventory_does_not_wait_on_slow_engine_visible_models(tmp_path: Path) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        noofy_model = noofy_root / "checkpoints" / "base.safetensors"
+        noofy_model.parent.mkdir(parents=True)
+        noofy_model.write_bytes(b"base")
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(
+                tmp_path / "settings" / "model-folders.json"
+            ),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(
+            ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root))
+        )
+        engine = SlowEngineVisibleModelsService(
+            noofy_root=noofy_root,
+            external_root=None,
+            packages=[],
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(
+                tmp_path / "settings" / "model-ownership.json"
+            ),
+            log_store=engine.log_store,
+            engine_visible_models_timeout_seconds=0.01,
+        )
+
+        inventory = await asyncio.wait_for(service.inventory(), timeout=1)
+
+        keys = {model.model_key for model in inventory.models}
+        assert "checkpoints/base.safetensors" in keys
+        assert "vae/slow-engine-only.safetensors" not in keys
+        assert any(
+            event.message == "Skipped slow engine-visible model enrichment"
+            for event in engine.log_store.list_events().events
+        )
+
+    asyncio.run(run())
+
+
+def test_models_inventory_uses_shallow_workflow_requirement_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_if_hashed(path: Path) -> str:
+        raise AssertionError(f"Inventory should not hash model files while listing: {path}")
+
+    monkeypatch.setattr("app.workflows.model_availability._sha256_file", fail_if_hashed)
+    model_path = tmp_path / "Noofy Models" / "checkpoints" / "hashed.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"hashed")
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="hashed.safetensors",
+                size_bytes=6,
+                checksum="sha256:" + "a" * 64,
+                verification_level="sha256_size",
+                source_url="https://example.test/hashed.safetensors",
+            ),
+        ]
+    )
+
+    with _client(tmp_path, [package]) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    by_key = {model["model_key"]: model for model in response.json()["models"]}
+    assert (
+        by_key["checkpoints/hashed.safetensors"]["workflow_usage"][0]["status"]
+        == "possible_match"
+    )
 
 
 def test_models_inventory_omits_unused_bundled_workflow_missing_requirements(tmp_path: Path) -> None:
