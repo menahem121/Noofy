@@ -1097,6 +1097,57 @@ async def test_workflow_run_memory_estimate_uses_runtime_dimensions_and_graph_ba
 
 
 @pytest.mark.anyio
+async def test_workflow_run_memory_estimate_uses_runtime_precision_and_vram_mode() -> None:
+    model = ModelInfo(
+        folder="checkpoints",
+        filename="v1-5-pruned-emaonly-fp16.safetensors",
+    )
+    memory_snapshot = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=24_000,
+            free_vram_mb=20_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    normal_service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=memory_snapshot,
+    )
+    high_service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=memory_snapshot,
+    )
+
+    normal = await normal_service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "width": 512, "height": 512},
+        options={"precision": "fp16", "vram_mode": "normal"},
+    )
+    high = await high_service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "width": 512, "height": 512},
+        options={"precision": "float32", "vram_mode": "high_vram"},
+    )
+
+    assert normal.memory_decision is not None
+    assert high.memory_decision is not None
+    normal_estimate = normal.memory_decision["workflow_estimate"]
+    high_estimate = high.memory_decision["workflow_estimate"]
+    high_features = high.memory_decision["developer_details"]["runtime_estimate_features"]
+
+    assert high_estimate["estimated_peak_vram_mb"] > normal_estimate["estimated_peak_vram_mb"]
+    assert high_estimate["precision"] == "fp32"
+    assert high_estimate["vram_mode"] == "highvram"
+    assert "precision_memory_option" in high_estimate["reasons"]
+    assert "vram_mode_memory_option" in high_estimate["reasons"]
+    assert high_features["precision"] == "fp32"
+    assert high_features["vram_mode"] == "highvram"
+    assert high_features["sources"]["precision"] == "option:precision"
+    assert high_features["sources"]["vram_mode"] == "option:vram_mode"
+
+
+@pytest.mark.anyio
 async def test_workflow_run_memory_estimate_exposes_custom_node_uncertainty() -> None:
     model = ModelInfo(
         folder="checkpoints",

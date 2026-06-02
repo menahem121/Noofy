@@ -22,7 +22,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.diagnostics import DiagnosticsSink
 from app.runtime.runners.supervisor import (
@@ -336,6 +336,8 @@ class WorkflowMemoryEstimate(BaseModel):
     recent_memory_error: bool = False
     custom_node_count: int = Field(default=0, ge=0)
     custom_node_types: list[str] = Field(default_factory=list)
+    precision: str | None = None
+    vram_mode: str | None = None
     reasons: list[str] = Field(default_factory=list)
 
     @property
@@ -353,6 +355,16 @@ class WorkflowMemoryEstimate(BaseModel):
     @property
     def conservative_memory_class(self) -> RunnerMemoryClass:
         return conservative_memory_class(self.memory_class)
+
+    @field_validator("precision", mode="before")
+    @classmethod
+    def _normalize_precision(cls, value: Any) -> Any:
+        return _normalize_runtime_precision_value(value)
+
+    @field_validator("vram_mode", mode="before")
+    @classmethod
+    def _normalize_vram_mode(cls, value: Any) -> Any:
+        return _normalize_runtime_vram_mode_value(value)
 
 
 class WorkflowMemoryEstimateRequest(BaseModel):
@@ -376,6 +388,18 @@ class WorkflowMemoryEstimateRequest(BaseModel):
     workflow_type: str | None = None
     custom_node_count: int = Field(default=0, ge=0)
     custom_node_types: list[str] = Field(default_factory=list)
+    precision: str | None = None
+    vram_mode: str | None = None
+
+    @field_validator("precision", mode="before")
+    @classmethod
+    def _normalize_precision(cls, value: Any) -> Any:
+        return _normalize_runtime_precision_value(value)
+
+    @field_validator("vram_mode", mode="before")
+    @classmethod
+    def _normalize_vram_mode(cls, value: Any) -> Any:
+        return _normalize_runtime_vram_mode_value(value)
 
 
 class MemoryGovernorDecision(BaseModel):
@@ -1302,13 +1326,16 @@ def build_workflow_memory_estimate(
     but they still produce confidence rather than guarantees. A changed input
     profile keeps the local source visible while lowering confidence.
     """
-    custom_node_reasons = _custom_node_memory_reasons(request)
-    custom_node_fields = _custom_node_estimate_fields(request)
+    estimate_reasons = [
+        *_runtime_memory_option_reasons(request),
+        *_custom_node_memory_reasons(request),
+    ]
+    estimate_fields = _estimate_request_fields(request)
     local = request.local_evidence
     if local is not None and local.has_local_evidence:
         settings_match = _local_evidence_matches_request(request, local)
         confidence = RunnerMemoryEstimateConfidence.LOW
-        reasons = ["local_memory_evidence", *custom_node_reasons]
+        reasons = ["local_memory_evidence", *estimate_reasons]
         if not settings_match:
             reasons.append("local_evidence_settings_mismatch")
         elif local.has_memory_failure:
@@ -1334,7 +1361,7 @@ def build_workflow_memory_estimate(
             creator_observed_peak_ram_mb=request.creator_observed_peak_ram_mb,
             local_evidence=local,
             recent_memory_error=local.has_memory_failure,
-            **custom_node_fields,
+            **estimate_fields,
             reasons=reasons,
         )
 
@@ -1357,8 +1384,8 @@ def build_workflow_memory_estimate(
             estimated_peak_ram_mb=request.creator_observed_peak_ram_mb,
             creator_observed_peak_vram_mb=request.creator_observed_peak_vram_mb,
             creator_observed_peak_ram_mb=request.creator_observed_peak_ram_mb,
-            **custom_node_fields,
-            reasons=["creator_observed_memory_hint", *custom_node_reasons],
+            **estimate_fields,
+            reasons=["creator_observed_memory_hint", *estimate_reasons],
         )
 
     if (
@@ -1378,8 +1405,8 @@ def build_workflow_memory_estimate(
             source=RunnerMemoryEstimateSource.DECLARED,
             estimated_peak_vram_mb=request.declared_peak_vram_mb,
             estimated_peak_ram_mb=request.declared_peak_ram_mb,
-            **custom_node_fields,
-            reasons=["declared_memory_requirement", *custom_node_reasons],
+            **estimate_fields,
+            reasons=["declared_memory_requirement", *estimate_reasons],
         )
 
     heuristic_peak_vram_mb = _heuristic_peak_vram_mb(request)
@@ -1393,8 +1420,8 @@ def build_workflow_memory_estimate(
             confidence=RunnerMemoryEstimateConfidence.LOW,
             source=RunnerMemoryEstimateSource.HEURISTIC,
             estimated_peak_vram_mb=heuristic_peak_vram_mb,
-            **custom_node_fields,
-            reasons=["model_and_input_heuristic", *custom_node_reasons],
+            **estimate_fields,
+            reasons=["model_and_input_heuristic", *estimate_reasons],
         )
 
     return WorkflowMemoryEstimate(
@@ -1403,8 +1430,8 @@ def build_workflow_memory_estimate(
         memory_class=conservative_memory_class(request.declared_memory_class),
         confidence=RunnerMemoryEstimateConfidence.UNKNOWN,
         source=RunnerMemoryEstimateSource.UNKNOWN,
-        **custom_node_fields,
-        reasons=["no_memory_estimate_available", *custom_node_reasons],
+        **estimate_fields,
+        reasons=["no_memory_estimate_available", *estimate_reasons],
     )
 
 
@@ -2611,17 +2638,30 @@ def _heuristic_peak_vram_mb(request: WorkflowMemoryEstimateRequest) -> int | Non
         int(
             sum(components)
             * _workflow_type_heuristic_factor(request.workflow_type)
+            * _runtime_precision_heuristic_factor(request.precision)
+            * _runtime_vram_mode_heuristic_factor(request.vram_mode)
             * _custom_node_heuristic_factor(request)
         ),
         512,
     )
 
 
-def _custom_node_estimate_fields(request: WorkflowMemoryEstimateRequest) -> dict[str, Any]:
+def _estimate_request_fields(request: WorkflowMemoryEstimateRequest) -> dict[str, Any]:
     return {
         "custom_node_count": request.custom_node_count,
         "custom_node_types": list(request.custom_node_types),
+        "precision": request.precision,
+        "vram_mode": request.vram_mode,
     }
+
+
+def _runtime_memory_option_reasons(request: WorkflowMemoryEstimateRequest) -> list[str]:
+    reasons: list[str] = []
+    if request.precision is not None:
+        reasons.append("precision_memory_option")
+    if request.vram_mode is not None:
+        reasons.append("vram_mode_memory_option")
+    return reasons
 
 
 def _custom_node_memory_reasons(request: WorkflowMemoryEstimateRequest) -> list[str]:
@@ -2647,6 +2687,78 @@ def _custom_node_heuristic_factor(request: WorkflowMemoryEstimateRequest) -> flo
     if request.custom_node_count <= 0:
         return 1.0
     return 1.15
+
+
+def _runtime_precision_heuristic_factor(precision: str | None) -> float:
+    normalized = _normalize_runtime_precision_value(precision)
+    if normalized is None:
+        return 1.0
+    if normalized == "fp32":
+        return 1.35
+    if normalized in {"fp8", "int8", "int4", "quantized"}:
+        return 0.9
+    return 1.0
+
+
+def _runtime_vram_mode_heuristic_factor(vram_mode: str | None) -> float:
+    normalized = _normalize_runtime_vram_mode_value(vram_mode)
+    if normalized is None:
+        return 1.0
+    if normalized == "highvram":
+        return 1.1
+    if normalized == "lowvram":
+        return 0.9
+    if normalized == "novram":
+        return 0.65
+    if normalized == "cpu":
+        return 0.35
+    return 1.0
+
+
+def _normalize_runtime_precision_value(value: Any) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    if normalized in {"auto", "default"}:
+        return "auto"
+    if normalized in {"fp32", "float32", "float", "full", "full_precision", "no_half"}:
+        return "fp32"
+    if normalized in {"fp16", "float16", "half", "half_precision"}:
+        return "fp16"
+    if normalized in {"bf16", "bfloat16"}:
+        return "bf16"
+    if normalized in {"fp8", "float8"}:
+        return "fp8"
+    if normalized in {"int8", "8bit", "q8"}:
+        return "int8"
+    if normalized in {"int4", "4bit", "q4"}:
+        return "int4"
+    if normalized in {"quantized", "quantization"}:
+        return "quantized"
+    return normalized
+
+
+def _normalize_runtime_vram_mode_value(value: Any) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    if normalized in {"auto", "default"}:
+        return "auto"
+    if normalized in {"normal", "normalvram", "normal_vram"}:
+        return "normal"
+    if normalized in {"high", "highvram", "high_vram"}:
+        return "highvram"
+    if normalized in {"low", "lowvram", "low_vram"}:
+        return "lowvram"
+    if normalized in {"none", "no", "novram", "no_vram"}:
+        return "novram"
+    if normalized in {"cpu", "cpu_only"}:
+        return "cpu"
+    return normalized
 
 
 def _workflow_type_heuristic_factor(workflow_type: str | None) -> float:

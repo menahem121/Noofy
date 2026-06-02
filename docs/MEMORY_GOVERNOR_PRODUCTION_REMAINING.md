@@ -40,6 +40,9 @@ the lifecycle foundation expected for production work:
   custom-node memory uncertainty in estimate diagnostics; non-local estimate
   confidence is lowered and heuristic VRAM estimates receive a conservative
   safety factor until local observations exist
+- third P2 runtime-option slice: submitted precision and VRAM mode options are
+  normalized, included in runtime estimate diagnostics, and applied to
+  heuristic VRAM estimates
 
 Ownership after P0/P1:
 
@@ -60,7 +63,7 @@ Ownership after P0/P1:
 | Same workflow rerun double-counted the warm runner's resident VRAM. | fixed | `runtime/memory`, `runs/orchestrator` | Same-workflow warm reuse no longer subtracts the full peak again for compatible resident state. | Broaden warm reuse in P2 for different workflows sharing the same resident model set. |
 | Prompt-only edits created a new memory bucket. | fixed | `engine/memory_observation`, `runs/orchestrator` | Text prompt controls are treated as memory-neutral when bindings identify them as prompt/text fields. | Add publisher/dashboard-declared memory-affecting metadata so unusual controls are classified explicitly. |
 | Seed-only edits created a new memory bucket. | fixed | `engine/memory_observation`, workflow package bindings | Seed widgets are treated as memory-neutral. | Same metadata follow-up as prompt controls for packages with custom seed controls. |
-| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted, and the first P2 slice semantically extracts width/height, batch, frame count, and workflow type into heuristic estimates. P2 still needs selected model/LoRA/precision semantics and declared bindings. | Implement publisher-declared memory-affecting bindings and richer model/runtime-option extraction. |
+| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted. P2 now semantically extracts width/height, batch, frame count, workflow type, precision, and VRAM mode into heuristic estimates. P2 still needs selected model/LoRA semantics and declared bindings. | Implement publisher-declared memory-affecting bindings and richer model/runtime-option extraction. |
 | Low free VRAM from an idle Noofy runner caused immediate blocking. | fixed | `runtime/memory`, `runtime/runners` | Idle Noofy-owned memory is treated as reclaimable and cleanup waits for observed release before admission continues. | Improve attribution of idle/resident memory where platform signals allow it. |
 | Active workflow followed by another run could block or be killed. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Active work queues by default; cleanup skips active runners. | Refine queueing so unrelated CPU-only/light work does not always wait behind GPU-heavy work. |
 | `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. Frontend still needs more distinct copy. | P3 UX polish for each backend memory state. |
@@ -102,6 +105,8 @@ Initial slice completed:
 - batch size is extracted from submitted values, defaults, or graph inputs
 - frame count is extracted and used as an effective batch multiplier
 - workflow type is inferred from package metadata and graph node types
+- precision and VRAM mode options are normalized and applied to heuristic VRAM
+  estimates
 - extracted features are recorded in Memory Governor developer diagnostics
 
 Remaining semantic extraction work:
@@ -115,8 +120,8 @@ Remaining semantic extraction work:
   other model-bearing inputs
 - selected LoRAs and LoRA strength sets when they affect model residency or
   execution memory
-- precision, quantization, VRAM mode, attention implementation, tiled decode,
-  CPU offload, and similar backend/runtime options
+- quantization beyond simple precision aliases, attention implementation, tiled
+  decode, CPU offload, and similar backend/runtime options
 - input media dimensions and channel count when media is part of execution
   memory
 - workflow type hints where available, such as text-to-image, image-to-image,

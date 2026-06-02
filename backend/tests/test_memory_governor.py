@@ -1092,6 +1092,61 @@ def test_build_workflow_memory_estimate_adjusts_heuristic_by_workflow_type() -> 
     assert upscale.estimated_peak_vram_mb < base.estimated_peak_vram_mb
 
 
+def test_build_workflow_memory_estimate_adjusts_heuristic_by_runtime_memory_options() -> None:
+    base = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-base",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            precision="fp16",
+            vram_mode="normal",
+        )
+    )
+    fp32 = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-fp32",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            precision="float32",
+            vram_mode="normal",
+        )
+    )
+    high_vram = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-highvram",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            precision="fp16",
+            vram_mode="high_vram",
+        )
+    )
+    compact = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-compact",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            precision="fp8",
+            vram_mode="lowvram",
+        )
+    )
+
+    assert base.estimated_peak_vram_mb is not None
+    assert fp32.estimated_peak_vram_mb is not None
+    assert high_vram.estimated_peak_vram_mb is not None
+    assert compact.estimated_peak_vram_mb is not None
+    assert fp32.estimated_peak_vram_mb > base.estimated_peak_vram_mb
+    assert high_vram.estimated_peak_vram_mb > base.estimated_peak_vram_mb
+    assert compact.estimated_peak_vram_mb < base.estimated_peak_vram_mb
+    assert fp32.precision == "fp32"
+    assert fp32.vram_mode == "normal"
+    assert "precision_memory_option" in fp32.reasons
+    assert "vram_mode_memory_option" in fp32.reasons
+
+
 def test_summarize_local_memory_observations_records_success_failure_and_peaks() -> None:
     summary = summarize_local_memory_observations(
         [

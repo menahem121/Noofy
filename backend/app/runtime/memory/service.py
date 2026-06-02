@@ -64,6 +64,8 @@ class _RunEstimateFeatures:
     batch_size: int | None = None
     frame_count: int | None = None
     workflow_type: str | None = None
+    precision: str | None = None
+    vram_mode: str | None = None
     sources: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -85,6 +87,8 @@ class _RunEstimateFeatures:
             "frame_count": self.frame_count,
             "effective_batch_size": self.effective_batch_size,
             "workflow_type": self.workflow_type,
+            "precision": self.precision,
+            "vram_mode": self.vram_mode,
             "sources": self.sources,
         }
 
@@ -243,6 +247,10 @@ class MemoryGovernorService:
                 creator_observed_peak_ram_mb=capsule_lock.hardware_observations.observed_peak_ram_mb
                 or capsule_lock.hardware_observations.recommended_ram_mb,
                 required_model_size_mb=model_size_mb,
+                precision=_runtime_option_string(
+                    capsule_lock.hardware_observations.precision,
+                    feature="precision",
+                ),
                 custom_node_count=custom_node_memory.count,
                 custom_node_types=custom_node_memory.node_types,
             )
@@ -311,6 +319,8 @@ class MemoryGovernorService:
                 resolution_height=estimate_features.resolution_height,
                 batch_size=estimate_features.effective_batch_size,
                 workflow_type=estimate_features.workflow_type,
+                precision=estimate_features.precision,
+                vram_mode=estimate_features.vram_mode,
                 custom_node_count=custom_node_memory.count,
                 custom_node_types=custom_node_memory.node_types,
             )
@@ -866,6 +876,8 @@ def _run_estimate_features(
     height = _first_int_feature(values, feature="height")
     batch_size = _first_int_feature(values, feature="batch")
     frame_count = _first_int_feature(values, feature="frames")
+    precision = _first_string_feature(values, feature="precision")
+    vram_mode = _first_string_feature(values, feature="vram_mode")
     workflow_type = _infer_workflow_type(package)
     sources: dict[str, str] = {}
     for name, feature in [
@@ -873,6 +885,8 @@ def _run_estimate_features(
         ("resolution_height", height),
         ("batch_size", batch_size),
         ("frame_count", frame_count),
+        ("precision", precision),
+        ("vram_mode", vram_mode),
     ]:
         if feature is not None:
             sources[name] = feature[1]
@@ -884,6 +898,8 @@ def _run_estimate_features(
         batch_size=batch_size[0] if batch_size is not None else None,
         frame_count=frame_count[0] if frame_count is not None else None,
         workflow_type=workflow_type,
+        precision=precision[0] if precision is not None else None,
+        vram_mode=vram_mode[0] if vram_mode is not None else None,
         sources=sources,
     )
 
@@ -952,6 +968,17 @@ def _first_int_feature(values, *, feature: str) -> tuple[int, str] | None:
     return None
 
 
+def _first_string_feature(values, *, feature: str) -> tuple[str, str] | None:
+    for raw_names, value, source in values:
+        names = {_normalize_feature_name(name) for name in raw_names if name}
+        if not _names_match_feature(names, feature):
+            continue
+        parsed = _runtime_option_string(value, feature=feature)
+        if parsed is not None:
+            return parsed, source
+    return None
+
+
 def _names_match_feature(names: set[str], feature: str) -> bool:
     if feature == "width":
         return any(name == "width" or name.endswith("_width") for name in names)
@@ -970,6 +997,37 @@ def _names_match_feature(names: set[str], feature: str) -> bool:
             or name.endswith("_frames")
             for name in names
         )
+    if feature == "precision":
+        return any(
+            name
+            in {
+                "precision",
+                "precision_policy",
+                "dtype",
+                "torch_dtype",
+                "weight_dtype",
+                "model_precision",
+                "runtime_precision",
+            }
+            or name.endswith("_precision")
+            or name.endswith("_dtype")
+            for name in names
+        )
+    if feature == "vram_mode":
+        return any(
+            name
+            in {
+                "vram_mode",
+                "memory_mode",
+                "gpu_memory_mode",
+                "comfyui_vram_mode",
+                "launch_vram_mode",
+                "runtime_vram_mode",
+            }
+            or name.endswith("_vram_mode")
+            or name.endswith("_memory_mode")
+            for name in names
+        )
     return False
 
 
@@ -981,6 +1039,55 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 1 else None
+
+
+def _runtime_option_string(value: Any, *, feature: str) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = _normalize_feature_name(value)
+    if not normalized:
+        return None
+    if feature == "precision":
+        return _normalize_runtime_precision(normalized)
+    if feature == "vram_mode":
+        return _normalize_runtime_vram_mode(normalized)
+    return normalized
+
+
+def _normalize_runtime_precision(value: str) -> str | None:
+    if value in {"auto", "default"}:
+        return "auto"
+    if value in {"fp32", "float32", "full", "full_precision", "no_half"}:
+        return "fp32"
+    if value in {"fp16", "float16", "half", "half_precision"}:
+        return "fp16"
+    if value in {"bf16", "bfloat16"}:
+        return "bf16"
+    if value in {"fp8", "float8"}:
+        return "fp8"
+    if value in {"int8", "8bit", "q8"}:
+        return "int8"
+    if value in {"int4", "4bit", "q4"}:
+        return "int4"
+    if value in {"quantized", "quantization"}:
+        return "quantized"
+    return value
+
+
+def _normalize_runtime_vram_mode(value: str) -> str | None:
+    if value in {"auto", "default"}:
+        return "auto"
+    if value in {"normal", "normalvram", "normal_vram"}:
+        return "normal"
+    if value in {"high", "highvram", "high_vram"}:
+        return "highvram"
+    if value in {"low", "lowvram", "low_vram"}:
+        return "lowvram"
+    if value in {"none", "no", "novram", "no_vram"}:
+        return "novram"
+    if value in {"cpu", "cpu_only"}:
+        return "cpu"
+    return value
 
 
 def _infer_workflow_type(package: WorkflowPackage) -> str | None:
