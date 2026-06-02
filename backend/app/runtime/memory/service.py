@@ -17,6 +17,7 @@ from app.engine.memory_observation import (
     MemoryObservationCoordinator,
     memory_input_profile_fingerprint,
 )
+from app.engine.adapter import EngineMemoryCleanupMode
 from app.engine.models import EngineJob, JobResult
 from app.gallery import RunSubmissionSnapshot
 from app.runtime.memory.memory_governor import (
@@ -28,6 +29,7 @@ from app.runtime.memory.memory_governor import (
     MemoryBackend,
     MemoryDecisionAction,
     MemoryGovernorDecision,
+    MemoryCleanupMode,
     MemoryReleaseCheckResult,
     MemoryReleaseStatus,
     ProcessTreeMemoryObserver,
@@ -215,6 +217,47 @@ class MemoryGovernorService:
     ) -> dict[str, Any]:
         return memory_user_status_for_decision(decision, queue_id=queue_id).model_dump(mode="json")
 
+    def _runner_cleanup_capabilities(
+        self,
+        runners: list[RunnerMemorySnapshot],
+    ) -> dict[str, list[MemoryCleanupMode]]:
+        capabilities: dict[str, list[MemoryCleanupMode]] = {}
+        for runner in runners:
+            modes: set[MemoryCleanupMode] = set()
+            if runner.kind is RunnerKind.ISOLATED_COMFYUI:
+                modes.add(MemoryCleanupMode.ISOLATED_EVICTION)
+            try:
+                adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+            except JobRunnerNotFoundError:
+                adapter = None
+            cleanup_capabilities = (
+                getattr(adapter, "memory_cleanup_capabilities", None)
+                if adapter is not None
+                else None
+            )
+            if callable(cleanup_capabilities):
+                try:
+                    details = cleanup_capabilities()
+                except Exception as exc:
+                    self.log_store.add(
+                        "warning",
+                        "Runner adapter cleanup capabilities could not be read",
+                        "memory_governor",
+                        details={"runner_id": runner.runner_id, "error": str(exc)},
+                    )
+                    details = None
+                for mode in getattr(details, "modes", frozenset()):
+                    mapped = _memory_cleanup_mode_from_engine_mode(mode)
+                    if mapped is not None:
+                        modes.add(mapped)
+            elif runner.kind is RunnerKind.CORE_COMFYUI and callable(
+                getattr(adapter, "release_memory", None)
+            ):
+                modes.add(MemoryCleanupMode.RUNNER_FREE)
+            if modes:
+                capabilities[runner.runner_id] = sorted(modes, key=lambda item: item.value)
+        return capabilities
+
     def _workflow_run_local_evidence(
         self,
         *,
@@ -301,6 +344,9 @@ class MemoryGovernorService:
                 workflow_estimate=estimate,
                 machine_snapshot=machine_snapshot,
                 resident_runners=runner_snapshots,
+                runner_cleanup_capabilities=self._runner_cleanup_capabilities(
+                    runner_snapshots
+                ),
             )
         )
         if custom_node_memory.present:
@@ -325,6 +371,7 @@ class MemoryGovernorService:
         options: dict[str, Any] | None = None,
         input_profile_fingerprint: str | None = None,
         memory_retry_after_cleanup: bool = False,
+        queued_model_residency_payloads: list[dict[str, Any]] | None = None,
     ) -> MemoryGovernorDecision | None:
         if self.memory_observer is None:
             return None
@@ -369,6 +416,7 @@ class MemoryGovernorService:
                 lora_strength_total=estimate_features.model_selections.lora_strength_total,
                 process_compatibility_signature=memory_signatures.process_compatibility_signature,
                 model_residency_signature=memory_signatures.model_residency_signature,
+                model_residency_payload=memory_signatures.model_residency_payload,
                 execution_profile_signature=memory_signatures.execution_profile_signature,
                 custom_node_count=custom_node_memory.count,
                 custom_node_types=custom_node_memory.node_types,
@@ -378,7 +426,6 @@ class MemoryGovernorService:
         for resident in self.runner_supervisor.list_runners():
             if (
                 resident.runner_id == runner.runner_id
-                and resident.kind is RunnerKind.ISOLATED_COMFYUI
                 and resident.current_job_id is None
             ):
                 continue
@@ -391,6 +438,10 @@ class MemoryGovernorService:
                 machine_snapshot=machine_snapshot,
                 selected_runner=RunnerMemorySnapshot.from_descriptor(runner),
                 resident_runners=resident_runners,
+                queued_model_residency_payloads=queued_model_residency_payloads or [],
+                runner_cleanup_capabilities=self._runner_cleanup_capabilities(
+                    [RunnerMemorySnapshot.from_descriptor(runner), *resident_runners]
+                ),
             )
         )
         developer_details = decision.developer_details
@@ -563,6 +614,7 @@ class MemoryGovernorService:
         )
         for runner_id in cleanup_runner_ids:
             runner = self.runner_supervisor.get_runner(runner_id)
+            cleanup_mode = _decision_cleanup_mode_for_runner(decision, runner_id)
             if _runner_is_active(runner):
                 self.log_store.add(
                     "warning",
@@ -588,6 +640,21 @@ class MemoryGovernorService:
                 self._finalize_release_reservations(reservation_tokens, released=False)
                 return False
             if runner.kind is RunnerKind.CORE_COMFYUI:
+                if cleanup_mode not in {None, MemoryCleanupMode.RUNNER_FREE.value}:
+                    self.log_store.add(
+                        "warning",
+                        "Core runner cleanup mode is not supported by the current adapter",
+                        log_source,
+                        workflow_id=decision.workflow_id,
+                        details={
+                            "runner_id": runner_id,
+                            "cleanup_mode": cleanup_mode,
+                            "memory_decision_id": decision.decision_id,
+                        },
+                    )
+                    self.runner_supervisor.rollback_runner_reservation(reservation.token)
+                    self._finalize_release_reservations(reservation_tokens, released=False)
+                    return False
                 require_observed_drop = True
                 baseline_snapshot = (
                     self.memory_observer.snapshot()
@@ -629,7 +696,23 @@ class MemoryGovernorService:
                     return False
                 self.runner_supervisor.mark_runner_waiting_for_memory_release(reservation.token)
                 cleanup_status = "models_and_cache_release_requested"
+                cleanup_mode = MemoryCleanupMode.RUNNER_FREE.value
             else:
+                if cleanup_mode not in {None, MemoryCleanupMode.ISOLATED_EVICTION.value}:
+                    self.log_store.add(
+                        "warning",
+                        "Isolated runner cleanup mode is not supported by the current coordinator",
+                        log_source,
+                        workflow_id=decision.workflow_id,
+                        details={
+                            "runner_id": runner_id,
+                            "cleanup_mode": cleanup_mode,
+                            "memory_decision_id": decision.decision_id,
+                        },
+                    )
+                    self.runner_supervisor.rollback_runner_reservation(reservation.token)
+                    self._finalize_release_reservations(reservation_tokens, released=False)
+                    return False
                 if self.runner_process_coordinator is None:
                     self.log_store.add(
                         "warning",
@@ -667,6 +750,7 @@ class MemoryGovernorService:
                     return False
                 self.runner_supervisor.mark_runner_waiting_for_memory_release(reservation.token)
                 cleanup_status = stopped.status.value
+                cleanup_mode = MemoryCleanupMode.ISOLATED_EVICTION.value
             reservation_tokens.append(reservation.token)
             self.record_metric(metric_name)
             self.log_store.add(
@@ -677,6 +761,7 @@ class MemoryGovernorService:
                 details={
                     "runner_id": runner_id,
                     "runner_kind": runner.kind.value,
+                    "cleanup_mode": cleanup_mode,
                     "cleanup_status": cleanup_status,
                     "memory_decision_id": decision.decision_id,
                     "reason": decision.reason_code,
@@ -917,15 +1002,45 @@ def _memory_signature_field(
     return value if isinstance(value, str) and value else None
 
 
+def _memory_cleanup_mode_from_engine_mode(mode: Any) -> MemoryCleanupMode | None:
+    value = mode.value if isinstance(mode, EngineMemoryCleanupMode) else str(mode)
+    try:
+        return MemoryCleanupMode(value)
+    except ValueError:
+        return None
+
+
+def _decision_cleanup_mode_for_runner(
+    decision: MemoryGovernorDecision,
+    runner_id: str,
+) -> str | None:
+    pressure = decision.developer_details.get("residency_pressure")
+    if not isinstance(pressure, dict):
+        return None
+    for candidate in pressure.get("candidate_scores") or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("runner_id") == runner_id and candidate.get("selected_for_cleanup"):
+            mode = candidate.get("cleanup_mode")
+            return str(mode) if mode is not None else None
+    return None
+
+
 def _runner_is_active(runner: Any) -> bool:
     return (
         runner.current_job_id is not None
         or runner.output_stream_lease_count > 0
+        or getattr(runner, "reservation_token", None) is not None
         or runner.status
         in {
             RunnerStatus.RUNNING,
             RunnerStatus.LOADING_MODEL,
             RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
+            RunnerStatus.RESERVING,
+            RunnerStatus.SUBMITTING,
+            RunnerStatus.EVICTING_RUNNER,
+            RunnerStatus.WAITING_FOR_MEMORY_RELEASE,
+            RunnerStatus.STOPPING,
         }
     )
 

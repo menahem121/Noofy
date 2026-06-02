@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -115,6 +116,14 @@ class MemoryDecisionAction(StrEnum):
     BLOCKED_BY_MEMORY = "blocked_by_memory"
 
 
+class MemoryCleanupMode(StrEnum):
+    PER_LORA_UNLOAD = "per_lora_unload"
+    PER_MODEL_UNLOAD = "per_model_unload"
+    RUNNER_FREE = "runner_free"
+    ISOLATED_EVICTION = "isolated_eviction"
+    CLEANUP_UNSUPPORTED = "cleanup_unsupported"
+
+
 class MemoryObservationOutcome(StrEnum):
     SUCCESS = "success"
     MEMORY_ERROR = "memory_error"
@@ -200,9 +209,13 @@ class RunnerMemorySnapshot(BaseModel):
     current_workflow_id: str | None = None
     last_workflow_id: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, Any] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
+    last_used_at: str | None = None
     open_workflow_lease_count: int = Field(default=0, ge=0)
     output_stream_lease_count: int = Field(default=0, ge=0)
+    reservation_kind: str | None = None
+    reservation_token_present: bool = False
     observed_idle_vram_mb: int | None = Field(default=None, ge=0)
     observed_idle_ram_mb: int | None = Field(default=None, ge=0)
     observed_load_peak_vram_mb: int | None = Field(default=None, ge=0)
@@ -226,9 +239,15 @@ class RunnerMemorySnapshot(BaseModel):
             current_workflow_id=descriptor.current_workflow_id,
             last_workflow_id=descriptor.last_workflow_id,
             model_residency_signature=descriptor.model_residency_signature,
+            model_residency_payload=dict(descriptor.model_residency_payload),
             execution_profile_signature=descriptor.execution_profile_signature,
+            last_used_at=descriptor.last_used_at,
             open_workflow_lease_count=descriptor.open_workflow_lease_count,
             output_stream_lease_count=descriptor.output_stream_lease_count,
+            reservation_kind=descriptor.reservation_kind.value
+            if descriptor.reservation_kind is not None
+            else None,
+            reservation_token_present=descriptor.reservation_token is not None,
             observed_idle_vram_mb=descriptor.observed_idle_vram_mb,
             observed_idle_ram_mb=descriptor.observed_idle_ram_mb,
             observed_load_peak_vram_mb=descriptor.observed_load_peak_vram_mb,
@@ -252,6 +271,7 @@ class LocalMemoryEvidenceSummary(BaseModel):
     input_profile_fingerprint: str | None = None
     process_compatibility_signature: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, Any] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
     successful_runs: int = Field(default=0, ge=0)
     memory_error_runs: int = Field(default=0, ge=0)
@@ -301,6 +321,7 @@ class LocalMemoryObservation(BaseModel):
     input_profile_fingerprint: str | None = None
     process_compatibility_signature: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, Any] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
     runner_id: str | None = None
     job_id: str | None = None
@@ -352,6 +373,7 @@ class WorkflowMemoryEstimate(BaseModel):
     lora_strength_total: float = Field(default=0, ge=0)
     process_compatibility_signature: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, Any] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
     precision: str | None = None
     vram_mode: str | None = None
@@ -411,6 +433,7 @@ class WorkflowMemoryEstimateRequest(BaseModel):
     lora_strength_total: float = Field(default=0, ge=0)
     process_compatibility_signature: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, Any] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
     precision: str | None = None
     vram_mode: str | None = None
@@ -471,6 +494,8 @@ class MemoryAdmissionRequest(BaseModel):
     machine_snapshot: MachineMemorySnapshot
     selected_runner: RunnerMemorySnapshot | None = None
     resident_runners: list[RunnerMemorySnapshot] = Field(default_factory=list)
+    queued_model_residency_payloads: list[dict[str, Any]] = Field(default_factory=list)
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]] = Field(default_factory=dict)
 
 
 class MemoryReleaseCheckResult(BaseModel):
@@ -1565,6 +1590,12 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
     machine = request.machine_snapshot
     selected_runner = request.selected_runner
     runners = list(request.resident_runners)
+    if (
+        selected_runner is not None
+        and selected_runner.runner_id not in {runner.runner_id for runner in runners}
+        and _runner_snapshot_may_hold_reclaimable_memory(selected_runner)
+    ):
+        runners.append(selected_runner)
     active_runners = [
         runner for runner in runners if _runner_snapshot_is_active(runner)
     ]
@@ -1688,6 +1719,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code="insufficient_ram_margin",
         )
 
@@ -1702,6 +1735,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code="memory_pressure_high",
         )
 
@@ -1716,6 +1751,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code="gpu_estimate_uncertain",
         )
 
@@ -1732,6 +1769,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code=reason_code,
             risk_level=risk_level,
         )
@@ -1747,6 +1786,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code="insufficient_vram_margin",
         )
 
@@ -1761,6 +1802,8 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            queued_model_residency_payloads=request.queued_model_residency_payloads,
+            runner_cleanup_capabilities=request.runner_cleanup_capabilities,
             reason_code="insufficient_ram_margin",
         )
 
@@ -2277,19 +2320,462 @@ def required_ram_margin(
 
 def eviction_candidates(
     runners: list[RunnerMemorySnapshot],
+    *,
+    workflow_estimate: WorkflowMemoryEstimate | None = None,
+    queued_model_residency_payloads: list[dict[str, Any]] | None = None,
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]] | None = None,
 ) -> list[RunnerMemorySnapshot]:
+    ranked = _ranked_cleanup_candidates(
+        runners,
+        workflow_estimate=workflow_estimate,
+        queued_model_residency_payloads=queued_model_residency_payloads or [],
+        runner_cleanup_capabilities=runner_cleanup_capabilities or {},
+    )
+    return [candidate.runner for candidate in ranked if candidate.cleanup_supported]
+
+
+@dataclass(frozen=True)
+class _CleanupCandidate:
+    runner: RunnerMemorySnapshot
+    cleanup_mode: MemoryCleanupMode
+    cleanup_supported: bool
+    reuse_score: int
+    useful_overlap_score: int
+    reasons: tuple[str, ...]
+    skipped_reason: str | None = None
+    reclaimable_vram_mb: int | None = None
+    reclaimable_ram_mb: int | None = None
+    reload_cost_estimate_mb: int | None = None
+    obsolete_lora_count: int = 0
+
+    def diagnostic_details(self, *, selected: bool) -> dict[str, Any]:
+        return {
+            "runner_id": self.runner.runner_id,
+            "runner_kind": self.runner.kind.value,
+            "runner_status": self.runner.status.value,
+            "selected_for_cleanup": selected,
+            "cleanup_mode": self.cleanup_mode.value,
+            "cleanup_supported": self.cleanup_supported,
+            "skipped_reason": self.skipped_reason,
+            "reuse_score": self.reuse_score,
+            "useful_overlap_score": self.useful_overlap_score,
+            "reasons": list(self.reasons),
+            "open_workflow_lease_count": self.runner.open_workflow_lease_count,
+            "queued_demand": "queued_demand" in self.reasons,
+            "recent_use": any(reason.startswith("recent_use") for reason in self.reasons),
+            "last_used_at": self.runner.last_used_at,
+            "reload_cost_estimate_mb": self.reload_cost_estimate_mb,
+            "reclaimable_vram_mb": self.reclaimable_vram_mb,
+            "reclaimable_ram_mb": self.reclaimable_ram_mb,
+            "obsolete_lora_count": self.obsolete_lora_count,
+            "model_residency_signature": self.runner.model_residency_signature,
+        }
+
+
+@dataclass(frozen=True)
+class _ModelResidencySets:
+    models_by_kind: dict[str, set[str]]
+    active_loras: set[str]
+
+    @property
+    def empty(self) -> bool:
+        return not self.models_by_kind and not self.active_loras
+
+
+def _ranked_cleanup_candidates(
+    runners: list[RunnerMemorySnapshot],
+    *,
+    workflow_estimate: WorkflowMemoryEstimate | None,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
+) -> list[_CleanupCandidate]:
+    candidates = [
+        _cleanup_candidate(
+            runner,
+            workflow_estimate=workflow_estimate,
+            queued_model_residency_payloads=queued_model_residency_payloads,
+            runner_cleanup_capabilities=runner_cleanup_capabilities,
+        )
+        for runner in runners
+    ]
     return sorted(
-        [runner for runner in runners if not _runner_snapshot_is_active(runner)],
-        key=lambda runner: (
-            runner.open_workflow_lease_count,
-            -(
-                runner.observed_idle_vram_mb
-                or runner.observed_execution_peak_vram_mb
-                or 0
-            ),
-            runner.runner_id,
+        candidates,
+        key=lambda candidate: (
+            not candidate.cleanup_supported,
+            candidate.reuse_score,
+            candidate.runner.open_workflow_lease_count,
+            candidate.reload_cost_estimate_mb or 0,
+            -candidate.obsolete_lora_count,
+            -(candidate.reclaimable_vram_mb or 0),
+            candidate.runner.last_used_at or "",
+            candidate.runner.runner_id,
         ),
     )
+
+
+def _cleanup_candidate(
+    runner: RunnerMemorySnapshot,
+    *,
+    workflow_estimate: WorkflowMemoryEstimate | None,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
+) -> _CleanupCandidate:
+    reclaimable_vram_mb = _runner_resident_vram_mb(runner)
+    reclaimable_ram_mb = _runner_resident_ram_mb(runner)
+    reload_cost_estimate_mb = max(
+        reclaimable_vram_mb or 0,
+        reclaimable_ram_mb or 0,
+    ) or None
+    if _runner_snapshot_is_active(runner):
+        return _CleanupCandidate(
+            runner=runner,
+            cleanup_mode=MemoryCleanupMode.CLEANUP_UNSUPPORTED,
+            cleanup_supported=False,
+            reuse_score=10_000,
+            useful_overlap_score=0,
+            reasons=("protected_runner_state",),
+            skipped_reason="active_or_reserved_runner",
+            reclaimable_vram_mb=reclaimable_vram_mb,
+            reclaimable_ram_mb=reclaimable_ram_mb,
+            reload_cost_estimate_mb=reload_cost_estimate_mb,
+        )
+
+    supported_modes = _cleanup_modes_for_runner(runner, runner_cleanup_capabilities)
+    cleanup_mode = _runner_cleanup_mode(runner, supported_modes)
+    cleanup_supported = cleanup_mode is not MemoryCleanupMode.CLEANUP_UNSUPPORTED
+    score, overlap_score, reasons, obsolete_lora_count = _runner_reuse_score(
+        runner,
+        workflow_estimate=workflow_estimate,
+        queued_model_residency_payloads=queued_model_residency_payloads,
+        precise_lora_cleanup_supported=MemoryCleanupMode.PER_LORA_UNLOAD
+        in supported_modes,
+    )
+    if not cleanup_supported:
+        reasons.append("cleanup_unsupported")
+    return _CleanupCandidate(
+        runner=runner,
+        cleanup_mode=cleanup_mode,
+        cleanup_supported=cleanup_supported,
+        reuse_score=score,
+        useful_overlap_score=overlap_score,
+        reasons=tuple(reasons),
+        skipped_reason=None if cleanup_supported else "cleanup_unsupported",
+        reclaimable_vram_mb=reclaimable_vram_mb,
+        reclaimable_ram_mb=reclaimable_ram_mb,
+        reload_cost_estimate_mb=reload_cost_estimate_mb,
+        obsolete_lora_count=obsolete_lora_count,
+    )
+
+
+def _cleanup_modes_for_runner(
+    runner: RunnerMemorySnapshot,
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
+) -> set[MemoryCleanupMode]:
+    configured = runner_cleanup_capabilities.get(runner.runner_id)
+    if configured is not None:
+        return set(configured)
+    if runner.kind is RunnerKind.CORE_COMFYUI:
+        return {MemoryCleanupMode.RUNNER_FREE}
+    if runner.kind is RunnerKind.ISOLATED_COMFYUI:
+        return {MemoryCleanupMode.ISOLATED_EVICTION}
+    return set()
+
+
+def _runner_cleanup_mode(
+    runner: RunnerMemorySnapshot,
+    supported_modes: set[MemoryCleanupMode],
+) -> MemoryCleanupMode:
+    if MemoryCleanupMode.PER_LORA_UNLOAD in supported_modes:
+        return MemoryCleanupMode.PER_LORA_UNLOAD
+    if MemoryCleanupMode.PER_MODEL_UNLOAD in supported_modes:
+        return MemoryCleanupMode.PER_MODEL_UNLOAD
+    if (
+        runner.kind is RunnerKind.CORE_COMFYUI
+        and MemoryCleanupMode.RUNNER_FREE in supported_modes
+    ):
+        return MemoryCleanupMode.RUNNER_FREE
+    if (
+        runner.kind is RunnerKind.ISOLATED_COMFYUI
+        and MemoryCleanupMode.ISOLATED_EVICTION in supported_modes
+    ):
+        return MemoryCleanupMode.ISOLATED_EVICTION
+    return MemoryCleanupMode.CLEANUP_UNSUPPORTED
+
+
+def _runner_reuse_score(
+    runner: RunnerMemorySnapshot,
+    *,
+    workflow_estimate: WorkflowMemoryEstimate | None,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    precise_lora_cleanup_supported: bool,
+) -> tuple[int, int, list[str], int]:
+    score = 0
+    useful_overlap_score = 0
+    reasons: list[str] = []
+    runner_sets = _model_residency_sets(runner.model_residency_payload)
+    requested_sets = _model_residency_sets(
+        workflow_estimate.model_residency_payload if workflow_estimate is not None else {}
+    )
+    queued_sets = [
+        _model_residency_sets(payload)
+        for payload in queued_model_residency_payloads
+        if payload
+    ]
+
+    if (
+        workflow_estimate is not None
+        and runner.model_residency_signature is not None
+        and runner.model_residency_signature
+        == workflow_estimate.model_residency_signature
+    ):
+        score += 100
+        useful_overlap_score += 100
+        reasons.append("same_model_residency_signature")
+
+    overlap_score, overlap_reasons = _useful_overlap_score(runner_sets, requested_sets)
+    score += overlap_score
+    useful_overlap_score += overlap_score
+    reasons.extend(overlap_reasons)
+
+    queued_overlap_score = 0
+    for queued in queued_sets:
+        partial, partial_reasons = _useful_overlap_score(runner_sets, queued)
+        queued_overlap_score = max(queued_overlap_score, partial)
+        if partial > 0:
+            reasons.extend(
+                f"queued_{reason}" for reason in partial_reasons if f"queued_{reason}" not in reasons
+            )
+    if queued_overlap_score > 0:
+        score += min(queued_overlap_score, 60)
+        reasons.append("queued_demand")
+
+    if runner.open_workflow_lease_count > 0:
+        lease_score = min(runner.open_workflow_lease_count * 20, 60)
+        score += lease_score
+        reasons.append("open_workflow_lease")
+
+    recency_score, recency_reason = _recent_use_score(runner.last_used_at)
+    if recency_score > 0:
+        score += recency_score
+        reasons.append(recency_reason)
+
+    reload_cost_mb = max(_runner_resident_vram_mb(runner) or 0, _runner_resident_ram_mb(runner) or 0)
+    if reload_cost_mb >= 8_000:
+        score += 24
+        reasons.append("high_reload_cost_estimate")
+    elif reload_cost_mb >= 3_000:
+        score += 12
+        reasons.append("medium_reload_cost_estimate")
+    elif reload_cost_mb > 0:
+        score += 4
+        reasons.append("low_reload_cost_estimate")
+
+    needed_loras = set(requested_sets.active_loras)
+    for queued in queued_sets:
+        needed_loras.update(queued.active_loras)
+    obsolete_loras = runner_sets.active_loras - needed_loras
+    obsolete_lora_count = len(obsolete_loras)
+    if obsolete_lora_count > 0 and runner.open_workflow_lease_count == 0:
+        if precise_lora_cleanup_supported:
+            reasons.append("obsolete_lora_precise_cleanup_candidate")
+            score -= min(obsolete_lora_count * 16, 48)
+        else:
+            reasons.append("obsolete_lora_pressure_signal")
+            reasons.append("per_lora_cleanup_unsupported")
+            score -= min(obsolete_lora_count * 6, 18)
+
+    if not reasons:
+        reasons.append("no_known_reuse_value")
+
+    return max(0, score), useful_overlap_score, reasons, obsolete_lora_count
+
+
+def _useful_overlap_score(
+    runner_sets: _ModelResidencySets,
+    requested_sets: _ModelResidencySets,
+) -> tuple[int, list[str]]:
+    if runner_sets.empty or requested_sets.empty:
+        return 0, []
+    weights = {
+        "checkpoint": 45,
+        "model": 45,
+        "refiner": 30,
+        "vae": 18,
+        "encoder": 18,
+        "controlnet": 22,
+        "ipadapter": 20,
+    }
+    score = 0
+    reasons: list[str] = []
+    for kind, requested_values in requested_sets.models_by_kind.items():
+        overlap = runner_sets.models_by_kind.get(kind, set()) & requested_values
+        if not overlap:
+            continue
+        score += weights.get(kind, 10) * len(overlap)
+        reasons.append(f"same_{kind}")
+    same_loras = runner_sets.active_loras & requested_sets.active_loras
+    if same_loras:
+        score += min(8 * len(same_loras), 32)
+        reasons.append("same_lora_set" if same_loras == requested_sets.active_loras else "same_lora")
+    return score, reasons
+
+
+def _model_residency_sets(payload: dict[str, Any] | None) -> _ModelResidencySets:
+    models_by_kind: dict[str, set[str]] = {}
+    active_loras: set[str] = set()
+    if not isinstance(payload, dict):
+        return _ModelResidencySets(models_by_kind={}, active_loras=set())
+    for item in payload.get("selected_models") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        selection = str(item.get("selection") or "").strip()
+        if not kind or not selection:
+            continue
+        models_by_kind.setdefault(kind, set()).add(selection)
+    for item in payload.get("selected_loras") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("active") is False:
+            continue
+        selection = str(item.get("selection") or "").strip()
+        if selection:
+            active_loras.add(selection)
+    return _ModelResidencySets(models_by_kind=models_by_kind, active_loras=active_loras)
+
+
+def _recent_use_score(last_used_at: str | None) -> tuple[int, str]:
+    if not last_used_at:
+        return 0, "not_recently_used"
+    try:
+        parsed = datetime.fromisoformat(last_used_at)
+    except ValueError:
+        return 1, "recent_use_unknown_age"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    age_seconds = max(0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds())
+    if age_seconds <= 5 * 60:
+        return 16, "recent_use_under_5m"
+    if age_seconds <= 30 * 60:
+        return 8, "recent_use_under_30m"
+    if age_seconds <= 2 * 60 * 60:
+        return 3, "recent_use_under_2h"
+    return 0, "not_recently_used"
+
+
+def _cleanup_plan(
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+    idle_runners: list[RunnerMemorySnapshot],
+    required_vram_margin_mb: int | None,
+    required_ram_margin_mb: int | None,
+    *,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
+) -> dict[str, Any]:
+    ranked = _ranked_cleanup_candidates(
+        idle_runners,
+        workflow_estimate=estimate,
+        queued_model_residency_payloads=queued_model_residency_payloads,
+        runner_cleanup_capabilities=runner_cleanup_capabilities,
+    )
+    needed_vram_mb, needed_ram_mb = _cleanup_shortfall_mb(
+        estimate,
+        machine,
+        required_vram_margin_mb,
+        required_ram_margin_mb,
+    )
+    selected: list[_CleanupCandidate] = []
+    reclaimed_vram_mb = 0
+    reclaimed_ram_mb = 0
+    for candidate in ranked:
+        if not candidate.cleanup_supported:
+            continue
+        if _cleanup_shortfall_satisfied(
+            needed_vram_mb,
+            needed_ram_mb,
+            reclaimed_vram_mb,
+            reclaimed_ram_mb,
+        ) and selected:
+            break
+        selected.append(candidate)
+        reclaimed_vram_mb += candidate.reclaimable_vram_mb or 0
+        reclaimed_ram_mb += candidate.reclaimable_ram_mb or 0
+
+    selected_runner_ids = [candidate.runner.runner_id for candidate in selected]
+    candidate_details = [
+        candidate.diagnostic_details(
+            selected=candidate.runner.runner_id in selected_runner_ids
+        )
+        for candidate in ranked
+    ]
+    selected_modes = sorted({candidate.cleanup_mode.value for candidate in selected})
+    precise_unsupported = any(
+        "per_lora_cleanup_unsupported" in candidate.reasons
+        or "cleanup_unsupported" in candidate.reasons
+        for candidate in ranked
+    )
+    return {
+        "requested_model_residency_signature": estimate.model_residency_signature,
+        "requested_model_residency_payload": estimate.model_residency_payload,
+        "queued_model_residency_payload_count": len(queued_model_residency_payloads),
+        "required_cleanup_vram_mb": needed_vram_mb,
+        "required_cleanup_ram_mb": needed_ram_mb,
+        "selected_runner_ids": selected_runner_ids,
+        "kept_warm_runner_ids": [
+            candidate.runner.runner_id
+            for candidate in ranked
+            if candidate.runner.runner_id not in selected_runner_ids
+            and candidate.cleanup_supported
+        ],
+        "selected_cleanup_modes": selected_modes,
+        "candidate_scores": candidate_details,
+        "precise_cleanup": {
+            "per_lora_unload": "unsupported_by_current_adapter"
+            if precise_unsupported
+            else "not_needed",
+            "per_model_unload": "future_adapter_capability",
+        },
+    }
+
+
+def _cleanup_shortfall_mb(
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+    required_vram_margin_mb: int | None,
+    required_ram_margin_mb: int | None,
+) -> tuple[int | None, int | None]:
+    needed_vram_mb: int | None = None
+    if not _accelerator_memory_uses_system_ram(machine):
+        estimated_vram_mb = estimate.estimated_peak_vram_mb
+        if machine.free_vram_mb is not None and estimated_vram_mb is not None:
+            needed_vram_mb = max(
+                0,
+                estimated_vram_mb
+                + (required_vram_margin_mb or 0)
+                - machine.free_vram_mb,
+            )
+    estimated_ram_mb = _estimated_ram_pressure_mb(machine, estimate)
+    needed_ram_mb: int | None = None
+    if machine.free_ram_mb is not None and estimated_ram_mb is not None:
+        needed_ram_mb = max(
+            0,
+            estimated_ram_mb + (required_ram_margin_mb or 0) - machine.free_ram_mb,
+        )
+    return needed_vram_mb, needed_ram_mb
+
+
+def _cleanup_shortfall_satisfied(
+    needed_vram_mb: int | None,
+    needed_ram_mb: int | None,
+    reclaimed_vram_mb: int,
+    reclaimed_ram_mb: int,
+) -> bool:
+    if needed_vram_mb is not None and reclaimed_vram_mb < needed_vram_mb:
+        return False
+    if needed_ram_mb is not None and reclaimed_ram_mb < needed_ram_mb:
+        return False
+    return True
 
 
 def _estimate_memory_class(
@@ -2373,6 +2859,8 @@ def _memory_shortfall_decision(
     predicted_free_vram_after_mb: int | None,
     predicted_free_ram_after_mb: int | None,
     *,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
     reason_code: str,
     risk_level: MemoryRiskLevel = MemoryRiskLevel.HIGH,
 ) -> MemoryGovernorDecision:
@@ -2394,8 +2882,16 @@ def _memory_shortfall_decision(
             can_retry_after_cleanup=True,
         )
 
-    candidates = eviction_candidates(idle_runners)
-    if candidates:
+    cleanup_plan = _cleanup_plan(
+        estimate,
+        machine,
+        idle_runners,
+        required_vram_margin_mb,
+        required_ram_margin_mb,
+        queued_model_residency_payloads=queued_model_residency_payloads,
+        runner_cleanup_capabilities=runner_cleanup_capabilities,
+    )
+    if cleanup_plan["selected_runner_ids"]:
         return _decision(
             MemoryDecisionAction.EVICT_THEN_START,
             risk_level,
@@ -2408,8 +2904,9 @@ def _memory_shortfall_decision(
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
-            evict_runner_ids=[runner.runner_id for runner in candidates],
+            evict_runner_ids=cleanup_plan["selected_runner_ids"],
             can_retry_after_cleanup=True,
+            developer_details={"residency_pressure": cleanup_plan},
         )
 
     return _decision(
@@ -2424,6 +2921,7 @@ def _memory_shortfall_decision(
         required_ram_margin_mb,
         predicted_free_vram_after_mb,
         predicted_free_ram_after_mb,
+        developer_details={"residency_pressure": cleanup_plan},
     )
 
 
@@ -2438,6 +2936,8 @@ def _uncertain_gpu_decision(
     predicted_free_vram_after_mb: int | None,
     predicted_free_ram_after_mb: int | None,
     *,
+    queued_model_residency_payloads: list[dict[str, Any]],
+    runner_cleanup_capabilities: dict[str, list[MemoryCleanupMode]],
     reason_code: str,
 ) -> MemoryGovernorDecision:
     if active_runners:
@@ -2458,8 +2958,16 @@ def _uncertain_gpu_decision(
             can_retry_after_cleanup=True,
         )
 
-    candidates = eviction_candidates(idle_runners)
-    if candidates:
+    cleanup_plan = _cleanup_plan(
+        estimate,
+        machine,
+        idle_runners,
+        required_vram_margin_mb,
+        required_ram_margin_mb,
+        queued_model_residency_payloads=queued_model_residency_payloads,
+        runner_cleanup_capabilities=runner_cleanup_capabilities,
+    )
+    if cleanup_plan["selected_runner_ids"]:
         return _decision(
             MemoryDecisionAction.EVICT_THEN_START,
             MemoryRiskLevel.HIGH,
@@ -2472,8 +2980,9 @@ def _uncertain_gpu_decision(
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
-            evict_runner_ids=[runner.runner_id for runner in candidates],
+            evict_runner_ids=cleanup_plan["selected_runner_ids"],
             can_retry_after_cleanup=True,
+            developer_details={"residency_pressure": cleanup_plan},
         )
 
     if estimate.recent_memory_error:
@@ -2489,6 +2998,7 @@ def _uncertain_gpu_decision(
             required_ram_margin_mb,
             predicted_free_vram_after_mb,
             predicted_free_ram_after_mb,
+            developer_details={"residency_pressure": cleanup_plan},
         )
 
     return _decision(
@@ -2512,11 +3022,34 @@ def _request_is_cpu_only(estimate: WorkflowMemoryEstimate) -> bool:
 
 
 def _runner_snapshot_is_active(runner: RunnerMemorySnapshot) -> bool:
-    return runner.current_job_id is not None or runner.output_stream_lease_count > 0 or runner.status in {
-        RunnerStatus.RUNNING,
-        RunnerStatus.LOADING_MODEL,
-        RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
-    }
+    return (
+        runner.current_job_id is not None
+        or runner.output_stream_lease_count > 0
+        or runner.reservation_token_present
+        or runner.status
+        in {
+            RunnerStatus.RUNNING,
+            RunnerStatus.LOADING_MODEL,
+            RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
+            RunnerStatus.RESERVING,
+            RunnerStatus.SUBMITTING,
+            RunnerStatus.EVICTING_RUNNER,
+            RunnerStatus.WAITING_FOR_MEMORY_RELEASE,
+            RunnerStatus.STOPPING,
+        }
+    )
+
+
+def _runner_snapshot_may_hold_reclaimable_memory(runner: RunnerMemorySnapshot) -> bool:
+    if _runner_snapshot_is_active(runner):
+        return True
+    return (
+        runner.last_workflow_id is not None
+        or runner.model_residency_signature is not None
+        or bool(runner.model_residency_payload)
+        or _runner_resident_vram_mb(runner) is not None
+        or _runner_resident_ram_mb(runner) is not None
+    )
 
 
 def _selected_runner_reuse_allowed(
@@ -2882,6 +3415,7 @@ def _estimate_request_fields(request: WorkflowMemoryEstimateRequest) -> dict[str
         "lora_strength_total": request.lora_strength_total,
         "process_compatibility_signature": request.process_compatibility_signature,
         "model_residency_signature": request.model_residency_signature,
+        "model_residency_payload": dict(request.model_residency_payload),
         "execution_profile_signature": request.execution_profile_signature,
         "precision": request.precision,
         "vram_mode": request.vram_mode,

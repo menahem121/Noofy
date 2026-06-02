@@ -57,6 +57,11 @@ the lifecycle foundation expected for production work:
   runner's model-residency signature while execution-shape changes remain in
   the execution-profile estimate lane and are checked as incremental same-runner
   pressure where runner residency evidence exists
+- sixth P2 residency-pressure slice: cleanup planning now scores useful
+  overlap before reclaiming idle residency, including same checkpoint, VAE,
+  encoder, ControlNet/IPAdapter, LoRA set, open leases, queued demand, recent
+  use, and reload-cost estimate; V1 cleanup capabilities are explicit and the
+  proven ComfyUI modes remain runner-level `/free` and isolated runner eviction
 - first P3 frontend memory-state slice: the workflow run page and default
   canvas run view now render distinct user-facing copy for queueing, cleanup,
   retry, cleanup failure, external pressure, capacity failure, and unattributed
@@ -284,6 +289,34 @@ Out of scope for V1:
 - planning cross-runner loaded-model VRAM reuse without modifying or extending
   engine internals to make that sharing explicit and safe
 
+### Residency Pressure Cleanup
+
+Implemented V1 behavior:
+
+- cleanup planning keeps active, reserved, submitting, output-stream, evicting,
+  and waiting-release runners out of cleanup candidates
+- candidate diagnostics expose reuse value and useful overlap, including same
+  checkpoint, VAE, encoder, ControlNet/IPAdapter, LoRA set, open lease, queued
+  demand, recent use, reload-cost estimate, and reclaim estimate
+- fully unreferenced or low-reuse idle residency is reclaimed before
+  open-view, queued-needed, or useful-overlap residency when it can satisfy the
+  pressure
+- obsolete LoRAs/model modifiers are cleanup-pressure signals when no active,
+  queued, or open workflow still needs them
+- current ComfyUI cleanup capability is runner-level `/free`; isolated runners
+  can be stopped/evicted through the runner coordinator
+
+Future adapter capability work:
+
+- precise per-LoRA/per-model cleanup is not a guaranteed ComfyUI feature
+- enable `per_lora_unload` or `per_model_unload` only for adapters/runtimes
+  that expose a stable public unload-by-reference capability without modifying
+  ComfyUI internals
+- clear precise residency metadata only after observed release confirmation
+- if precise cleanup remains unsupported, obsolete LoRA/model-modifier changes
+  must remain scoring/diagnostic signals rather than automatic whole-runner
+  eviction reasons
+
 ### Refined Active-Job Queueing
 
 Current behavior queues conservatively behind active Noofy work. P2 should
@@ -447,6 +480,10 @@ Validation notes should record:
 
 - ComfyUI `/free` is asynchronous and best-effort.
 - `/free` cannot guarantee private custom-node caches are released.
+- Precise per-LoRA/per-model cleanup is a future adapter capability, not a
+  guaranteed ComfyUI feature. In V1, Noofy only claims runner-level `/free` and
+  isolated runner eviction unless an adapter proves a safer mode without
+  ComfyUI internals.
 - Live tensor references may remain alive inside the runner or custom node code.
 - Global GPU metrics cannot always prove ownership of unattributed VRAM.
 - Some production confidence requires hardware validation, not only mocks.
@@ -470,8 +507,11 @@ Memory Governor can be considered production-complete when:
 - [x] Same-runner warm reuse uses model-residency signatures safely, while
       execution-profile changes update estimates without creating a new loaded
       model state.
-- [ ] Cross-workflow runner selection uses signatures more intelligently
+- [x] Idle residency cleanup uses signature payloads and reuse-value
+      diagnostics to prefer low-reuse cleanup before useful warm residency,
       without assuming cross-runner loaded-model VRAM reuse.
+- [ ] Future adapters with stable public precise unload support can expose
+      per-LoRA/per-model cleanup behind observed release confirmation.
 - [ ] Active queueing policy is refined for CPU-only and lightweight work.
 - [ ] Frontend memory states are polished and do not collapse distinct backend
       failures into generic copy.

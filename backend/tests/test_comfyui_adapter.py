@@ -6,6 +6,7 @@ import pytest
 
 import app.engine.comfyui_adapter as comfyui_adapter_module
 from app.diagnostics import LogStore
+from app.engine.adapter import EngineMemoryCleanupMode
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.models import JobProgress, JobResult
 from app.engine.service import EngineService
@@ -545,6 +546,17 @@ async def test_adapter_redacts_resolved_api_key_from_http_errors(
 def json_payload(request: httpx.Request) -> dict:
     request.read()
     return json.loads(request.content.decode("utf-8"))
+
+
+def test_comfyui_cleanup_capabilities_are_runner_level_only(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+
+    capabilities = adapter.memory_cleanup_capabilities()
+
+    assert capabilities.supports(EngineMemoryCleanupMode.RUNNER_FREE)
+    assert not capabilities.supports(EngineMemoryCleanupMode.PER_LORA_UNLOAD)
+    assert not capabilities.supports(EngineMemoryCleanupMode.PER_MODEL_UNLOAD)
+    assert capabilities.observed_release_confirmation is True
 
 
 @pytest.mark.anyio

@@ -1223,7 +1223,7 @@ async def test_workflow_run_memory_estimate_exposes_selected_models_and_loras() 
         folder="checkpoints",
         filename="v1-5-pruned-emaonly-fp16.safetensors",
     )
-    service, _ = _build_service(
+    service, supervisor = _build_service(
         RecordingAdapter(models=[model]),
         memory_observer=StaticMemoryObserver(
             MachineMemorySnapshot(
@@ -1323,6 +1323,9 @@ async def test_workflow_run_memory_estimate_exposes_selected_models_and_loras() 
     assert features["selected_loras"][0]["source"] == "input:style_lora"
     assert features["selected_loras"][0]["strength_model"] == 0.75
     assert features["selected_loras"][0]["strength_clip"] == 0.5
+    runner_payload = supervisor.core_runner().model_residency_payload
+    assert runner_payload == signatures["payloads"]["model_residency"]
+    assert runner_payload["selected_loras"][0]["selection"] == "detail-style.safetensors"
 
 
 @pytest.mark.anyio

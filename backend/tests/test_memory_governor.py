@@ -1596,7 +1596,11 @@ def test_memory_admission_eviction_for_memory_pressure_and_queue_for_active_runn
 
     assert idle_decision.action is MemoryDecisionAction.EVICT_THEN_START
     assert idle_decision.reason_code == "memory_pressure_high"
-    assert idle_decision.evict_runner_ids == ["runner-big", "runner-small"]
+    assert idle_decision.evict_runner_ids == ["runner-big"]
+    pressure = idle_decision.developer_details["residency_pressure"]
+    assert pressure["selected_cleanup_modes"] == ["isolated_eviction"]
+    assert pressure["selected_runner_ids"] == ["runner-big"]
+    assert pressure["kept_warm_runner_ids"] == ["runner-small"]
     assert idle_decision.developer_details["memory_ownership"]["reclaimable_idle_runner_ids"] == [
         "runner-big",
         "runner-small",
@@ -1782,6 +1786,119 @@ def test_memory_admission_high_pressure_warm_runner_uses_cleanup_path() -> None:
     assert memory_user_status_for_decision(decision).state == "freeing_previous_models"
 
 
+def test_memory_admission_preserves_useful_base_residency_when_lora_is_obsolete() -> None:
+    requested_payload = _model_payload(
+        models=[("checkpoint", "base.safetensors"), ("vae", "main.vae.safetensors")],
+        loras=["new-style.safetensors"],
+    )
+    warm_base_with_old_lora = _runner(
+        "runner-base",
+        RunnerMemoryClass.GPU_HEAVY,
+        idle_vram_mb=6000,
+        model_payload=_model_payload(
+            models=[("checkpoint", "base.safetensors"), ("vae", "main.vae.safetensors")],
+            loras=["old-style.safetensors"],
+        ),
+    )
+    unrelated = _runner(
+        "runner-unrelated",
+        RunnerMemoryClass.GPU_HEAVY,
+        idle_vram_mb=5000,
+        model_payload=_model_payload(models=[("checkpoint", "other.safetensors")]),
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=WorkflowMemoryEstimate(
+                workflow_id="workflow-b",
+                memory_class=RunnerMemoryClass.GPU_HEAVY,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                estimated_peak_vram_mb=2500,
+                model_residency_payload=requested_payload,
+            ),
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            resident_runners=[warm_base_with_old_lora, unrelated],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.EVICT_THEN_START
+    assert decision.evict_runner_ids == ["runner-unrelated"]
+    pressure = decision.developer_details["residency_pressure"]
+    candidates = {
+        candidate["runner_id"]: candidate
+        for candidate in pressure["candidate_scores"]
+    }
+    assert candidates["runner-base"]["selected_for_cleanup"] is False
+    assert "same_checkpoint" in candidates["runner-base"]["reasons"]
+    assert "same_vae" in candidates["runner-base"]["reasons"]
+    assert "obsolete_lora_pressure_signal" in candidates["runner-base"]["reasons"]
+    assert "per_lora_cleanup_unsupported" in candidates["runner-base"]["reasons"]
+    assert candidates["runner-base"]["useful_overlap_score"] > candidates["runner-unrelated"]["useful_overlap_score"]
+    assert pressure["precise_cleanup"]["per_lora_unload"] == "unsupported_by_current_adapter"
+
+
+def test_memory_admission_queued_demand_adds_reuse_value_before_cleanup() -> None:
+    queued_payload = _model_payload(models=[("checkpoint", "queued.safetensors")])
+    queued_needed = _runner(
+        "runner-queued-needed",
+        RunnerMemoryClass.GPU_HEAVY,
+        idle_vram_mb=5000,
+        model_payload=queued_payload,
+    )
+    low_reuse = _runner(
+        "runner-low-reuse",
+        RunnerMemoryClass.GPU_HEAVY,
+        idle_vram_mb=5000,
+        model_payload=_model_payload(models=[("checkpoint", "unused.safetensors")]),
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate("workflow-new", RunnerMemoryClass.GPU_HEAVY, 2500),
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            resident_runners=[queued_needed, low_reuse],
+            queued_model_residency_payloads=[queued_payload],
+        )
+    )
+
+    assert decision.evict_runner_ids == ["runner-low-reuse"]
+    pressure = decision.developer_details["residency_pressure"]
+    queued_candidate = next(
+        candidate
+        for candidate in pressure["candidate_scores"]
+        if candidate["runner_id"] == "runner-queued-needed"
+    )
+    assert queued_candidate["selected_for_cleanup"] is False
+    assert queued_candidate["queued_demand"] is True
+    assert "queued_same_checkpoint" in queued_candidate["reasons"]
+
+
+def test_eviction_candidates_excludes_reserved_submitting_and_waiting_release_runners() -> None:
+    candidates = eviction_candidates(
+        [
+            _runner("runner-reserving", RunnerMemoryClass.GPU_HEAVY, status=RunnerStatus.RESERVING),
+            _runner("runner-submitting", RunnerMemoryClass.GPU_HEAVY, status=RunnerStatus.SUBMITTING),
+            _runner(
+                "runner-waiting-release",
+                RunnerMemoryClass.GPU_HEAVY,
+                status=RunnerStatus.WAITING_FOR_MEMORY_RELEASE,
+            ),
+            _runner("runner-idle", RunnerMemoryClass.GPU_HEAVY, idle_vram_mb=3000),
+        ]
+    )
+
+    assert [runner.runner_id for runner in candidates] == ["runner-idle"]
+
+
 def test_memory_status_reports_isolated_runner_eviction_as_unloading_previous_workflow() -> None:
     decision = MemoryGovernorDecision(
         action=MemoryDecisionAction.EVICT_THEN_START,
@@ -1937,6 +2054,7 @@ def _estimate(
     *,
     confidence: RunnerMemoryEstimateConfidence = RunnerMemoryEstimateConfidence.MEDIUM,
     source: RunnerMemoryEstimateSource = RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+    model_payload: dict[str, object] | None = None,
 ) -> WorkflowMemoryEstimate:
     return WorkflowMemoryEstimate(
         workflow_id=workflow_id,
@@ -1944,6 +2062,7 @@ def _estimate(
         confidence=confidence,
         source=source,
         estimated_peak_vram_mb=peak_vram_mb,
+        model_residency_payload=dict(model_payload or {}),
     )
 
 
@@ -1957,6 +2076,7 @@ def _runner(
     current_job_id: str | None = None,
     idle_vram_mb: int | None = None,
     lease_count: int = 0,
+    model_payload: dict[str, object] | None = None,
 ) -> RunnerMemorySnapshot:
     return RunnerMemorySnapshot(
         runner_id=runner_id,
@@ -1967,7 +2087,32 @@ def _runner(
         current_job_id=current_job_id,
         observed_idle_vram_mb=idle_vram_mb,
         open_workflow_lease_count=lease_count,
+        model_residency_payload=dict(model_payload or {}),
     )
+
+
+def _model_payload(
+    *,
+    models: list[tuple[str, str]] | None = None,
+    loras: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": "test",
+        "selected_models": [
+            {"kind": kind, "selection": selection}
+            for kind, selection in (models or [])
+        ],
+        "selected_loras": [
+            {
+                "kind": "lora",
+                "selection": selection,
+                "strength_model": 1.0,
+                "strength_clip": 1.0,
+                "active": True,
+            }
+            for selection in (loras or [])
+        ],
+    }
 
 
 def _machine(

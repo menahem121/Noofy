@@ -152,6 +152,7 @@ class RunnerDescriptor(BaseModel):
     current_workflow_id: str | None = None
     last_workflow_id: str | None = None
     model_residency_signature: str | None = None
+    model_residency_payload: dict[str, object] = Field(default_factory=dict)
     execution_profile_signature: str | None = None
     last_used_at: str | None = None
     open_workflow_lease_count: int = 0
@@ -542,6 +543,7 @@ class RunnerSupervisor:
         job_id: str,
         workflow_id: str | None = None,
         model_residency_signature: str | None = None,
+        model_residency_payload: dict[str, object] | None = None,
         execution_profile_signature: str | None = None,
         memory_signatures_known: bool = False,
     ) -> RunnerDescriptor:
@@ -561,6 +563,7 @@ class RunnerSupervisor:
             }
             if memory_signatures_known:
                 updates["model_residency_signature"] = model_residency_signature
+                updates["model_residency_payload"] = dict(model_residency_payload or {})
                 updates["execution_profile_signature"] = execution_profile_signature
             updated = descriptor.model_copy(update=updates)
             self._descriptors[reservation.runner_id] = updated
@@ -583,6 +586,7 @@ class RunnerSupervisor:
                     ),
                     "last_workflow_id": None,
                     "model_residency_signature": None,
+                    "model_residency_payload": {},
                     "execution_profile_signature": None,
                     "observed_idle_vram_mb": None,
                     "observed_idle_ram_mb": None,
@@ -827,6 +831,7 @@ class RunnerSupervisor:
                     "status": RunnerStatus.IDLE,
                     "last_workflow_id": None,
                     "model_residency_signature": None,
+                    "model_residency_payload": {},
                     "execution_profile_signature": None,
                     "observed_idle_vram_mb": None,
                     "observed_idle_ram_mb": None,

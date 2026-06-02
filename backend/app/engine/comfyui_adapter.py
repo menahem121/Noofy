@@ -26,6 +26,7 @@ from app.engine.models import (
     JobResult,
     ModelInfo,
 )
+from app.engine.adapter import EngineMemoryCleanupCapabilities, EngineMemoryCleanupMode
 from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
 
@@ -73,6 +74,16 @@ class ComfyUIEngineAdapter:
 
     def configure_terminal_notifier(self, notifier: Callable[[str], None] | None) -> None:
         self._terminal_notifier = notifier
+
+    def memory_cleanup_capabilities(self) -> EngineMemoryCleanupCapabilities:
+        return EngineMemoryCleanupCapabilities(
+            modes=frozenset({EngineMemoryCleanupMode.RUNNER_FREE}),
+            observed_release_confirmation=True,
+            notes=(
+                "ComfyUI /free supports unload_models and free_memory only in the vendored runtime.",
+                "No stable public per-model or per-LoRA unload-by-reference route is exposed.",
+            ),
+        )
 
     async def release_memory(self) -> None:
         """Ask an idle ComfyUI runner to unload models and empty its cache."""

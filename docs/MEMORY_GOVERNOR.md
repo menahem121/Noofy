@@ -126,6 +126,16 @@ isolated runners, unload idle core model/cache memory, wait for bounded memory
 release, and retry the same workflow once. It does not retry non-memory failures
 or repeat memory retries forever.
 
+Cleanup planning is capability-based. The Memory Governor scores each idle
+resident runner for useful overlap before reclaiming it: same checkpoint, VAE,
+encoder, ControlNet/IPAdapter, LoRA set, queued demand, open workflow leases,
+recent use, and estimated reload cost all increase reuse value. Obsolete LoRAs
+or model modifiers lower reuse value only when no active, queued, or open work
+still needs them. For V1, the proven ComfyUI cleanup modes are runner-level
+`/free` for the core runner and isolated runner eviction. Precise per-LoRA or
+per-model cleanup is a future adapter capability, not a guaranteed ComfyUI
+feature.
+
 `/free` HTTP success is only an acknowledgment. Noofy records a pre-cleanup
 baseline and polls RAM/VRAM asynchronously with adaptive intervals until
 release is observed or the configured timeout expires. Isolated runner
@@ -186,8 +196,10 @@ Core-runner admission follows the same product policy:
 
 The core process is not evicted as idle cleanup. When its warm models are
 reclaimable, the ComfyUI adapter requests model unload and allocator-cache
-release while leaving the trusted process alive. Runtime Isolation, not the
-Memory Governor, owns dependency-conflict boundaries.
+release while leaving the trusted process alive. Noofy does not assume a
+specific LoRA or model can be unloaded by reference unless the active adapter
+explicitly exposes that capability and release is confirmed by observation.
+Runtime Isolation, not the Memory Governor, owns dependency-conflict boundaries.
 
 ## Platform Policy
 

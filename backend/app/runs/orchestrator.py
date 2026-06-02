@@ -17,6 +17,10 @@ from app.runtime.memory.memory_governor import (
     MemoryDecisionAction,
     MemoryGovernorDecision,
 )
+from app.runtime.memory.input_features import (
+    build_memory_signature_set,
+    extract_model_selection_features,
+)
 from app.runtime.runners.supervisor import RunnerDescriptor, RunnerSupervisor
 from app.runs.credentials import (
     CredentialResolver,
@@ -35,7 +39,11 @@ from app.runs.media_staging import (
     MediaInputStagingResolver,
     cleanup_staged_media_files,
 )
-from app.runs.queue_service import WorkflowRunQueueRecord, WorkflowRunQueueService
+from app.runs.queue_service import (
+    WorkflowRunQueueRecord,
+    WorkflowRunQueueService,
+    WorkflowRunQueueStatus,
+)
 
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
@@ -354,6 +362,9 @@ class RunOrchestrator:
                 options=options,
                 input_profile_fingerprint=input_profile_fingerprint,
                 memory_retry_after_cleanup=memory_retry_after_cleanup,
+                queued_model_residency_payloads=self._queued_model_residency_payloads(
+                    exclude_queue_id=queue_id
+                ),
             )
             memory_result = await self._handle_memory_decision(
                 workflow_id=workflow_id,
@@ -415,6 +426,46 @@ class RunOrchestrator:
             run_submission_snapshot=record.run_submission_snapshot.model_copy(deep=True),
             queue_id=record.queue_id,
         )
+
+    def _queued_model_residency_payloads(
+        self,
+        *,
+        exclude_queue_id: str | None,
+    ) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for record in self.workflow_run_queue_service.list_records():
+            if record.queue_id == exclude_queue_id or record.cancel_requested:
+                continue
+            if record.status not in {
+                WorkflowRunQueueStatus.QUEUED,
+                WorkflowRunQueueStatus.REQUEUED,
+                WorkflowRunQueueStatus.HANDING_OFF,
+            }:
+                continue
+            try:
+                package = self.workflow_loader.get_package(record.workflow_id)
+                runtime_package = package_for_input_bindings(package, dict(record.inputs))
+                model_selections = extract_model_selection_features(
+                    runtime_package,
+                    dict(record.inputs),
+                )
+                signatures = build_memory_signature_set(
+                    runner_process_compatibility_key=None,
+                    model_selections=model_selections,
+                    execution_profile={},
+                )
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Queued workflow model-residency demand could not be summarized",
+                    "runs.orchestrator",
+                    workflow_id=record.workflow_id,
+                    details={"queue_id": record.queue_id, "error": str(exc)},
+                )
+                continue
+            if signatures.model_residency_payload:
+                payloads.append(signatures.model_residency_payload)
+        return payloads
 
     def _run_submission_snapshot(
         self,
@@ -635,6 +686,10 @@ class RunOrchestrator:
             and isinstance(memory_signatures.get("model_residency_signature"), str)
             else None
         )
+        model_residency_payload = _memory_signature_payload(
+            memory_signatures,
+            "model_residency",
+        )
         execution_profile_signature = (
             memory_signatures.get("execution_profile_signature")
             if isinstance(memory_signatures, dict)
@@ -646,6 +701,7 @@ class RunOrchestrator:
             job_id=job.job_id,
             workflow_id=workflow_id,
             model_residency_signature=model_residency_signature,
+            model_residency_payload=model_residency_payload,
             execution_profile_signature=execution_profile_signature,
             memory_signatures_known=isinstance(memory_signatures, dict),
         )
@@ -758,3 +814,16 @@ def _dashboard_unavailable_reason(package: WorkflowPackage) -> str | None:
     if not any(section.controls for section in package.dashboard.sections):
         return "Dashboard setup is incomplete. Add at least one dashboard widget before running this workflow."
     return None
+
+
+def _memory_signature_payload(
+    memory_signatures: Any,
+    payload_name: str,
+) -> dict[str, Any]:
+    if not isinstance(memory_signatures, dict):
+        return {}
+    payloads = memory_signatures.get("payloads")
+    if not isinstance(payloads, dict):
+        return {}
+    payload = payloads.get(payload_name)
+    return dict(payload) if isinstance(payload, dict) else {}

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 from app.engine.models import (
@@ -8,6 +10,31 @@ from app.engine.models import (
     ModelInfo,
 )
 from app.workflows.package import WorkflowPackage
+
+
+class EngineMemoryCleanupMode(StrEnum):
+    PER_LORA_UNLOAD = "per_lora_unload"
+    PER_MODEL_UNLOAD = "per_model_unload"
+    RUNNER_FREE = "runner_free"
+    ISOLATED_EVICTION = "isolated_eviction"
+    CLEANUP_UNSUPPORTED = "cleanup_unsupported"
+
+
+@dataclass(frozen=True)
+class EngineMemoryCleanupCapabilities:
+    modes: frozenset[EngineMemoryCleanupMode] = frozenset()
+    observed_release_confirmation: bool = True
+    notes: tuple[str, ...] = ()
+
+    def supports(self, mode: EngineMemoryCleanupMode) -> bool:
+        return mode in self.modes
+
+    def diagnostic_details(self) -> dict[str, Any]:
+        return {
+            "modes": sorted(mode.value for mode in self.modes),
+            "observed_release_confirmation": self.observed_release_confirmation,
+            "notes": list(self.notes),
+        }
 
 
 class EngineAdapter(Protocol):
@@ -62,6 +89,9 @@ class EngineAdapter(Protocol):
 
     async def release_memory(self) -> None:
         """Release idle engine-owned model and allocator memory."""
+
+    def memory_cleanup_capabilities(self) -> EngineMemoryCleanupCapabilities:
+        """Return safe cleanup modes exposed by this adapter/runtime."""
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         """Update this adapter's active engine endpoint."""
