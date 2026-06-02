@@ -40,6 +40,7 @@ from app.runtime.runners.supervisor import (
     RunnerSupervisor,
 )
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.package import WorkflowCustomNodeRecord
 from app.workflows.validator import WorkflowPackageValidator
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1] / "app/workflows/packages"
@@ -1093,6 +1094,62 @@ async def test_workflow_run_memory_estimate_uses_runtime_dimensions_and_graph_ba
     assert small_features["sources"]["resolution_width"] == "input:width"
     assert small_features["sources"]["resolution_height"] == "input:height"
     assert small_features["sources"]["batch_size"] == "graph:5.batch_size"
+
+
+@pytest.mark.anyio
+async def test_workflow_run_memory_estimate_exposes_custom_node_uncertainty() -> None:
+    model = ModelInfo(
+        folder="checkpoints",
+        filename="v1-5-pruned-emaonly-fp16.safetensors",
+    )
+    memory_snapshot = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=24_000,
+            free_vram_mb=20_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=memory_snapshot,
+    )
+    package = service.run_orchestrator.workflow_loader.get_package("text_to_image_v0")
+    custom_package = package.model_copy(
+        update={
+            "custom_nodes": [
+                WorkflowCustomNodeRecord(
+                    id="impact-pack",
+                    folder_name="ComfyUI-Impact-Pack",
+                    source="https://example.invalid/impact-pack.git",
+                    node_types=["ImpactWildcard"],
+                )
+            ]
+        }
+    )
+    service.run_orchestrator.workflow_loader = SimpleNamespace(
+        get_package=lambda workflow_id: custom_package
+    )
+
+    job = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "width": 512, "height": 512},
+        options={},
+    )
+
+    assert job.memory_decision is not None
+    estimate = job.memory_decision["workflow_estimate"]
+    custom_node_details = job.memory_decision["developer_details"][
+        "custom_node_memory_uncertainty"
+    ]
+
+    assert estimate["source"] == "heuristic"
+    assert estimate["confidence"] == "low"
+    assert estimate["custom_node_count"] == 1
+    assert estimate["custom_node_types"] == ["ImpactWildcard"]
+    assert "custom_node_memory_uncertain" in estimate["reasons"]
+    assert custom_node_details["custom_node_count"] == 1
+    assert custom_node_details["custom_node_ids"] == ["impact-pack"]
 
 
 def test_engine_service_runner_lease_round_trip_uses_bound_runner() -> None:

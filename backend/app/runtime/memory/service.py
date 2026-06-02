@@ -89,6 +89,25 @@ class _RunEstimateFeatures:
         }
 
 
+@dataclass(frozen=True)
+class _CustomNodeMemoryUncertainty:
+    count: int = 0
+    node_types: list[str] = field(default_factory=list)
+    custom_node_ids: list[str] = field(default_factory=list)
+
+    @property
+    def present(self) -> bool:
+        return self.count > 0
+
+    def diagnostic_details(self) -> dict[str, Any]:
+        return {
+            "custom_node_count": self.count,
+            "custom_node_types": self.node_types,
+            "custom_node_ids": self.custom_node_ids,
+            "reason": "custom_node_memory_uncertain",
+        }
+
+
 class MemoryGovernorService:
     """Stateful memory admission, retry, and sampling orchestration.
 
@@ -211,6 +230,7 @@ class MemoryGovernorService:
             if self.memory_learning_store is not None
             else None
         )
+        custom_node_memory = _custom_node_memory_uncertainty(capsule_lock.custom_nodes)
         model_size_mb = _installed_model_size_mb(install_state)
         estimate = build_workflow_memory_estimate(
             WorkflowMemoryEstimateRequest(
@@ -223,6 +243,8 @@ class MemoryGovernorService:
                 creator_observed_peak_ram_mb=capsule_lock.hardware_observations.observed_peak_ram_mb
                 or capsule_lock.hardware_observations.recommended_ram_mb,
                 required_model_size_mb=model_size_mb,
+                custom_node_count=custom_node_memory.count,
+                custom_node_types=custom_node_memory.node_types,
             )
         )
         runner_snapshots = [
@@ -237,6 +259,15 @@ class MemoryGovernorService:
                 resident_runners=runner_snapshots,
             )
         )
+        if custom_node_memory.present:
+            decision = decision.model_copy(
+                update={
+                    "developer_details": {
+                        **decision.developer_details,
+                        "custom_node_memory_uncertainty": custom_node_memory.diagnostic_details(),
+                    }
+                }
+            )
         record_memory_governor_decision(self.log_store, decision)
         return decision
 
@@ -261,6 +292,7 @@ class MemoryGovernorService:
             input_profile_fingerprint=input_profile_fingerprint,
         )
         estimate_features = _run_estimate_features(package, inputs or {}, options or {})
+        custom_node_memory = _custom_node_memory_uncertainty(package.custom_nodes)
         estimate = build_workflow_memory_estimate(
             WorkflowMemoryEstimateRequest(
                 workflow_id=workflow_id,
@@ -279,6 +311,8 @@ class MemoryGovernorService:
                 resolution_height=estimate_features.resolution_height,
                 batch_size=estimate_features.effective_batch_size,
                 workflow_type=estimate_features.workflow_type,
+                custom_node_count=custom_node_memory.count,
+                custom_node_types=custom_node_memory.node_types,
             )
         )
         resident_runners = []
@@ -300,14 +334,20 @@ class MemoryGovernorService:
                 resident_runners=resident_runners,
             )
         )
+        developer_details = decision.developer_details
         if not estimate_features.empty:
+            developer_details = {
+                **developer_details,
+                "runtime_estimate_features": estimate_features.diagnostic_details(),
+            }
+        if custom_node_memory.present:
+            developer_details = {
+                **developer_details,
+                "custom_node_memory_uncertainty": custom_node_memory.diagnostic_details(),
+            }
+        if developer_details != decision.developer_details:
             decision = decision.model_copy(
-                update={
-                    "developer_details": {
-                        **decision.developer_details,
-                        "runtime_estimate_features": estimate_features.diagnostic_details(),
-                    }
-                }
+                update={"developer_details": developer_details}
             )
         record_memory_governor_decision(self.log_store, decision)
         self.record_metric(f"workflow_run_decision_{decision.action.value}")
@@ -790,6 +830,30 @@ def _required_model_size_mb_from_package(package: WorkflowPackage) -> int | None
     if total_size_bytes <= 0:
         return None
     return max(1, total_size_bytes // (1024 * 1024))
+
+
+def _custom_node_memory_uncertainty(custom_nodes: Any) -> _CustomNodeMemoryUncertainty:
+    if not isinstance(custom_nodes, list):
+        custom_nodes = list(custom_nodes or [])
+    node_types: set[str] = set()
+    custom_node_ids: set[str] = set()
+    for custom_node in custom_nodes:
+        for attr_name in ("id", "package_id", "folder_name"):
+            raw_id = getattr(custom_node, attr_name, None)
+            if isinstance(raw_id, str) and raw_id.strip():
+                custom_node_ids.add(raw_id.strip())
+                break
+        raw_node_types = getattr(custom_node, "node_types", [])
+        if not isinstance(raw_node_types, list):
+            continue
+        for node_type in raw_node_types:
+            if isinstance(node_type, str) and node_type.strip():
+                node_types.add(node_type.strip())
+    return _CustomNodeMemoryUncertainty(
+        count=len(custom_nodes),
+        node_types=sorted(node_types)[:32],
+        custom_node_ids=sorted(custom_node_ids)[:32],
+    )
 
 
 def _run_estimate_features(

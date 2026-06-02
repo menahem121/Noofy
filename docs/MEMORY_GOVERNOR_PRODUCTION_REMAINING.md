@@ -36,6 +36,10 @@ the lifecycle foundation expected for production work:
 - first P2 estimate-enrichment slice: submitted width/height, graph/default
   batch size, frame count as effective batch multiplier, and inferred workflow
   type now feed the existing heuristic estimate and developer diagnostics
+- second P2 estimate-safety slice: workflows with custom nodes now carry
+  custom-node memory uncertainty in estimate diagnostics; non-local estimate
+  confidence is lowered and heuristic VRAM estimates receive a conservative
+  safety factor until local observations exist
 
 Ownership after P0/P1:
 
@@ -75,6 +79,7 @@ Ownership after P0/P1:
 | Cleanup failure was reported only as generic `blocked_by_memory`. | fixed | `runtime/memory/service`, API models | Compatibility `EngineJob.status` can remain `blocked_by_memory`, but `memory_status.state` reports `memory_cleanup_failed`. | P3 UI must avoid collapsing this into generic capacity failure. |
 | Local learning reused stale descriptor peaks for sampled jobs. | fixed | `engine/memory_observation` | Sampled jobs learn selected job-window peaks or no peak evidence; descriptor fallback is not used when a sampled job lacks selected peak evidence. | No immediate follow-up. |
 | Later larger runs might not raise runner/profile peak evidence. | fixed | `engine/memory_observation`, `runtime/runners/supervisor`, `LocalMemoryLearningStore` | Runner descriptor peaks and local summaries update as maxima and dedupe by non-null job ID. | P2 semantic profile extraction still needed so larger profiles are classified reliably. |
+| Custom-node workflows could appear as ordinary low-risk heuristic runs. | partially fixed | `runtime/memory` | Custom-node count/types are now included in workflow estimates and developer diagnostics, non-local confidence is lowered, and heuristic estimates use a conservative safety factor. The implementation does not yet classify individual custom-node memory behavior or private caches. | Add publisher/dashboard declarations and richer custom-node/cache validation. |
 | Observer-unavailable cleanup could claim success or clear residency. | fixed | `runtime/memory/service`, `runtime/memory/memory_governor` | Unavailable observation returns `memory_cleanup_failed`, preserves attribution, and marks release failure. | No immediate follow-up. |
 | Runtime/memory exposed runs-owned queue internals. | fixed | `runtime/memory/service`, `runs/job_service`, `runs/lifecycle_service` | Queue handoff/progress/cancel ownership has moved back to `runs/`; memory owns admission and cleanup only. | Keep future queue work out of memory modules. |
 | EngineService accumulated lifecycle ownership. | partially fixed | Composition root, `runs/`, `runtime/runners/`, `runtime/memory` | P0/P1 lifecycle behavior lives in domain services. `EngineService` still remains a broad application front door and compatibility facade. | Track long-term EngineService cleanup below. |
@@ -145,15 +150,26 @@ machine remain stronger than publisher hints once enough evidence exists.
 ### Conservative Fallback For Custom Nodes
 
 Community workflows and custom nodes may hide memory use behind arbitrary node
-logic. P2 should add conservative fallback behavior when Noofy cannot classify
-custom-node memory effects:
+logic. P2 should use conservative fallback behavior when Noofy cannot classify
+custom-node memory effects.
+
+Initial slice completed:
 
 - lower estimate confidence when unclassified custom nodes are present
+- carry custom-node count and node types in `workflow_estimate`
+- add `custom_node_memory_uncertainty` to developer diagnostics
+- apply a small conservative VRAM heuristic factor for custom-node workflows
+  until local observations provide better evidence
+
+Remaining work:
+
+- classify known custom-node memory behavior where package/runtime metadata can
+  support it
 - keep memory-affecting unknown controls in the profile fingerprint
 - prefer cleanup, queueing, or warning over optimistic co-residence when
   unknown nodes combine with high memory pressure
-- record diagnostics that explain which nodes or bindings caused conservative
-  treatment
+- record diagnostics for memory-affecting bindings, not only node/package types
+- test private custom-node caches and runner-side cleanup behavior on hardware
 
 ### Signature Decomposition
 

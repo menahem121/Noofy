@@ -984,6 +984,67 @@ def test_build_workflow_memory_estimate_falls_back_through_creator_declared_heur
     assert unknown.conservative_memory_class is RunnerMemoryClass.GPU_HEAVY
 
 
+def test_build_workflow_memory_estimate_marks_custom_node_uncertainty() -> None:
+    creator = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-custom-creator",
+            creator_observed_peak_vram_mb=6200,
+            custom_node_count=1,
+            custom_node_types=["ImpactWildcard"],
+        )
+    )
+    declared = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-custom-declared",
+            declared_peak_vram_mb=3200,
+            custom_node_count=1,
+            custom_node_types=["ImpactWildcard"],
+        )
+    )
+    base_heuristic = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-base",
+            required_model_size_mb=5000,
+            resolution_width=1024,
+            resolution_height=1024,
+        )
+    )
+    custom_heuristic = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-custom-heuristic",
+            required_model_size_mb=5000,
+            resolution_width=1024,
+            resolution_height=1024,
+            custom_node_count=1,
+            custom_node_types=["ImpactWildcard"],
+        )
+    )
+    local = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-custom-local",
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-custom-local",
+                successful_runs=3,
+                observed_peak_vram_mb=7200,
+            ),
+            custom_node_count=1,
+            custom_node_types=["ImpactWildcard"],
+        )
+    )
+
+    assert creator.confidence is RunnerMemoryEstimateConfidence.LOW
+    assert declared.confidence is RunnerMemoryEstimateConfidence.LOW
+    assert custom_heuristic.estimated_peak_vram_mb is not None
+    assert base_heuristic.estimated_peak_vram_mb is not None
+    assert custom_heuristic.estimated_peak_vram_mb > base_heuristic.estimated_peak_vram_mb
+    assert local.confidence is RunnerMemoryEstimateConfidence.HIGH
+    assert "custom_node_memory_uncertain" in creator.reasons
+    assert "custom_node_memory_uncertain" in custom_heuristic.reasons
+    assert "custom_node_memory_uncertain" in local.reasons
+    assert creator.custom_node_count == 1
+    assert creator.custom_node_types == ["ImpactWildcard"]
+
+
 def test_build_workflow_memory_estimate_adjusts_heuristic_by_workflow_type() -> None:
     base = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(

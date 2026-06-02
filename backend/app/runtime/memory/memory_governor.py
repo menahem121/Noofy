@@ -334,6 +334,8 @@ class WorkflowMemoryEstimate(BaseModel):
     creator_observed_peak_ram_mb: int | None = Field(default=None, ge=0)
     local_evidence: LocalMemoryEvidenceSummary | None = None
     recent_memory_error: bool = False
+    custom_node_count: int = Field(default=0, ge=0)
+    custom_node_types: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
 
     @property
@@ -372,6 +374,8 @@ class WorkflowMemoryEstimateRequest(BaseModel):
     resolution_height: int | None = Field(default=None, ge=1)
     batch_size: int = Field(default=1, ge=1)
     workflow_type: str | None = None
+    custom_node_count: int = Field(default=0, ge=0)
+    custom_node_types: list[str] = Field(default_factory=list)
 
 
 class MemoryGovernorDecision(BaseModel):
@@ -1298,11 +1302,13 @@ def build_workflow_memory_estimate(
     but they still produce confidence rather than guarantees. A changed input
     profile keeps the local source visible while lowering confidence.
     """
+    custom_node_reasons = _custom_node_memory_reasons(request)
+    custom_node_fields = _custom_node_estimate_fields(request)
     local = request.local_evidence
     if local is not None and local.has_local_evidence:
         settings_match = _local_evidence_matches_request(request, local)
         confidence = RunnerMemoryEstimateConfidence.LOW
-        reasons = ["local_memory_evidence"]
+        reasons = ["local_memory_evidence", *custom_node_reasons]
         if not settings_match:
             reasons.append("local_evidence_settings_mismatch")
         elif local.has_memory_failure:
@@ -1328,6 +1334,7 @@ def build_workflow_memory_estimate(
             creator_observed_peak_ram_mb=request.creator_observed_peak_ram_mb,
             local_evidence=local,
             recent_memory_error=local.has_memory_failure,
+            **custom_node_fields,
             reasons=reasons,
         )
 
@@ -1341,13 +1348,17 @@ def build_workflow_memory_estimate(
             memory_class=_estimate_memory_class(
                 request.declared_memory_class, request.creator_observed_peak_vram_mb
             ),
-            confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+            confidence=_non_local_confidence_after_custom_node_uncertainty(
+                RunnerMemoryEstimateConfidence.MEDIUM,
+                request,
+            ),
             source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
             estimated_peak_vram_mb=request.creator_observed_peak_vram_mb,
             estimated_peak_ram_mb=request.creator_observed_peak_ram_mb,
             creator_observed_peak_vram_mb=request.creator_observed_peak_vram_mb,
             creator_observed_peak_ram_mb=request.creator_observed_peak_ram_mb,
-            reasons=["creator_observed_memory_hint"],
+            **custom_node_fields,
+            reasons=["creator_observed_memory_hint", *custom_node_reasons],
         )
 
     if (
@@ -1360,11 +1371,15 @@ def build_workflow_memory_estimate(
             memory_class=_estimate_memory_class(
                 request.declared_memory_class, request.declared_peak_vram_mb
             ),
-            confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+            confidence=_non_local_confidence_after_custom_node_uncertainty(
+                RunnerMemoryEstimateConfidence.MEDIUM,
+                request,
+            ),
             source=RunnerMemoryEstimateSource.DECLARED,
             estimated_peak_vram_mb=request.declared_peak_vram_mb,
             estimated_peak_ram_mb=request.declared_peak_ram_mb,
-            reasons=["declared_memory_requirement"],
+            **custom_node_fields,
+            reasons=["declared_memory_requirement", *custom_node_reasons],
         )
 
     heuristic_peak_vram_mb = _heuristic_peak_vram_mb(request)
@@ -1378,7 +1393,8 @@ def build_workflow_memory_estimate(
             confidence=RunnerMemoryEstimateConfidence.LOW,
             source=RunnerMemoryEstimateSource.HEURISTIC,
             estimated_peak_vram_mb=heuristic_peak_vram_mb,
-            reasons=["model_and_input_heuristic"],
+            **custom_node_fields,
+            reasons=["model_and_input_heuristic", *custom_node_reasons],
         )
 
     return WorkflowMemoryEstimate(
@@ -1387,7 +1403,8 @@ def build_workflow_memory_estimate(
         memory_class=conservative_memory_class(request.declared_memory_class),
         confidence=RunnerMemoryEstimateConfidence.UNKNOWN,
         source=RunnerMemoryEstimateSource.UNKNOWN,
-        reasons=["no_memory_estimate_available"],
+        **custom_node_fields,
+        reasons=["no_memory_estimate_available", *custom_node_reasons],
     )
 
 
@@ -2591,9 +2608,45 @@ def _heuristic_peak_vram_mb(request: WorkflowMemoryEstimateRequest) -> int | Non
     if not components:
         return None
     return max(
-        int(sum(components) * _workflow_type_heuristic_factor(request.workflow_type)),
+        int(
+            sum(components)
+            * _workflow_type_heuristic_factor(request.workflow_type)
+            * _custom_node_heuristic_factor(request)
+        ),
         512,
     )
+
+
+def _custom_node_estimate_fields(request: WorkflowMemoryEstimateRequest) -> dict[str, Any]:
+    return {
+        "custom_node_count": request.custom_node_count,
+        "custom_node_types": list(request.custom_node_types),
+    }
+
+
+def _custom_node_memory_reasons(request: WorkflowMemoryEstimateRequest) -> list[str]:
+    if request.custom_node_count <= 0:
+        return []
+    return ["custom_node_memory_uncertain"]
+
+
+def _non_local_confidence_after_custom_node_uncertainty(
+    confidence: RunnerMemoryEstimateConfidence,
+    request: WorkflowMemoryEstimateRequest,
+) -> RunnerMemoryEstimateConfidence:
+    if request.custom_node_count <= 0:
+        return confidence
+    if confidence is RunnerMemoryEstimateConfidence.HIGH:
+        return RunnerMemoryEstimateConfidence.MEDIUM
+    if confidence is RunnerMemoryEstimateConfidence.MEDIUM:
+        return RunnerMemoryEstimateConfidence.LOW
+    return confidence
+
+
+def _custom_node_heuristic_factor(request: WorkflowMemoryEstimateRequest) -> float:
+    if request.custom_node_count <= 0:
+        return 1.0
+    return 1.15
 
 
 def _workflow_type_heuristic_factor(workflow_type: str | None) -> float:
