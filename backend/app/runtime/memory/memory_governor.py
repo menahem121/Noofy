@@ -199,6 +199,8 @@ class RunnerMemorySnapshot(BaseModel):
     current_job_id: str | None = None
     current_workflow_id: str | None = None
     last_workflow_id: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     open_workflow_lease_count: int = Field(default=0, ge=0)
     output_stream_lease_count: int = Field(default=0, ge=0)
     observed_idle_vram_mb: int | None = Field(default=None, ge=0)
@@ -223,6 +225,8 @@ class RunnerMemorySnapshot(BaseModel):
             current_job_id=descriptor.current_job_id,
             current_workflow_id=descriptor.current_workflow_id,
             last_workflow_id=descriptor.last_workflow_id,
+            model_residency_signature=descriptor.model_residency_signature,
+            execution_profile_signature=descriptor.execution_profile_signature,
             open_workflow_lease_count=descriptor.open_workflow_lease_count,
             output_stream_lease_count=descriptor.output_stream_lease_count,
             observed_idle_vram_mb=descriptor.observed_idle_vram_mb,
@@ -1583,11 +1587,25 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
         not active_runners
         and machine.memory_pressure is not MemoryPressureLevel.HIGH
         and _selected_runner_reuse_allowed(selected_runner, estimate)
+        and _same_runner_reuse_incremental_margin_ok(
+            machine,
+            selected_runner,
+            estimate,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+        )
     ):
+        execution_profile_changed = (
+            selected_runner is not None
+            and selected_runner.execution_profile_signature is not None
+            and estimate.execution_profile_signature is not None
+            and selected_runner.execution_profile_signature
+            != estimate.execution_profile_signature
+        )
         return _decision(
             MemoryDecisionAction.REUSE_RUNNER,
             _warm_runner_reuse_risk_level(machine, estimate),
-            "same_workflow_warm_runner_reuse",
+            "same_runner_model_residency_reuse",
             "This workflow is ready to run quickly.",
             estimate,
             machine,
@@ -1599,9 +1617,31 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             selected_runner=selected_runner,
             developer_details={
                 "warm_runner_reuse": True,
+                "same_runner_model_residency_reuse": True,
+                "execution_profile_changed": execution_profile_changed,
                 "selected_runner_last_workflow_id": selected_runner.last_workflow_id
                 if selected_runner is not None
                 else None,
+                "selected_runner_model_residency_signature": (
+                    selected_runner.model_residency_signature
+                    if selected_runner is not None
+                    else None
+                ),
+                "selected_runner_execution_profile_signature": (
+                    selected_runner.execution_profile_signature
+                    if selected_runner is not None
+                    else None
+                ),
+                "same_runner_incremental_estimated_vram_mb": _same_runner_incremental_vram_mb(
+                    machine,
+                    selected_runner,
+                    estimate,
+                ),
+                "same_runner_incremental_estimated_ram_mb": _same_runner_incremental_ram_mb(
+                    machine,
+                    selected_runner,
+                    estimate,
+                ),
             },
         )
 
@@ -2292,8 +2332,8 @@ def _decision(
         "memory_ownership": _memory_ownership_details(
             machine,
             runners,
+            workflow_estimate=estimate,
             selected_runner=selected_runner,
-            requested_workflow_id=estimate.workflow_id,
         ),
         **(developer_details or {}),
     }
@@ -2492,16 +2532,85 @@ def _selected_runner_reuse_allowed(
         RunnerStatus.CO_RESIDENT,
     }:
         return False
-    if runner.last_workflow_id != estimate.workflow_id:
+    if not _same_runner_model_residency_matches(runner, estimate):
         return False
-    if "local_evidence_settings_mismatch" in estimate.reasons:
+    if estimate.local_evidence is not None:
+        if estimate.local_evidence.memory_error_runs > 0:
+            return False
+        if estimate.local_evidence.successful_runs > 0:
+            return True
+    return _runner_resident_vram_mb(runner) is not None
+
+
+def _same_runner_model_residency_matches(
+    runner: RunnerMemorySnapshot,
+    estimate: WorkflowMemoryEstimate,
+) -> bool:
+    if (
+        runner.model_residency_signature is not None
+        and estimate.model_residency_signature is not None
+    ):
+        return runner.model_residency_signature == estimate.model_residency_signature
+    if (
+        runner.model_residency_signature is not None
+        or estimate.model_residency_signature is not None
+    ):
         return False
-    if estimate.local_evidence is None:
+    return runner.last_workflow_id == estimate.workflow_id
+
+
+def _same_runner_reuse_incremental_margin_ok(
+    machine: MachineMemorySnapshot,
+    runner: RunnerMemorySnapshot | None,
+    estimate: WorkflowMemoryEstimate,
+    required_vram_margin_mb: int,
+    required_ram_margin_mb: int,
+) -> bool:
+    incremental_vram_mb = _same_runner_incremental_vram_mb(machine, runner, estimate)
+    if (
+        incremental_vram_mb is not None
+        and incremental_vram_mb > 0
+        and machine.free_vram_mb is not None
+        and machine.free_vram_mb - incremental_vram_mb < required_vram_margin_mb
+    ):
         return False
-    return (
-        estimate.local_evidence.successful_runs > 0
-        and estimate.local_evidence.memory_error_runs == 0
-    )
+    incremental_ram_mb = _same_runner_incremental_ram_mb(machine, runner, estimate)
+    if (
+        incremental_ram_mb is not None
+        and incremental_ram_mb > 0
+        and machine.free_ram_mb is not None
+        and machine.free_ram_mb - incremental_ram_mb < required_ram_margin_mb
+    ):
+        return False
+    return True
+
+
+def _same_runner_incremental_vram_mb(
+    machine: MachineMemorySnapshot,
+    runner: RunnerMemorySnapshot | None,
+    estimate: WorkflowMemoryEstimate,
+) -> int | None:
+    estimated_vram_mb = _estimated_vram_pressure_mb(machine, estimate)
+    if runner is None or estimated_vram_mb is None:
+        return estimated_vram_mb
+    resident_vram_mb = _runner_resident_vram_mb(runner)
+    if resident_vram_mb is None:
+        return estimated_vram_mb
+    return max(0, estimated_vram_mb - resident_vram_mb)
+
+
+def _same_runner_incremental_ram_mb(
+    machine: MachineMemorySnapshot,
+    runner: RunnerMemorySnapshot | None,
+    estimate: WorkflowMemoryEstimate,
+) -> int | None:
+    estimated_ram_mb = _estimated_ram_pressure_mb(machine, estimate)
+    if runner is None or estimated_ram_mb is None:
+        return estimated_ram_mb
+    resident_ram_mb = _runner_resident_ram_mb(runner)
+    if resident_ram_mb is None:
+        return estimated_ram_mb
+    return max(0, estimated_ram_mb - resident_ram_mb)
 
 
 def _warm_runner_reuse_risk_level(
@@ -2517,8 +2626,8 @@ def _memory_ownership_details(
     machine: MachineMemorySnapshot,
     runners: list[RunnerMemorySnapshot],
     *,
+    workflow_estimate: WorkflowMemoryEstimate,
     selected_runner: RunnerMemorySnapshot | None,
-    requested_workflow_id: str,
 ) -> dict[str, Any]:
     known_runners = {runner.runner_id: runner for runner in runners}
     if selected_runner is not None:
@@ -2549,7 +2658,7 @@ def _memory_ownership_details(
         selected_runner
         if selected_runner is not None
         and not _runner_snapshot_is_active(selected_runner)
-        and selected_runner.last_workflow_id == requested_workflow_id
+        and _same_runner_model_residency_matches(selected_runner, workflow_estimate)
         else None
     )
     return {
@@ -2558,6 +2667,16 @@ def _memory_ownership_details(
         "same_warm_runner_vram_mb": _runner_resident_vram_mb(same_warm_runner)
         if same_warm_runner is not None
         else None,
+        "same_warm_runner_model_residency_signature": (
+            same_warm_runner.model_residency_signature
+            if same_warm_runner is not None
+            else None
+        ),
+        "same_warm_runner_execution_profile_signature": (
+            same_warm_runner.execution_profile_signature
+            if same_warm_runner is not None
+            else None
+        ),
         "reclaimable_idle_runner_ids": reclaimable_idle_runner_ids,
         "active_noofy_runner_ids": active_runner_ids,
         "known_noofy_runner_vram_mb": known_noofy_runner_vram_mb,
@@ -2567,6 +2686,10 @@ def _memory_ownership_details(
 
 def _runner_resident_vram_mb(runner: RunnerMemorySnapshot) -> int | None:
     return runner.observed_idle_vram_mb or runner.observed_execution_peak_vram_mb
+
+
+def _runner_resident_ram_mb(runner: RunnerMemorySnapshot) -> int | None:
+    return runner.observed_idle_ram_mb or runner.observed_execution_peak_ram_mb
 
 
 def _gpu_estimate_is_uncertain(estimate: WorkflowMemoryEstimate) -> bool:

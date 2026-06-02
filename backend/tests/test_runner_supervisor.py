@@ -1894,6 +1894,81 @@ async def test_prompt_and_seed_edit_reruns_reuse_warm_runner_instead_of_blocking
 
 
 @pytest.mark.anyio
+async def test_resolution_edit_reuses_same_runner_model_residency_with_new_execution_profile(tmp_path: Path) -> None:
+    adapter = SuccessfulIncrementingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=23_028,
+                free_vram_mb=20_000,
+                total_ram_mb=64_000,
+                free_ram_mb=50_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    first = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "seed": 1, "width": 512, "height": 512},
+        options={},
+    )
+    await service.get_result(first.job_id)
+    first_estimate = first.memory_decision["workflow_estimate"]
+    first_runner = supervisor.core_runner()
+
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=23_028,
+            free_vram_mb=8_617,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    second = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "seed": 1, "width": 768, "height": 768},
+        options={},
+    )
+    second_estimate = second.memory_decision["workflow_estimate"]
+    second_details = second.memory_decision["developer_details"]
+
+    assert second.memory_decision["action"] == "reuse_runner"
+    assert second.memory_decision["reason_code"] == "same_runner_model_residency_reuse"
+    assert second.memory_decision["selected_runner_id"] == CORE_RUNNER_ID
+    assert second_estimate["model_residency_signature"] == first_estimate[
+        "model_residency_signature"
+    ]
+    assert second_estimate["execution_profile_signature"] != first_estimate[
+        "execution_profile_signature"
+    ]
+    assert first_runner.model_residency_signature == first_estimate[
+        "model_residency_signature"
+    ]
+    assert supervisor.core_runner().model_residency_signature == second_estimate[
+        "model_residency_signature"
+    ]
+    assert supervisor.core_runner().execution_profile_signature == second_estimate[
+        "execution_profile_signature"
+    ]
+    assert second_details["execution_profile_changed"] is True
+    assert second_details["memory_ownership"]["same_warm_runner_id"] == CORE_RUNNER_ID
+    assert adapter.release_memory_calls == 0
+
+
+@pytest.mark.anyio
 async def test_workflow_run_releases_incompatible_warm_core_memory_then_submits() -> None:
     adapter = RecordingAdapter(
         models=[

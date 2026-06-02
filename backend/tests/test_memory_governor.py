@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.diagnostics import LogStore
+from app.runtime.memory import service as memory_service_module
 from app.runtime.memory.memory_governor import (
     FallbackMemoryObserver,
     BackendAllocatorMemorySample,
@@ -181,6 +182,8 @@ def test_runner_memory_snapshot_can_be_derived_from_descriptor() -> None:
         observed_execution_peak_vram_mb=2400,
         recent_memory_error_count=1,
         open_workflow_lease_count=2,
+        model_residency_signature="sha256:model-a",
+        execution_profile_signature="sha256:execution-a",
     )
 
     snapshot = RunnerMemorySnapshot.from_descriptor(descriptor)
@@ -192,6 +195,8 @@ def test_runner_memory_snapshot_can_be_derived_from_descriptor() -> None:
     assert snapshot.observed_execution_peak_vram_mb == 2400
     assert snapshot.open_workflow_lease_count == 2
     assert snapshot.recent_memory_error_count == 1
+    assert snapshot.model_residency_signature == "sha256:model-a"
+    assert snapshot.execution_profile_signature == "sha256:execution-a"
 
 
 def test_memory_governor_decision_serializes_and_records_diagnostics() -> None:
@@ -979,6 +984,55 @@ def test_build_workflow_memory_estimate_lowers_confidence_for_changed_settings()
     assert "local_evidence_settings_mismatch" in estimate.reasons
 
 
+def test_compatible_local_evidence_fallback_filters_by_model_residency_signature() -> None:
+    summaries = [
+        LocalMemoryEvidenceSummary(
+            workflow_id="workflow-a",
+            runner_process_compatibility_key="compat-a",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-a",
+            model_residency_signature="sha256:model-a",
+            successful_runs=3,
+            observed_peak_vram_mb=6000,
+        ),
+        LocalMemoryEvidenceSummary(
+            workflow_id="workflow-a",
+            runner_process_compatibility_key="compat-a",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-b",
+            model_residency_signature="sha256:model-b",
+            successful_runs=1,
+            observed_peak_vram_mb=9000,
+        ),
+    ]
+
+    matching = memory_service_module._best_compatible_success_evidence(
+        summaries,
+        workflow_id="workflow-a",
+        runner_process_compatibility_key="compat-a",
+        machine_profile_id="machine-a",
+        backend=MemoryBackend.CUDA,
+        input_profile_fingerprint="settings-c",
+        model_residency_signature="sha256:model-b",
+    )
+    missing = memory_service_module._best_compatible_success_evidence(
+        summaries,
+        workflow_id="workflow-a",
+        runner_process_compatibility_key="compat-a",
+        machine_profile_id="machine-a",
+        backend=MemoryBackend.CUDA,
+        input_profile_fingerprint="settings-c",
+        model_residency_signature="sha256:model-c",
+    )
+
+    assert matching is not None
+    assert matching.model_residency_signature == "sha256:model-b"
+    assert matching.observed_peak_vram_mb == 9000
+    assert missing is None
+
+
 def test_build_workflow_memory_estimate_falls_back_through_creator_declared_heuristic_unknown() -> None:
     creator = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(workflow_id="workflow-a", creator_observed_peak_vram_mb=6200)
@@ -1575,15 +1629,19 @@ def test_memory_admission_queues_active_noofy_job_even_when_margin_is_available(
     assert decision.queued_behind_runner_id == "runner-active"
 
 
-def test_memory_admission_does_not_reuse_warm_runner_for_changed_memory_profile() -> None:
+def test_memory_admission_reuses_same_runner_model_residency_for_changed_execution_profile() -> None:
     estimate = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(
             workflow_id="workflow-a",
             declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
             input_profile_fingerprint="settings-b",
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-b",
             local_evidence=LocalMemoryEvidenceSummary(
                 workflow_id="workflow-a",
                 input_profile_fingerprint="settings-a",
+                model_residency_signature="sha256:model-a",
+                execution_profile_signature="sha256:execution-a",
                 successful_runs=1,
                 observed_peak_vram_mb=6000,
             ),
@@ -1597,14 +1655,92 @@ def test_memory_admission_does_not_reuse_warm_runner_for_changed_memory_profile(
                 runner_id="core",
                 status=RunnerStatus.IDLE,
                 last_workflow_id="workflow-a",
+                model_residency_signature="sha256:model-a",
+                execution_profile_signature="sha256:execution-a",
+                observed_idle_vram_mb=6000,
             ),
             resident_runners=[],
         )
     )
 
     assert "local_evidence_settings_mismatch" in estimate.reasons
+    assert decision.action is MemoryDecisionAction.REUSE_RUNNER
+    assert decision.reason_code == "same_runner_model_residency_reuse"
+    assert decision.developer_details["execution_profile_changed"] is True
+    ownership = decision.developer_details["memory_ownership"]
+    assert ownership["same_warm_runner_id"] == "core"
+    assert ownership["same_warm_runner_model_residency_signature"] == "sha256:model-a"
+
+
+def test_memory_admission_accounts_for_incremental_execution_growth_on_same_runner() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
+            creator_observed_peak_vram_mb=10_000,
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-large",
+        )
+    )
+    warm_core = RunnerMemorySnapshot(
+        runner_id="core",
+        kind=RunnerKind.CORE_COMFYUI,
+        memory_class=RunnerMemoryClass.GPU_HEAVY,
+        status=RunnerStatus.IDLE,
+        last_workflow_id="workflow-a",
+        model_residency_signature="sha256:model-a",
+        execution_profile_signature="sha256:execution-small",
+        observed_idle_vram_mb=3000,
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=6000),
+            selected_runner=warm_core,
+            resident_runners=[warm_core],
+        )
+    )
+
     assert decision.action is not MemoryDecisionAction.REUSE_RUNNER
-    assert decision.reason_code == "gpu_estimate_uncertain_cautious_start"
+
+
+def test_memory_admission_does_not_reuse_runner_for_changed_model_residency() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
+            input_profile_fingerprint="settings-b",
+            model_residency_signature="sha256:model-b",
+            execution_profile_signature="sha256:execution-a",
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                input_profile_fingerprint="settings-a",
+                model_residency_signature="sha256:model-a",
+                execution_profile_signature="sha256:execution-a",
+                successful_runs=1,
+                observed_peak_vram_mb=6000,
+            ),
+        )
+    )
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=1000),
+            selected_runner=RunnerMemorySnapshot(
+                runner_id="core",
+                status=RunnerStatus.IDLE,
+                last_workflow_id="workflow-a",
+                model_residency_signature="sha256:model-a",
+                execution_profile_signature="sha256:execution-a",
+                observed_idle_vram_mb=6000,
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is not MemoryDecisionAction.REUSE_RUNNER
+    assert decision.developer_details["memory_ownership"]["same_warm_runner_id"] is None
 
 
 def test_memory_admission_high_pressure_warm_runner_uses_cleanup_path() -> None:

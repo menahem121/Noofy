@@ -151,6 +151,8 @@ class RunnerDescriptor(BaseModel):
     current_job_id: str | None = None
     current_workflow_id: str | None = None
     last_workflow_id: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     last_used_at: str | None = None
     open_workflow_lease_count: int = 0
     open_workflow_lease_ids: list[str] = Field(default_factory=list)
@@ -539,23 +541,28 @@ class RunnerSupervisor:
         *,
         job_id: str,
         workflow_id: str | None = None,
+        model_residency_signature: str | None = None,
+        execution_profile_signature: str | None = None,
+        memory_signatures_known: bool = False,
     ) -> RunnerDescriptor:
         with self._lock:
             reservation = self._reservations.pop(token, None)
             if reservation is None or reservation.kind is not RunnerReservationKind.SUBMISSION:
                 raise RuntimeError(f"Unknown submission reservation: {token}")
             descriptor = self._descriptor_locked(reservation.runner_id)
-            updated = descriptor.model_copy(
-                update={
-                    "status": RunnerStatus.RUNNING,
-                    "current_job_id": job_id,
-                    "current_workflow_id": workflow_id,
-                    "last_workflow_id": workflow_id or descriptor.last_workflow_id,
-                    "last_used_at": _iso(self._now()),
-                    "reservation_token": None,
-                    "reservation_kind": None,
-                }
-            )
+            updates: dict[str, object] = {
+                "status": RunnerStatus.RUNNING,
+                "current_job_id": job_id,
+                "current_workflow_id": workflow_id,
+                "last_workflow_id": workflow_id or descriptor.last_workflow_id,
+                "last_used_at": _iso(self._now()),
+                "reservation_token": None,
+                "reservation_kind": None,
+            }
+            if memory_signatures_known:
+                updates["model_residency_signature"] = model_residency_signature
+                updates["execution_profile_signature"] = execution_profile_signature
+            updated = descriptor.model_copy(update=updates)
             self._descriptors[reservation.runner_id] = updated
         self._registry.register(job_id, reservation.runner_id)
         self._notify_state_change("runner_submission_committed")
@@ -575,6 +582,8 @@ class RunnerSupervisor:
                         else RunnerStatus.STOPPED
                     ),
                     "last_workflow_id": None,
+                    "model_residency_signature": None,
+                    "execution_profile_signature": None,
                     "observed_idle_vram_mb": None,
                     "observed_idle_ram_mb": None,
                     "last_used_at": _iso(self._now()),
@@ -817,6 +826,8 @@ class RunnerSupervisor:
                 update={
                     "status": RunnerStatus.IDLE,
                     "last_workflow_id": None,
+                    "model_residency_signature": None,
+                    "execution_profile_signature": None,
                     "observed_idle_vram_mb": None,
                     "observed_idle_ram_mb": None,
                     "last_used_at": _iso(self._now()),

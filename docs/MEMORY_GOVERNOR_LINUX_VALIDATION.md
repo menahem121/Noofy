@@ -93,7 +93,66 @@ Observed highlights:
   recorded `release_requested -> observed_memory_drop`
 - the managed runner PID was absent after shutdown
 
-This does not replace the pending large-model CUDA pass. A real checkpoint or
-other substantial model is still needed to validate large warm residency,
-delayed core `/free`, allocator reserved-memory behavior after `/free`, and
-private custom-node caches.
+The default harness remains model-free. It does not validate delayed core
+`/free`, allocator reserved-memory behavior after `/free`, or private
+custom-node caches.
+
+## Latest A10G Model-Backed Pass
+
+On 2026-06-02, the bundled `text_to_image_v0` workflow also passed on the same
+NVIDIA A10G using the SD 1.5 checkpoint
+`v1-5-pruned-emaonly-fp16.safetensors`.
+
+Observed highlights:
+
+- initial 512x512 text-to-image run completed through the managed backend path
+- model selection diagnostics identified the checkpoint as model-residency
+  evidence
+- first-run heuristic estimate allowed a cautious `memory_warning` start
+- observed execution peak VRAM rose to about 2.5 GB for the first run
+- prompt-only rerun reused the same warm runner, kept the same memory-profile
+  fingerprint, and reported `ready_reusing_runner`
+- seed-only rerun reused the same warm runner, kept the same memory-profile
+  fingerprint, and reported `ready_reusing_runner`
+- 768x768 rerun changed the memory-profile fingerprint and execution-profile
+  signature, reached about 4.0 GB observed execution peak VRAM, and completed
+  successfully
+
+The validation artifact was written to:
+
+```text
+.noofy-runtime/validation/sd15-large-model-validation.json
+```
+
+## Latest A10G External-Pressure Probe
+
+On 2026-06-02, a separate non-Noofy Python process allocated about 19 GB of
+CUDA memory before the bundled text-to-image workflow was requested.
+
+Observed result:
+
+- Noofy blocked the run instead of trying to reclaim memory it did not own
+- the backend state was `blocked_unattributed_pressure`
+- the reason was `insufficient_vram_margin`
+- the global GPU snapshot showed about 3.3 GB free out of 23.0 GB total
+
+This is safe for v1, but it is intentionally not counted as explicit
+`blocked_external_pressure`: the admission snapshot did not carry external
+process details, so the backend correctly avoided claiming proven external
+ownership from global usage alone.
+
+The validation artifact was written to:
+
+```text
+.noofy-runtime/validation/external-pressure-validation.json
+```
+
+Still pending after these A10G passes:
+
+- delayed core `/free` from a loaded core-sidecar model
+- PyTorch allocated/reserved memory after `/free`
+- private custom-node cache behavior after `/free`
+- orphan child-process cleanup beyond the validated managed runner PID absence
+- packaged desktop UI rapid double-click against a real backend and runner
+- Windows, Apple Silicon large-model, Linux PSI pressure, and multi-GPU
+  platform validation

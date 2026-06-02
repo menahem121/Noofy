@@ -624,10 +624,30 @@ class RunOrchestrator:
             self.runner_supervisor.rollback_runner_reservation(reservation_token)
             cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
             raise
+        memory_signatures = (
+            (memory_decision.developer_details or {}).get("memory_signatures")
+            if memory_decision is not None
+            else None
+        )
+        model_residency_signature = (
+            memory_signatures.get("model_residency_signature")
+            if isinstance(memory_signatures, dict)
+            and isinstance(memory_signatures.get("model_residency_signature"), str)
+            else None
+        )
+        execution_profile_signature = (
+            memory_signatures.get("execution_profile_signature")
+            if isinstance(memory_signatures, dict)
+            and isinstance(memory_signatures.get("execution_profile_signature"), str)
+            else None
+        )
         self.runner_supervisor.commit_runner_submission(
             reservation_token,
             job_id=job.job_id,
             workflow_id=workflow_id,
+            model_residency_signature=model_residency_signature,
+            execution_profile_signature=execution_profile_signature,
+            memory_signatures_known=isinstance(memory_signatures, dict),
         )
         if queue_id is not None:
             self.workflow_run_queue_service.mark_submitted(queue_id, job_id=job.job_id)
@@ -635,11 +655,6 @@ class RunOrchestrator:
         self.job_started_at[job.job_id] = datetime.now(UTC)
         self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), safe_options_for_storage(options))
         self.job_memory_profile_fingerprints[job.job_id] = input_profile_fingerprint
-        memory_signatures = (
-            (memory_decision.developer_details or {}).get("memory_signatures")
-            if memory_decision is not None
-            else None
-        )
         if isinstance(memory_signatures, dict):
             self.job_memory_signatures[job.job_id] = memory_signatures
         self.job_run_snapshots[job.job_id] = run_submission_snapshot

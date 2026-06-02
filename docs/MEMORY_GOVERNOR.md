@@ -85,8 +85,29 @@ different runs. Prompt text and seed controls are intentionally memory-neutral.
 Resolution, batch size, model or LoRA choice, media inputs, video frame count,
 precision, VRAM mode, and other non-text settings remain profile inputs.
 
+Memory diagnostics also separate process compatibility, model residency, and
+execution profile. Checkpoints, VAEs, encoders, ControlNet/IPAdapter
+selections, LoRAs, and other model modifiers affect
+`model_residency_signature`. Resolution, batch size, frame count, precision,
+VRAM mode, latent/media shape, and similar runtime parameters affect
+`execution_profile_signature` and the transient peak estimate. A changed
+execution profile does not by itself create a new loaded-model state.
+
+Warm model reuse is runner-local in v1. If the selected runner already holds
+the same `model_residency_signature`, Noofy may reuse that warm residency even
+when the execution profile changed. Matching model signatures across different
+runners are useful for diagnostics and scheduling, but Noofy does not assume
+loaded model memory can be shared or reused across ComfyUI processes,
+dependency environments, or devices.
+
+When the execution profile changes on the same runner, admission compares the
+new estimated peak against the runner's resident memory evidence and checks the
+incremental RAM/VRAM pressure where possible. This avoids double-counting the
+loaded model while still allowing a larger batch, resolution, or frame count to
+warn, queue, clean up, or block if the transient peak no longer fits safely.
+
 Each decision also records a `memory_ownership` diagnostic summary: currently
-free VRAM, same-workflow warm-runner memory, reclaimable idle Noofy runners,
+free VRAM, same-runner warm model memory, reclaimable idle Noofy runners,
 active Noofy runners, known Noofy-runner VRAM, and VRAM that remains
 unattributed or external. The last category is intentionally honest: incomplete
 process attribution cannot prove which non-Noofy process owns every remaining
@@ -332,7 +353,11 @@ For production-like Ubuntu CUDA hardware validation, use
 [`MEMORY_GOVERNOR_LINUX_VALIDATION.md`](MEMORY_GOVERNOR_LINUX_VALIDATION.md).
 That path prepares the managed ComfyUI runtime under app data, verifies runner
 side PyTorch CUDA telemetry, and runs a model-free managed workflow through the
-backend run path.
+backend run path. On 2026-06-02, an additional NVIDIA A10G pass also ran the
+bundled SD 1.5 text-to-image workflow with a real checkpoint: prompt-only and
+seed-only reruns reused the warm runner and profile bucket, while a 768x768
+rerun kept the same model-residency signature, produced a distinct execution
+profile, and completed with about 4.0 GB observed execution peak VRAM.
 
 Apple Silicon validation has been run on macOS 15.6 with an Apple M2 and 8 GB
 unified memory. That pass confirmed Darwin RAM sampling through `sysctl` /
@@ -346,7 +371,8 @@ This validates MPS signal availability and unified-memory behavior, not peak
 behavior for large model loads.
 - local evidence precedence and persistence
 - input-profile-sensitive confidence lowering
-- prompt/seed-neutral warm reuse and memory-changing profile invalidation
+- prompt/seed-neutral warm reuse, runner-local model residency reuse, and
+  memory-changing execution-profile invalidation
 - heavy/heavy denial and large-GPU high-confidence allowance
 - memory-pressure eviction and active-runner queueing
 - bounded memory-release success and timeout
@@ -389,8 +415,8 @@ when:
   `retry_after_cleanup`, and `after_completion` windows, with startup telemetry
   available from the runner probe
 - isolated and core workflow runs use Memory Governor admission
-- same-workflow warm runs reuse exact memory profiles without double-counting
-  resident model memory
+- same-runner warm runs reuse matching model residency without double-counting
+  resident model memory, while execution-shape changes update the estimate
 - idle isolated memory is evicted and idle core model/cache memory is unloaded
   before a last-resort block
 - workflow runs can queue, clean up, warn, or refuse based on memory

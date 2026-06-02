@@ -222,6 +222,7 @@ class MemoryGovernorService:
         runner_process_compatibility_key: str | None,
         machine_snapshot: MachineMemorySnapshot,
         input_profile_fingerprint: str | None,
+        model_residency_signature: str | None = None,
     ) -> LocalMemoryEvidenceSummary | None:
         if self.memory_learning_store is None:
             return None
@@ -241,6 +242,7 @@ class MemoryGovernorService:
             machine_profile_id=machine_snapshot.machine_profile_id,
             backend=machine_snapshot.backend,
             input_profile_fingerprint=input_profile_fingerprint,
+            model_residency_signature=model_residency_signature,
         )
 
     # ------------------------------------------------------------------
@@ -327,17 +329,18 @@ class MemoryGovernorService:
         if self.memory_observer is None:
             return None
         machine_snapshot = self.memory_observer.snapshot()
-        local_evidence = self._workflow_run_local_evidence(
-            workflow_id=workflow_id,
-            runner_process_compatibility_key=runner.runner_process_compatibility_key,
-            machine_snapshot=machine_snapshot,
-            input_profile_fingerprint=input_profile_fingerprint,
-        )
         estimate_features = _run_estimate_features(package, inputs or {}, options or {})
         memory_signatures = build_memory_signature_set(
             runner_process_compatibility_key=runner.runner_process_compatibility_key,
             model_selections=estimate_features.model_selections,
             execution_profile=estimate_features.execution_profile_payload(),
+        )
+        local_evidence = self._workflow_run_local_evidence(
+            workflow_id=workflow_id,
+            runner_process_compatibility_key=runner.runner_process_compatibility_key,
+            machine_snapshot=machine_snapshot,
+            input_profile_fingerprint=input_profile_fingerprint,
+            model_residency_signature=memory_signatures.model_residency_signature,
         )
         custom_node_memory = _custom_node_memory_uncertainty(package.custom_nodes)
         estimate = build_workflow_memory_estimate(
@@ -783,6 +786,10 @@ class MemoryGovernorService:
             runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
             machine_snapshot=machine_snapshot,
             input_profile_fingerprint=input_profile_fingerprint,
+            model_residency_signature=_memory_signature_field(
+                memory_signatures,
+                "model_residency_signature",
+            ),
         )
         estimate = build_workflow_memory_estimate(
             WorkflowMemoryEstimateRequest(
@@ -1251,6 +1258,7 @@ def _best_compatible_success_evidence(
     machine_profile_id: str | None,
     backend: MemoryBackend,
     input_profile_fingerprint: str | None,
+    model_residency_signature: str | None = None,
 ) -> LocalMemoryEvidenceSummary | None:
     candidates = [
         summary
@@ -1263,6 +1271,10 @@ def _best_compatible_success_evidence(
         and summary.input_profile_fingerprint != input_profile_fingerprint
         and summary.successful_runs > 0
         and summary.memory_error_runs == 0
+        and (
+            model_residency_signature is None
+            or summary.model_residency_signature == model_residency_signature
+        )
     ]
     if not candidates:
         return None
