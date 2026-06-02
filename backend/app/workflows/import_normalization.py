@@ -204,6 +204,9 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
         identity_verified = model.get("identity_verified_by_exporter")
         local_file_available = model.get("local_file_available_at_export")
         bundled = model.get("bundled")
+        architecture_family = optional_string_field(model, "architecture_family")
+        architecture_family_confidence = optional_string_field(model, "architecture_family_confidence")
+        architecture_family_source = optional_string_field(model, "architecture_family_source")
         identity_warnings = [
             item for item in model.get("identity_warnings", []) if isinstance(item, str)
         ]
@@ -239,6 +242,9 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
                     model.get("asset_ownership")
                 ),
                 identity_warnings=identity_warnings,
+                architecture_family=architecture_family,
+                architecture_family_confidence=architecture_family_confidence,
+                architecture_family_source=architecture_family_source,
             )
         )
     return normalized

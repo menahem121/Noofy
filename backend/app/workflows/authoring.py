@@ -21,6 +21,10 @@ from app.workflows.package import (
     WorkflowOutput,
     WorkflowPackage,
 )
+from app.workflows.model_architecture import (
+    ArchitectureFilterEvent,
+    filter_bindable_input_nodes_for_architecture,
+)
 from app.workflows.store_paths import assert_path_within, mutable_package_dir, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -64,6 +68,8 @@ class DashboardAuthoringService:
         if object_info is None and self.object_info_provider is not None:
             object_info = self.object_info_provider(workflow_id)
         nodes = _classify_graph_inputs(package.comfyui_graph, object_info=object_info)
+        nodes, filter_events = filter_bindable_input_nodes_for_architecture(package, nodes)
+        self._log_architecture_filter_events(workflow_id, filter_events)
         return {
             "workflow_id": workflow_id,
             "enrichment": "object_info" if object_info is not None else "heuristic",
@@ -232,6 +238,26 @@ class DashboardAuthoringService:
             "workflow_id": workflow_id,
             "removed": removed,
         }
+
+    def _log_architecture_filter_events(
+        self,
+        workflow_id: str,
+        events: list[ArchitectureFilterEvent],
+    ) -> None:
+        for event in events:
+            self.log_store.add(
+                "debug",
+                "Filtered bindable model options by architecture family",
+                "workflow.authoring",
+                workflow_id=workflow_id,
+                details={
+                    "node_id": event.node_id,
+                    "input_name": event.input_name,
+                    "category": event.category,
+                    "target_family": event.target_family,
+                    "hidden_count": event.hidden_count,
+                },
+            )
 
 
 # ------------------------------------------------------------------

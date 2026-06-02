@@ -43,6 +43,10 @@ from app.workflows.model_grouping import (
     group_required_models,
     unique_required_models,
 )
+from app.workflows.model_architecture import (
+    ArchitectureFilterEvent,
+    filter_workflow_inputs_for_architecture,
+)
 from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.verification_dispatch import (
     log_verification_concurrency,
@@ -208,6 +212,19 @@ class WorkflowLibraryService:
     def workflow_package_payload(self, workflow_id: str) -> dict[str, object]:
         package = self.workflow_loader.get_package(workflow_id)
         payload = package.model_dump()
+        filtered_inputs, filter_events = filter_workflow_inputs_for_architecture(package, package.inputs)
+        payload["inputs"] = [item.model_dump(mode="json") for item in filtered_inputs]
+        dashboard_payload = payload.get("dashboard")
+        if isinstance(dashboard_payload, dict):
+            filtered_dashboard_inputs, dashboard_filter_events = filter_workflow_inputs_for_architecture(
+                package,
+                package.dashboard.inputs,
+            )
+            dashboard_payload["inputs"] = [
+                item.model_dump(mode="json") for item in filtered_dashboard_inputs
+            ]
+            filter_events.extend(dashboard_filter_events)
+        self._log_architecture_filter_events(workflow_id, filter_events)
         metadata = self._library_metadata(package)
         display_name = metadata["display_name"]
         payload["display_name"] = display_name
@@ -216,6 +233,27 @@ class WorkflowLibraryService:
             package_metadata["display_name"] = display_name
             package_metadata["name"] = display_name
         return payload
+
+    def _log_architecture_filter_events(
+        self,
+        workflow_id: str,
+        events: list[ArchitectureFilterEvent],
+    ) -> None:
+        for event in events:
+            self.log_store.add(
+                "debug",
+                "Filtered model dropdown options by architecture family",
+                "workflow.library",
+                workflow_id=workflow_id,
+                details={
+                    "input_id": event.input_id,
+                    "node_id": event.node_id,
+                    "input_name": event.input_name,
+                    "category": event.category,
+                    "target_family": event.target_family,
+                    "hidden_count": event.hidden_count,
+                },
+            )
 
     def update_workflow_metadata(
         self,
