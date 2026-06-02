@@ -234,6 +234,15 @@ const configuredPackageData = {
   },
 };
 
+const unconfiguredPackageData = {
+  ...configuredPackageData,
+  dashboard: {
+    version: "0.1.0",
+    status: "not_configured",
+    sections: [],
+  },
+};
+
 function dashboardOnlyNotePackageData() {
   return {
     ...configuredPackageData,
@@ -581,6 +590,20 @@ describe("WorkflowRunPage", () => {
       "memory_governor",
       "workflow.models",
     ]);
+  });
+
+  it("resumes dashboard setup instead of rendering run views when the package dashboard is not ready", async () => {
+    const onConfigureDashboard = vi.fn();
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, unconfiguredPackageData);
+
+    renderRunPage({ onConfigureDashboard });
+
+    expect(await screen.findByRole("heading", { name: "Finish Text to Image" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /run workflow/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("main", { name: /workflow dashboard canvas/i })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(onConfigureDashboard).toHaveBeenCalledWith("text_to_image_v0", "Text to Image");
+    });
   });
 
   it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {

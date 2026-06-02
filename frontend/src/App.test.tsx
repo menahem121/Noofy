@@ -106,9 +106,11 @@ const modelSummary = {
 describe("App workflow tabs", () => {
   const fetchMock = vi.fn();
   let lastOpened: string | null = null;
+  let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
 
   beforeEach(() => {
     lastOpened = null;
+    workflowListSummary = workflowSummary;
     window.localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", undefined);
@@ -117,7 +119,7 @@ describe("App workflow tabs", () => {
       const method = init?.method ?? "GET";
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtime));
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
-      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([{ ...workflowSummary, last_opened: lastOpened }]));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([{ ...workflowListSummary, last_opened: lastOpened }]));
       if (url.endsWith("/api/workflows/text_to_image_v0/open") && method === "POST") {
         lastOpened = "2026-05-29T12:00:00+00:00";
         return Promise.resolve(jsonResponse({
@@ -131,6 +133,29 @@ describe("App workflow tabs", () => {
       }
       if (url.endsWith("/api/settings/apis")) {
         return Promise.resolve(jsonResponse({ providers: {}, credential_store: { available: true } }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/bindable-inputs")) {
+        return Promise.resolve(jsonResponse({
+          workflow_id: "text_to_image_v0",
+          enrichment: "heuristic",
+          nodes: [
+            {
+              node_id: "6",
+              node_type: "CLIPTextEncode",
+              is_image_node: false,
+              is_lora_node: false,
+              inputs: [
+                {
+                  input_name: "text",
+                  current_value: "a lake",
+                  kind: "string",
+                  suggested_widget_type: "textarea",
+                  widget_types: ["textarea", "string_field"],
+                },
+              ],
+            },
+          ],
+        }));
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
       if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
@@ -197,6 +222,28 @@ describe("App workflow tabs", () => {
       expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
     });
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+  });
+
+  it("routes workflows that need input setup to the dashboard builder instead of opening the run view", async () => {
+    workflowListSummary = {
+      ...workflowSummary,
+      status: "needs_input_setup",
+      status_label: "Needs input setup",
+      needs_setup: true,
+      dashboard_status: "not_configured",
+      dashboard_ready: false,
+    };
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Workflows" }));
+    const row = (await screen.findByText("Text to Image")).closest("article");
+    expect(row).toBeTruthy();
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/open"))).toBe(false);
   });
 
   it("restores tabs as shortcuts only and does not open leases until the tab is viewed", async () => {

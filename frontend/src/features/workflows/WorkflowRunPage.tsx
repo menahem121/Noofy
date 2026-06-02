@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -12,6 +12,7 @@ import {
   Play,
   RotateCcw,
   Share2,
+  SlidersHorizontal,
   Square,
   X,
 } from "lucide-react";
@@ -113,6 +114,7 @@ interface WorkflowRunPageProps {
   onBack: () => void;
   onWorkflowNameChange?: (workflowName: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
+  onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
@@ -192,7 +194,14 @@ const comparisonImageInputControlTypes = new Set(["load_image", "load_image_mask
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
 
-export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEditWidgets, onNavigate }: WorkflowRunPageProps) {
+export function WorkflowRunPage({
+  workflowId,
+  onBack,
+  onWorkflowNameChange,
+  onEditWidgets,
+  onConfigureDashboard,
+  onNavigate,
+}: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
@@ -215,6 +224,8 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const modelVerificationStartInFlightRef = useRef(false);
+  const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
+  const runnerLeaseOpenedForRef = useRef<string | null>(null);
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
@@ -493,29 +504,6 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       cleanupJobWatchers();
     };
   }, [workflowId, runtimeStatus.refreshRuntime]);
-
-  useEffect(() => {
-    if (!workflowTabs) return;
-    let canceled = false;
-    openWorkflowRunnerLease(workflowId)
-      .then((response) => {
-        if (!response.lease_id) return;
-        if (canceled) {
-          void closeWorkflowRunnerLease(workflowId, response.lease_id);
-          return;
-        }
-        workflowTabs.setWorkflowRuntime(workflowId, {
-          runnerLeaseId: response.lease_id,
-          runnerId: runnerIdFromLease(response.runner),
-        });
-      })
-      .catch(() => {
-        // A workflow can be opened without a bound isolated runner; tabs remain navigation-only.
-      });
-    return () => {
-      canceled = true;
-    };
-  }, [workflowId]);
 
   useEffect(() => {
     if (!modelDownloadJob || !isModelDownloadActive(modelDownloadJob.status)) return;
@@ -982,6 +970,10 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
   const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : activeValidation?.missing_models ?? [];
   const workflowSummary = state.workflowStatus?.workflow;
   const workflowNameSource = workflowSummary ?? state.packageData?.metadata ?? state.packageData;
+  const workflowDisplayTitle = workflowDisplayName(workflowNameSource);
+  const dashboardSetupRequired = Boolean(
+    state.packageData && packageNeedsDashboardSetup(state.packageData, workflowSummary),
+  );
   const trust = workflowSummary?.trust;
 
   useEffect(() => {
@@ -996,6 +988,44 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
     workflowSummary?.name,
     workflowNameSource,
   ]);
+
+  useLayoutEffect(() => {
+    if (!dashboardSetupRequired || !state.packageData || !onConfigureDashboard) return;
+    const redirectKey = [
+      workflowId,
+      state.packageData.dashboard.status,
+      dashboardUserStateVersion(state.packageData),
+    ].join(":");
+    if (dashboardSetupRouteRequestedRef.current === redirectKey) return;
+    dashboardSetupRouteRequestedRef.current = redirectKey;
+    onConfigureDashboard(workflowId, workflowDisplayTitle);
+  }, [dashboardSetupRequired, onConfigureDashboard, state.packageData, workflowDisplayTitle, workflowId]);
+
+  useEffect(() => {
+    if (!workflowTabs || !state.packageData || dashboardSetupRequired) return;
+    if (runnerLeaseOpenedForRef.current === workflowId) return;
+    let canceled = false;
+    runnerLeaseOpenedForRef.current = workflowId;
+    openWorkflowRunnerLease(workflowId)
+      .then((response) => {
+        if (!response.lease_id) return;
+        if (canceled) {
+          void closeWorkflowRunnerLease(workflowId, response.lease_id);
+          return;
+        }
+        workflowTabs.setWorkflowRuntime(workflowId, {
+          runnerLeaseId: response.lease_id,
+          runnerId: runnerIdFromLease(response.runner),
+        });
+      })
+      .catch(() => {
+        // A workflow can be opened without a bound isolated runner; tabs remain navigation-only.
+      });
+    return () => {
+      canceled = true;
+      runnerLeaseOpenedForRef.current = null;
+    };
+  }, [workflowId, Boolean(state.packageData), dashboardSetupRequired]);
 
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
@@ -1278,7 +1308,6 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       }
     />
   ) : null;
-  const workflowDisplayTitle = workflowDisplayName(workflowNameSource);
   const exportReview: WorkflowExportReviewModel = {
     name: workflowDisplayTitle,
     description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
@@ -1316,6 +1345,22 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       onClose={() => setRequiredModelsModalOpen(false)}
     />
   ) : null;
+
+  if (dashboardSetupRequired) {
+    return (
+      <AppLayout activeRoute="workflows" onNavigate={onNavigate}>
+        <DashboardSetupRequired
+          workflowName={workflowDisplayTitle}
+          onBack={onBack}
+          onContinue={
+            onConfigureDashboard
+              ? () => onConfigureDashboard(workflowId, workflowDisplayTitle)
+              : undefined
+          }
+        />
+      </AppLayout>
+    );
+  }
 
   if (showCanvasView) {
     return (
@@ -1545,6 +1590,52 @@ export function WorkflowRunPage({ workflowId, onBack, onWorkflowNameChange, onEd
       {exportDialogElement}
       {requiredModelsModalElement}
     </AppLayout>
+  );
+}
+
+function DashboardSetupRequired({
+  workflowName,
+  onBack,
+  onContinue,
+}: {
+  workflowName: string;
+  onBack: () => void;
+  onContinue?: () => void;
+}) {
+  return (
+    <section className="page-heading page-heading--compact" aria-labelledby="dashboard-setup-required-title">
+      <div>
+        <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          Back to Home
+        </button>
+        <p className="eyebrow">Dashboard setup</p>
+        <h1 id="dashboard-setup-required-title">Finish {workflowName}</h1>
+        <p>This workflow needs dashboard widgets before it can be opened and run.</p>
+      </div>
+      {onContinue ? (
+        <button className="primary-button" type="button" onClick={onContinue}>
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          Continue setup
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function packageNeedsDashboardSetup(
+  packageData: WorkflowPackageResponse,
+  workflowSummary: WorkflowStatusResponse["workflow"] | null | undefined,
+) {
+  if (workflowSummary?.dashboard_ready === false) return true;
+  if (workflowSummary?.dashboard_status && workflowSummary.dashboard_status !== "configured") return true;
+  if ((workflowSummary?.unresolved_input_count ?? 0) > 0) return true;
+  if (workflowSummary?.status === "needs_input_setup" || workflowSummary?.status === "prepared_needs_input_setup") {
+    return true;
+  }
+  return (
+    packageData.dashboard.status !== "configured" ||
+    !packageData.dashboard.sections.some((section) => section.controls.length > 0)
   );
 }
 

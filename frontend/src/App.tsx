@@ -22,6 +22,7 @@ import {
   closeWorkflowRunnerLease,
   fetchJobProgress,
   recordWorkflowOpened,
+  type WorkflowSummary,
 } from "./lib/api/noofyApi";
 import {
   consumePendingNativeWorkflowFile,
@@ -127,8 +128,31 @@ function AppContent() {
     return workflow ? workflowDisplayName(workflow) : "Workflow";
   }
 
-  function openWorkflow(workflowId: string, workflowName?: string) {
-    workflowTabs.openWorkflowTab(workflowId, workflowNameFor(workflowId, workflowName));
+  function openWorkflow(workflowId: string, workflowName?: string, options: { skipDashboardSetupGuard?: boolean } = {}) {
+    const resolvedWorkflowName = workflowNameFor(workflowId, workflowName);
+    const knownWorkflow = workflowLibrary.workflows.find((item) => item.id === workflowId);
+    if (!options.skipDashboardSetupGuard && workflowNeedsDashboardSetup(knownWorkflow)) {
+      setRoute({ name: "dashboard-builder", workflowId, workflowName: resolvedWorkflowName });
+      return;
+    }
+
+    if (!options.skipDashboardSetupGuard && !knownWorkflow && !workflowLibrary.hasLoaded) {
+      void workflowLibrary.refreshWorkflows().then((workflows) => {
+        const refreshedWorkflow = workflows?.find((item) => item.id === workflowId);
+        if (workflowNeedsDashboardSetup(refreshedWorkflow)) {
+          setRoute({ name: "dashboard-builder", workflowId, workflowName: resolvedWorkflowName });
+          return;
+        }
+        openRunnableWorkflow(workflowId, resolvedWorkflowName);
+      });
+      return;
+    }
+
+    openRunnableWorkflow(workflowId, resolvedWorkflowName);
+  }
+
+  function openRunnableWorkflow(workflowId: string, workflowName: string) {
+    workflowTabs.openWorkflowTab(workflowId, workflowName);
     setRoute({ name: "workflow", workflowId });
     void recordWorkflowOpened(workflowId)
       .then((response) => workflowLibrary.updateWorkflowFromResponse(response.workflow))
@@ -218,6 +242,13 @@ function AppContent() {
               initialSchema: schema,
             })
           }
+          onConfigureDashboard={(workflowId, workflowName) =>
+            setRoute({
+              name: "dashboard-builder",
+              workflowId: workflowId ?? undefined,
+              workflowName: workflowName ?? undefined,
+            })
+          }
           onNavigate={navigate}
         />
       );
@@ -257,7 +288,10 @@ function AppContent() {
               initialSchema: schema,
             })
           }
-          onSaveComplete={(workflowId) => openWorkflow(workflowId)}
+          onSaveComplete={(workflowId) => {
+            openWorkflow(workflowId, undefined, { skipDashboardSetupGuard: true });
+            void workflowLibrary.refreshWorkflows();
+          }}
           onNavigate={navigate}
         />
       );
@@ -367,6 +401,14 @@ function AppContent() {
       />
     </WorkflowTabsRouteProvider>
   );
+}
+
+function workflowNeedsDashboardSetup(workflow: WorkflowSummary | null | undefined) {
+  if (!workflow) return false;
+  if (workflow.dashboard_ready === false) return true;
+  if (workflow.dashboard_status && workflow.dashboard_status !== "configured") return true;
+  if ((workflow.unresolved_input_count ?? 0) > 0) return true;
+  return workflow.status === "needs_input_setup" || workflow.status === "prepared_needs_input_setup";
 }
 
 interface WorkflowCloseDialogState {
