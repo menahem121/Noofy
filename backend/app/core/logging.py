@@ -37,6 +37,8 @@ def _contains_sensitive_query_value(text: str) -> bool:
 
 
 def _is_suppressed_polling_path(path: str) -> bool:
+    if path == "/api/runtime" or path.startswith("/api/runtime?"):
+        return True
     if path == "/api/resources" or path.startswith("/api/resources?"):
         return True
     if path.startswith("/api/workflows/import/") and path.endswith("/model-verification"):
@@ -45,6 +47,8 @@ def _is_suppressed_polling_path(path: str) -> bool:
 
 
 def _is_suppressed_polling_request_line(request_line: str) -> bool:
+    if " /api/runtime " in request_line:
+        return True
     if " /api/resources " in request_line:
         return True
     return (

@@ -32,6 +32,11 @@ def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() 
         200,
     ))
     runtime_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime", "1.1", 200))
+    runtime_query_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime?detail=1", "1.1", 200))
+    runtime_line_record = logging_record((
+        "127.0.0.1:1234",
+        "GET /api/runtime HTTP/1.1",
+    ))
     import_preview_record = logging_record((
         "127.0.0.1:1234",
         "POST",
@@ -42,7 +47,9 @@ def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() 
 
     assert access_filter.filter(resources_record) is False
     assert access_filter.filter(verification_record) is False
-    assert access_filter.filter(runtime_record) is True
+    assert access_filter.filter(runtime_record) is False
+    assert access_filter.filter(runtime_query_record) is False
+    assert access_filter.filter(runtime_line_record) is False
     assert access_filter.filter(import_preview_record) is True
 
 
