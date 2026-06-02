@@ -2201,7 +2201,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: "Verify Again" })).toBeInTheDocument();
   });
 
-  it("uses the selected canvas shell while workflow data is loading", () => {
+  it("uses the selected canvas shell while workflow data is loading", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "canvas" }));
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -2215,6 +2215,9 @@ describe("WorkflowRunPage", () => {
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Inputs" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview" })).not.toBeInTheDocument();
+
+    // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
+    await act(async () => {});
   });
 
   it("shows the compact resource monitor in the top bar while idle", async () => {

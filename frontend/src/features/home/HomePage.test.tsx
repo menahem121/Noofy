@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -355,6 +355,9 @@ describe("HomePage", () => {
 
     fireEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Open" }));
     expect(onOpenWorkflow).toHaveBeenCalledWith("workflow_second");
+
+    // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
+    await act(async () => {});
   });
 
   it("pressing Enter on Home search navigates to Workflows with the query preserved", async () => {
@@ -599,9 +602,12 @@ describe("HomePage", () => {
     expect(screen.queryByText("Checking Noofy")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Cached Workflow" })).not.toBeInTheDocument();
     expect(screen.getByText("Starter workflows will appear here as packages are added.")).toBeInTheDocument();
+
+    // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
+    await act(async () => {});
   });
 
-  it("keeps imported Noofy re-exports out of Built-in Workflows", () => {
+  it("keeps imported Noofy re-exports out of Built-in Workflows", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -644,6 +650,9 @@ describe("HomePage", () => {
     expect(screen.queryByText("Unsupported")).not.toBeInTheDocument();
     const icon = view.container.querySelector(".workflow-card__icon img") as HTMLImageElement | null;
     expect(icon).toBeNull();
+
+    // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
+    await act(async () => {});
   });
 
   it("preserves cached workflows and shows a warning when workflow refresh fails", async () => {
