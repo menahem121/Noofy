@@ -1599,7 +1599,8 @@
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
 }
 
-.field-group input[type="range"] {
+.field-group input[type="range"],
+.dashboard-slider__input {
   display: block;
   width: 100%;
   min-width: 0;
@@ -1616,7 +1617,8 @@
   font-size: 12px;
 }
 
-.field-group input[type="range"]:disabled {
+.field-group input[type="range"]:disabled,
+.dashboard-slider__input:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -2350,7 +2352,8 @@ button.dashboard-image-input__surface {
   transition: width 120ms ease;
 }
 
-.field-group input[type="range"]::-webkit-slider-runnable-track {
+.field-group input[type="range"]::-webkit-slider-runnable-track,
+.dashboard-slider__input::-webkit-slider-runnable-track {
   height: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
@@ -2364,7 +2367,8 @@ button.dashboard-image-input__surface {
     );
 }
 
-.field-group input[type="range"]::-moz-range-track {
+.field-group input[type="range"]::-moz-range-track,
+.dashboard-slider__input::-moz-range-track {
   height: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
@@ -2378,7 +2382,8 @@ button.dashboard-image-input__surface {
     );
 }
 
-.field-group input[type="range"]::-webkit-slider-thumb {
+.field-group input[type="range"]::-webkit-slider-thumb,
+.dashboard-slider__input::-webkit-slider-thumb {
   width: 20px;
   height: 20px;
   margin-top: -7px;
@@ -2390,7 +2395,8 @@ button.dashboard-image-input__surface {
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.32);
 }
 
-.field-group input[type="range"]::-moz-range-thumb {
+.field-group input[type="range"]::-moz-range-thumb,
+.dashboard-slider__input::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border: 3px solid var(--primary);
@@ -2399,7 +2405,8 @@ button.dashboard-image-input__surface {
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.32);
 }
 
-.field-group input[type="range"]:focus-visible {
+.field-group input[type="range"]:focus-visible,
+.dashboard-slider__input:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 4px;
 }

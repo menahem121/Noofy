@@ -192,6 +192,33 @@ describe("DashboardInputControl", () => {
     expect(onChange).toHaveBeenCalledWith(1536);
   });
 
+  it("positions canvas sliders from the configured min, max, and value", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "width", type: "slider", label: "Width", input_id: "width" }}
+        input={{
+          id: "width",
+          label: "Width",
+          control: "slider",
+          binding: { node_id: "5", input_name: "width" },
+          default: 1024,
+          validation: { min: 64, max: 4096, step: 64 },
+        }}
+        value={1024}
+        variant="canvas"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const slider = screen.getByRole("slider");
+    const wrapper = slider.closest(".dashboard-slider") as HTMLElement;
+    const progress = Number.parseFloat(wrapper.style.getPropertyValue("--dashboard-slider-progress"));
+
+    expect(slider).toHaveValue("1024");
+    expect(progress).toBeCloseTo(23.81, 2);
+  });
+
   it("renders decimal sliders with configured step size", () => {
     const onChange = vi.fn();
 
