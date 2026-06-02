@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderPage } from "./DashboardBuilderPage";
-import type { DashboardSchema } from "./dashboardBuilderContent";
+import { dashboardDraftKey, toBackendPayload, type DashboardSchema } from "./dashboardBuilderContent";
+import { topLevelDashboardControlItems } from "../workflows/dashboardTopLevelItems";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -173,6 +174,144 @@ function imageWorkflowBindableInputsResponse() {
   };
 }
 
+function dragWorkflowBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "6",
+        node_type: "CLIPTextEncode",
+        node_title: "Positive prompt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: "a lake",
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+          },
+        ],
+      },
+      {
+        node_id: "7",
+        node_type: "CLIPTextEncode",
+        node_title: "Negative prompt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: "blurry",
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+          },
+        ],
+      },
+      {
+        node_id: "5",
+        node_type: "EmptyLatentImage",
+        node_title: "Image size",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "width",
+            current_value: 1024,
+            kind: "number",
+            suggested_widget_type: "slider",
+            widget_types: ["slider", "int_field"],
+          },
+          {
+            input_name: "height",
+            current_value: 768,
+            kind: "number",
+            suggested_widget_type: "slider",
+            widget_types: ["slider", "int_field"],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function dragSchema(groups: DashboardSchema["groups"] = []): DashboardSchema {
+  return {
+    version: 1,
+    workflowId: "wf-drag",
+    workflowName: "Drag workflow",
+    layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+    groups,
+    widgets: [
+      {
+        id: "ctrl-node-6-text",
+        valueId: "node-6-text",
+        binding: { nodeId: "6", inputName: "text" },
+        widgetType: "textarea",
+        title: "Prompt",
+        description: "Describe the image.",
+        defaultValue: "a lake",
+        layout: { x: 0, y: 0, w: 16, h: 6 },
+      },
+      {
+        id: "ctrl-node-7-text",
+        valueId: "node-7-text",
+        binding: { nodeId: "7", inputName: "text" },
+        widgetType: "textarea",
+        title: "Negative prompt",
+        description: "What to avoid.",
+        defaultValue: "blurry",
+        layout: { x: 0, y: 6, w: 16, h: 6 },
+      },
+      {
+        id: "ctrl-node-5-width",
+        valueId: "node-5-width",
+        binding: { nodeId: "5", inputName: "width" },
+        widgetType: "slider",
+        title: "Width",
+        description: "Output width.",
+        defaultValue: 1024,
+        min: 64,
+        max: 2048,
+        step: 64,
+        layout: { x: 0, y: 12, w: 16, h: 4 },
+      },
+      {
+        id: "ctrl-node-5-height",
+        valueId: "node-5-height",
+        binding: { nodeId: "5", inputName: "height" },
+        widgetType: "slider",
+        title: "Height",
+        description: "Output height.",
+        defaultValue: 768,
+        min: 64,
+        max: 2048,
+        step: 64,
+        layout: { x: 0, y: 16, w: 16, h: 4 },
+      },
+    ],
+  };
+}
+
+function dragDataTransfer() {
+  return {
+    effectAllowed: "",
+    dropEffect: "",
+    setData: vi.fn(),
+    getData: vi.fn(),
+    clearData: vi.fn(),
+  };
+}
+
+function dragAndDrop(source: Element, target: Element) {
+  const dataTransfer = dragDataTransfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
+  fireEvent.dragEnd(source, { dataTransfer });
+}
+
 describe("DashboardBuilderPage", () => {
   const fetchMock = vi.fn();
 
@@ -190,6 +329,229 @@ describe("DashboardBuilderPage", () => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     window.localStorage.clear();
+  });
+
+  function mockDragWorkflowFetch() {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-drag/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(dragWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+  }
+
+  async function renderDragBuilder(initialSchema: DashboardSchema, onContinue = vi.fn()) {
+    mockDragWorkflowFetch();
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-drag"
+        workflowName="Drag workflow"
+        initialSchema={initialSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+    await screen.findByTestId("created-widget-ctrl-node-6-text");
+    return onContinue;
+  }
+
+  it("reorders top-level widgets through horizontal insertion zones and saves that order", async () => {
+    const onContinue = await renderDragBuilder(dragSchema());
+    const source = screen.getByTestId("created-widget-ctrl-node-6-text");
+    const insertBeforeWidth = screen.getByTestId("created-insert-top-ctrl-node-5-width");
+    const dataTransfer = dragDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(insertBeforeWidth, { dataTransfer });
+    expect(insertBeforeWidth).toHaveClass("preview-insert-zone--active");
+    fireEvent.drop(insertBeforeWidth, { dataTransfer });
+    fireEvent.dragEnd(source, { dataTransfer });
+
+    fireEvent.click(screen.getByRole("button", { name: /save as draft/i }));
+    const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-drag")) ?? "{}") as DashboardSchema;
+    expect(stored.widgets.map((widget) => widget.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-6-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    const payload = toBackendPayload(onContinue.mock.calls[0][0]);
+    expect(payload.dashboard.sections[0].controls.map((control) => control.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-6-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+    expect(topLevelDashboardControlItems(payload.dashboard.sections[0].controls, payload.dashboard.sections[0].groups).map((item) => item.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-6-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+  });
+
+  it("groups widgets only when dropping onto another widget body", async () => {
+    const onContinue = await renderDragBuilder(dragSchema());
+    const source = screen.getByTestId("created-widget-ctrl-node-6-text");
+    const targetBody = screen.getByTestId("created-widget-ctrl-node-7-text");
+    const dataTransfer = dragDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(targetBody, { dataTransfer });
+    expect(targetBody).toHaveClass("preview-widget--group-preview");
+    fireEvent.drop(targetBody, { dataTransfer });
+    fireEvent.dragEnd(source, { dataTransfer });
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].widgets.map((widget: { id: string }) => widget.id)).toEqual([
+      "ctrl-node-6-text",
+      "ctrl-node-7-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+    expect(onContinue.mock.calls[0][0].groups).toEqual([
+      expect.objectContaining({
+        widgetIds: ["ctrl-node-6-text", "ctrl-node-7-text"],
+      }),
+    ]);
+  });
+
+  it("moves a widget out of a group into the exact top-level insertion slot", async () => {
+    const onContinue = await renderDragBuilder(
+      dragSchema([
+        {
+          id: "prompt-group",
+          title: "Prompts",
+          description: "",
+          widgetIds: ["ctrl-node-6-text", "ctrl-node-7-text"],
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ]),
+    );
+
+    dragAndDrop(
+      screen.getByTestId("created-widget-ctrl-node-6-text"),
+      screen.getByTestId("created-insert-top-ctrl-node-5-width"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].groups).toEqual([]);
+    expect(onContinue.mock.calls[0][0].widgets.map((widget: { id: string }) => widget.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-6-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+  });
+
+  it("reorders widgets inside an existing group through group insertion zones", async () => {
+    const onContinue = await renderDragBuilder(
+      dragSchema([
+        {
+          id: "main-group",
+          title: "Main controls",
+          description: "",
+          widgetIds: ["ctrl-node-6-text", "ctrl-node-7-text", "ctrl-node-5-width"],
+          layout: { x: 0, y: 0, w: 16, h: 12 },
+        },
+      ]),
+    );
+
+    dragAndDrop(
+      screen.getByTestId("created-widget-ctrl-node-5-width"),
+      screen.getByTestId("created-insert-group-main-group-ctrl-node-7-text"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].groups).toEqual([
+      expect.objectContaining({
+        id: "main-group",
+        widgetIds: ["ctrl-node-6-text", "ctrl-node-5-width", "ctrl-node-7-text"],
+      }),
+    ]);
+    expect(onContinue.mock.calls[0][0].widgets.find((widget: { id: string }) => widget.id === "ctrl-node-5-width")).toMatchObject({
+      binding: { nodeId: "5", inputName: "width" },
+      defaultValue: 1024,
+      min: 64,
+      max: 2048,
+      step: 64,
+    });
+  });
+
+  it("does not show a grouping affordance for sibling widgets that are already in the same group", async () => {
+    const onContinue = await renderDragBuilder(
+      dragSchema([
+        {
+          id: "main-group",
+          title: "Main controls",
+          description: "",
+          widgetIds: ["ctrl-node-6-text", "ctrl-node-7-text", "ctrl-node-5-width"],
+          layout: { x: 0, y: 0, w: 16, h: 12 },
+        },
+      ]),
+    );
+    const source = screen.getByTestId("created-widget-ctrl-node-5-width");
+    const siblingBody = screen.getByTestId("created-widget-ctrl-node-7-text");
+    const dataTransfer = dragDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(siblingBody, { dataTransfer });
+    expect(siblingBody).not.toHaveClass("preview-widget--group-preview");
+    fireEvent.drop(siblingBody, { dataTransfer });
+    fireEvent.dragEnd(source, { dataTransfer });
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].groups).toEqual([
+      expect.objectContaining({
+        id: "main-group",
+        widgetIds: ["ctrl-node-6-text", "ctrl-node-7-text", "ctrl-node-5-width"],
+      }),
+    ]);
+  });
+
+  it("reorders a top-level group as a stable block", async () => {
+    const onContinue = await renderDragBuilder(
+      dragSchema([
+        {
+          id: "size-group",
+          title: "Size",
+          description: "",
+          widgetIds: ["ctrl-node-7-text", "ctrl-node-5-width"],
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ]),
+    );
+
+    dragAndDrop(
+      screen.getByTestId("created-group-size-group"),
+      screen.getByTestId("created-insert-top-ctrl-node-6-text"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].widgets.map((widget: { id: string }) => widget.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-5-width",
+      "ctrl-node-6-text",
+      "ctrl-node-5-height",
+    ]);
+    expect(onContinue.mock.calls[0][0].groups).toEqual([
+      expect.objectContaining({
+        id: "size-group",
+        widgetIds: ["ctrl-node-7-text", "ctrl-node-5-width"],
+      }),
+    ]);
+    const payload = toBackendPayload(onContinue.mock.calls[0][0]);
+    expect(topLevelDashboardControlItems(payload.dashboard.sections[0].controls, payload.dashboard.sections[0].groups).map((item) => item.id)).toEqual([
+      "size-group",
+      "ctrl-node-6-text",
+      "ctrl-node-5-height",
+    ]);
   });
 
   it("edits dropdown options as individual grid fields", async () => {

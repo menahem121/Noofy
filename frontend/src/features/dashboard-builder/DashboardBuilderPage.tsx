@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -69,6 +69,16 @@ interface WorkflowAuthoringState {
   error: string | null;
 }
 
+type CreatedDragState =
+  | { kind: "widget"; widgetId: string; sourceGroupId: string | null }
+  | { kind: "group"; groupId: string };
+
+type CreatedDropPreview =
+  | { kind: "group"; targetWidgetId: string }
+  | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
+  | { kind: "insert"; targetGroupId: string | null; beforeId: string | null }
+  | null;
+
 function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
   return {
     ...MOCK_WORKFLOW,
@@ -136,13 +146,8 @@ export function DashboardBuilderPage({
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [createdDrag, setCreatedDrag] = useState<{ widgetId: string; sourceGroupId: string | null } | null>(null);
-  const [createdDropPreview, setCreatedDropPreview] = useState<
-    | { kind: "group"; targetWidgetId: string }
-    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
-    | { kind: "ungroup"; sourceGroupId: string }
-    | null
-  >(null);
+  const [createdDrag, setCreatedDrag] = useState<CreatedDragState | null>(null);
+  const [createdDropPreview, setCreatedDropPreview] = useState<CreatedDropPreview>(null);
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
@@ -354,7 +359,12 @@ export function DashboardBuilderPage({
 
   function handleCreatedDragStart(widgetId: string) {
     const sourceGroupId = groupIdByWidgetId.get(widgetId) ?? null;
-    setCreatedDrag({ widgetId, sourceGroupId });
+    setCreatedDrag({ kind: "widget", widgetId, sourceGroupId });
+    setCreatedDropPreview(null);
+  }
+
+  function handleCreatedGroupDragStart(groupId: string) {
+    setCreatedDrag({ kind: "group", groupId });
     setCreatedDropPreview(null);
   }
 
@@ -364,7 +374,7 @@ export function DashboardBuilderPage({
   }
 
   function handleWidgetDragOver(event: DragEvent<HTMLElement>, targetWidgetId: string) {
-    if (!createdDrag) return;
+    if (!createdDrag || createdDrag.kind !== "widget") return;
     if (createdDrag.widgetId === targetWidgetId) {
       event.stopPropagation();
       return;
@@ -372,6 +382,10 @@ export function DashboardBuilderPage({
     event.preventDefault();
     event.stopPropagation();
     const targetGroupId = groupIdByWidgetId.get(targetWidgetId) ?? null;
+    if (targetGroupId && createdDrag.sourceGroupId === targetGroupId) {
+      setCreatedDropPreview(null);
+      return;
+    }
     setCreatedDropPreview(
       targetGroupId
         ? { kind: "group-add", targetGroupId, targetWidgetId }
@@ -382,14 +396,14 @@ export function DashboardBuilderPage({
   function handleWidgetDrop(event: DragEvent<HTMLElement>, targetWidgetId: string) {
     event.preventDefault();
     event.stopPropagation();
-    if (!createdDrag || createdDrag.widgetId === targetWidgetId) return;
+    if (!createdDrag || createdDrag.kind !== "widget" || createdDrag.widgetId === targetWidgetId) return;
     setSchema((current) => groupWidgetOnTarget(current, createdDrag.widgetId, targetWidgetId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
 
   function handleGroupDragOver(event: DragEvent<HTMLElement>, targetGroupId: string) {
-    if (!createdDrag) return;
+    if (!createdDrag || createdDrag.kind !== "widget") return;
     if (createdDrag.sourceGroupId === targetGroupId) {
       event.stopPropagation();
       return;
@@ -402,22 +416,55 @@ export function DashboardBuilderPage({
   function handleGroupDrop(event: DragEvent<HTMLElement>, targetGroupId: string) {
     event.preventDefault();
     event.stopPropagation();
-    if (!createdDrag) return;
+    if (!createdDrag || createdDrag.kind !== "widget") return;
     setSchema((current) => moveWidgetToGroup(current, createdDrag.widgetId, targetGroupId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
 
-  function handleUngroupDragOver(event: DragEvent<HTMLElement>) {
-    if (!createdDrag?.sourceGroupId) return;
+  function handleTopLevelInsertDragOver(event: DragEvent<HTMLElement>, beforeId: string | null) {
+    if (!createdDrag) return;
+    if (
+      (createdDrag.kind === "widget" && beforeId === createdDrag.widgetId) ||
+      (createdDrag.kind === "group" && beforeId === createdDrag.groupId)
+    ) {
+      event.stopPropagation();
+      setCreatedDropPreview(null);
+      return;
+    }
     event.preventDefault();
-    setCreatedDropPreview({ kind: "ungroup", sourceGroupId: createdDrag.sourceGroupId });
+    event.stopPropagation();
+    setCreatedDropPreview({ kind: "insert", targetGroupId: null, beforeId });
   }
 
-  function handleUngroupDrop(event: DragEvent<HTMLElement>) {
+  function handleTopLevelInsertDrop(event: DragEvent<HTMLElement>, beforeId: string | null) {
     event.preventDefault();
-    if (!createdDrag?.sourceGroupId) return;
-    setSchema((current) => ungroupWidget(current, createdDrag.widgetId));
+    event.stopPropagation();
+    if (!createdDrag) return;
+    const dropped = createdDrag;
+    setSchema((current) => moveCreatedItemToTopLevelPosition(current, dropped, beforeId));
+    if (dropped.kind === "widget") handleSelectWidget(dropped.widgetId);
+    else handleSelectGroup(dropped.groupId);
+    handleCreatedDragEnd();
+  }
+
+  function handleGroupInsertDragOver(event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) {
+    if (!createdDrag || createdDrag.kind !== "widget") return;
+    if (beforeWidgetId === createdDrag.widgetId) {
+      event.stopPropagation();
+      setCreatedDropPreview(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setCreatedDropPreview({ kind: "insert", targetGroupId, beforeId: beforeWidgetId });
+  }
+
+  function handleGroupInsertDrop(event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!createdDrag || createdDrag.kind !== "widget") return;
+    setSchema((current) => moveWidgetToGroupPosition(current, createdDrag.widgetId, targetGroupId, beforeWidgetId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
@@ -609,19 +656,23 @@ export function DashboardBuilderPage({
                   items={createdItems}
                   selectedWidgetId={selectedWidgetId}
                   selectedGroupId={selectedGroupId}
-                  draggingWidgetId={createdDrag?.widgetId ?? null}
+                  draggingWidgetId={createdDrag?.kind === "widget" ? createdDrag.widgetId : null}
+                  draggingGroupId={createdDrag?.kind === "group" ? createdDrag.groupId : null}
                   dropPreview={createdDropPreview}
                   onSelectWidget={handleSelectWidget}
                   onSelectGroup={handleSelectGroup}
                   onRemoveWidget={removeWidget}
                   onDragStart={handleCreatedDragStart}
+                  onGroupDragStart={handleCreatedGroupDragStart}
                   onDragEnd={handleCreatedDragEnd}
                   onWidgetDragOver={handleWidgetDragOver}
                   onWidgetDrop={handleWidgetDrop}
                   onGroupDragOver={handleGroupDragOver}
                   onGroupDrop={handleGroupDrop}
-                  onUngroupDragOver={handleUngroupDragOver}
-                  onUngroupDrop={handleUngroupDrop}
+                  onTopLevelInsertDragOver={handleTopLevelInsertDragOver}
+                  onTopLevelInsertDrop={handleTopLevelInsertDrop}
+                  onGroupInsertDragOver={handleGroupInsertDragOver}
+                  onGroupInsertDrop={handleGroupInsertDrop}
                 />
               )}
             </div>
@@ -646,7 +697,7 @@ function groupWidgetOnTarget(schema: DashboardSchema, widgetId: string, targetWi
   const targetGroupId = groupMap.get(targetWidgetId);
   const sourceGroupId = groupMap.get(widgetId);
   if (targetGroupId && sourceGroupId === targetGroupId) {
-    return reorderWidgetInGroup(schema, widgetId, targetWidgetId);
+    return schema;
   }
   if (targetGroupId) {
     return moveWidgetToGroup(schema, widgetId, targetGroupId, targetWidgetId);
@@ -681,15 +732,114 @@ function groupWidgetOnTarget(schema: DashboardSchema, widgetId: string, targetWi
   });
 }
 
-function reorderWidgetInGroup(schema: DashboardSchema, widgetId: string, beforeWidgetId: string): DashboardSchema {
+function moveCreatedItemToTopLevelPosition(
+  schema: DashboardSchema,
+  drag: CreatedDragState,
+  beforeTopLevelId: string | null,
+): DashboardSchema {
+  if (drag.kind === "group") {
+    return moveGroupToTopLevelPosition(schema, drag.groupId, beforeTopLevelId);
+  }
+  return moveWidgetToTopLevelPosition(schema, drag.widgetId, beforeTopLevelId);
+}
+
+function moveWidgetToTopLevelPosition(
+  schema: DashboardSchema,
+  widgetId: string,
+  beforeTopLevelId: string | null,
+): DashboardSchema {
+  if (beforeTopLevelId === widgetId) return schema;
+  if (!schema.widgets.some((widget) => widget.id === widgetId)) return schema;
+  const anchorWidgetId = topLevelAnchorWidgetId(schema, beforeTopLevelId, new Set([widgetId]));
+  const current = ungroupWidget(schema, widgetId);
+  return normalizeDashboardSchema({
+    ...current,
+    widgets: moveWidgetBlockBefore(current.widgets, [widgetId], anchorWidgetId),
+  });
+}
+
+function moveGroupToTopLevelPosition(
+  schema: DashboardSchema,
+  groupId: string,
+  beforeTopLevelId: string | null,
+): DashboardSchema {
+  if (beforeTopLevelId === groupId) return schema;
+  const group = schema.groups.find((candidate) => candidate.id === groupId);
+  if (!group) return schema;
+  const movingWidgetIds = group.widgetIds.filter((widgetId) =>
+    schema.widgets.some((widget) => widget.id === widgetId),
+  );
+  if (movingWidgetIds.length === 0) return schema;
+  const anchorWidgetId = topLevelAnchorWidgetId(schema, beforeTopLevelId, new Set(movingWidgetIds));
+  return normalizeDashboardSchema({
+    ...schema,
+    widgets: moveWidgetBlockBefore(schema.widgets, movingWidgetIds, anchorWidgetId),
+  });
+}
+
+function topLevelAnchorWidgetId(
+  schema: DashboardSchema,
+  beforeTopLevelId: string | null,
+  movingWidgetIds: Set<string>,
+): string | null {
+  if (!beforeTopLevelId) return null;
+  if (schema.widgets.some((widget) => widget.id === beforeTopLevelId && !movingWidgetIds.has(widget.id))) {
+    return beforeTopLevelId;
+  }
+
+  const targetGroup = schema.groups.find((group) => group.id === beforeTopLevelId);
+  return targetGroup?.widgetIds.find((widgetId) => !movingWidgetIds.has(widgetId)) ?? null;
+}
+
+function moveWidgetBlockBefore(
+  widgets: DashboardWidget[],
+  movingWidgetIds: string[],
+  beforeWidgetId: string | null,
+): DashboardWidget[] {
+  const movingSet = new Set(movingWidgetIds);
+  const movingById = new Map(widgets.filter((widget) => movingSet.has(widget.id)).map((widget) => [widget.id, widget]));
+  const movingWidgets = movingWidgetIds
+    .map((widgetId) => movingById.get(widgetId))
+    .filter((widget): widget is DashboardWidget => Boolean(widget));
+  if (movingWidgets.length === 0) return widgets;
+
+  const remainingWidgets = widgets.filter((widget) => !movingSet.has(widget.id));
+  const insertIndex = beforeWidgetId
+    ? remainingWidgets.findIndex((widget) => widget.id === beforeWidgetId)
+    : remainingWidgets.length;
+  const resolvedInsertIndex = insertIndex >= 0 ? insertIndex : remainingWidgets.length;
+  return [
+    ...remainingWidgets.slice(0, resolvedInsertIndex),
+    ...movingWidgets,
+    ...remainingWidgets.slice(resolvedInsertIndex),
+  ];
+}
+
+function moveWidgetToGroupPosition(
+  schema: DashboardSchema,
+  widgetId: string,
+  targetGroupId: string,
+  beforeWidgetId: string | null,
+): DashboardSchema {
+  const sourceGroupId = widgetGroupIdMap(schema).get(widgetId);
+  if (sourceGroupId === targetGroupId) {
+    return reorderWidgetInGroup(schema, widgetId, beforeWidgetId);
+  }
+  return moveWidgetToGroup(schema, widgetId, targetGroupId, beforeWidgetId ?? undefined);
+}
+
+function reorderWidgetInGroup(schema: DashboardSchema, widgetId: string, beforeWidgetId: string | null): DashboardSchema {
   const groupId = widgetGroupIdMap(schema).get(widgetId);
   if (!groupId) return schema;
+  if (beforeWidgetId === widgetId) return schema;
   return normalizeDashboardSchema({
     ...schema,
     groups: schema.groups.map((group) => {
       if (group.id !== groupId) return group;
       const nextWidgetIds = group.widgetIds.filter((id) => id !== widgetId);
-      const insertIndex = nextWidgetIds.includes(beforeWidgetId) ? nextWidgetIds.indexOf(beforeWidgetId) : nextWidgetIds.length;
+      const insertIndex = beforeWidgetId && nextWidgetIds.includes(beforeWidgetId)
+        ? nextWidgetIds.indexOf(beforeWidgetId)
+        : nextWidgetIds.length;
       nextWidgetIds.splice(insertIndex, 0, widgetId);
       return { ...group, widgetIds: nextWidgetIds };
     }),
@@ -1654,90 +1804,132 @@ function CreatedWidgetsList({
   selectedWidgetId,
   selectedGroupId,
   draggingWidgetId,
+  draggingGroupId,
   dropPreview,
   onSelectWidget,
   onSelectGroup,
   onRemoveWidget,
   onDragStart,
+  onGroupDragStart,
   onDragEnd,
   onWidgetDragOver,
   onWidgetDrop,
   onGroupDragOver,
   onGroupDrop,
-  onUngroupDragOver,
-  onUngroupDrop,
+  onTopLevelInsertDragOver,
+  onTopLevelInsertDrop,
+  onGroupInsertDragOver,
+  onGroupInsertDrop,
 }: {
   items: DashboardTopLevelItem[];
   selectedWidgetId: string | null;
   selectedGroupId: string | null;
   draggingWidgetId: string | null;
-  dropPreview:
-    | { kind: "group"; targetWidgetId: string }
-    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
-    | { kind: "ungroup"; sourceGroupId: string }
-    | null;
+  draggingGroupId: string | null;
+  dropPreview: CreatedDropPreview;
   onSelectWidget: (id: string) => void;
   onSelectGroup: (id: string) => void;
   onRemoveWidget: (id: string) => void;
   onDragStart: (id: string) => void;
+  onGroupDragStart: (id: string) => void;
   onDragEnd: () => void;
   onWidgetDragOver: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
   onWidgetDrop: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
   onGroupDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
   onGroupDrop: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
-  onUngroupDragOver: (event: DragEvent<HTMLElement>) => void;
-  onUngroupDrop: (event: DragEvent<HTMLElement>) => void;
+  onTopLevelInsertDragOver: (event: DragEvent<HTMLElement>, beforeId: string | null) => void;
+  onTopLevelInsertDrop: (event: DragEvent<HTMLElement>, beforeId: string | null) => void;
+  onGroupInsertDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
+  onGroupInsertDrop: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
 }) {
   return (
     <section className="preview-section">
       <header>
         <h4>Created widgets</h4>
       </header>
-      <div
-        className={`preview-stack ${dropPreview?.kind === "ungroup" ? "preview-stack--ungroup-target" : ""}`}
-        onDragOver={onUngroupDragOver}
-        onDrop={onUngroupDrop}
-      >
+      <div className="preview-stack">
         {items.map((item) => (
-          item.kind === "group" ? (
-            <PreviewGroup
-              key={item.id}
-              item={item}
-              selectedGroupId={selectedGroupId}
-              selectedWidgetId={selectedWidgetId}
-              draggingWidgetId={draggingWidgetId}
-              dropPreview={dropPreview}
-              onSelectGroup={() => onSelectGroup(item.id)}
-              onSelectWidget={onSelectWidget}
-              onRemoveWidget={onRemoveWidget}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-              onWidgetDragOver={onWidgetDragOver}
-              onWidgetDrop={onWidgetDrop}
-              onGroupDragOver={onGroupDragOver}
-              onGroupDrop={onGroupDrop}
+          <Fragment key={item.id}>
+            <PreviewInsertDropZone
+              active={isInsertPreview(dropPreview, null, item.id)}
+              testId={`created-insert-top-${item.id}`}
+              onDragOver={(event) => onTopLevelInsertDragOver(event, item.id)}
+              onDrop={(event) => onTopLevelInsertDrop(event, item.id)}
             />
-          ) : (
-            <PreviewWidget
-              key={item.id}
-              widget={item.widget}
-              isSelected={selectedWidgetId === item.id}
-              dragging={draggingWidgetId === item.id}
-              groupPreview={dropPreview?.kind === "group" && dropPreview.targetWidgetId === item.id}
-              onSelect={() => onSelectWidget(item.id)}
-              onRemove={() => onRemoveWidget(item.id)}
-              onDragStart={() => onDragStart(item.id)}
-              onDragEnd={onDragEnd}
-              onDragOver={(event) => onWidgetDragOver(event, item.id)}
-              onDrop={(event) => onWidgetDrop(event, item.id)}
-            />
-          )
+            {item.kind === "group" ? (
+              <PreviewGroup
+                item={item}
+                selectedGroupId={selectedGroupId}
+                selectedWidgetId={selectedWidgetId}
+                draggingWidgetId={draggingWidgetId}
+                draggingGroupId={draggingGroupId}
+                dropPreview={dropPreview}
+                onSelectGroup={() => onSelectGroup(item.id)}
+                onSelectWidget={onSelectWidget}
+                onRemoveWidget={onRemoveWidget}
+                onDragStart={onDragStart}
+                onGroupDragStart={() => onGroupDragStart(item.id)}
+                onDragEnd={onDragEnd}
+                onWidgetDragOver={onWidgetDragOver}
+                onWidgetDrop={onWidgetDrop}
+                onGroupDragOver={onGroupDragOver}
+                onGroupDrop={onGroupDrop}
+                onGroupInsertDragOver={onGroupInsertDragOver}
+                onGroupInsertDrop={onGroupInsertDrop}
+              />
+            ) : (
+              <PreviewWidget
+                widget={item.widget}
+                isSelected={selectedWidgetId === item.id}
+                dragging={draggingWidgetId === item.id}
+                groupPreview={dropPreview?.kind === "group" && dropPreview.targetWidgetId === item.id}
+                onSelect={() => onSelectWidget(item.id)}
+                onRemove={() => onRemoveWidget(item.id)}
+                onDragStart={() => onDragStart(item.id)}
+                onDragEnd={onDragEnd}
+                onDragOver={(event) => onWidgetDragOver(event, item.id)}
+                onDrop={(event) => onWidgetDrop(event, item.id)}
+              />
+            )}
+          </Fragment>
         ))}
-        {dropPreview?.kind === "ungroup" ? (
-          <div className="preview-ungroup-target">Drop here to remove this widget from its group</div>
-        ) : null}
+        <PreviewInsertDropZone
+          active={isInsertPreview(dropPreview, null, null)}
+          testId="created-insert-top-end"
+          onDragOver={(event) => onTopLevelInsertDragOver(event, null)}
+          onDrop={(event) => onTopLevelInsertDrop(event, null)}
+        />
       </div>
     </section>
+  );
+}
+
+function isInsertPreview(dropPreview: CreatedDropPreview, targetGroupId: string | null, beforeId: string | null): boolean {
+  return dropPreview?.kind === "insert" && dropPreview.targetGroupId === targetGroupId && dropPreview.beforeId === beforeId;
+}
+
+function PreviewInsertDropZone({
+  active,
+  compact = false,
+  testId,
+  onDragOver,
+  onDrop,
+}: {
+  active: boolean;
+  compact?: boolean;
+  testId: string;
+  onDragOver: (event: DragEvent<HTMLDivElement>) => void;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      className={`preview-insert-zone ${compact ? "preview-insert-zone--compact" : ""} ${
+        active ? "preview-insert-zone--active" : ""
+      }`}
+      data-testid={testId}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    />
   );
 }
 
@@ -1746,44 +1938,59 @@ function PreviewGroup({
   selectedGroupId,
   selectedWidgetId,
   draggingWidgetId,
+  draggingGroupId,
   dropPreview,
   onSelectGroup,
   onSelectWidget,
   onRemoveWidget,
   onDragStart,
+  onGroupDragStart,
   onDragEnd,
   onWidgetDragOver,
   onWidgetDrop,
   onGroupDragOver,
   onGroupDrop,
+  onGroupInsertDragOver,
+  onGroupInsertDrop,
 }: {
   item: Extract<DashboardTopLevelItem, { kind: "group" }>;
   selectedGroupId: string | null;
   selectedWidgetId: string | null;
   draggingWidgetId: string | null;
-  dropPreview:
-    | { kind: "group"; targetWidgetId: string }
-    | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
-    | { kind: "ungroup"; sourceGroupId: string }
-    | null;
+  draggingGroupId: string | null;
+  dropPreview: CreatedDropPreview;
   onSelectGroup: () => void;
   onSelectWidget: (id: string) => void;
   onRemoveWidget: (id: string) => void;
   onDragStart: (id: string) => void;
+  onGroupDragStart: () => void;
   onDragEnd: () => void;
   onWidgetDragOver: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
   onWidgetDrop: (event: DragEvent<HTMLElement>, targetWidgetId: string) => void;
   onGroupDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
   onGroupDrop: (event: DragEvent<HTMLElement>, targetGroupId: string) => void;
+  onGroupInsertDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
+  onGroupInsertDrop: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
 }) {
   const isSelected = selectedGroupId === item.id;
   const isGroupTarget = dropPreview?.kind === "group-add" && dropPreview.targetGroupId === item.id && !dropPreview.targetWidgetId;
   return (
     <article
-      className={`preview-group ${isSelected ? "preview-group--selected" : ""} ${isGroupTarget ? "preview-group--drop-target" : ""}`}
+      className={`preview-group ${isSelected ? "preview-group--selected" : ""} ${isGroupTarget ? "preview-group--drop-target" : ""} ${
+        draggingGroupId === item.id ? "preview-group--dragging" : ""
+      }`}
+      draggable
       onClick={onSelectGroup}
+      onDragStart={(event) => {
+        event.stopPropagation();
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", item.id);
+        onGroupDragStart();
+      }}
+      onDragEnd={onDragEnd}
       onDragOver={(event) => onGroupDragOver(event, item.id)}
       onDrop={(event) => onGroupDrop(event, item.id)}
+      data-testid={`created-group-${item.id}`}
     >
       <div className="preview-group__header">
         <div className="preview-group__title">
@@ -1798,25 +2005,40 @@ function PreviewGroup({
       </div>
       <div className="preview-group__children">
         {item.widgets.map((widget) => (
-          <PreviewWidget
-            key={widget.id}
-            widget={widget}
-            compact
-            isSelected={selectedWidgetId === widget.id}
-            dragging={draggingWidgetId === widget.id}
-            groupPreview={
-              dropPreview?.kind === "group-add" &&
-              dropPreview.targetGroupId === item.id &&
-              dropPreview.targetWidgetId === widget.id
-            }
-            onSelect={() => onSelectWidget(widget.id)}
-            onRemove={() => onRemoveWidget(widget.id)}
-            onDragStart={() => onDragStart(widget.id)}
-            onDragEnd={onDragEnd}
-            onDragOver={(event) => onWidgetDragOver(event, widget.id)}
-            onDrop={(event) => onWidgetDrop(event, widget.id)}
-          />
+          <Fragment key={widget.id}>
+            <PreviewInsertDropZone
+              compact
+              active={isInsertPreview(dropPreview, item.id, widget.id)}
+              testId={`created-insert-group-${item.id}-${widget.id}`}
+              onDragOver={(event) => onGroupInsertDragOver(event, item.id, widget.id)}
+              onDrop={(event) => onGroupInsertDrop(event, item.id, widget.id)}
+            />
+            <PreviewWidget
+              widget={widget}
+              compact
+              isSelected={selectedWidgetId === widget.id}
+              dragging={draggingWidgetId === widget.id}
+              groupPreview={
+                dropPreview?.kind === "group-add" &&
+                dropPreview.targetGroupId === item.id &&
+                dropPreview.targetWidgetId === widget.id
+              }
+              onSelect={() => onSelectWidget(widget.id)}
+              onRemove={() => onRemoveWidget(widget.id)}
+              onDragStart={() => onDragStart(widget.id)}
+              onDragEnd={onDragEnd}
+              onDragOver={(event) => onWidgetDragOver(event, widget.id)}
+              onDrop={(event) => onWidgetDrop(event, widget.id)}
+            />
+          </Fragment>
         ))}
+        <PreviewInsertDropZone
+          compact
+          active={isInsertPreview(dropPreview, item.id, null)}
+          testId={`created-insert-group-${item.id}-end`}
+          onDragOver={(event) => onGroupInsertDragOver(event, item.id, null)}
+          onDrop={(event) => onGroupInsertDrop(event, item.id, null)}
+        />
       </div>
     </article>
   );
@@ -1866,6 +2088,7 @@ function PreviewWidget({
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      data-testid={`created-widget-${widget.id}`}
     >
       <div className="preview-widget__handle" aria-hidden="true">
         <GripVertical size={14} />
