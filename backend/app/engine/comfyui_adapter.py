@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
 from uuid import uuid4
@@ -60,6 +61,7 @@ class ComfyUIEngineAdapter:
         self._terminal_log_job_ids: set[str] = set()
         self._staged_files: dict[str, list[Path]] = {}
         self._output_kinds_by_job: dict[str, dict[str, str]] = {}
+        self._terminal_notifier: Callable[[str], None] | None = None
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
@@ -68,6 +70,34 @@ class ComfyUIEngineAdapter:
     def configure_model_roots(self, model_roots: list[Path]) -> None:
         self.model_roots = model_roots or [self.models_dir]
         self.models_dir = self.model_roots[0]
+
+    def configure_terminal_notifier(self, notifier: Callable[[str], None] | None) -> None:
+        self._terminal_notifier = notifier
+
+    async def release_memory(self) -> None:
+        """Ask an idle ComfyUI runner to unload models and empty its cache."""
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{self.base_url}/free",
+                    json={"unload_models": True, "free_memory": True},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            self.log_store.add(
+                "error",
+                "Failed to release ComfyUI memory",
+                "comfyui.adapter",
+                details={"error": str(exc)},
+            )
+            raise ValueError(
+                f"Failed to release ComfyUI memory: {sanitize_text(str(exc))}"
+            ) from exc
+        self.log_store.add(
+            "info",
+            "Requested ComfyUI model and cache memory release",
+            "comfyui.adapter",
+        )
 
     async def run_workflow(
         self,
@@ -228,6 +258,7 @@ class ComfyUIEngineAdapter:
             "info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id
         )
         self._terminal_log_job_ids.add(job_id)
+        self._notify_terminal(job_id)
         return progress
 
     async def get_result(self, job_id: str) -> JobResult:
@@ -798,6 +829,7 @@ class ComfyUIEngineAdapter:
     def _log_terminal_progress_once(self, progress: JobProgress) -> None:
         if progress.status not in {"completed", "failed", "canceled"}:
             return
+        self._notify_terminal(progress.job_id)
         if progress.job_id in self._terminal_log_job_ids:
             return
         self._terminal_log_job_ids.add(progress.job_id)
@@ -810,6 +842,7 @@ class ComfyUIEngineAdapter:
                 "comfyui.adapter",
                 job_id=progress.job_id,
             )
+
         elif progress.status == "failed":
             self.log_store.add(
                 "error",
@@ -825,6 +858,10 @@ class ComfyUIEngineAdapter:
                 "comfyui.adapter",
                 job_id=progress.job_id,
             )
+
+    def _notify_terminal(self, job_id: str) -> None:
+        if self._terminal_notifier is not None:
+            self._terminal_notifier(job_id)
 
     def _cleanup_staged_files(self, job_id: str) -> None:
         for path in self._staged_files.pop(job_id, []):

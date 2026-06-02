@@ -55,6 +55,7 @@ class MemoryObservationCoordinator:
         self._sampling_stop_events: dict[str, asyncio.Event] = {}
         self._sampling_snapshots: dict[str, list[MachineMemorySnapshot]] = {}
         self._job_attribution: dict[str, dict[str, Any]] = {}
+        self._recorded_job_ids: set[str] = set()
 
     def start_job_sampling(
         self,
@@ -211,6 +212,8 @@ class MemoryObservationCoordinator:
             "system_peak_delta_vram_mb": system_peak_vram_mb,
             "system_peak_delta_ram_mb": system_peak_ram_mb,
             "backend_allocator_peak_vram_mb": allocator_peak_vram_mb,
+            "selected_peak_vram_mb": peak_vram_mb,
+            "selected_peak_ram_mb": peak_ram_mb,
             "backend_allocator_details": _merge_service_dicts(
                 snapshot.backend_allocator_details for snapshot in snapshots
             ),
@@ -257,16 +260,33 @@ class MemoryObservationCoordinator:
         *,
         workflow_id: str | None,
         run_request: tuple[str, dict[str, Any], dict[str, Any]] | None,
+        input_profile_fingerprint: str | None = None,
     ) -> None:
         if self.memory_learning_store is None or workflow_id is None:
             return
         if result.status not in {"completed", "failed", "canceled"}:
             return
+        if result.job_id in self._recorded_job_ids:
+            return
         try:
             runner = self.runner_supervisor.runner_for_job(result.job_id)
         except JobRunnerNotFoundError:
             runner = None
-        attribution = self._job_attribution.get(result.job_id, {})
+        attribution = self._job_attribution.get(result.job_id)
+        has_job_window_attribution = attribution is not None
+        attribution = attribution or {}
+        selected_peak_vram_mb = attribution.get("selected_peak_vram_mb")
+        selected_peak_ram_mb = attribution.get("selected_peak_ram_mb")
+        peak_vram_mb = _peak_for_local_observation(
+            selected_peak=selected_peak_vram_mb,
+            descriptor_peak=runner.observed_execution_peak_vram_mb if runner is not None else None,
+            has_job_window_attribution=has_job_window_attribution,
+        )
+        peak_ram_mb = _peak_for_local_observation(
+            selected_peak=selected_peak_ram_mb,
+            descriptor_peak=runner.observed_execution_peak_ram_mb if runner is not None else None,
+            has_job_window_attribution=has_job_window_attribution,
+        )
         machine_snapshot = self.memory_observer.snapshot() if self.memory_observer is not None else None
         if result.status == "completed":
             outcome = MemoryObservationOutcome.SUCCESS
@@ -282,9 +302,12 @@ class MemoryObservationCoordinator:
                 runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
                 machine_profile_id=machine_snapshot.machine_profile_id if machine_snapshot is not None else None,
                 backend=machine_snapshot.backend if machine_snapshot is not None else MemoryBackend.UNKNOWN,
-                input_profile_fingerprint=memory_input_profile_fingerprint(run_request[1], run_request[2])
-                if run_request is not None
-                else None,
+                input_profile_fingerprint=input_profile_fingerprint
+                or (
+                    memory_input_profile_fingerprint(run_request[1], run_request[2])
+                    if run_request is not None
+                    else None
+                ),
                 runner_id=runner.runner_id if runner is not None else None,
                 job_id=result.job_id,
                 runner_root_pid=attribution.get("runner_root_pid"),
@@ -292,16 +315,8 @@ class MemoryObservationCoordinator:
                 sample_window=attribution.get("sample_window", MemorySampleWindow.UNKNOWN),
                 outcome=outcome,
                 memory_class=runner.memory_class if runner is not None else RunnerMemoryClass.UNKNOWN,
-                peak_vram_mb=(
-                    runner.observed_execution_peak_vram_mb
-                    if runner is not None and runner.observed_execution_peak_vram_mb is not None
-                    else None
-                ),
-                peak_ram_mb=(
-                    runner.observed_execution_peak_ram_mb
-                    if runner is not None and runner.observed_execution_peak_ram_mb is not None
-                    else None
-                ),
+                peak_vram_mb=peak_vram_mb,
+                peak_ram_mb=peak_ram_mb,
                 process_tree_peak_vram_mb=attribution.get("process_tree_peak_vram_mb"),
                 process_tree_peak_ram_mb=attribution.get("process_tree_peak_ram_mb"),
                 system_peak_delta_vram_mb=attribution.get("system_peak_delta_vram_mb"),
@@ -314,6 +329,7 @@ class MemoryObservationCoordinator:
                 retry_required=outcome is MemoryObservationOutcome.MEMORY_ERROR,
             )
         )
+        self._recorded_job_ids.add(result.job_id)
         self.log_store.add(
             "info",
             "Recorded local workflow memory observation",
@@ -399,13 +415,90 @@ class MemoryObservationCoordinator:
         )
 
 
-def memory_input_profile_fingerprint(inputs: dict[str, Any], options: dict[str, Any]) -> str:
+_ALWAYS_MEMORY_NEUTRAL_INPUT_CONTROLS = {
+    "note",
+    "seed_widget",
+    "api_credential",
+}
+_TEXT_INPUT_CONTROLS = {"textarea", "string_field"}
+_TEXT_BINDING_INPUT_NAMES = {
+    "caption",
+    "negative",
+    "negative_prompt",
+    "positive",
+    "positive_prompt",
+    "prompt",
+    "system_prompt",
+    "text",
+    "user_prompt",
+}
+
+
+def memory_input_profile_fingerprint(
+    inputs: dict[str, Any],
+    options: dict[str, Any],
+    *,
+    package: Any | None = None,
+) -> str:
+    profile_inputs = _memory_relevant_inputs(inputs, package)
     payload = {
-        "inputs": inputs,
+        "inputs": profile_inputs,
         "options": options,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _memory_relevant_inputs(
+    inputs: dict[str, Any],
+    package: Any | None,
+) -> dict[str, Any]:
+    if package is None:
+        return inputs
+    neutral_input_ids = _memory_neutral_input_ids(package)
+    return {
+        key: value
+        for key, value in inputs.items()
+        if key not in neutral_input_ids
+    }
+
+
+def _memory_neutral_input_ids(package: Any) -> set[str]:
+    neutral: set[str] = set()
+    for workflow_input in getattr(package, "inputs", []) or []:
+        input_id = getattr(workflow_input, "id", None)
+        control = getattr(workflow_input, "control", None)
+        if isinstance(input_id, str) and _input_is_memory_neutral(workflow_input, control):
+            neutral.add(input_id)
+
+    dashboard = getattr(package, "dashboard", None)
+    for dashboard_input in getattr(dashboard, "inputs", []) or []:
+        input_id = getattr(dashboard_input, "id", None)
+        control = getattr(dashboard_input, "control", None)
+        if isinstance(input_id, str) and _input_is_memory_neutral(dashboard_input, control):
+            neutral.add(input_id)
+    for section in getattr(dashboard, "sections", []) or []:
+        for control in getattr(section, "controls", []) or []:
+            input_id = getattr(control, "input_id", None)
+            control_type = getattr(control, "type", None)
+            if (
+                isinstance(input_id, str)
+                and control_type in _ALWAYS_MEMORY_NEUTRAL_INPUT_CONTROLS
+            ):
+                neutral.add(input_id)
+    return neutral
+
+
+def _input_is_memory_neutral(workflow_input: Any, control: Any) -> bool:
+    if control in _ALWAYS_MEMORY_NEUTRAL_INPUT_CONTROLS:
+        return True
+    if control not in _TEXT_INPUT_CONTROLS:
+        return False
+    binding = getattr(workflow_input, "binding", None)
+    input_name = getattr(binding, "input_name", None)
+    if not isinstance(input_name, str):
+        return False
+    return input_name.lower() in _TEXT_BINDING_INPUT_NAMES
 
 
 def _peak_used_memory_delta_from_snapshots(snapshots: list[MachineMemorySnapshot]) -> tuple[int | None, int | None]:
@@ -413,6 +506,19 @@ def _peak_used_memory_delta_from_snapshots(snapshots: list[MachineMemorySnapshot
         _peak_used_delta_mb((snapshot.total_vram_mb, snapshot.free_vram_mb) for snapshot in snapshots),
         _peak_used_delta_mb((snapshot.total_ram_mb, snapshot.free_ram_mb) for snapshot in snapshots),
     )
+
+
+def _peak_for_local_observation(
+    *,
+    selected_peak: int | None,
+    descriptor_peak: int | None,
+    has_job_window_attribution: bool,
+) -> int | None:
+    if selected_peak is not None:
+        return selected_peak
+    if has_job_window_attribution:
+        return None
+    return descriptor_peak
 
 
 def _peak_optional(values: Iterable[int | None]) -> int | None:

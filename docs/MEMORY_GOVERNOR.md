@@ -50,6 +50,10 @@ and workflow decisions.
 The Memory Governor is implemented in
 `backend/app/runtime/memory/memory_governor.py` and integrated by
 `backend/app/runtime/memory/service.py` and `backend/app/runs/orchestrator.py`.
+Workflow queue records, queue-ID aliases, dispatch loop guards, and terminal
+watchers live in `backend/app/runs/`. Runner reservations and runner-start
+transitions live in `backend/app/runtime/runners/`. `EngineService` wires these
+domains and retains migration proxies; it is not the lifecycle owner.
 
 Before submitting a workflow run through the backend run path, Noofy:
 
@@ -63,14 +67,30 @@ Before submitting a workflow run through the backend run path, Noofy:
 5. Records a structured diagnostic and memory metric.
 
 The same admission path now covers isolated runners and the core/default runner.
-Idle isolated runners can be evicted before a run; idle core runners are not
-treated as eviction candidates. Active core work is still considered for
-queueing decisions, because the point is to make a good RAM/VRAM decision before
-any workflow starts.
+Idle isolated runners can be evicted before a run. The core process stays
+alive, but its idle ComfyUI model and allocator cache can be released through
+the adapter-owned `/free` operation. Active work is queued rather than
+interrupted.
+
+Submission reserves the selected runner atomically before memory admission and
+before awaiting adapter submission. Cleanup uses separate eviction
+reservations. A queued workflow keeps one UUID queue ID across requeue and
+handoff attempts; after adapter submission that public queue ID resolves to the
+canonical submitted job ID for progress, result, cancellation, logs, SSE, and
+output reads.
 
 Input/options are hashed into an input-profile fingerprint, so local learning is
 scoped to similar run settings instead of being blindly reused across materially
-different runs.
+different runs. Prompt text and seed controls are intentionally memory-neutral.
+Resolution, batch size, model or LoRA choice, media inputs, video frame count,
+precision, VRAM mode, and other non-text settings remain profile inputs.
+
+Each decision also records a `memory_ownership` diagnostic summary: currently
+free VRAM, same-workflow warm-runner memory, reclaimable idle Noofy runners,
+active Noofy runners, known Noofy-runner VRAM, and VRAM that remains
+unattributed or external. The last category is intentionally honest: incomplete
+process attribution cannot prove which non-Noofy process owns every remaining
+allocation.
 
 After a workflow result, Noofy records a local observation for completed,
 failed, canceled, and memory-error outcomes. Memory errors lower future
@@ -81,8 +101,30 @@ per-process GPU memory, runner-side backend allocator telemetry, an
 active-job-window system delta, or weak/unavailable attribution.
 
 If a submitted job fails with a likely memory error, Noofy may stop idle
-isolated runners, wait for bounded memory release, and retry the same workflow
-once. It does not retry non-memory failures or repeat memory retries forever.
+isolated runners, unload idle core model/cache memory, wait for bounded memory
+release, and retry the same workflow once. It does not retry non-memory failures
+or repeat memory retries forever.
+
+`/free` HTTP success is only an acknowledgment. Noofy polls RAM/VRAM
+asynchronously with adaptive intervals until release is observed or the
+configured timeout expires. The defaults are:
+
+- `NOOFY_MEMORY_RELEASE_TIMEOUT_SECONDS=8`
+- `NOOFY_MEMORY_RELEASE_INITIAL_POLL_INTERVAL_SECONDS=0.1`
+- `NOOFY_MEMORY_RELEASE_MAX_POLL_INTERVAL_SECONDS=1.0`
+
+Core warm residency is cleared only after confirmed release. If observation is
+unavailable or release times out, Noofy preserves attribution, marks the runner
+`release_failed`, and reports `memory_cleanup_failed`.
+
+Compatibility responses may retain `EngineJob.status = "blocked_by_memory"`,
+while `memory_status.state` exposes the precise backend condition:
+`waiting_for_active_workflow`, `freeing_previous_models`,
+`unloading_previous_workflow`, `retrying_after_memory_cleanup`,
+`memory_cleanup_failed`, `blocked_external_pressure`,
+`blocked_exceeds_capacity`, or `blocked_unattributed_pressure`. Noofy reports
+external pressure only when observation includes explicit non-Noofy-process
+evidence; unexplained residual usage remains unattributed.
 
 ## Library Advisory Warnings
 
@@ -118,8 +160,10 @@ Core-runner admission follows the same product policy:
 - avoid refusing execution unless there is strong evidence the run cannot
   proceed or cleanup/retry has already failed
 
-The core runner is not evicted as idle cleanup. Runtime Isolation, not the Memory
-Governor, owns dependency-conflict boundaries.
+The core process is not evicted as idle cleanup. When its warm models are
+reclaimable, the ComfyUI adapter requests model unload and allocator-cache
+release while leaving the trusted process alive. Runtime Isolation, not the
+Memory Governor, owns dependency-conflict boundaries.
 
 ## Platform Policy
 
@@ -216,8 +260,9 @@ The implemented measurement windows are:
 - `workflow_execution`: sampled while a normal workflow job is active
 - `retry_after_cleanup`: sampled while a memory-cleanup retry is active
 - `after_completion`: sampled immediately after the job result is observed
-- `cleanup` / `memory_release`: represented in the schema for cleanup/release
-  diagnostics; release polling still records ordinary machine snapshots today
+- `cleanup` / `memory_release`: release polling records ordinary machine
+  snapshots plus a structured timeline for request, pending allocation,
+  partial release, observed drop, timeout, and observer-unavailable states
 - `model_loading` / `unknown`: reserved for when reliable engine-side model-load
   boundaries are available
 
@@ -298,12 +343,17 @@ This validates MPS signal availability and unified-memory behavior, not peak
 behavior for large model loads.
 - local evidence precedence and persistence
 - input-profile-sensitive confidence lowering
+- prompt/seed-neutral warm reuse and memory-changing profile invalidation
 - heavy/heavy denial and large-GPU high-confidence allowance
 - memory-pressure eviction and active-runner queueing
 - bounded memory-release success and timeout
+- asynchronous release pending, partial, unavailable, and confirmed-drop timelines
+- UUID workflow queue aliases, same-ID requeue loop guards, automatic dispatch,
+  custom-node queued startup handoff, and concurrent terminal finalize-once
 - retry-after-cleanup success and blocked retry
 - service-level runner start eviction, co-residence, and memory blocking
-- service-level workflow run queueing, blocking, local learning, and retry
+- service-level workflow run queueing, isolated-runner eviction, core-cache
+  release, cleanup timeout, external-pressure blocking, local learning, and retry
 - API payloads for memory status and metrics
 - frontend display of memory waiting and blocked states
 
@@ -336,6 +386,10 @@ when:
   `retry_after_cleanup`, and `after_completion` windows, with startup telemetry
   available from the runner probe
 - isolated and core workflow runs use Memory Governor admission
+- same-workflow warm runs reuse exact memory profiles without double-counting
+  resident model memory
+- idle isolated memory is evicted and idle core model/cache memory is unloaded
+  before a last-resort block
 - workflow runs can queue, clean up, warn, or refuse based on memory
   decisions
 - local observations are persisted outside `.noofy` packages

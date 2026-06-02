@@ -33,6 +33,7 @@ export interface EngineJob {
 
 export interface JobProgress {
   job_id: string;
+  queue_id?: string | null;
   status: JobStatus;
   value: number | null;
   max: number | null;
@@ -42,6 +43,7 @@ export interface JobProgress {
 
 export interface JobResult {
   job_id: string;
+  queue_id?: string | null;
   status: JobStatus;
   outputs: Array<Record<string, unknown>>;
   error: string | null;

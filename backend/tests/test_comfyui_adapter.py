@@ -548,6 +548,36 @@ def json_payload(request: httpx.Request) -> dict:
 
 
 @pytest.mark.anyio
+async def test_release_memory_posts_comfyui_free_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+
+    await adapter.release_memory()
+
+    assert len(requests) == 1
+    assert requests[0].url.path == "/free"
+    assert json_payload(requests[0]) == {
+        "unload_models": True,
+        "free_memory": True,
+    }
+
+
+@pytest.mark.anyio
 async def test_fetch_output_reads_from_configured_view_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

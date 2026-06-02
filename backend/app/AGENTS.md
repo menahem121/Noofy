@@ -49,7 +49,7 @@ app/
     adapter.py         EngineAdapter ABC
     comfyui_adapter.py ComfyUIEngineAdapter
     diagnostics.py     Diagnostics store/sink/events — Phase 2 move target
-    service.py         EngineService orchestrator — Phase 3 split target
+    service.py         EngineService composition facade — migration proxies only
     job_store.py       In-memory job registry
     models.py          Engine-level data models
 

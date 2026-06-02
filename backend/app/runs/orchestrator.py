@@ -35,11 +35,12 @@ from app.runs.media_staging import (
     MediaInputStagingResolver,
     cleanup_staged_media_files,
 )
+from app.runs.queue_service import WorkflowRunQueueRecord, WorkflowRunQueueService
 
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
-EnsureWorkflowRunner = Callable[[WorkflowPackage], Awaitable[str | None]]
+EnsureWorkflowRunner = Callable[[WorkflowPackage], Awaitable[str | dict[str, Any] | None]]
 WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
 EvictIdleRunners = Callable[[MemoryGovernorDecision], Awaitable[EngineJob | None]]
 MemoryStatusPayload = Callable[..., dict[str, Any]]
@@ -51,9 +52,8 @@ ApiNodesUnavailableReason = Callable[[WorkflowPackage, EngineAdapter], Awaitable
 class RunOrchestrator:
     """Validate and submit user workflow runs.
 
-    Memory admission and retry state are still supplied by EngineService
-    callbacks. This keeps the current memory-governor behavior intact while
-    moving the user-facing run path into the runs domain.
+    Memory admission and retry state are supplied by runtime/memory callbacks.
+    Workflow-run queue records and public-handle aliases stay in runs/.
     """
 
     def __init__(
@@ -66,9 +66,10 @@ class RunOrchestrator:
         job_workflows: dict[str, str],
         job_started_at: dict[str, datetime],
         job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]],
+        job_memory_profile_fingerprints: dict[str, str],
         job_run_snapshots: dict[str, RunSubmissionSnapshot],
         memory_retry_roots: dict[str, str],
-        queued_workflow_runs: dict[str, tuple[str, dict[str, Any], dict[str, Any], RunSubmissionSnapshot]],
+        workflow_run_queue_service: WorkflowRunQueueService,
         validate_package: ValidatePackage,
         unavailable_package_reason: UnavailablePackageReason,
         apply_input_bindings: ApplyInputBindings,
@@ -82,6 +83,8 @@ class RunOrchestrator:
         credential_resolver: CredentialResolver | None = None,
         api_nodes_unavailable_reason: ApiNodesUnavailableReason | None = None,
         media_staging_resolver: MediaInputStagingResolver | None = None,
+        request_run_dispatch: Callable[[str], None] | None = None,
+        submitted_job_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -90,9 +93,10 @@ class RunOrchestrator:
         self.job_workflows = job_workflows
         self.job_started_at = job_started_at
         self.job_run_requests = job_run_requests
+        self.job_memory_profile_fingerprints = job_memory_profile_fingerprints
         self.job_run_snapshots = job_run_snapshots
         self.memory_retry_roots = memory_retry_roots
-        self.queued_workflow_runs = queued_workflow_runs
+        self.workflow_run_queue_service = workflow_run_queue_service
         self.validate_package = validate_package
         self.unavailable_package_reason = unavailable_package_reason
         self.apply_input_bindings = apply_input_bindings
@@ -106,6 +110,8 @@ class RunOrchestrator:
         self.credential_resolver = credential_resolver
         self.api_nodes_unavailable_reason = api_nodes_unavailable_reason
         self.media_staging_resolver = media_staging_resolver
+        self.request_run_dispatch = request_run_dispatch
+        self.submitted_job_callback = submitted_job_callback
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -172,6 +178,7 @@ class RunOrchestrator:
         validated_before_queue: bool = False,
         output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
         run_submission_snapshot: RunSubmissionSnapshot | None = None,
+        queue_id: str | None = None,
     ):
         package = self.workflow_loader.get_package(workflow_id)
         unavailable = self.unavailable_package_reason(package)
@@ -235,6 +242,34 @@ class RunOrchestrator:
         runtime_package = package_for_input_bindings(package, runtime_inputs)
         if self.ensure_workflow_runner is not None:
             runner_unavailable = await self.ensure_workflow_runner(package)
+            if isinstance(runner_unavailable, dict):
+                runner_start_queue_id = runner_unavailable.get("queue_id")
+                queued = self.workflow_run_queue_service.enqueue(
+                    workflow_id=workflow_id,
+                    inputs=runtime_inputs,
+                    options=options,
+                    run_submission_snapshot=run_submission_snapshot,
+                    reason=str(runner_unavailable.get("status") or "waiting_for_runner_start"),
+                    prerequisite_runner_start_queue_id=(
+                        str(runner_start_queue_id)
+                        if runner_start_queue_id is not None
+                        else None
+                    ),
+                    queue_id=queue_id,
+                )
+                return EngineJob(
+                    job_id=queued.queue_id,
+                    queue_id=queued.queue_id,
+                    workflow_id=workflow_id,
+                    engine="noofy",
+                    status="queued_pending_memory",
+                    message="This workflow is waiting for its isolated runner to become ready.",
+                    memory_status={
+                        "state": "waiting_for_active_workflow",
+                        "message": "This workflow is waiting for its isolated runner to become ready.",
+                        "runner_start_queue_id": queued.prerequisite_runner_start_queue_id,
+                    },
+                )
             if runner_unavailable is not None:
                 self._record_run_blocked(package, runner_unavailable)
                 self.log_store.add(
@@ -286,23 +321,70 @@ class RunOrchestrator:
                     errors=[unavailable_reason],
                 )
 
-        memory_decision = self.workflow_run_memory_decision(
+        if self._queue_cancel_requested(queue_id):
+            return self._canceled_queue_job(workflow_id, queue_id)
+        reservation = self.runner_supervisor.reserve_runner_for_submission(
+            runner.runner_id,
+            workflow_id=workflow_id,
+        )
+        if reservation is None:
+            return self._runner_reservation_wait_job(
+                workflow_id=workflow_id,
+                inputs=runtime_inputs,
+                options=options,
+                runner=runner,
+                run_submission_snapshot=run_submission_snapshot,
+                queue_id=queue_id,
+            )
+        if queue_id is not None:
+            self.workflow_run_queue_service.set_reservation(queue_id, reservation.token)
+        input_profile_fingerprint = memory_input_profile_fingerprint(
+            runtime_inputs,
+            options,
             package=package,
-            workflow_id=workflow_id,
-            runner=runner,
-            input_profile_fingerprint=memory_input_profile_fingerprint(runtime_inputs, options),
-            memory_retry_after_cleanup=memory_retry_after_cleanup,
         )
-        memory_result = await self._handle_memory_decision(
-            workflow_id=workflow_id,
-            inputs=runtime_inputs,
-            options=options,
-            runner=runner,
-            memory_decision=memory_decision,
-            run_submission_snapshot=run_submission_snapshot,
-        )
+        try:
+            memory_decision = self.workflow_run_memory_decision(
+                package=package,
+                workflow_id=workflow_id,
+                runner=runner,
+                input_profile_fingerprint=input_profile_fingerprint,
+                memory_retry_after_cleanup=memory_retry_after_cleanup,
+            )
+            memory_result = await self._handle_memory_decision(
+                workflow_id=workflow_id,
+                inputs=runtime_inputs,
+                options=options,
+                runner=runner,
+                memory_decision=memory_decision,
+                run_submission_snapshot=run_submission_snapshot,
+                queue_id=queue_id,
+                reservation_token=reservation.token,
+            )
+        except Exception:
+            self.runner_supervisor.rollback_runner_reservation(reservation.token)
+            raise
         if memory_result is not None:
             return memory_result
+        if (
+            memory_decision is not None
+            and memory_decision.action is MemoryDecisionAction.EVICT_THEN_START
+        ):
+            reservation = self.runner_supervisor.reserve_runner_for_submission(
+                runner.runner_id,
+                workflow_id=workflow_id,
+            )
+            if reservation is None:
+                return self._runner_reservation_wait_job(
+                    workflow_id=workflow_id,
+                    inputs=runtime_inputs,
+                    options=options,
+                    runner=runner,
+                    run_submission_snapshot=run_submission_snapshot,
+                    queue_id=queue_id,
+                )
+            if queue_id is not None:
+                self.workflow_run_queue_service.set_reservation(queue_id, reservation.token)
 
         return await self._submit_run(
             package=package,
@@ -315,6 +397,19 @@ class RunOrchestrator:
             memory_decision=memory_decision,
             memory_retry_after_cleanup=memory_retry_after_cleanup,
             run_submission_snapshot=run_submission_snapshot,
+            input_profile_fingerprint=input_profile_fingerprint,
+            queue_id=queue_id,
+            reservation_token=reservation.token,
+        )
+
+    async def handoff_queued_run(self, record: WorkflowRunQueueRecord):
+        return await self.run_workflow(
+            record.workflow_id,
+            dict(record.inputs),
+            dict(record.options),
+            validated_before_queue=True,
+            run_submission_snapshot=record.run_submission_snapshot.model_copy(deep=True),
+            queue_id=record.queue_id,
         )
 
     def _run_submission_snapshot(
@@ -349,16 +444,20 @@ class RunOrchestrator:
         runner: RunnerDescriptor,
         memory_decision: MemoryGovernorDecision | None,
         run_submission_snapshot: RunSubmissionSnapshot,
+        queue_id: str | None,
+        reservation_token: str,
     ) -> EngineJob | None:
         if memory_decision is None:
             return None
         if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
-            queue_id = f"workflow-run-queue-{workflow_id}-{len(self.queued_workflow_runs) + 1}"
-            self.queued_workflow_runs[queue_id] = (
-                workflow_id,
-                dict(inputs),
-                dict(options),
-                run_submission_snapshot.model_copy(deep=True),
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            queued = self.workflow_run_queue_service.enqueue(
+                workflow_id=workflow_id,
+                inputs=inputs,
+                options=options,
+                run_submission_snapshot=run_submission_snapshot,
+                reason=memory_decision.reason_code,
+                queue_id=queue_id,
             )
             self.record_memory_metric("workflow_run_queued_pending_memory")
             self.log_store.add(
@@ -367,23 +466,24 @@ class RunOrchestrator:
                 "runs.orchestrator",
                 workflow_id=workflow_id,
                 details={
-                    "queue_id": queue_id,
+                    "queue_id": queued.queue_id,
                     "runner_id": runner.runner_id,
                     "memory_decision_id": memory_decision.decision_id,
                     "reason": memory_decision.reason_code,
                 },
             )
             return EngineJob(
-                job_id=queue_id,
+                job_id=queued.queue_id,
                 workflow_id=workflow_id,
                 engine="noofy",
                 status="queued_pending_memory",
-                queue_id=queue_id,
+                queue_id=queued.queue_id,
                 message=memory_decision.user_message,
                 memory_decision=memory_decision.model_dump(mode="json"),
-                memory_status=self.memory_status_payload(memory_decision, queue_id=queue_id),
+                memory_status=self.memory_status_payload(memory_decision, queue_id=queued.queue_id),
             )
         if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
             self.record_memory_metric("workflow_run_blocked_by_memory")
             self._record_run_blocked_by_workflow_id(workflow_id, memory_decision.user_message)
             self.log_store.add(
@@ -407,6 +507,7 @@ class RunOrchestrator:
                 memory_status=self.memory_status_payload(memory_decision),
             )
         if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
             return await self.evict_idle_runners(memory_decision)
         return None
 
@@ -446,7 +547,13 @@ class RunOrchestrator:
         memory_decision: MemoryGovernorDecision | None,
         memory_retry_after_cleanup: bool,
         run_submission_snapshot: RunSubmissionSnapshot,
+        input_profile_fingerprint: str,
+        queue_id: str | None,
+        reservation_token: str,
     ) -> EngineJob | WorkflowValidationResult:
+        if self._queue_cancel_requested(queue_id):
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            return self._canceled_queue_job(workflow_id, queue_id)
         job_id = str(uuid4())
         try:
             media_staging = (
@@ -461,6 +568,7 @@ class RunOrchestrator:
                 else None
             )
         except MediaInputStagingError as exc:
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
             self._record_run_blocked(package, str(exc))
             self.log_store.add(
                 "warning",
@@ -493,15 +601,27 @@ class RunOrchestrator:
         )
         try:
             graph = self.apply_input_bindings(package, resolved_inputs)
+            self.runner_supervisor.mark_runner_submitting(reservation_token)
+            if self._queue_cancel_requested(queue_id):
+                self.runner_supervisor.rollback_runner_reservation(reservation_token)
+                cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
+                return self._canceled_queue_job(workflow_id, queue_id)
             job = await adapter.run_workflow(package, graph, resolved_inputs, adapter_options)
         except Exception:
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
             cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
             raise
-        self.runner_supervisor.register_job(job.job_id, runner.runner_id)
-        self.runner_supervisor.mark_runner_job_started(runner.runner_id, job.job_id)
+        self.runner_supervisor.commit_runner_submission(
+            reservation_token,
+            job_id=job.job_id,
+            workflow_id=workflow_id,
+        )
+        if queue_id is not None:
+            self.workflow_run_queue_service.mark_submitted(queue_id, job_id=job.job_id)
         self.job_workflows[job.job_id] = workflow_id
         self.job_started_at[job.job_id] = datetime.now(UTC)
         self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), safe_options_for_storage(options))
+        self.job_memory_profile_fingerprints[job.job_id] = input_profile_fingerprint
         self.job_run_snapshots[job.job_id] = run_submission_snapshot
         self.memory_retry_roots.setdefault(job.job_id, job.job_id)
         self.start_memory_sampling(
@@ -512,6 +632,13 @@ class RunOrchestrator:
             retry_after_cleanup=memory_retry_after_cleanup,
             telemetry_observed_after=memory_sampling_started_at,
         )
+        if queue_id is not None:
+            job = job.model_copy(update={"queue_id": queue_id})
+            queued = self.workflow_run_queue_service.get(queue_id)
+            if queued is not None and queued.cancel_requested:
+                await adapter.cancel_job(job.job_id)
+        if self.submitted_job_callback is not None:
+            self.submitted_job_callback(job.job_id)
         if memory_decision is not None:
             job = job.model_copy(
                 update={
@@ -528,6 +655,64 @@ class RunOrchestrator:
             details={"runner_id": runner.runner_id},
         )
         return job
+
+    def _runner_reservation_wait_job(
+        self,
+        *,
+        workflow_id: str,
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        runner: RunnerDescriptor,
+        run_submission_snapshot: RunSubmissionSnapshot,
+        queue_id: str | None,
+    ) -> EngineJob:
+        queued = self.workflow_run_queue_service.enqueue(
+            workflow_id=workflow_id,
+            inputs=inputs,
+            options=options,
+            run_submission_snapshot=run_submission_snapshot,
+            reason="runner_submission_reservation_unavailable",
+            queue_id=queue_id,
+        )
+        self.log_store.add(
+            "info",
+            "Workflow run queued because runner submission reservation is busy",
+            "runs.orchestrator",
+            workflow_id=workflow_id,
+            details={"queue_id": queued.queue_id, "runner_id": runner.runner_id},
+        )
+        if self.request_run_dispatch is not None:
+            self.request_run_dispatch("submission_reservation_busy")
+        return EngineJob(
+            job_id=queued.queue_id,
+            queue_id=queued.queue_id,
+            workflow_id=workflow_id,
+            engine="noofy",
+            status="queued_pending_memory",
+            message="This workflow is waiting for the current runner handoff to finish.",
+            memory_status={
+                "state": "waiting_for_active_workflow",
+                "message": "This workflow is waiting for the current runner handoff to finish.",
+            },
+        )
+
+    def _queue_cancel_requested(self, queue_id: str | None) -> bool:
+        if queue_id is None:
+            return False
+        queued = self.workflow_run_queue_service.get(queue_id)
+        return queued is not None and queued.cancel_requested
+
+    @staticmethod
+    def _canceled_queue_job(workflow_id: str, queue_id: str | None) -> EngineJob:
+        assert queue_id is not None
+        return EngineJob(
+            job_id=queue_id,
+            queue_id=queue_id,
+            workflow_id=workflow_id,
+            engine="noofy",
+            status="canceled",
+            message="Workflow run canceled.",
+        )
 
 
 def _dashboard_unavailable_reason(package: WorkflowPackage) -> str | None:

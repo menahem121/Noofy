@@ -7,6 +7,7 @@ without turning fallback margins into the main policy engine.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import contextlib
 import json
@@ -26,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.diagnostics import DiagnosticsSink
 from app.runtime.runners.supervisor import (
     RunnerDescriptor,
+    RunnerKind,
     RunnerMemoryClass,
     RunnerMemoryEstimateConfidence,
     RunnerMemoryEstimateSource,
@@ -184,6 +186,7 @@ class RunnerMemorySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runner_id: str = Field(min_length=1)
+    kind: RunnerKind = RunnerKind.ISOLATED_COMFYUI
     runner_process_compatibility_key: str | None = None
     memory_class: RunnerMemoryClass = RunnerMemoryClass.UNKNOWN
     memory_estimate_confidence: RunnerMemoryEstimateConfidence = (
@@ -194,6 +197,8 @@ class RunnerMemorySnapshot(BaseModel):
     )
     status: RunnerStatus = RunnerStatus.UNKNOWN
     current_job_id: str | None = None
+    current_workflow_id: str | None = None
+    last_workflow_id: str | None = None
     open_workflow_lease_count: int = Field(default=0, ge=0)
     output_stream_lease_count: int = Field(default=0, ge=0)
     observed_idle_vram_mb: int | None = Field(default=None, ge=0)
@@ -209,12 +214,15 @@ class RunnerMemorySnapshot(BaseModel):
     def from_descriptor(cls, descriptor: RunnerDescriptor) -> RunnerMemorySnapshot:
         return cls(
             runner_id=descriptor.runner_id,
+            kind=descriptor.kind,
             runner_process_compatibility_key=descriptor.runner_process_compatibility_key,
             memory_class=descriptor.memory_class,
             memory_estimate_confidence=descriptor.memory_estimate_confidence,
             memory_estimate_source=descriptor.memory_estimate_source,
             status=descriptor.status,
             current_job_id=descriptor.current_job_id,
+            current_workflow_id=descriptor.current_workflow_id,
+            last_workflow_id=descriptor.last_workflow_id,
             open_workflow_lease_count=descriptor.open_workflow_lease_count,
             output_stream_lease_count=descriptor.output_stream_lease_count,
             observed_idle_vram_mb=descriptor.observed_idle_vram_mb,
@@ -409,6 +417,7 @@ class MemoryAdmissionRequest(BaseModel):
 
     workflow_estimate: WorkflowMemoryEstimate
     machine_snapshot: MachineMemorySnapshot
+    selected_runner: RunnerMemorySnapshot | None = None
     resident_runners: list[RunnerMemorySnapshot] = Field(default_factory=list)
 
 
@@ -419,6 +428,7 @@ class MemoryReleaseCheckResult(BaseModel):
     required_free_vram_mb: int | None = Field(default=None, ge=0)
     required_free_ram_mb: int | None = Field(default=None, ge=0)
     snapshots: list[MachineMemorySnapshot] = Field(default_factory=list)
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
     reason_code: str
 
 
@@ -1096,6 +1106,10 @@ class LocalMemoryLearningStore:
         )
         path = self._path_for_key(key)
         with self._lock:
+            if observation.job_id is not None:
+                existing = self._observations_for_job_id(observation.job_id)
+                if existing:
+                    return summarize_local_memory_observations(existing)
             observations = self._read_observations(path)
             observations.append(observation)
             self._write_observations(path, observations)
@@ -1135,6 +1149,15 @@ class LocalMemoryLearningStore:
 
     def _path_for_key(self, key: str) -> Path:
         return self.root_dir / f"{_safe_learning_key(key)}.json"
+
+    def _observations_for_job_id(self, job_id: str) -> list[LocalMemoryObservation]:
+        if not self.root_dir.exists():
+            return []
+        for path in sorted(self.root_dir.glob("*.json")):
+            observations = self._read_observations(path)
+            if any(observation.job_id == job_id for observation in observations):
+                return observations
+        return []
 
     def _read_observations(self, path: Path) -> list[LocalMemoryObservation]:
         if not path.exists():
@@ -1468,6 +1491,7 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
     """
     estimate = request.workflow_estimate
     machine = request.machine_snapshot
+    selected_runner = request.selected_runner
     runners = list(request.resident_runners)
     active_runners = [
         runner for runner in runners if _runner_snapshot_is_active(runner)
@@ -1486,6 +1510,50 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
         _estimated_ram_pressure_mb(machine, estimate),
     )
     runner_ids = [runner.runner_id for runner in runners]
+
+    if (
+        not active_runners
+        and machine.memory_pressure is not MemoryPressureLevel.HIGH
+        and _selected_runner_reuse_allowed(selected_runner, estimate)
+    ):
+        return _decision(
+            MemoryDecisionAction.REUSE_RUNNER,
+            _warm_runner_reuse_risk_level(machine, estimate),
+            "same_workflow_warm_runner_reuse",
+            "This workflow is ready to run quickly.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            selected_runner=selected_runner,
+            developer_details={
+                "warm_runner_reuse": True,
+                "selected_runner_last_workflow_id": selected_runner.last_workflow_id
+                if selected_runner is not None
+                else None,
+            },
+        )
+
+    if active_runners:
+        active_runner = sorted(active_runners, key=lambda runner: runner.runner_id)[0]
+        return _decision(
+            MemoryDecisionAction.QUEUE_PENDING_MEMORY,
+            MemoryRiskLevel.MEDIUM,
+            "active_noofy_job_queues_run",
+            "This workflow is waiting until the current GPU work finishes.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            queued_behind_runner_id=active_runner.runner_id,
+            can_retry_after_cleanup=True,
+        )
 
     if _request_is_cpu_only(estimate):
         if _ram_margin_ok(machine, estimate, required_ram_margin_mb):
@@ -1649,6 +1717,101 @@ def wait_for_memory_release(
     )
 
 
+async def wait_for_memory_release_async(
+    observer: MachineMemoryObserver,
+    *,
+    required_free_vram_mb: int | None = None,
+    required_free_ram_mb: int | None = None,
+    timeout_seconds: float = 8,
+    initial_poll_interval_seconds: float = 0.1,
+    max_poll_interval_seconds: float = 1.0,
+) -> MemoryReleaseCheckResult:
+    """Adaptively poll after cleanup acknowledgment without blocking the loop."""
+    snapshots: list[MachineMemorySnapshot] = []
+    timeline: list[dict[str, Any]] = [{"state": "release_requested"}]
+    started = time.monotonic()
+    interval = max(0.001, initial_poll_interval_seconds)
+    previous_free_vram_mb: int | None = None
+    previous_free_ram_mb: int | None = None
+    while True:
+        snapshot = observer.snapshot()
+        snapshots.append(snapshot)
+        if not snapshot.available:
+            timeline.append({"state": "observer_unavailable", "error": snapshot.error})
+            return MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.UNAVAILABLE,
+                required_free_vram_mb=required_free_vram_mb,
+                required_free_ram_mb=required_free_ram_mb,
+                snapshots=snapshots,
+                timeline=timeline,
+                reason_code="memory_snapshot_unavailable",
+            )
+        if memory_release_satisfied(
+            snapshot,
+            required_free_vram_mb=required_free_vram_mb,
+            required_free_ram_mb=required_free_ram_mb,
+        ):
+            timeline.append(
+                {
+                    "state": "observed_memory_drop",
+                    "free_vram_mb": snapshot.free_vram_mb,
+                    "free_ram_mb": snapshot.free_ram_mb,
+                }
+            )
+            return MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.RELEASED,
+                required_free_vram_mb=required_free_vram_mb,
+                required_free_ram_mb=required_free_ram_mb,
+                snapshots=snapshots,
+                timeline=timeline,
+                reason_code="memory_released",
+            )
+        elapsed = time.monotonic() - started
+        if elapsed >= max(0, timeout_seconds):
+            timeline.append(
+                {
+                    "state": "timeout",
+                    "free_vram_mb": snapshot.free_vram_mb,
+                    "free_ram_mb": snapshot.free_ram_mb,
+                }
+            )
+            return MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.TIMEOUT,
+                required_free_vram_mb=required_free_vram_mb,
+                required_free_ram_mb=required_free_ram_mb,
+                snapshots=snapshots,
+                timeline=timeline,
+                reason_code="memory_release_timeout",
+            )
+        timeline.append(
+            {
+                "state": "release_pending",
+                "free_vram_mb": snapshot.free_vram_mb,
+                "free_ram_mb": snapshot.free_ram_mb,
+            }
+        )
+        memory_increased = (
+            previous_free_vram_mb is not None
+            and snapshot.free_vram_mb is not None
+            and snapshot.free_vram_mb > previous_free_vram_mb
+        ) or (
+            previous_free_ram_mb is not None
+            and snapshot.free_ram_mb is not None
+            and snapshot.free_ram_mb > previous_free_ram_mb
+        )
+        timeline.append(
+            {
+                "state": "partial_release" if memory_increased else "still_reserved_or_allocated",
+                "free_vram_mb": snapshot.free_vram_mb,
+                "free_ram_mb": snapshot.free_ram_mb,
+            }
+        )
+        previous_free_vram_mb = snapshot.free_vram_mb
+        previous_free_ram_mb = snapshot.free_ram_mb
+        await asyncio.sleep(min(interval, max(0, timeout_seconds - elapsed)))
+        interval = min(max_poll_interval_seconds, interval * 2)
+
+
 def memory_release_satisfied(
     snapshot: MachineMemorySnapshot,
     *,
@@ -1800,9 +1963,14 @@ def memory_user_status_for_decision(
             can_retry_after_cleanup=decision.can_retry_after_cleanup,
         )
     if decision.action is MemoryDecisionAction.EVICT_THEN_START:
+        cleanup_state = _evict_then_start_state(decision)
         return MemoryUserStatus(
-            state="freeing_memory",
-            message="Noofy is freeing memory before starting this workflow.",
+            state=cleanup_state,
+            message=(
+                "Noofy is unloading a previous workflow before starting this one."
+                if cleanup_state == "unloading_previous_workflow"
+                else "Noofy is freeing memory before starting this workflow."
+            ),
             risk_level=decision.risk_level,
             queue_id=queue_id,
             can_retry_after_cleanup=decision.can_retry_after_cleanup,
@@ -1812,7 +1980,7 @@ def memory_user_status_for_decision(
         MemoryDecisionAction.QUEUE_PENDING_SWITCH,
     }:
         return MemoryUserStatus(
-            state="waiting_for_gpu",
+            state="waiting_for_active_workflow",
             message="This workflow is waiting until the current GPU work finishes.",
             risk_level=decision.risk_level,
             queue_id=queue_id,
@@ -1836,7 +2004,7 @@ def memory_user_status_for_decision(
         )
     if decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
         return MemoryUserStatus(
-            state="blocked_by_memory",
+            state=_blocked_memory_state(decision),
             message=decision.user_message
             or "This workflow needs more memory than Noofy can safely use right now.",
             risk_level=decision.risk_level,
@@ -1850,6 +2018,33 @@ def memory_user_status_for_decision(
         queue_id=queue_id,
         can_retry_after_cleanup=decision.can_retry_after_cleanup,
     )
+
+
+def _evict_then_start_state(decision: MemoryGovernorDecision) -> str:
+    evict_runner_ids = set(decision.evict_runner_ids)
+    for runner in decision.runner_snapshots:
+        if runner.runner_id in evict_runner_ids and runner.kind is RunnerKind.ISOLATED_COMFYUI:
+            return "unloading_previous_workflow"
+    return "freeing_previous_models"
+
+
+def _blocked_memory_state(decision: MemoryGovernorDecision) -> str:
+    estimate = decision.workflow_estimate
+    machine = decision.machine_snapshot
+    if estimate is not None and machine is not None:
+        required_vram_mb = (estimate.estimated_peak_vram_mb or 0) + (decision.required_vram_margin_mb or 0)
+        required_ram_mb = (estimate.estimated_peak_ram_mb or 0) + (decision.required_ram_margin_mb or 0)
+        if (
+            machine.total_vram_mb is not None
+            and required_vram_mb > machine.total_vram_mb
+        ) or (
+            machine.total_ram_mb is not None
+            and required_ram_mb > machine.total_ram_mb
+        ):
+            return "blocked_exceeds_capacity"
+        if any(reason.startswith("external_process") for reason in machine.pressure_reasons):
+            return "blocked_external_pressure"
+    return "blocked_unattributed_pressure"
 
 
 def _confidence_rank(confidence: RunnerMemoryEstimateConfidence) -> int:
@@ -1953,17 +2148,28 @@ def _decision(
     predicted_free_vram_after_mb: int | None,
     predicted_free_ram_after_mb: int | None,
     *,
+    selected_runner: RunnerMemorySnapshot | None = None,
     evict_runner_ids: list[str] | None = None,
     queued_behind_runner_id: str | None = None,
     can_retry_after_cleanup: bool = False,
     developer_details: dict[str, Any] | None = None,
 ) -> MemoryGovernorDecision:
+    details = {
+        "memory_ownership": _memory_ownership_details(
+            machine,
+            runners,
+            selected_runner=selected_runner,
+            requested_workflow_id=estimate.workflow_id,
+        ),
+        **(developer_details or {}),
+    }
     return MemoryGovernorDecision(
         action=action,
         risk_level=risk_level,
         confidence=estimate.confidence,
         reason_code=reason_code,
         workflow_id=estimate.workflow_id,
+        selected_runner_id=selected_runner.runner_id if selected_runner is not None else None,
         evict_runner_ids=evict_runner_ids or [],
         queued_behind_runner_id=queued_behind_runner_id,
         machine_snapshot=machine,
@@ -1978,7 +2184,7 @@ def _decision(
         pressure_reasons=machine.pressure_reasons,
         can_retry_after_cleanup=can_retry_after_cleanup,
         user_message=user_message,
-        developer_details=developer_details or {},
+        developer_details=details,
     )
 
 
@@ -2137,6 +2343,96 @@ def _runner_snapshot_is_active(runner: RunnerMemorySnapshot) -> bool:
         RunnerStatus.LOADING_MODEL,
         RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
     }
+
+
+def _selected_runner_reuse_allowed(
+    runner: RunnerMemorySnapshot | None,
+    estimate: WorkflowMemoryEstimate,
+) -> bool:
+    if runner is None or _runner_snapshot_is_active(runner):
+        return False
+    if runner.status not in {
+        RunnerStatus.READY,
+        RunnerStatus.IDLE,
+        RunnerStatus.IDLE_WARM,
+        RunnerStatus.CO_RESIDENT,
+    }:
+        return False
+    if runner.last_workflow_id != estimate.workflow_id:
+        return False
+    if "local_evidence_settings_mismatch" in estimate.reasons:
+        return False
+    if estimate.local_evidence is None:
+        return False
+    return (
+        estimate.local_evidence.successful_runs > 0
+        and estimate.local_evidence.memory_error_runs == 0
+    )
+
+
+def _warm_runner_reuse_risk_level(
+    machine: MachineMemorySnapshot,
+    estimate: WorkflowMemoryEstimate,
+) -> MemoryRiskLevel:
+    if machine.memory_pressure is MemoryPressureLevel.HIGH:
+        return MemoryRiskLevel.HIGH
+    return MemoryRiskLevel.LOW
+
+
+def _memory_ownership_details(
+    machine: MachineMemorySnapshot,
+    runners: list[RunnerMemorySnapshot],
+    *,
+    selected_runner: RunnerMemorySnapshot | None,
+    requested_workflow_id: str,
+) -> dict[str, Any]:
+    known_runners = {runner.runner_id: runner for runner in runners}
+    if selected_runner is not None:
+        known_runners.setdefault(selected_runner.runner_id, selected_runner)
+    active_runner_ids = sorted(
+        runner.runner_id
+        for runner in known_runners.values()
+        if _runner_snapshot_is_active(runner)
+    )
+    reclaimable_idle_runner_ids = sorted(
+        runner.runner_id
+        for runner in runners
+        if not _runner_snapshot_is_active(runner)
+    )
+    known_noofy_runner_vram_mb = sum(
+        _runner_resident_vram_mb(runner) or 0
+        for runner in known_runners.values()
+    )
+    unattributed_or_external_used_vram_mb = None
+    if machine.total_vram_mb is not None and machine.free_vram_mb is not None:
+        unattributed_or_external_used_vram_mb = max(
+            0,
+            machine.total_vram_mb
+            - machine.free_vram_mb
+            - known_noofy_runner_vram_mb,
+        )
+    same_warm_runner = (
+        selected_runner
+        if selected_runner is not None
+        and not _runner_snapshot_is_active(selected_runner)
+        and selected_runner.last_workflow_id == requested_workflow_id
+        else None
+    )
+    return {
+        "free_vram_mb": machine.free_vram_mb,
+        "same_warm_runner_id": same_warm_runner.runner_id if same_warm_runner is not None else None,
+        "same_warm_runner_vram_mb": _runner_resident_vram_mb(same_warm_runner)
+        if same_warm_runner is not None
+        else None,
+        "reclaimable_idle_runner_ids": reclaimable_idle_runner_ids,
+        "active_noofy_runner_ids": active_runner_ids,
+        "known_noofy_runner_vram_mb": known_noofy_runner_vram_mb,
+        "unattributed_or_external_used_vram_mb": unattributed_or_external_used_vram_mb,
+    }
+
+
+def _runner_resident_vram_mb(runner: RunnerMemorySnapshot) -> int | None:
+    return runner.observed_idle_vram_mb or runner.observed_execution_peak_vram_mb
 
 
 def _gpu_estimate_is_uncertain(estimate: WorkflowMemoryEstimate) -> bool:

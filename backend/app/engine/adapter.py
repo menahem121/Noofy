@@ -60,5 +60,8 @@ class EngineAdapter(Protocol):
     ) -> EngineOutputStream:
         """Stream generated output media for an app-owned job."""
 
+    async def release_memory(self) -> None:
+        """Release idle engine-owned model and allocator memory."""
+
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         """Update this adapter's active engine endpoint."""

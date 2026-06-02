@@ -39,6 +39,7 @@ from app.runtime.runners.supervisor import (
     QueuedRunnerStartKind,
     RunnerKind,
     RunnerMemoryClass,
+    QueuedRunnerStartStatus,
     RunnerSelectionAction,
     RunnerStatus,
     RunnerSupervisor,
@@ -96,11 +97,13 @@ class WorkflowRunnerLifecycleService:
         *,
         released_runner_id: str | None = None,
     ) -> dict[str, object] | None:
-        queued = self.runner_supervisor.pop_next_queued_runner_start(
+        queued = self.runner_supervisor.claim_next_queued_runner_start(
             released_runner_id=released_runner_id,
         )
         if queued is None:
             return None
+        if self._runner_start_canceled(queued.queue_id):
+            return self._canceled_runner_start_payload(queued)
         self.log_store.add(
             "info",
             "Handing off queued workflow runner start",
@@ -115,6 +118,32 @@ class WorkflowRunnerLifecycleService:
             },
         )
         result = await self.start_workflow_runner(queued.workflow_id)
+        if self._runner_start_canceled(queued.queue_id):
+            if result.get("status") in {
+                RunnerStatus.READY.value,
+                RunnerStatus.IDLE.value,
+                RunnerStatus.IDLE_WARM.value,
+            }:
+                await self.stop_workflow_runner(queued.workflow_id)
+            return self._canceled_runner_start_payload(queued)
+        if result.get("status") in {
+            RunnerStatus.READY.value,
+            RunnerStatus.IDLE.value,
+            RunnerStatus.IDLE_WARM.value,
+        }:
+            queue_status = QueuedRunnerStartStatus.SUBMITTED
+        elif result.get("status") in {
+            RunnerStatus.QUEUED_PENDING_MEMORY.value,
+            RunnerStatus.QUEUED_PENDING_SWITCH.value,
+        }:
+            queue_status = QueuedRunnerStartStatus.REQUEUED
+        else:
+            queue_status = QueuedRunnerStartStatus.FAILED
+        self.runner_supervisor.finish_queued_runner_start(
+            queued.queue_id,
+            status=queue_status,
+            reason=str(result.get("error") or result.get("status")),
+        )
         result["started_from_queue_id"] = queued.queue_id
         return result
 
@@ -478,7 +507,7 @@ class WorkflowRunnerLifecycleService:
                 if decision.queued_behind_runner_id is not None
                 else None
             )
-            queued = self.runner_supervisor.enqueue_runner_start(
+            queued = self._enqueue_runner_start_once(
                 workflow_id=workflow_id,
                 kind=QueuedRunnerStartKind.PENDING_SWITCH,
                 queued_behind_runner_id=decision.queued_behind_runner_id,
@@ -529,7 +558,7 @@ class WorkflowRunnerLifecycleService:
                             if memory_decision.queued_behind_runner_id is not None
                             else None
                         )
-                        queued = self.runner_supervisor.enqueue_runner_start(
+                        queued = self._enqueue_runner_start_once(
                             workflow_id=workflow_id,
                             kind=QueuedRunnerStartKind.PENDING_MEMORY,
                             queued_behind_runner_id=memory_decision.queued_behind_runner_id,
@@ -560,23 +589,29 @@ class WorkflowRunnerLifecycleService:
                             "memory_status": self.memory_service.memory_status_payload(memory_decision),
                         }
                     if memory_decision.action is MemoryDecisionAction.EVICT_THEN_START:
-                        for evict_runner_id in memory_decision.evict_runner_ids:
-                            stopped = await self.runner_process_coordinator.stop_runner(evict_runner_id)
-                            self.memory_service.record_metric("idle_runner_evicted_for_memory")
-                            self.log_store.add(
-                                "info",
-                                "Evicted idle runner before Memory Governor admitted workflow runner",
-                                "runtime.runners.lifecycle_service",
-                                workflow_id=workflow_id,
-                                details={
-                                    "evicted_runner_id": evict_runner_id,
-                                    "stop_status": stopped.status.value,
-                                    "memory_decision_id": memory_decision.decision_id,
-                                    "reason": memory_decision.reason_code,
+                        cleaned_up = await self.memory_service.cleanup_idle_runners_for_memory_decision(
+                            memory_decision,
+                            metric_name="idle_runner_evicted_for_memory",
+                            log_source="runtime.runners.lifecycle_service",
+                            log_message="Released idle runner memory before Memory Governor admitted workflow runner",
+                        )
+                        if not cleaned_up:
+                            return {
+                                "workflow_id": workflow_id,
+                                "status": RunnerStatus.MEMORY_CLEANUP_FAILED.value,
+                                "runner": None,
+                                "pid": None,
+                                "install_status": InstallStatus.READY.value,
+                                "error": "Noofy could not release the idle runner memory needed for this workflow.",
+                                "memory_decision": memory_decision.model_dump(mode="json"),
+                                "memory_status": {
+                                    **self.memory_service.memory_status_payload(memory_decision),
+                                    "state": "memory_cleanup_failed",
+                                    "message": "Noofy could not release the idle runner memory needed for this workflow.",
                                 },
-                            )
-                        release_check = self.memory_service.wait_for_memory_release_after_cleanup(memory_decision)
-                        if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
+                            }
+                        release_check = await self.memory_service.wait_for_memory_release_after_cleanup(memory_decision)
+                        if release_check.status is not MemoryReleaseStatus.RELEASED:
                             self.log_store.add(
                                 "warning",
                                 "Memory cleanup did not release enough memory",
@@ -725,6 +760,43 @@ class WorkflowRunnerLifecycleService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _runner_start_canceled(self, queue_id: str) -> bool:
+        queued = self.runner_supervisor.get_queued_runner_start(queue_id)
+        return queued is not None and (
+            queued.cancel_requested
+            or queued.status is QueuedRunnerStartStatus.CANCELED
+        )
+
+    @staticmethod
+    def _canceled_runner_start_payload(queued) -> dict[str, object]:
+        return {
+            "workflow_id": queued.workflow_id,
+            "status": QueuedRunnerStartStatus.CANCELED.value,
+            "queue_id": queued.queue_id,
+            "runner": None,
+            "pid": None,
+            "error": None,
+            "started_from_queue_id": queued.queue_id,
+        }
+
+    def _enqueue_runner_start_once(
+        self,
+        *,
+        workflow_id: str,
+        kind: QueuedRunnerStartKind,
+        queued_behind_runner_id: str | None,
+        reason: str | None,
+    ):
+        queued = self.runner_supervisor.queued_runner_start_for_workflow(workflow_id)
+        if queued is not None:
+            return queued
+        return self.runner_supervisor.enqueue_runner_start(
+            workflow_id=workflow_id,
+            kind=kind,
+            queued_behind_runner_id=queued_behind_runner_id,
+            reason=reason,
+        )
 
     def _preparable_capsule_lock(self, workflow_id: str) -> CapsuleLock | None:
         if self.capsule_loader is None:

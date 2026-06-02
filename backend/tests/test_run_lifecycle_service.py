@@ -1,0 +1,217 @@
+import asyncio
+import uuid
+from datetime import UTC, datetime
+
+import pytest
+
+from app.diagnostics import LogStore
+from app.engine.models import EngineJob, JobProgress, JobResult
+from app.gallery import RunSubmissionSnapshot
+from app.runs.job_service import RunJobService
+from app.runs.lifecycle_service import RunLifecycleService
+from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
+from app.runs.result_service import RunResultService
+from app.runtime.runners.supervisor import (
+    CORE_RUNNER_FINGERPRINT,
+    CORE_RUNNER_ID,
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerSupervisor,
+)
+
+
+def _snapshot() -> RunSubmissionSnapshot:
+    return RunSubmissionSnapshot(
+        workflow_id="wf",
+        workflow_title="Workflow",
+        dashboard_version="1",
+    )
+
+
+class _Adapter:
+    def __init__(self) -> None:
+        self.progress_calls: list[str] = []
+        self.cancel_calls: list[str] = []
+        self.result_calls: list[str] = []
+
+    async def get_progress(self, job_id: str) -> JobProgress:
+        self.progress_calls.append(job_id)
+        return JobProgress(job_id=job_id, status="running")
+
+    async def cancel_job(self, job_id: str) -> JobProgress:
+        self.cancel_calls.append(job_id)
+        return JobProgress(job_id=job_id, status="canceled")
+
+    async def get_result(self, job_id: str) -> JobResult:
+        self.result_calls.append(job_id)
+        return JobResult(job_id=job_id, status="completed")
+
+
+def _supervisor(adapter: _Adapter) -> RunnerSupervisor:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        RunnerDescriptor(
+            runner_id=CORE_RUNNER_ID,
+            kind=RunnerKind.CORE_COMFYUI,
+            base_url="http://127.0.0.1:8188",
+            fingerprint=CORE_RUNNER_FINGERPRINT,
+        ),
+        adapter,
+    )
+    supervisor.register_job("job-1", CORE_RUNNER_ID)
+    return supervisor
+
+
+def test_workflow_queue_uses_uuid_alias_and_same_id_requeue() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={"prompt": "one"},
+        options={},
+        run_submission_snapshot=_snapshot(),
+        reason="active_workflow",
+    )
+    uuid.UUID(record.queue_id.removeprefix("workflow-run-queue-"))
+
+    claimed = queue.claim_next(dispatch_epoch=1)
+    assert claimed is not None
+    requeued = queue.requeue(claimed.queue_id, reason="active_workflow", transient=False)
+    assert requeued is not None
+    assert requeued.queue_id == record.queue_id
+
+    submitted = queue.mark_submitted(record.queue_id, job_id="job-1")
+    assert submitted is not None
+    assert queue.resolve(record.queue_id).job_id == "job-1"
+    assert queue.resolve("job-1").queue_id == record.queue_id
+    queue.mark_terminal("job-1")
+    assert queue.resolve(record.queue_id).job_id == "job-1"
+
+
+def test_workflow_queue_fails_after_eight_transient_handoff_failures() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+
+    for attempt in range(8):
+        record = queue.requeue(record.queue_id, reason=f"race-{attempt}", transient=True)
+        assert record is not None
+
+    assert record.status is WorkflowRunQueueStatus.FAILED
+    assert record.transient_failure_count == 8
+
+
+@pytest.mark.anyio
+async def test_job_service_routes_queue_alias_to_submitted_job() -> None:
+    adapter = _Adapter()
+    supervisor = _supervisor(adapter)
+    queue = WorkflowRunQueueService()
+    queued = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+    queue.mark_submitted(queued.queue_id, job_id="job-1")
+    service = RunJobService(
+        runner_supervisor=supervisor,
+        log_store=LogStore(),
+        workflow_run_queue_service=queue,
+    )
+
+    progress = await service.get_progress(queued.queue_id)
+    canceled = await service.cancel_job(queued.queue_id)
+
+    assert progress.job_id == "job-1"
+    assert progress.queue_id == queued.queue_id
+    assert canceled.job_id == "job-1"
+    assert canceled.queue_id == queued.queue_id
+    assert adapter.progress_calls == ["job-1"]
+    assert adapter.cancel_calls == ["job-1"]
+
+
+@pytest.mark.anyio
+async def test_run_result_service_finalizes_concurrent_terminal_reads_once() -> None:
+    adapter = _Adapter()
+    supervisor = _supervisor(adapter)
+    job_service = RunJobService(runner_supervisor=supervisor, log_store=LogStore())
+    calls = {"sampling": 0, "observation": 0, "retry": 0}
+
+    async def finish_sampling(job_id: str) -> None:
+        calls["sampling"] += 1
+        await asyncio.sleep(0)
+
+    def record_observation(result: JobResult) -> None:
+        calls["observation"] += 1
+
+    async def maybe_retry(result: JobResult):
+        calls["retry"] += 1
+        return None
+
+    service = RunResultService(
+        job_service=job_service,
+        log_store=LogStore(),
+        job_workflows={"job-1": "wf"},
+        job_started_at={"job-1": datetime.now(UTC)},
+        job_run_snapshots={"job-1": _snapshot()},
+        finish_memory_sampling=finish_sampling,
+        record_memory_observation=record_observation,
+        maybe_retry_after_memory_cleanup=maybe_retry,
+    )
+    job_service.terminal_job_progress = service.terminal_progress
+
+    first, second = await asyncio.gather(service.get_result("job-1"), service.get_result("job-1"))
+    canceled = await job_service.cancel_job("job-1")
+
+    assert first.status == second.status == "completed"
+    assert calls == {"sampling": 1, "observation": 1, "retry": 1}
+    assert adapter.result_calls == ["job-1", "job-1"]
+    assert adapter.cancel_calls == []
+    assert canceled.status == "completed"
+
+
+@pytest.mark.anyio
+async def test_run_lifecycle_requeues_under_same_id_until_state_change() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+    lifecycle = RunLifecycleService(queue_service=queue, log_store=LogStore())
+    calls = 0
+
+    async def submit(queued):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return EngineJob(
+                job_id=queued.queue_id,
+                queue_id=queued.queue_id,
+                workflow_id="wf",
+                engine="noofy",
+                status="queued_pending_memory",
+                memory_status={"state": "waiting_for_active_workflow"},
+            )
+        return EngineJob(job_id="job-1", workflow_id="wf", engine="comfyui", status="queued")
+
+    lifecycle.submit_queued_run = submit
+    lifecycle.request_dispatch("initial")
+    await asyncio.sleep(0.01)
+    waiting = queue.get(record.queue_id)
+    assert waiting is not None
+    assert waiting.status is WorkflowRunQueueStatus.REQUEUED
+    assert calls == 1
+
+    lifecycle.request_dispatch("runner_finished")
+    await asyncio.sleep(0.01)
+    submitted = queue.get(record.queue_id)
+    assert submitted is not None
+    assert submitted.status is WorkflowRunQueueStatus.SUBMITTED
+    assert submitted.submitted_job_id == "job-1"
+    assert calls == 2
+    await lifecycle.shutdown()

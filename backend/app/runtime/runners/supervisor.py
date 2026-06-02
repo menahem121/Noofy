@@ -42,6 +42,8 @@ class RunnerStatus(StrEnum):
     QUEUED_PENDING_SWITCH = "queued_pending_switch"
     QUEUED_PENDING_MEMORY = "queued_pending_memory"
     IDLE_WARM = "idle_warm"
+    RESERVING = "reserving"
+    SUBMITTING = "submitting"
     STOPPING = "stopping"
     STOPPED = "stopped"
     SWITCHING = "switching"
@@ -52,6 +54,7 @@ class RunnerStatus(StrEnum):
     FAILED = "failed"
     BLOCKED_BY_MEMORY = "blocked_by_memory"
     MEMORY_CLEANUP_FAILED = "memory_cleanup_failed"
+    RELEASE_FAILED = "release_failed"
     EVICTED_FOR_MEMORY = "evicted_for_memory"
     EVICTED_AFTER_COOLDOWN = "evicted_after_cooldown"
     CO_RESIDENT = "co_resident"
@@ -101,7 +104,17 @@ class QueuedRunnerStartKind(StrEnum):
 
 class QueuedRunnerStartStatus(StrEnum):
     QUEUED = "queued"
+    HANDING_OFF = "handing_off"
+    SUBMITTED = "submitted"
+    REQUEUED = "requeued"
+    FAILED = "failed"
     CANCELED = "canceled"
+
+
+class RunnerReservationKind(StrEnum):
+    SUBMISSION = "submission"
+    EVICTION = "eviction"
+    STARTUP = "startup"
 
 
 class RunnerDescriptor(BaseModel):
@@ -136,11 +149,15 @@ class RunnerDescriptor(BaseModel):
     pid: int | None = None
     memory_telemetry_path: str | None = None
     current_job_id: str | None = None
+    current_workflow_id: str | None = None
+    last_workflow_id: str | None = None
     last_used_at: str | None = None
     open_workflow_lease_count: int = 0
     open_workflow_lease_ids: list[str] = Field(default_factory=list)
     output_stream_lease_count: int = Field(default=0, ge=0)
     closed_view_cooldown_expires_at: str | None = None
+    reservation_token: str | None = None
+    reservation_kind: RunnerReservationKind | None = None
 
 
 class RunnerSelectionDecision(BaseModel):
@@ -163,7 +180,22 @@ class QueuedRunnerStart(BaseModel):
     queued_behind_runner_id: str | None = None
     reason: str | None = None
     created_at: str
+    updated_at: str | None = None
     canceled_at: str | None = None
+    cancel_requested: bool = False
+    attempt_count: int = Field(default=0, ge=0)
+    last_reason: str | None = None
+
+
+class RunnerReservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
+    runner_id: str = Field(min_length=1)
+    kind: RunnerReservationKind
+    prior_status: RunnerStatus
+    workflow_id: str | None = None
+    created_at: str
 
 
 class RunnerNotFoundError(LookupError):
@@ -231,7 +263,10 @@ class RunnerSupervisor:
         self._workflow_runners: dict[str, str] = {}
         self._workflow_leases: dict[str, tuple[str, str]] = {}
         self._queued_runner_starts: dict[str, QueuedRunnerStart] = {}
+        self._reservations: dict[str, RunnerReservation] = {}
         self._registry = JobRunnerRegistry()
+        self._state_change_notifier: Callable[[str], None] | None = None
+        self._terminal_notifier: Callable[[str], None] | None = None
         self.closed_view_cooldown_seconds = closed_view_cooldown_seconds
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -248,6 +283,17 @@ class RunnerSupervisor:
             self._descriptors[descriptor.runner_id] = descriptor
             self._adapters[descriptor.runner_id] = adapter
             self._core_runner_id = descriptor.runner_id
+        self._configure_adapter_terminal_notifier(adapter)
+
+    def configure_state_change_notifier(self, notifier: Callable[[str], None] | None) -> None:
+        self._state_change_notifier = notifier
+
+    def configure_terminal_notifier(self, notifier: Callable[[str], None] | None) -> None:
+        self._terminal_notifier = notifier
+        with self._lock:
+            adapters = list(self._adapters.values())
+        for adapter in adapters:
+            self._configure_adapter_terminal_notifier(adapter)
 
     def upsert_runner(self, descriptor: RunnerDescriptor, adapter: EngineAdapter) -> None:
         """Register or replace a non-core runner descriptor and adapter."""
@@ -258,6 +304,7 @@ class RunnerSupervisor:
                 raise ValueError("Cannot replace the core runner through upsert_runner")
             self._descriptors[descriptor.runner_id] = descriptor
             self._adapters[descriptor.runner_id] = adapter
+        self._configure_adapter_terminal_notifier(adapter)
 
     # ------------------------------------------------------------------
     # Lookup
@@ -328,19 +375,20 @@ class RunnerSupervisor:
         ws_url: str | None = None,
     ) -> RunnerDescriptor:
         """Reconfigure a runner's endpoint (and its adapter) in lock-step."""
-        descriptor = self.get_runner(runner_id)
         adapter = self.get_adapter(runner_id)
-        new_descriptor = descriptor.model_copy(update={"base_url": base_url, "ws_url": ws_url})
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            new_descriptor = descriptor.model_copy(update={"base_url": base_url, "ws_url": ws_url})
             self._descriptors[runner_id] = new_descriptor
         adapter.configure_endpoint(base_url, ws_url)
         return new_descriptor
 
     def update_runner_status(self, runner_id: str, status: RunnerStatus) -> RunnerDescriptor:
-        descriptor = self.get_runner(runner_id)
-        new_descriptor = descriptor.model_copy(update={"status": status})
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            new_descriptor = descriptor.model_copy(update={"status": status})
             self._descriptors[runner_id] = new_descriptor
+        self._notify_state_change("runner_status_changed")
         return new_descriptor
 
     def fill_runner_memory_observation(
@@ -351,18 +399,237 @@ class RunnerSupervisor:
         observed_execution_peak_ram_mb: int | None = None,
     ) -> RunnerDescriptor:
         """Fill missing best-effort memory observations without replacing stronger data."""
-        descriptor = self.get_runner(runner_id)
-        updates: dict[str, int] = {}
-        if descriptor.observed_execution_peak_vram_mb is None and observed_execution_peak_vram_mb is not None:
-            updates["observed_execution_peak_vram_mb"] = observed_execution_peak_vram_mb
-        if descriptor.observed_execution_peak_ram_mb is None and observed_execution_peak_ram_mb is not None:
-            updates["observed_execution_peak_ram_mb"] = observed_execution_peak_ram_mb
-        if not updates:
-            return descriptor
-        updated = descriptor.model_copy(update=updates)
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            updates: dict[str, int] = {}
+            if observed_execution_peak_vram_mb is not None:
+                updates["observed_execution_peak_vram_mb"] = max(
+                    descriptor.observed_execution_peak_vram_mb or 0,
+                    observed_execution_peak_vram_mb,
+                )
+            if observed_execution_peak_ram_mb is not None:
+                updates["observed_execution_peak_ram_mb"] = max(
+                    descriptor.observed_execution_peak_ram_mb or 0,
+                    observed_execution_peak_ram_mb,
+                )
+            if not updates:
+                return descriptor
+            updated = descriptor.model_copy(update=updates)
             self._descriptors[runner_id] = updated
         return updated
+
+    # ------------------------------------------------------------------
+    # Atomic reservations
+    # ------------------------------------------------------------------
+
+    def reserve_runner_for_submission(
+        self,
+        runner_id: str,
+        *,
+        workflow_id: str | None = None,
+    ) -> RunnerReservation | None:
+        return self._reserve_runner(
+            runner_id,
+            kind=RunnerReservationKind.SUBMISSION,
+            workflow_id=workflow_id,
+            allowed_statuses={
+                RunnerStatus.UNKNOWN,
+                RunnerStatus.READY,
+                RunnerStatus.IDLE,
+                RunnerStatus.IDLE_WARM,
+                RunnerStatus.CO_RESIDENT,
+            },
+            reserved_status=RunnerStatus.RESERVING,
+        )
+
+    def reserve_runner_for_eviction(self, runner_id: str) -> RunnerReservation | None:
+        return self._reserve_runner(
+            runner_id,
+            kind=RunnerReservationKind.EVICTION,
+            allowed_statuses={
+                RunnerStatus.READY,
+                RunnerStatus.IDLE,
+                RunnerStatus.IDLE_WARM,
+                RunnerStatus.CO_RESIDENT,
+                RunnerStatus.RELEASE_FAILED,
+            },
+            reserved_status=RunnerStatus.EVICTING_RUNNER,
+        )
+
+    def reserve_runner_for_startup(self, runner_id: str) -> RunnerReservation | None:
+        return self._reserve_runner(
+            runner_id,
+            kind=RunnerReservationKind.STARTUP,
+            allowed_statuses={RunnerStatus.STOPPED, RunnerStatus.UNKNOWN, RunnerStatus.FAILED},
+            reserved_status=RunnerStatus.RESERVING,
+        )
+
+    def mark_runner_submitting(self, token: str) -> RunnerDescriptor | None:
+        return self._transition_reserved_runner(token, RunnerStatus.SUBMITTING)
+
+    def mark_runner_waiting_for_memory_release(self, token: str) -> RunnerDescriptor | None:
+        return self._transition_reserved_runner(token, RunnerStatus.WAITING_FOR_MEMORY_RELEASE)
+
+    def fail_runner_memory_release(self, token: str) -> RunnerDescriptor | None:
+        with self._lock:
+            reservation = self._reservations.pop(token, None)
+            if reservation is None:
+                return None
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": RunnerStatus.RELEASE_FAILED,
+                    "reservation_token": None,
+                    "reservation_kind": None,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
+            self._descriptors[reservation.runner_id] = updated
+        self._notify_state_change("runner_memory_release_failed")
+        return updated
+
+    def rollback_runner_reservation(self, token: str) -> RunnerDescriptor | None:
+        with self._lock:
+            reservation = self._reservations.pop(token, None)
+            if reservation is None:
+                return None
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": reservation.prior_status,
+                    "reservation_token": None,
+                    "reservation_kind": None,
+                }
+            )
+            self._descriptors[reservation.runner_id] = updated
+        self._notify_state_change("runner_reservation_rolled_back")
+        return updated
+
+    def cancel_pre_submission_reservation(self, token: str) -> bool:
+        """Rollback a reservation unless adapter submission is already awaiting.
+
+        Once the adapter call has started, the returned job must be registered
+        and canceled canonically so queue aliases remain valid.
+        """
+        with self._lock:
+            reservation = self._reservations.get(token)
+            if reservation is None:
+                return True
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            if descriptor.status is RunnerStatus.SUBMITTING:
+                return False
+            self._reservations.pop(token, None)
+            self._descriptors[reservation.runner_id] = descriptor.model_copy(
+                update={
+                    "status": reservation.prior_status,
+                    "reservation_token": None,
+                    "reservation_kind": None,
+                }
+            )
+        self._notify_state_change("runner_reservation_canceled")
+        return True
+
+    def commit_runner_submission(
+        self,
+        token: str,
+        *,
+        job_id: str,
+        workflow_id: str | None = None,
+    ) -> RunnerDescriptor:
+        with self._lock:
+            reservation = self._reservations.pop(token, None)
+            if reservation is None or reservation.kind is not RunnerReservationKind.SUBMISSION:
+                raise RuntimeError(f"Unknown submission reservation: {token}")
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": RunnerStatus.RUNNING,
+                    "current_job_id": job_id,
+                    "current_workflow_id": workflow_id,
+                    "last_workflow_id": workflow_id or descriptor.last_workflow_id,
+                    "last_used_at": _iso(self._now()),
+                    "reservation_token": None,
+                    "reservation_kind": None,
+                }
+            )
+            self._descriptors[reservation.runner_id] = updated
+        self._registry.register(job_id, reservation.runner_id)
+        self._notify_state_change("runner_submission_committed")
+        return updated
+
+    def confirm_runner_memory_released(self, token: str) -> RunnerDescriptor | None:
+        with self._lock:
+            reservation = self._reservations.pop(token, None)
+            if reservation is None or reservation.kind is not RunnerReservationKind.EVICTION:
+                return None
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": (
+                        RunnerStatus.IDLE
+                        if descriptor.kind is RunnerKind.CORE_COMFYUI
+                        else RunnerStatus.STOPPED
+                    ),
+                    "last_workflow_id": None,
+                    "observed_idle_vram_mb": None,
+                    "observed_idle_ram_mb": None,
+                    "last_used_at": _iso(self._now()),
+                    "reservation_token": None,
+                    "reservation_kind": None,
+                }
+            )
+            self._descriptors[reservation.runner_id] = updated
+        self._notify_state_change("runner_memory_released")
+        return updated
+
+    def _reserve_runner(
+        self,
+        runner_id: str,
+        *,
+        kind: RunnerReservationKind,
+        allowed_statuses: set[RunnerStatus],
+        reserved_status: RunnerStatus,
+        workflow_id: str | None = None,
+    ) -> RunnerReservation | None:
+        with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            if descriptor.reservation_token is not None or descriptor.current_job_id is not None:
+                return None
+            if descriptor.status not in allowed_statuses:
+                return None
+            reservation = RunnerReservation(
+                token=f"runner-reservation-{uuid.uuid4().hex}",
+                runner_id=runner_id,
+                kind=kind,
+                prior_status=descriptor.status,
+                workflow_id=workflow_id,
+                created_at=_iso(self._now()),
+            )
+            self._reservations[reservation.token] = reservation
+            self._descriptors[runner_id] = descriptor.model_copy(
+                update={
+                    "status": reserved_status,
+                    "reservation_token": reservation.token,
+                    "reservation_kind": reservation.kind,
+                }
+            )
+            return reservation
+
+    def _transition_reserved_runner(self, token: str, status: RunnerStatus) -> RunnerDescriptor | None:
+        with self._lock:
+            reservation = self._reservations.get(token)
+            if reservation is None:
+                return None
+            descriptor = self._descriptor_locked(reservation.runner_id)
+            updated = descriptor.model_copy(update={"status": status})
+            self._descriptors[reservation.runner_id] = updated
+            return updated
+
+    def _descriptor_locked(self, runner_id: str) -> RunnerDescriptor:
+        descriptor = self._descriptors.get(runner_id)
+        if descriptor is None:
+            raise RunnerNotFoundError(f"Unknown runner: {runner_id}")
+        return descriptor
 
     def bind_workflow_runner(self, workflow_id: str, runner_id: str) -> RunnerDescriptor:
         descriptor = self.get_runner(runner_id)
@@ -412,15 +679,15 @@ class RunnerSupervisor:
         self._registry.unregister(job_id)
 
     def acquire_output_stream_lease(self, runner_id: str) -> None:
-        descriptor = self.get_runner(runner_id)
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
             self._descriptors[runner_id] = descriptor.model_copy(
                 update={"output_stream_lease_count": descriptor.output_stream_lease_count + 1}
             )
 
     def release_output_stream_lease(self, runner_id: str) -> None:
-        descriptor = self.get_runner(runner_id)
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
             self._descriptors[runner_id] = descriptor.model_copy(
                 update={"output_stream_lease_count": max(0, descriptor.output_stream_lease_count - 1)}
             )
@@ -498,33 +765,61 @@ class RunnerSupervisor:
             reason="no_resident_gpu_runner",
         )
 
-    def mark_runner_job_started(self, runner_id: str, job_id: str) -> RunnerDescriptor:
-        descriptor = self.get_runner(runner_id)
-        updated = descriptor.model_copy(
-            update={
-                "status": RunnerStatus.RUNNING,
-                "current_job_id": job_id,
-                "last_used_at": _iso(self._now()),
-            }
-        )
+    def mark_runner_job_started(
+        self,
+        runner_id: str,
+        job_id: str,
+        *,
+        workflow_id: str | None = None,
+    ) -> RunnerDescriptor:
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": RunnerStatus.RUNNING,
+                    "current_job_id": job_id,
+                    "current_workflow_id": workflow_id,
+                    "last_workflow_id": workflow_id or descriptor.last_workflow_id,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
             self._descriptors[runner_id] = updated
+        self._notify_state_change("runner_job_started")
         return updated
 
     def mark_runner_job_finished(self, runner_id: str, job_id: str | None = None) -> RunnerDescriptor:
-        descriptor = self.get_runner(runner_id)
-        if job_id is not None and descriptor.current_job_id not in {None, job_id}:
-            return descriptor
-        next_status = RunnerStatus.IDLE_WARM if descriptor.open_workflow_lease_count > 0 else RunnerStatus.IDLE
-        updated = descriptor.model_copy(
-            update={
-                "status": next_status,
-                "current_job_id": None,
-                "last_used_at": _iso(self._now()),
-            }
-        )
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            if job_id is not None and descriptor.current_job_id not in {None, job_id}:
+                return descriptor
+            next_status = RunnerStatus.IDLE_WARM if descriptor.open_workflow_lease_count > 0 else RunnerStatus.IDLE
+            updated = descriptor.model_copy(
+                update={
+                    "status": next_status,
+                    "current_job_id": None,
+                    "current_workflow_id": None,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
             self._descriptors[runner_id] = updated
+        self._notify_state_change("runner_job_finished")
+        return updated
+
+    def mark_runner_memory_released(self, runner_id: str) -> RunnerDescriptor:
+        """Clear warm-workflow state after an idle runner unloads its model cache."""
+        with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            updated = descriptor.model_copy(
+                update={
+                    "status": RunnerStatus.IDLE,
+                    "last_workflow_id": None,
+                    "observed_idle_vram_mb": None,
+                    "observed_idle_ram_mb": None,
+                    "last_used_at": _iso(self._now()),
+                }
+            )
+            self._descriptors[runner_id] = updated
+        self._notify_state_change("runner_memory_released")
         return updated
 
     def open_workflow_lease(
@@ -534,9 +829,9 @@ class RunnerSupervisor:
         *,
         lease_id: str | None = None,
     ) -> str:
-        descriptor = self.get_runner(runner_id)
         lease_id = lease_id or f"lease-{uuid.uuid4().hex}"
         with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
             self._workflow_leases[lease_id] = (workflow_id, runner_id)
             lease_ids = sorted(
                 existing_lease_id
@@ -610,9 +905,11 @@ class RunnerSupervisor:
             queued_behind_runner_id=queued_behind_runner_id,
             reason=reason,
             created_at=_iso(self._now()),
+            updated_at=_iso(self._now()),
         )
         with self._lock:
             self._queued_runner_starts[queued.queue_id] = queued
+        self._notify_state_change("runner_start_queued")
         return queued
 
     def list_queued_runner_starts(
@@ -630,6 +927,21 @@ class RunnerSupervisor:
         with self._lock:
             return self._queued_runner_starts.get(queue_id)
 
+    def queued_runner_start_for_workflow(self, workflow_id: str) -> QueuedRunnerStart | None:
+        with self._lock:
+            queued = [
+                item
+                for item in self._queued_runner_starts.values()
+                if item.workflow_id == workflow_id
+                and item.status
+                in {
+                    QueuedRunnerStartStatus.QUEUED,
+                    QueuedRunnerStartStatus.HANDING_OFF,
+                    QueuedRunnerStartStatus.REQUEUED,
+                }
+            ]
+        return sorted(queued, key=lambda item: (item.created_at, item.queue_id))[0] if queued else None
+
     def cancel_queued_runner_start(self, queue_id: str) -> QueuedRunnerStart | None:
         with self._lock:
             queued = self._queued_runner_starts.get(queue_id)
@@ -641,10 +953,12 @@ class RunnerSupervisor:
                 update={
                     "status": QueuedRunnerStartStatus.CANCELED,
                     "canceled_at": _iso(self._now()),
+                    "cancel_requested": True,
                 }
             )
             self._queued_runner_starts[queue_id] = updated
-            return updated
+        self._notify_state_change("runner_start_canceled")
+        return updated
 
     def pop_next_queued_runner_start(
         self,
@@ -667,11 +981,70 @@ class RunnerSupervisor:
             self._queued_runner_starts.pop(selected.queue_id, None)
             return selected
 
+    def claim_next_queued_runner_start(
+        self,
+        *,
+        released_runner_id: str | None = None,
+    ) -> QueuedRunnerStart | None:
+        with self._lock:
+            queued = sorted(
+                (
+                    item
+                    for item in self._queued_runner_starts.values()
+                    if item.status in {QueuedRunnerStartStatus.QUEUED, QueuedRunnerStartStatus.REQUEUED}
+                    and (released_runner_id is None or item.queued_behind_runner_id in {None, released_runner_id})
+                ),
+                key=lambda item: (item.created_at, item.queue_id),
+            )
+            if not queued:
+                return None
+            selected = queued[0]
+            updated = selected.model_copy(
+                update={
+                    "status": QueuedRunnerStartStatus.HANDING_OFF,
+                    "attempt_count": selected.attempt_count + 1,
+                    "updated_at": _iso(self._now()),
+                }
+            )
+            self._queued_runner_starts[selected.queue_id] = updated
+            return updated
+
+    def finish_queued_runner_start(
+        self,
+        queue_id: str,
+        *,
+        status: QueuedRunnerStartStatus,
+        reason: str | None = None,
+    ) -> QueuedRunnerStart | None:
+        with self._lock:
+            queued = self._queued_runner_starts.get(queue_id)
+            if queued is None:
+                return None
+            updated = queued.model_copy(
+                update={"status": status, "last_reason": reason, "updated_at": _iso(self._now())}
+            )
+            if status is QueuedRunnerStartStatus.SUBMITTED:
+                self._queued_runner_starts.pop(queue_id, None)
+            else:
+                self._queued_runner_starts[queue_id] = updated
+        if status is not QueuedRunnerStartStatus.REQUEUED:
+            self._notify_state_change("runner_start_transitioned")
+        return updated
+
     @staticmethod
     def _workflow_id(workflow_package: object) -> str | None:
         metadata = getattr(workflow_package, "metadata", None)
         workflow_id = getattr(metadata, "id", None)
         return workflow_id if isinstance(workflow_id, str) else None
+
+    def _notify_state_change(self, reason: str) -> None:
+        if self._state_change_notifier is not None:
+            self._state_change_notifier(reason)
+
+    def _configure_adapter_terminal_notifier(self, adapter: EngineAdapter) -> None:
+        configure_terminal_notifier = getattr(adapter, "configure_terminal_notifier", None)
+        if callable(configure_terminal_notifier):
+            configure_terminal_notifier(self._terminal_notifier)
 
 
 def _effective_memory_class(memory_class: RunnerMemoryClass) -> RunnerMemoryClass:

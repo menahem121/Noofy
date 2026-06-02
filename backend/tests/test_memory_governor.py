@@ -48,6 +48,8 @@ from app.runtime.memory.memory_governor import (
     retry_after_memory_cleanup_decision,
     summarize_local_memory_observations,
     wait_for_memory_release,
+    wait_for_memory_release_async,
+    memory_user_status_for_decision,
     _linux_system_ram_mb,
 )
 from app.runtime.runners.supervisor import (
@@ -775,6 +777,54 @@ def test_wait_for_memory_release_times_out_and_handles_unavailable_snapshots() -
     assert unavailable.reason_code == "memory_snapshot_unavailable"
 
 
+@pytest.mark.anyio
+async def test_wait_for_memory_release_async_records_pending_drop_and_unavailable_timeline() -> None:
+    released = await wait_for_memory_release_async(
+        _SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    free_vram_mb=1_000,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    free_vram_mb=2_000,
+                    memory_pressure=MemoryPressureLevel.MEDIUM,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    free_vram_mb=7_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+        required_free_vram_mb=6_000,
+        timeout_seconds=0.1,
+        initial_poll_interval_seconds=0.001,
+        max_poll_interval_seconds=0.001,
+    )
+    unavailable = await wait_for_memory_release_async(
+        _SequenceMemoryObserver(
+            [MachineMemorySnapshot(available=False, backend=MemoryBackend.CUDA, error="nvml unavailable")]
+        ),
+        required_free_vram_mb=6_000,
+        timeout_seconds=0.1,
+    )
+
+    assert released.status is MemoryReleaseStatus.RELEASED
+    assert [event["state"] for event in released.timeline] == [
+        "release_requested",
+        "release_pending",
+        "still_reserved_or_allocated",
+        "release_pending",
+        "partial_release",
+        "observed_memory_drop",
+    ]
+    assert unavailable.status is MemoryReleaseStatus.UNAVAILABLE
+    assert unavailable.timeline[-1]["state"] == "observer_unavailable"
+
+
 def test_memory_release_satisfied_requires_margin_and_low_pressure() -> None:
     assert (
         memory_release_satisfied(
@@ -1087,6 +1137,38 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
     assert store.summary_for(workflow_id="workflow-a", backend=MemoryBackend.MPS) is None
 
 
+def test_local_memory_learning_store_deduplicates_non_null_job_ids_across_buckets(tmp_path) -> None:
+    store = LocalMemoryLearningStore(tmp_path)
+    store.record(
+        LocalMemoryObservation(
+            workflow_id="workflow-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="small",
+            job_id="job-a",
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=1000,
+        )
+    )
+    duplicate = store.record(
+        LocalMemoryObservation(
+            workflow_id="workflow-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="large",
+            job_id="job-a",
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=9000,
+        )
+    )
+
+    assert duplicate.successful_runs == 1
+    assert len(store.list_summaries()) == 1
+    assert store.summary_for(
+        workflow_id="workflow-a",
+        backend=MemoryBackend.CUDA,
+        input_profile_fingerprint="large",
+    ) is None
+
+
 def test_memory_admission_denies_heavy_heavy_without_large_gpu_local_confidence() -> None:
     decision = decide_memory_admission(
         MemoryAdmissionRequest(
@@ -1255,8 +1337,192 @@ def test_memory_admission_eviction_for_memory_pressure_and_queue_for_active_runn
     assert idle_decision.action is MemoryDecisionAction.EVICT_THEN_START
     assert idle_decision.reason_code == "memory_pressure_high"
     assert idle_decision.evict_runner_ids == ["runner-big", "runner-small"]
+    assert idle_decision.developer_details["memory_ownership"]["reclaimable_idle_runner_ids"] == [
+        "runner-big",
+        "runner-small",
+    ]
     assert active_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY
     assert active_decision.queued_behind_runner_id == "runner-active"
+    assert active_decision.developer_details["memory_ownership"]["active_noofy_runner_ids"] == [
+        "runner-active"
+    ]
+
+
+def test_memory_admission_queues_active_noofy_job_even_when_margin_is_available() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate("workflow-light", RunnerMemoryClass.GPU_LIGHT, 1200),
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=10_000),
+            resident_runners=[
+                _runner(
+                    "runner-active",
+                    RunnerMemoryClass.GPU_LIGHT,
+                    status=RunnerStatus.RUNNING,
+                    current_job_id="job-1",
+                )
+            ],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY
+    assert decision.reason_code == "active_noofy_job_queues_run"
+    assert decision.queued_behind_runner_id == "runner-active"
+
+
+def test_memory_admission_does_not_reuse_warm_runner_for_changed_memory_profile() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
+            input_profile_fingerprint="settings-b",
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                input_profile_fingerprint="settings-a",
+                successful_runs=1,
+                observed_peak_vram_mb=6000,
+            ),
+        )
+    )
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=1000),
+            selected_runner=RunnerMemorySnapshot(
+                runner_id="core",
+                status=RunnerStatus.IDLE,
+                last_workflow_id="workflow-a",
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert "local_evidence_settings_mismatch" in estimate.reasons
+    assert decision.action is not MemoryDecisionAction.REUSE_RUNNER
+    assert decision.reason_code == "gpu_estimate_uncertain_cautious_start"
+
+
+def test_memory_admission_high_pressure_warm_runner_uses_cleanup_path() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_HEAVY,
+            input_profile_fingerprint="settings-a",
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                input_profile_fingerprint="settings-a",
+                successful_runs=1,
+                observed_peak_vram_mb=6000,
+            ),
+        )
+    )
+    warm_core = RunnerMemorySnapshot(
+        runner_id="core",
+        kind=RunnerKind.CORE_COMFYUI,
+        status=RunnerStatus.IDLE,
+        last_workflow_id="workflow-a",
+        observed_idle_vram_mb=5000,
+    )
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            ),
+            selected_runner=warm_core,
+            resident_runners=[warm_core],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.EVICT_THEN_START
+    assert decision.evict_runner_ids == ["core"]
+    assert memory_user_status_for_decision(decision).state == "freeing_previous_models"
+
+
+def test_memory_status_reports_isolated_runner_eviction_as_unloading_previous_workflow() -> None:
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        risk_level=MemoryRiskLevel.MEDIUM,
+        reason_code="insufficient_margin_for_co_residence",
+        workflow_id="workflow-b",
+        evict_runner_ids=["isolated-a"],
+        runner_snapshots=[
+            RunnerMemorySnapshot(
+                runner_id="isolated-a",
+                kind=RunnerKind.ISOLATED_COMFYUI,
+                status=RunnerStatus.IDLE,
+                last_workflow_id="workflow-a",
+            )
+        ],
+    )
+
+    status = memory_user_status_for_decision(decision)
+
+    assert status.state == "unloading_previous_workflow"
+
+
+def test_memory_admission_reports_external_pressure_when_no_noofy_memory_is_reclaimable() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-heavy",
+                RunnerMemoryClass.GPU_HEAVY,
+                9000,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=500),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert decision.reason_code == "insufficient_vram_margin"
+    ownership = decision.developer_details["memory_ownership"]
+    assert ownership["free_vram_mb"] == 500
+    assert ownership["reclaimable_idle_runner_ids"] == []
+    assert ownership["active_noofy_runner_ids"] == []
+    assert ownership["unattributed_or_external_used_vram_mb"] == 11_500
+    assert memory_user_status_for_decision(decision).state == "blocked_unattributed_pressure"
+
+
+def test_memory_user_status_reports_external_pressure_only_with_explicit_evidence() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-heavy",
+                RunnerMemoryClass.GPU_HEAVY,
+                9_000,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                pressure_reasons=["external_process_vram_pressure"],
+            ),
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert memory_user_status_for_decision(decision).state == "blocked_external_pressure"
+
+
+def test_memory_user_status_reports_capacity_shortfall_separately() -> None:
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-too-large",
+                RunnerMemoryClass.GPU_HEAVY,
+                20_000,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=11_000),
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert memory_user_status_for_decision(decision).state == "blocked_exceeds_capacity"
 
 
 def test_mps_unified_memory_uses_ram_margin_instead_of_requiring_vram() -> None:

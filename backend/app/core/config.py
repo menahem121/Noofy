@@ -52,6 +52,15 @@ class Settings:
         os.environ.get("MODEL_VERIFICATION_MAX_CONCURRENCY", "3")
     )
     comfyui_restart_backoff_base: float = float(os.environ.get("COMFYUI_RESTART_BACKOFF_BASE", "2.0"))
+    memory_release_timeout_seconds: float = float(
+        os.environ.get("NOOFY_MEMORY_RELEASE_TIMEOUT_SECONDS", "8")
+    )
+    memory_release_initial_poll_interval_seconds: float = float(
+        os.environ.get("NOOFY_MEMORY_RELEASE_INITIAL_POLL_INTERVAL_SECONDS", "0.1")
+    )
+    memory_release_max_poll_interval_seconds: float = float(
+        os.environ.get("NOOFY_MEMORY_RELEASE_MAX_POLL_INTERVAL_SECONDS", "1.0")
+    )
     noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
     comfyui_repo_dir_override_active: bool = bool(os.environ.get("COMFYUI_REPO_DIR"))
     comfyui_python_executable_override_active: bool = bool(os.environ.get("COMFYUI_PYTHON_EXECUTABLE"))

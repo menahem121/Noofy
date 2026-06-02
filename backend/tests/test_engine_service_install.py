@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import shutil
@@ -54,11 +55,17 @@ class StubRuntimeManager:
 
 
 class StubAdapter:
+    def __init__(self) -> None:
+        self.release_memory_calls = 0
+
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
         pass
 
     async def list_available_models(self):
         return []
+
+    async def release_memory(self) -> None:
+        self.release_memory_calls += 1
 
 
 class StubMemoryObserver:
@@ -741,6 +748,51 @@ async def test_queued_pending_switch_handoff_starts_after_runner_finishes(tmp_pa
     assert handoff is not None
     assert handoff["started_from_queue_id"] == queued["queue_id"]
     assert handoff["status"] == RunnerStatus.READY.value
+    assert coordinator.stopped_runner_ids == ["busy-runner"]
+    assert len(coordinator.started_specs) == 1
+    assert service.runner_supervisor.get_queued_runner_start(queued["queue_id"]) is None
+
+
+@pytest.mark.anyio
+async def test_queued_pending_switch_starts_automatically_after_runner_finishes(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="busy-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9200",
+            ws_url="ws://127.0.0.1:9200/ws",
+            fingerprint="sha256:" + ("9" * 64),
+            status=RunnerStatus.RUNNING,
+            runner_process_compatibility_key="sha256:" + ("9" * 64),
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-1",
+            pid=9200,
+        ),
+        StubAdapter(),
+    )
+    await service.prepare_workflow("runner_workflow")
+    queued = await service.start_workflow_runner("runner_workflow")
+
+    service.runner_supervisor.mark_runner_job_finished("busy-runner", "job-1")
+    await asyncio.sleep(0.05)
+
+    assert coordinator is not None
+    assert queued["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
     assert coordinator.stopped_runner_ids == ["busy-runner"]
     assert len(coordinator.started_specs) == 1
     assert service.runner_supervisor.get_queued_runner_start(queued["queue_id"]) is None

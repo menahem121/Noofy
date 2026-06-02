@@ -77,7 +77,9 @@ from app.runtime.runners.supervisor import (
     RunnerSupervisor,
 )
 from app.runs.job_service import RunJobService
+from app.runs.lifecycle_service import RunLifecycleService
 from app.runs.orchestrator import RunOrchestrator
+from app.runs.queue_service import WorkflowRunQueueService
 from app.runs.result_service import RunResultService
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.bindings import apply_input_bindings
@@ -133,6 +135,8 @@ class EngineService:
         run_result_service: RunResultService | None = None,
         history_service: HistoryService | None = None,
         credential_resolver=None,
+        workflow_run_queue_service: WorkflowRunQueueService | None = None,
+        run_lifecycle_service: RunLifecycleService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -187,11 +191,14 @@ class EngineService:
             )
         else:
             self.workflow_import_orchestrator = workflow_import_orchestrator
+        self.workflow_run_queue_service = workflow_run_queue_service or WorkflowRunQueueService()
         self.run_job_service: RunJobService = run_job_service or RunJobService(
             runner_supervisor=runner_supervisor,
             log_store=log_store,
             workflow_loader=self.workflow_loader,
+            workflow_run_queue_service=self.workflow_run_queue_service,
         )
+        self.run_job_service.workflow_run_queue_service = self.workflow_run_queue_service
         self.model_availability_service.cleanup_interrupted_downloads()
         self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
             runtime_manager=runtime_manager,
@@ -205,10 +212,11 @@ class EngineService:
         self._job_workflows: dict[str, str] = {}
         self._job_started_at: dict[str, datetime] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+        self._job_memory_profile_fingerprints: dict[str, str] = {}
         self._job_run_snapshots: dict[str, RunSubmissionSnapshot] = {}
 
-        # Memory-governor stateful service — owns retry roots, queued run
-        # queue, sampling, and learning-store updates.
+        # Memory-governor stateful service — owns admission, cleanup, retry,
+        # sampling, and learning-store updates.
         self.memory_service = MemoryGovernorService(
             runner_supervisor=runner_supervisor,
             runner_process_coordinator=runner_process_coordinator,
@@ -219,12 +227,16 @@ class EngineService:
             memory_learning_store=memory_learning_store,
             job_workflows=self._job_workflows,
             job_run_requests=self._job_run_requests,
+            job_memory_profile_fingerprints=self._job_memory_profile_fingerprints,
             job_run_snapshots=self._job_run_snapshots,
         )
-        self.run_job_service.queued_workflow_run_progress = self.memory_service.queued_workflow_run_progress
-        self.run_job_service.cancel_queued_workflow_run = self.memory_service.cancel_queued_workflow_run
         # Temporary migration alias used by diagnostics and tests.
         self.memory_observation = self.memory_service.memory_observation
+
+        self.run_lifecycle_service = run_lifecycle_service or RunLifecycleService(
+            queue_service=self.workflow_run_queue_service,
+            log_store=self.log_store,
+        )
 
         self.run_result_service: RunResultService = run_result_service or RunResultService(
             job_service=self.run_job_service,
@@ -238,6 +250,8 @@ class EngineService:
             gallery_capture_service=self.gallery_capture_service,
             workflow_library_store=self.workflow_library_store,
             history_service=self.history_service,
+            workflow_run_queue_service=self.workflow_run_queue_service,
+            request_run_dispatch=self.run_lifecycle_service.request_dispatch,
         )
         self.run_orchestrator: RunOrchestrator = run_orchestrator or RunOrchestrator(
             workflow_loader=self.workflow_loader,
@@ -247,9 +261,10 @@ class EngineService:
             job_workflows=self._job_workflows,
             job_started_at=self._job_started_at,
             job_run_requests=self._job_run_requests,
+            job_memory_profile_fingerprints=self._job_memory_profile_fingerprints,
             job_run_snapshots=self._job_run_snapshots,
             memory_retry_roots=self.memory_service._memory_retry_roots,
-            queued_workflow_runs=self.memory_service.queued_workflow_runs,
+            workflow_run_queue_service=self.workflow_run_queue_service,
             validate_package=self._validate_package,
             unavailable_package_reason=self._imported_workflow_without_preparable_capsule,
             apply_input_bindings=self._apply_input_bindings,
@@ -262,9 +277,22 @@ class EngineService:
             history_service=self.history_service,
             credential_resolver=credential_resolver,
             api_nodes_unavailable_reason=self._api_nodes_unavailable_reason,
+            request_run_dispatch=self.run_lifecycle_service.request_dispatch,
+            submitted_job_callback=self.run_lifecycle_service.track_submitted_job,
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow
+        self.run_lifecycle_service.submit_queued_run = self.run_orchestrator.handoff_queued_run
+        self.run_lifecycle_service.finalize_job = self.run_result_service.get_result
+        self.run_lifecycle_service.get_progress = self.run_job_service.get_progress
+        self.run_job_service.terminal_job_progress = self.run_result_service.terminal_progress
+        configure_state_change_notifier = getattr(
+            self.runner_supervisor,
+            "configure_state_change_notifier",
+            None,
+        )
+        if callable(configure_state_change_notifier):
+            configure_state_change_notifier(self.run_lifecycle_service.request_dispatch)
 
         self.workflow_runner_lifecycle_service: WorkflowRunnerLifecycleService = (
             workflow_runner_lifecycle_service
@@ -281,6 +309,20 @@ class EngineService:
                 workflow_summary=self.workflow_library_service.workflow_summary,
             )
         )
+        drain_runner_starts = getattr(
+            self.workflow_runner_lifecycle_service,
+            "handoff_next_queued_runner_start",
+            None,
+        )
+        if callable(drain_runner_starts):
+            self.run_lifecycle_service.drain_runner_starts = drain_runner_starts
+        configure_terminal_notifier = getattr(
+            self.runner_supervisor,
+            "configure_terminal_notifier",
+            None,
+        )
+        if callable(configure_terminal_notifier):
+            configure_terminal_notifier(self.run_lifecycle_service.notify_terminal_hint)
 
     @property
     def memory_observer(self) -> MachineMemoryObserver | None:
@@ -295,6 +337,7 @@ class EngineService:
         memory_service = getattr(self, "memory_service", None)
         if memory_service is not None:
             memory_service.memory_observer = value
+            memory_service.memory_observation.memory_observer = value
         workflow_library_service = getattr(self, "workflow_library_service", None)
         if workflow_library_service is not None:
             workflow_library_service.memory_observer = value
@@ -548,7 +591,7 @@ class EngineService:
 
     async def _ensure_workflow_runner_for_run(
         self, package: WorkflowPackage
-    ) -> str | None:
+    ) -> str | dict[str, object] | None:
         """Prepare and bind a workflow runner before running custom-node capsules."""
         workflow_id = package.metadata.id
         capsule_lock = self.workflow_runner_lifecycle_service.preparable_capsule_lock(
@@ -611,6 +654,11 @@ class EngineService:
             RunnerStatus.IDLE.value,
             RunnerStatus.IDLE_WARM.value,
         }:
+            if start.get("status") in {
+                RunnerStatus.QUEUED_PENDING_MEMORY.value,
+                RunnerStatus.QUEUED_PENDING_SWITCH.value,
+            }:
+                return start
             return _workflow_runner_unavailable_message(start)
         return None
 
@@ -627,7 +675,7 @@ class EngineService:
         return self.workflow_runner_lifecycle_service.cancel_queued_runner_start(queue_id)
 
     async def handoff_queued_workflow_run(self, queue_id: str) -> dict[str, object] | EngineJob | WorkflowValidationResult | None:
-        return await self.memory_service.handoff_queued_workflow_run(queue_id)
+        return await self.run_lifecycle_service.handoff(queue_id)
 
     async def stop_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         return await self.workflow_runner_lifecycle_service.stop_workflow_runner(workflow_id)
@@ -842,6 +890,7 @@ class EngineService:
         return self.comfyui_sidecar_service.update_status()
 
     async def shutdown(self) -> None:
+        await self.run_lifecycle_service.shutdown()
         if self.gallery_capture_service is not None:
             await self.gallery_capture_service.shutdown()
         if self.runner_process_coordinator is not None:

@@ -5,10 +5,11 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from app.diagnostics import DiagnosticsSink
-from app.engine.models import EngineJob, JobResult
+from app.engine.models import EngineJob, JobProgress, JobResult
 from app.gallery import GalleryCaptureService, GalleryItem, RunSubmissionSnapshot
 from app.history import HistoryService
 from app.runs.job_service import RunJobService
+from app.runs.queue_service import WorkflowRunQueueService
 from app.workflows.library import WorkflowLibraryStore
 
 FinishMemorySampling = Callable[[str], Awaitable[None]]
@@ -19,9 +20,9 @@ MaybeRetryAfterMemoryCleanup = Callable[[JobResult], Awaitable[EngineJob | None]
 class RunResultService:
     """Run result, SSE, gallery capture, and run-history coordination.
 
-    Memory retry decisions remain injected callbacks for now. That keeps the
-    current memory-governor state together while moving result handling into
-    the runs domain.
+    Memory retry decisions remain injected runtime/memory callbacks. Terminal
+    side effects are guarded here so REST reads, SSE, watchers, and terminal
+    hints converge on one finalize-once path.
     """
 
     def __init__(
@@ -38,6 +39,8 @@ class RunResultService:
         gallery_capture_service: GalleryCaptureService | None = None,
         workflow_library_store: WorkflowLibraryStore | None = None,
         history_service: HistoryService | None = None,
+        workflow_run_queue_service: WorkflowRunQueueService | None = None,
+        request_run_dispatch: Callable[[str], None] | None = None,
     ) -> None:
         self.job_service = job_service
         self.log_store = log_store
@@ -50,23 +53,77 @@ class RunResultService:
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
+        self.workflow_run_queue_service = workflow_run_queue_service
+        self.request_run_dispatch = request_run_dispatch
+        self._terminal_locks: dict[str, asyncio.Lock] = {}
+        self._terminal_outcomes: dict[str, JobResult | EngineJob] = {}
 
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
-        adapter = self.job_service.adapter_for_job(job_id)
-        result = await adapter.get_result(job_id)
+        canonical_job_id = self._canonical_job_id(job_id)
+        cached = self._terminal_outcomes.get(canonical_job_id)
+        if cached is not None:
+            return self._decorate_queue_id(cached, job_id)
+        adapter = self.job_service.adapter_for_job(canonical_job_id)
+        result = await adapter.get_result(canonical_job_id)
         if result.status in {"completed", "failed", "canceled"}:
+            return self._decorate_queue_id(await self._finalize_once(result), job_id)
+        return self._decorate_queue_id(result, job_id)
+
+    async def _finalize_once(self, result: JobResult) -> JobResult | EngineJob:
+        lock = self._terminal_locks.setdefault(result.job_id, asyncio.Lock())
+        async with lock:
+            cached = self._terminal_outcomes.get(result.job_id)
+            if cached is not None:
+                return cached
             mark_job_finished = getattr(self.job_service, "mark_job_finished", None)
             if callable(mark_job_finished):
                 mark_job_finished(result.job_id)
             await self.finish_memory_sampling(result.job_id)
             self.record_memory_observation(result)
             retry_job = await self.maybe_retry_after_memory_cleanup(result)
-            if retry_job is not None:
-                return retry_job
-            self._register_gallery_run(result)
-            self._record_run_history_and_activity(result, [])
-            self._schedule_gallery_auto_saves(result)
-        return result
+            outcome: JobResult | EngineJob = retry_job or result
+            if retry_job is None:
+                self._register_gallery_run(result)
+                self._record_run_history_and_activity(result, [])
+                self._schedule_gallery_auto_saves(result)
+            self._terminal_outcomes[result.job_id] = outcome
+            if self.workflow_run_queue_service is not None:
+                self.workflow_run_queue_service.mark_terminal(result.job_id)
+            if self.request_run_dispatch is not None:
+                self.request_run_dispatch("job_finalized")
+            return outcome
+
+    def _decorate_queue_id(self, result: JobResult | EngineJob, handle: str):
+        queue_id = self._queue_id_for(handle)
+        if queue_id is None:
+            queue_id = self._queue_id_for(result.job_id)
+        if queue_id is None:
+            return result
+        return result.model_copy(update={"queue_id": queue_id})
+
+    def _canonical_job_id(self, handle: str) -> str:
+        canonical_job_id = getattr(self.job_service, "canonical_job_id", None)
+        return canonical_job_id(handle) if callable(canonical_job_id) else handle
+
+    def _queue_id_for(self, handle: str) -> str | None:
+        queue_id_for = getattr(self.job_service, "queue_id_for", None)
+        return queue_id_for(handle) if callable(queue_id_for) else None
+
+    def terminal_progress(self, handle: str) -> JobProgress | None:
+        canonical_job_id = self._canonical_job_id(handle)
+        outcome = self._terminal_outcomes.get(canonical_job_id)
+        if not isinstance(outcome, JobResult):
+            return None
+        return self._progress_from_terminal_result(outcome)
+
+    @staticmethod
+    def _progress_from_terminal_result(result: JobResult) -> JobProgress:
+        return JobProgress(
+            job_id=result.job_id,
+            queue_id=result.queue_id,
+            status=result.status,
+            message=result.error,
+        )
 
     async def stream_progress_events(self, job_id: str):
         while True:

@@ -258,6 +258,7 @@ class EngineJob(BaseModel):
 
 class JobProgress(BaseModel):
     job_id: str
+    queue_id: str | None = None
     status: JobStatus
     value: int | None = None
     max: int | None = None
@@ -267,6 +268,7 @@ class JobProgress(BaseModel):
 
 class JobResult(BaseModel):
     job_id: str
+    queue_id: str | None = None
     status: JobStatus
     outputs: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None

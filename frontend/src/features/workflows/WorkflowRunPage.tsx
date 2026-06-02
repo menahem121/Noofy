@@ -2333,16 +2333,16 @@ function sectionId(title: string) {
 }
 
 function memoryStatusTitle(state: string) {
-  if (state === "waiting_for_gpu") return "Waiting for the GPU";
-  if (state === "freeing_memory" || state === "waiting_for_memory_release") return "Freeing memory";
+  if (state === "waiting_for_gpu" || state === "waiting_for_active_workflow") return "Waiting for the GPU";
+  if (state === "freeing_memory" || state === "freeing_previous_models" || state === "unloading_previous_workflow" || state === "waiting_for_memory_release") return "Freeing memory";
   if (state === "retrying_after_memory_cleanup") return "Trying again";
-  if (state === "blocked_by_memory" || state === "memory_cleanup_failed") return "Not enough memory";
+  if (state === "blocked_by_memory" || state === "memory_cleanup_failed" || state === "blocked_external_pressure" || state === "blocked_exceeds_capacity" || state === "blocked_unattributed_pressure") return "Not enough memory";
   if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") return "Ready to relaunch";
   return "Memory status";
 }
 
 function memoryNoticeClass(status: MemoryStatus) {
-  if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed") return "notice--error";
+  if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed" || status.state.startsWith("blocked_")) return "notice--error";
   return "notice--warning";
 }
 

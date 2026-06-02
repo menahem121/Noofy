@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -6,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.diagnostics import LogStore
+from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
 from app.engine.service import EngineService
 from app.runtime.memory.memory_governor import (
@@ -60,6 +62,7 @@ class RecordingAdapter:
         self.result_calls: list[str] = []
         self.upload_calls: list[tuple[str, str, bytes, str]] = []
         self.fetch_output_calls: list[tuple[str, str, str, str]] = []
+        self.release_memory_calls = 0
         self._next_job_id = next_job_id
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
@@ -67,6 +70,9 @@ class RecordingAdapter:
 
     async def list_available_models(self) -> list[ModelInfo]:
         return self.models
+
+    async def release_memory(self) -> None:
+        self.release_memory_calls += 1
 
     async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
         del graph, options
@@ -130,6 +136,43 @@ class MemoryRetryAdapter(RecordingAdapter):
     async def get_result(self, job_id: str) -> JobResult:
         self.result_calls.append(job_id)
         return JobResult(job_id=job_id, status="failed", error="CUDA out of memory")
+
+
+class SuccessfulIncrementingAdapter(RecordingAdapter):
+    def __init__(self, models: list[ModelInfo]) -> None:
+        super().__init__(models=models)
+        self._job_counter = 0
+
+    async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
+        del graph, options
+        self._job_counter += 1
+        job_id = f"job-{self._job_counter}"
+        self.run_calls.append((job_id, dict(inputs)))
+        return EngineJob(
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+            engine="comfyui",
+            status="queued",
+        )
+
+
+class BlockingSubmissionAdapter(RecordingAdapter):
+    def __init__(self, models: list[ModelInfo], *, next_job_id: str) -> None:
+        super().__init__(models=models, next_job_id=next_job_id)
+        self.submission_started = asyncio.Event()
+        self.allow_submission = asyncio.Event()
+
+    async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
+        del graph, options
+        self.submission_started.set()
+        await self.allow_submission.wait()
+        self.run_calls.append((self._next_job_id, dict(inputs)))
+        return EngineJob(
+            job_id=self._next_job_id,
+            workflow_id=workflow_package.metadata.id,
+            engine="comfyui",
+            status="queued",
+        )
 
 
 class FailingGalleryCapture:
@@ -205,6 +248,37 @@ class AutoPrepareLifecycle:
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         self.start_calls.append(workflow_id)
+        descriptor = _isolated_descriptor(status=RunnerStatus.READY)
+        self.supervisor.upsert_runner(descriptor, self.adapter)
+        self.supervisor.bind_workflow_runner(workflow_id, descriptor.runner_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "ready",
+            "runner": descriptor.model_dump(mode="json"),
+            "pid": descriptor.pid,
+            "install_status": "ready",
+            "error": None,
+        }
+
+
+class QueuedAutoPrepareLifecycle(AutoPrepareLifecycle):
+    def __init__(self, supervisor: RunnerSupervisor, adapter: RecordingAdapter) -> None:
+        super().__init__(supervisor, adapter)
+        self.install_status = "ready"
+        self.runner_ready = False
+
+    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+        self.start_calls.append(workflow_id)
+        if not self.runner_ready:
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "queue_id": "runner-start-queue-1",
+                "runner": None,
+                "pid": None,
+                "install_status": "ready",
+                "error": None,
+            }
         descriptor = _isolated_descriptor(status=RunnerStatus.READY)
         self.supervisor.upsert_runner(descriptor, self.adapter)
         self.supervisor.bind_workflow_runner(workflow_id, descriptor.runner_id)
@@ -759,6 +833,20 @@ class SequenceMemoryObserver:
         return snapshot
 
 
+class RecordingStopCoordinator:
+    def __init__(self, supervisor: RunnerSupervisor) -> None:
+        self.supervisor = supervisor
+        self.stopped_runner_ids: list[str] = []
+
+    async def stop_runner(self, runner_id: str):
+        self.stopped_runner_ids.append(runner_id)
+        self.supervisor.update_runner_status(runner_id, RunnerStatus.STOPPED)
+        return SimpleNamespace(status=RunnerStatus.STOPPED)
+
+    async def stop_all_runners(self) -> list[Any]:
+        return []
+
+
 class AttributingMemoryObserver(SequenceMemoryObserver):
     def sample_process_vram(self, pids: set[int]) -> GpuProcessMemorySample:
         matched = sorted(pid for pid in pids if pid in {4242, 4243})
@@ -833,21 +921,124 @@ def _build_service(
     memory_observer: StaticMemoryObserver | SequenceMemoryObserver | None = None,
     process_tree_memory_observer: FakeProcessTreeMemoryObserver | None = None,
     runner_memory_telemetry_reader: FakeRunnerMemoryTelemetryReader | None = None,
+    runner_process_coordinator: Any | None = None,
+    runner_process_coordinator_factory: Any | None = None,
 ) -> tuple[EngineService, RunnerSupervisor]:
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), adapter)
+    if runner_process_coordinator_factory is not None:
+        runner_process_coordinator = runner_process_coordinator_factory(supervisor)
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
         workflow_validator=WorkflowPackageValidator(),
         runner_supervisor=supervisor,
         runtime_manager=StubRuntimeManager(),
         log_store=LogStore(),
+        runner_process_coordinator=runner_process_coordinator,
         memory_learning_store=memory_learning_store,
         memory_observer=memory_observer,
         process_tree_memory_observer=process_tree_memory_observer,
         runner_memory_telemetry_reader=runner_memory_telemetry_reader,
     )
     return service, supervisor
+
+
+def test_memory_input_profile_ignores_prompt_and_seed_but_keeps_memory_changing_inputs() -> None:
+    package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
+
+    base = memory_input_profile_fingerprint(
+        {
+            "prompt": "a lake",
+            "seed": 1,
+            "width": 512,
+            "height": 512,
+            "batch_size": 1,
+            "model": "model-a",
+            "lora": "none",
+            "frame_count": 8,
+            "source_image": "image-a.png",
+        },
+        {"vram_mode": "normal", "precision": "fp16"},
+        package=package,
+    )
+    prompt_changed = memory_input_profile_fingerprint(
+        {
+            "prompt": "a forest",
+            "seed": 999,
+            "width": 512,
+            "height": 512,
+            "batch_size": 1,
+            "model": "model-a",
+            "lora": "none",
+            "frame_count": 8,
+            "source_image": "image-a.png",
+        },
+        {"vram_mode": "normal", "precision": "fp16"},
+        package=package,
+    )
+
+    assert prompt_changed == base
+    for changed_inputs, changed_options in [
+        ({"width": 768}, {}),
+        ({"batch_size": 2}, {}),
+        ({"model": "model-b"}, {}),
+        ({"lora": "detail-lora"}, {}),
+        ({"frame_count": 24}, {}),
+        ({"source_image": "image-b.png"}, {}),
+        ({}, {"vram_mode": "lowvram"}),
+        ({}, {"precision": "fp8"}),
+    ]:
+        inputs = {
+            "prompt": "a forest",
+            "seed": 999,
+            "width": 512,
+            "height": 512,
+            "batch_size": 1,
+            "model": "model-a",
+            "lora": "none",
+            "frame_count": 8,
+            "source_image": "image-a.png",
+            **changed_inputs,
+        }
+        options = {"vram_mode": "normal", "precision": "fp16", **changed_options}
+        assert memory_input_profile_fingerprint(inputs, options, package=package) != base
+
+
+def test_memory_input_profile_keeps_string_fields_that_are_not_prompt_text() -> None:
+    package = SimpleNamespace(
+        inputs=[
+            SimpleNamespace(
+                id="model",
+                control="string_field",
+                binding=SimpleNamespace(node_id="4", input_name="ckpt_name"),
+            ),
+            SimpleNamespace(
+                id="prompt",
+                control="string_field",
+                binding=SimpleNamespace(node_id="6", input_name="text"),
+            ),
+        ],
+        dashboard=SimpleNamespace(inputs=[], sections=[]),
+    )
+
+    base = memory_input_profile_fingerprint(
+        {"model": "model-a", "prompt": "a lake"},
+        {},
+        package=package,
+    )
+    prompt_changed = memory_input_profile_fingerprint(
+        {"model": "model-a", "prompt": "a forest"},
+        {},
+        package=package,
+    )
+    model_changed = memory_input_profile_fingerprint(
+        {"model": "model-b", "prompt": "a forest"},
+        {},
+        package=package,
+    )
+
+    assert prompt_changed == base
+    assert model_changed != base
 
 
 def test_engine_service_runner_lease_round_trip_uses_bound_runner() -> None:
@@ -1029,6 +1220,41 @@ async def test_run_workflow_auto_prepares_custom_node_runner_before_submit() -> 
     assert lifecycle.start_calls == ["text_to_image_v0"]
     assert supervisor.runner_for_job(job.job_id).runner_id == "isolated-1"
     assert isolated_adapter.run_calls == [("isolated-job", {})]
+
+
+@pytest.mark.anyio
+async def test_custom_node_run_click_survives_queued_runner_start() -> None:
+    core_adapter = RecordingAdapter()
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = QueuedAutoPrepareLifecycle(supervisor, isolated_adapter)
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    queued = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    lifecycle.runner_ready = True
+    service.run_lifecycle_service.request_dispatch("runner_ready")
+    await asyncio.sleep(0.05)
+
+    assert queued.status == "queued_pending_memory"
+    assert queued.queue_id == queued.job_id
+    assert service.workflow_run_queue_service.resolve(queued.job_id).job_id == "isolated-job"
+    assert isolated_adapter.run_calls == [("isolated-job", {})]
     assert core_adapter.run_calls == []
 
 
@@ -1191,7 +1417,9 @@ async def test_progress_cancel_result_route_through_registry() -> None:
 
 
 @pytest.mark.anyio
-async def test_get_result_records_successful_local_memory_observation(tmp_path: Path) -> None:
+async def test_get_result_records_successful_local_observation_without_reusing_stale_descriptor_peak(
+    tmp_path: Path,
+) -> None:
     adapter = RecordingAdapter(
         models=[
             ModelInfo(
@@ -1238,7 +1466,295 @@ async def test_get_result_records_successful_local_memory_observation(tmp_path: 
     assert summary.input_profile_fingerprint is not None
     assert summary.successful_runs == 1
     assert summary.memory_error_runs == 0
-    assert summary.observed_peak_vram_mb == 2400
+    assert summary.observed_peak_vram_mb is None
+
+
+@pytest.mark.anyio
+async def test_prompt_and_seed_edit_reruns_reuse_warm_runner_instead_of_blocking_memory(tmp_path: Path) -> None:
+    adapter = SuccessfulIncrementingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_learning_store=LocalMemoryLearningStore(tmp_path / "memory-learning"),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=23_028,
+                free_vram_mb=20_000,
+                total_ram_mb=64_000,
+                free_ram_mb=50_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+
+    first = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a lake", "seed": 1, "width": 512, "height": 512},
+        options={},
+    )
+    await service.get_result(first.job_id)
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=23_028,
+            free_vram_mb=8_617,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+
+    second = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a forest", "seed": 1, "width": 512, "height": 512},
+        options={},
+    )
+    await service.get_result(second.job_id)
+    third = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={"prompt": "a forest", "seed": 999, "width": 512, "height": 512},
+        options={},
+    )
+
+    assert isinstance(second, EngineJob)
+    assert second.status == "queued"
+    assert second.memory_decision is not None
+    assert second.memory_decision["action"] == "reuse_runner"
+    assert second.memory_decision["selected_runner_id"] == CORE_RUNNER_ID
+    assert second.memory_decision["developer_details"]["memory_ownership"]["same_warm_runner_id"] == CORE_RUNNER_ID
+    assert isinstance(third, EngineJob)
+    assert third.status == "queued"
+    assert third.memory_decision is not None
+    assert third.memory_decision["action"] == "reuse_runner"
+    assert third.memory_decision["selected_runner_id"] == CORE_RUNNER_ID
+    assert supervisor.core_runner().last_workflow_id == "text_to_image_v0"
+    assert adapter.run_calls == [
+        ("job-1", {"prompt": "a lake", "seed": 1, "width": 512, "height": 512}),
+        ("job-2", {"prompt": "a forest", "seed": 1, "width": 512, "height": 512}),
+        ("job-3", {"prompt": "a forest", "seed": 999, "width": 512, "height": 512}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_workflow_run_releases_incompatible_warm_core_memory_then_submits() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=10_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=10_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert job.status == "queued"
+    assert job.memory_decision is not None
+    assert job.memory_decision["action"] == "evict_then_start"
+    assert job.memory_decision["evict_runner_ids"] == [CORE_RUNNER_ID]
+    assert adapter.release_memory_calls == 1
+    assert len(adapter.run_calls) == 1
+    assert supervisor.core_runner().last_workflow_id == "text_to_image_v0"
+
+
+@pytest.mark.anyio
+async def test_core_residency_is_retained_when_cleanup_observer_becomes_unavailable() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    available=False,
+                    backend=MemoryBackend.CUDA,
+                    error="nvml unavailable",
+                ),
+            ]
+        ),
+    )
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(job, EngineJob)
+    assert job.status == "blocked_by_memory"
+    assert job.memory_status is not None
+    assert job.memory_status["state"] == "memory_cleanup_failed"
+    assert adapter.release_memory_calls == 1
+    assert adapter.run_calls == []
+    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
+    assert supervisor.core_runner().last_workflow_id == "workflow-a"
+
+
+@pytest.mark.anyio
+async def test_workflow_run_evicts_idle_isolated_runner_waits_for_release_then_submits() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingStopCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingStopCoordinator(supervisor)
+        return coordinator
+
+    service, supervisor = _build_service(
+        adapter,
+        runner_process_coordinator_factory=coordinator_factory,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=10_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=10_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="idle-heavy",
+            status=RunnerStatus.IDLE_WARM,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+        ).model_copy(update={"observed_idle_vram_mb": 7000}),
+        RecordingAdapter(),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert coordinator is not None
+    assert isinstance(job, EngineJob)
+    assert job.status == "queued"
+    assert job.memory_decision is not None
+    assert job.memory_decision["action"] == "evict_then_start"
+    assert coordinator.stopped_runner_ids == ["idle-heavy"]
+    assert len(adapter.run_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingStopCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingStopCoordinator(supervisor)
+        return coordinator
+
+    service, supervisor = _build_service(
+        adapter,
+        runner_process_coordinator_factory=coordinator_factory,
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="idle-heavy",
+            status=RunnerStatus.IDLE_WARM,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+        ).model_copy(update={"observed_idle_vram_mb": 7000}),
+        RecordingAdapter(),
+    )
+
+    job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert coordinator is not None
+    assert isinstance(job, EngineJob)
+    assert job.status == "blocked_by_memory"
+    assert job.memory_status is not None
+    assert job.memory_status["state"] == "memory_cleanup_failed"
+    assert job.memory_decision is not None
+    assert job.memory_decision["developer_details"]["memory_cleanup_failure"]["reason_code"] == "memory_release_timeout"
+    assert coordinator.stopped_runner_ids == ["idle-heavy"]
+    assert adapter.run_calls == []
 
 
 @pytest.mark.anyio
@@ -1516,6 +2032,7 @@ async def test_get_result_retries_once_after_memory_cleanup(tmp_path: Path) -> N
     assert retry_job.memory_status is not None
     assert retry_job.memory_status["state"] == "retrying_after_memory_cleanup"
     assert adapter.run_calls == [("job-1", {"prompt": "hello"}), ("job-2", {"prompt": "hello"})]
+    assert adapter.release_memory_calls == 1
     assert service.memory_governor_metrics()["memory_retry_attempted"] == 1
 
 
@@ -1580,7 +2097,7 @@ async def test_run_workflow_blocked_by_validation_does_not_register_job() -> Non
 
 
 @pytest.mark.anyio
-async def test_run_workflow_queues_pending_memory_without_submitting_to_adapter() -> None:
+async def test_run_workflow_queues_behind_active_noofy_job_even_when_margin_is_available() -> None:
     selected_adapter = RecordingAdapter(
         models=[
             ModelInfo(
@@ -1595,8 +2112,8 @@ async def test_run_workflow_queues_pending_memory_without_submitting_to_adapter(
             MachineMemorySnapshot(
                 backend=MemoryBackend.CUDA,
                 total_vram_mb=12_000,
-                free_vram_mb=500,
-                memory_pressure=MemoryPressureLevel.HIGH,
+                free_vram_mb=10_000,
+                memory_pressure=MemoryPressureLevel.LOW,
             )
         ),
     )
@@ -1628,8 +2145,9 @@ async def test_run_workflow_queues_pending_memory_without_submitting_to_adapter(
     assert job.queue_id == job.job_id
     assert job.memory_decision is not None
     assert job.memory_decision["action"] == "queue_pending_memory"
+    assert job.memory_decision["reason_code"] == "active_noofy_job_queues_run"
     assert job.memory_status is not None
-    assert job.memory_status["state"] == "waiting_for_gpu"
+    assert job.memory_status["state"] == "waiting_for_active_workflow"
     assert selected_adapter.run_calls == []
     assert supervisor.job_registry.snapshot() == {}
 
@@ -1750,6 +2268,134 @@ async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> Non
     assert selected_adapter.run_calls == [("job-after-memory", {"prompt": "hello"})]
     assert supervisor.runner_for_job("job-after-memory").runner_id == "selected-runner"
     assert await service.handoff_queued_workflow_run(queued.queue_id) is None
+
+
+@pytest.mark.anyio
+async def test_queued_workflow_run_submits_automatically_after_active_runner_finishes() -> None:
+    selected_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-auto-handoff",
+    )
+    service, supervisor = _build_service(
+        RecordingAdapter(),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+    queued = await service.run_workflow("text_to_image_v0", inputs={"prompt": "hello"}, options={})
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=8_000,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+
+    supervisor.mark_runner_job_finished("active-runner", "job-active")
+    await asyncio.sleep(0.05)
+
+    assert service.workflow_run_queue_service.resolve(queued.queue_id).job_id == "job-auto-handoff"
+    assert selected_adapter.run_calls == [("job-auto-handoff", {"prompt": "hello"})]
+
+
+@pytest.mark.anyio
+async def test_cancel_during_adapter_submission_registers_alias_then_cancels_canonical_job() -> None:
+    selected_adapter = BlockingSubmissionAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-after-cancel-race",
+    )
+    core_adapter = RecordingAdapter()
+    service, supervisor = _build_service(
+        core_adapter,
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=12_000,
+                free_vram_mb=500,
+                memory_pressure=MemoryPressureLevel.HIGH,
+            )
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="selected-runner",
+            compatibility_key="selected-key",
+            status=RunnerStatus.READY,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_execution_peak_vram_mb": 1200}),
+        selected_adapter,
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="active-runner",
+            compatibility_key="active-key",
+            status=RunnerStatus.RUNNING,
+            memory_class=RunnerMemoryClass.GPU_HEAVY,
+            current_job_id="job-active",
+        ),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "selected-runner")
+    queued = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+    service.memory_observer = StaticMemoryObserver(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=8_000,
+            total_ram_mb=64_000,
+            free_ram_mb=50_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        )
+    )
+    supervisor.mark_runner_job_finished("active-runner", "job-active")
+    await selected_adapter.submission_started.wait()
+
+    canceled = await service.cancel_job(queued.queue_id)
+    selected_adapter.allow_submission.set()
+    await asyncio.sleep(0.05)
+
+    assert canceled.status == "canceled"
+    assert service.workflow_run_queue_service.resolve(queued.queue_id).job_id == "job-after-cancel-race"
+    assert selected_adapter.cancel_calls == ["job-after-cancel-race"]
+    assert core_adapter.cancel_calls == []
 
 
 @pytest.mark.anyio
