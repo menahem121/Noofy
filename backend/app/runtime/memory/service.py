@@ -42,6 +42,10 @@ from app.runtime.memory.memory_governor import (
     retry_after_memory_cleanup_decision,
     wait_for_memory_release_async,
 )
+from app.runtime.memory.input_features import (
+    ModelSelectionFeatures,
+    extract_model_selection_features,
+)
 from app.runtime.dependencies.isolation import CapsuleLock, InstallState
 from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
 from app.runtime.runners.supervisor import (
@@ -66,6 +70,9 @@ class _RunEstimateFeatures:
     workflow_type: str | None = None
     precision: str | None = None
     vram_mode: str | None = None
+    model_selections: ModelSelectionFeatures = field(
+        default_factory=ModelSelectionFeatures
+    )
     sources: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -77,7 +84,11 @@ class _RunEstimateFeatures:
 
     @property
     def empty(self) -> bool:
-        return not self.sources and self.workflow_type is None
+        return (
+            not self.sources
+            and self.workflow_type is None
+            and self.model_selections.empty
+        )
 
     def diagnostic_details(self) -> dict[str, Any]:
         return {
@@ -89,6 +100,7 @@ class _RunEstimateFeatures:
             "workflow_type": self.workflow_type,
             "precision": self.precision,
             "vram_mode": self.vram_mode,
+            **self.model_selections.diagnostic_details(),
             "sources": self.sources,
         }
 
@@ -328,6 +340,10 @@ class MemoryGovernorService:
                 workflow_type=estimate_features.workflow_type,
                 precision=estimate_features.precision,
                 vram_mode=estimate_features.vram_mode,
+                selected_model_count=estimate_features.model_selections.selected_model_count,
+                selected_model_kinds=estimate_features.model_selections.selected_model_kinds,
+                lora_count=estimate_features.model_selections.lora_count,
+                lora_strength_total=estimate_features.model_selections.lora_strength_total,
                 custom_node_count=custom_node_memory.count,
                 custom_node_types=custom_node_memory.node_types,
             )
@@ -919,6 +935,7 @@ def _run_estimate_features(
     frame_count = _first_int_feature(values, feature="frames")
     precision = _first_string_feature(values, feature="precision")
     vram_mode = _first_string_feature(values, feature="vram_mode")
+    model_selections = extract_model_selection_features(package, inputs)
     workflow_type = _infer_workflow_type(package)
     sources: dict[str, str] = {}
     for name, feature in [
@@ -941,6 +958,7 @@ def _run_estimate_features(
         workflow_type=workflow_type,
         precision=precision[0] if precision is not None else None,
         vram_mode=vram_mode[0] if vram_mode is not None else None,
+        model_selections=model_selections,
         sources=sources,
     )
 

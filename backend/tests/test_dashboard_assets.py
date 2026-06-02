@@ -177,7 +177,7 @@ def test_store_masked_image_inverts_alpha_and_preserves_rgb(tmp_path: Path) -> N
     )
 
     with Image.open(svc.asset_path(result["asset_id"])) as image:
-        assert list(image.convert("RGBA").getdata()) == [(10, 20, 30, 0), (40, 50, 60, 255)]
+        assert list(image.convert("RGBA").get_flattened_data()) == [(10, 20, 30, 0), (40, 50, 60, 255)]
     metadata = svc.metadata(result["asset_id"])
     assert metadata["has_mask"] is True
     assert metadata["source_asset_id"] == source["asset_id"]

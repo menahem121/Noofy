@@ -345,7 +345,7 @@ class RunOrchestrator:
         )
         try:
             memory_decision = self.workflow_run_memory_decision(
-                package=package,
+                package=runtime_package,
                 workflow_id=workflow_id,
                 runner=runner,
                 inputs=runtime_inputs,

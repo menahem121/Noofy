@@ -45,6 +45,11 @@ the lifecycle foundation expected for production work:
 - third P2 runtime-option slice: submitted precision and VRAM mode options are
   normalized, included in runtime estimate diagnostics, and applied to
   heuristic VRAM estimates
+- fourth P2 model-selection slice: checkpoint/model, refiner, VAE, encoder,
+  ControlNet, IPAdapter, and LoRA selections are extracted from workflow
+  inputs, dashboard bindings, graph nodes, and required-model fallback
+  metadata; LoRA count and available strengths now feed conservative heuristic
+  adjustments and profile fingerprints
 - first P3 frontend memory-state slice: the workflow run page and default
   canvas run view now render distinct user-facing copy for queueing, cleanup,
   retry, cleanup failure, external pressure, capacity failure, and unattributed
@@ -74,7 +79,7 @@ Ownership after P0/P1:
 | Same workflow rerun double-counted the warm runner's resident VRAM. | fixed | `runtime/memory`, `runs/orchestrator` | Same-workflow warm reuse no longer subtracts the full peak again for compatible resident state. | Broaden warm reuse in P2 for different workflows sharing the same resident model set. |
 | Prompt-only edits created a new memory bucket. | fixed | `engine/memory_observation`, `runs/orchestrator` | Text prompt controls are treated as memory-neutral when bindings identify them as prompt/text fields. | Add publisher/dashboard-declared memory-affecting metadata so unusual controls are classified explicitly. |
 | Seed-only edits created a new memory bucket. | fixed | `engine/memory_observation`, workflow package bindings | Seed widgets are treated as memory-neutral. | Same metadata follow-up as prompt controls for packages with custom seed controls. |
-| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted. P2 now semantically extracts width/height, batch, frame count, workflow type, precision, and VRAM mode into heuristic estimates. P2 still needs selected model/LoRA semantics and declared bindings. | Implement publisher-declared memory-affecting bindings and richer model/runtime-option extraction. |
+| Memory-changing settings could inherit smaller-run evidence. | partially fixed | `engine/memory_observation`, `runtime/memory` | Non-neutral inputs/options are fingerprinted. P2 now semantically extracts width/height, batch, frame count, workflow type, precision, VRAM mode, model-bearing selections, and LoRA strengths/counts into heuristic estimates. Static graph model/LoRA selections also contribute to profile fingerprints. | Implement publisher-declared memory-affecting bindings and richer runtime-option/media extraction. |
 | Low free VRAM from an idle Noofy runner caused immediate blocking. | fixed | `runtime/memory`, `runtime/runners` | Idle Noofy-owned memory is treated as reclaimable and cleanup waits for observed release before admission continues. | Improve attribution of idle/resident memory where platform signals allow it. |
 | Active workflow followed by another run could block or be killed. | fixed | `runs/queue_service`, `runs/lifecycle_service`, `runtime/runners` | Active work queues by default; cleanup skips active runners. | Refine queueing so unrelated CPU-only/light work does not always wait behind GPU-heavy work. |
 | `Not enough memory` was too early in the admission path. | partially fixed | `runtime/memory`, `runs/orchestrator`, frontend | Backend now attempts reuse, queue, cleanup, release polling, and retry before terminal memory failure. The workflow run page and canvas run view now render distinct copy from `memory_status.state`. | Continue P3 polish across any remaining surfaces and next-step copy. |
@@ -118,6 +123,14 @@ Initial slice completed:
 - workflow type is inferred from package metadata and graph node types
 - precision and VRAM mode options are normalized and applied to heuristic VRAM
   estimates
+- checkpoint/model, refiner, VAE, encoder, ControlNet, IPAdapter, and LoRA
+  selections are extracted from workflow inputs, dashboard bindings, graph
+  nodes, and required-model fallback metadata
+- active LoRA count and available model/CLIP strengths receive modest
+  conservative heuristic adjustments
+- static graph model/LoRA selections contribute to input-profile fingerprints
+  so residency-changing graph edits do not inherit an unrelated local-learning
+  bucket
 - extracted features are recorded in Memory Governor developer diagnostics
 
 Remaining semantic extraction work:
@@ -127,10 +140,10 @@ Remaining semantic extraction work:
 - iteration count and latent count beyond batch size
 - FPS-related frame windows and clip/image sequence length beyond simple frame
   count
-- selected checkpoint/model, refiner, VAE, encoder, ControlNet, IPAdapter, and
-  other model-bearing inputs
-- selected LoRAs and LoRA strength sets when they affect model residency or
-  execution memory
+- richer model metadata where available, including selected file sizes,
+  quantization, architecture families, and model-specific residency behavior
+- custom-node model loaders and modifier stacks beyond the conservative
+  filename/binding heuristics
 - quantization beyond simple precision aliases, attention implementation, tiled
   decode, CPU offload, and similar backend/runtime options
 - input media dimensions and channel count when media is part of execution
@@ -138,8 +151,8 @@ Remaining semantic extraction work:
 - workflow type hints where available, such as text-to-image, image-to-image,
   upscaling, video, audio, LLM, or multimodal
 
-Current fingerprinting protects against many accidental bucket collisions, but
-it does not yet understand why a value changes memory. P2 should make estimates
+Current fingerprinting protects against many accidental bucket collisions and
+now records common model-bearing semantics. P2 should keep making estimates
 more explainable and less dependent on broad fallback heuristics.
 
 ### Publisher And Dashboard Declarations

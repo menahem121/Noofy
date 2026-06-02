@@ -23,6 +23,7 @@ from app.runtime.memory.memory_governor import (
     RunnerMemoryTelemetryReader,
     likely_memory_error,
 )
+from app.runtime.memory.input_features import extract_model_selection_features
 from app.runtime.runners.supervisor import (
     JobRunnerNotFoundError,
     RunnerMemoryClass,
@@ -445,6 +446,10 @@ def memory_input_profile_fingerprint(
         "inputs": profile_inputs,
         "options": options,
     }
+    if package is not None:
+        model_selections = extract_model_selection_features(package, inputs)
+        if not model_selections.empty:
+            payload["model_selections"] = model_selections.profile_payload()
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 

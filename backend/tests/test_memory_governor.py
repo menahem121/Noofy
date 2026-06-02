@@ -1170,6 +1170,53 @@ def test_build_workflow_memory_estimate_adjusts_heuristic_by_runtime_memory_opti
     assert "vram_mode_memory_option" in fp32.reasons
 
 
+def test_build_workflow_memory_estimate_adjusts_heuristic_by_model_and_lora_selections() -> None:
+    base = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-base",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            selected_model_count=1,
+            selected_model_kinds=["checkpoint"],
+        )
+    )
+    enriched = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-enriched",
+            required_model_size_mb=4000,
+            resolution_width=1024,
+            resolution_height=1024,
+            selected_model_count=5,
+            selected_model_kinds=[
+                "checkpoint",
+                "controlnet",
+                "encoder",
+                "ipadapter",
+                "vae",
+            ],
+            lora_count=2,
+            lora_strength_total=2.5,
+        )
+    )
+
+    assert base.estimated_peak_vram_mb is not None
+    assert enriched.estimated_peak_vram_mb is not None
+    assert enriched.estimated_peak_vram_mb > base.estimated_peak_vram_mb
+    assert enriched.selected_model_count == 5
+    assert enriched.selected_model_kinds == [
+        "checkpoint",
+        "controlnet",
+        "encoder",
+        "ipadapter",
+        "vae",
+    ]
+    assert enriched.lora_count == 2
+    assert enriched.lora_strength_total == 2.5
+    assert "selected_model_memory_heuristic" in enriched.reasons
+    assert "lora_memory_heuristic" in enriched.reasons
+
+
 def test_summarize_local_memory_observations_records_success_failure_and_peaks() -> None:
     summary = summarize_local_memory_observations(
         [

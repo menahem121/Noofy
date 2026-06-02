@@ -336,6 +336,10 @@ class WorkflowMemoryEstimate(BaseModel):
     recent_memory_error: bool = False
     custom_node_count: int = Field(default=0, ge=0)
     custom_node_types: list[str] = Field(default_factory=list)
+    selected_model_count: int = Field(default=0, ge=0)
+    selected_model_kinds: list[str] = Field(default_factory=list)
+    lora_count: int = Field(default=0, ge=0)
+    lora_strength_total: float = Field(default=0, ge=0)
     precision: str | None = None
     vram_mode: str | None = None
     reasons: list[str] = Field(default_factory=list)
@@ -388,6 +392,10 @@ class WorkflowMemoryEstimateRequest(BaseModel):
     workflow_type: str | None = None
     custom_node_count: int = Field(default=0, ge=0)
     custom_node_types: list[str] = Field(default_factory=list)
+    selected_model_count: int = Field(default=0, ge=0)
+    selected_model_kinds: list[str] = Field(default_factory=list)
+    lora_count: int = Field(default=0, ge=0)
+    lora_strength_total: float = Field(default=0, ge=0)
     precision: str | None = None
     vram_mode: str | None = None
 
@@ -1328,6 +1336,7 @@ def build_workflow_memory_estimate(
     """
     estimate_reasons = [
         *_runtime_memory_option_reasons(request),
+        *_model_selection_reasons(request),
         *_custom_node_memory_reasons(request),
     ]
     estimate_fields = _estimate_request_fields(request)
@@ -2698,6 +2707,18 @@ def _heuristic_peak_vram_mb(request: WorkflowMemoryEstimateRequest) -> int | Non
             request.resolution_width * request.resolution_height * request.batch_size
         ) / 1_000_000
         components.append(int(megapixels * 900))
+    if (
+        request.required_model_size_mb is None
+        and (request.selected_model_count > 0 or request.lora_count > 0)
+    ):
+        # Selection names do not reveal exact file sizes. This is only a
+        # conservative coarse floor until package metadata or local learning
+        # provides stronger evidence.
+        components.append(
+            768
+            + max(0, request.selected_model_count - 1) * 192
+            + request.lora_count * 64
+        )
     if not components:
         return None
     return max(
@@ -2706,6 +2727,7 @@ def _heuristic_peak_vram_mb(request: WorkflowMemoryEstimateRequest) -> int | Non
             * _workflow_type_heuristic_factor(request.workflow_type)
             * _runtime_precision_heuristic_factor(request.precision)
             * _runtime_vram_mode_heuristic_factor(request.vram_mode)
+            * _model_selection_heuristic_factor(request)
             * _custom_node_heuristic_factor(request)
         ),
         512,
@@ -2716,6 +2738,10 @@ def _estimate_request_fields(request: WorkflowMemoryEstimateRequest) -> dict[str
     return {
         "custom_node_count": request.custom_node_count,
         "custom_node_types": list(request.custom_node_types),
+        "selected_model_count": request.selected_model_count,
+        "selected_model_kinds": list(request.selected_model_kinds),
+        "lora_count": request.lora_count,
+        "lora_strength_total": request.lora_strength_total,
         "precision": request.precision,
         "vram_mode": request.vram_mode,
     }
@@ -2736,6 +2762,15 @@ def _custom_node_memory_reasons(request: WorkflowMemoryEstimateRequest) -> list[
     return ["custom_node_memory_uncertain"]
 
 
+def _model_selection_reasons(request: WorkflowMemoryEstimateRequest) -> list[str]:
+    reasons: list[str] = []
+    if request.selected_model_count > 0:
+        reasons.append("selected_model_memory_heuristic")
+    if request.lora_count > 0:
+        reasons.append("lora_memory_heuristic")
+    return reasons
+
+
 def _non_local_confidence_after_custom_node_uncertainty(
     confidence: RunnerMemoryEstimateConfidence,
     request: WorkflowMemoryEstimateRequest,
@@ -2753,6 +2788,24 @@ def _custom_node_heuristic_factor(request: WorkflowMemoryEstimateRequest) -> flo
     if request.custom_node_count <= 0:
         return 1.0
     return 1.15
+
+
+def _model_selection_heuristic_factor(request: WorkflowMemoryEstimateRequest) -> float:
+    kinds = set(request.selected_model_kinds)
+    factor = 1.0
+    factor += min(max(0, request.selected_model_count - 1) * 0.025, 0.15)
+    if "refiner" in kinds:
+        factor += 0.12
+    if "controlnet" in kinds:
+        factor += 0.10
+    if "ipadapter" in kinds:
+        factor += 0.08
+    if "encoder" in kinds:
+        factor += 0.04
+    if "vae" in kinds:
+        factor += 0.03
+    factor += min(request.lora_strength_total * 0.025, 0.15)
+    return factor
 
 
 def _runtime_precision_heuristic_factor(precision: str | None) -> float:

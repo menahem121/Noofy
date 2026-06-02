@@ -46,7 +46,7 @@ from app.runtime.runners.supervisor import (
     RunnerSupervisor,
 )
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.package import WorkflowCustomNodeRecord
+from app.workflows.package import WorkflowCustomNodeRecord, WorkflowInput
 from app.workflows.validator import WorkflowPackageValidator
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1] / "app/workflows/packages"
@@ -1215,6 +1215,102 @@ async def test_workflow_run_memory_estimate_uses_runtime_precision_and_vram_mode
     assert high_features["vram_mode"] == "highvram"
     assert high_features["sources"]["precision"] == "option:precision"
     assert high_features["sources"]["vram_mode"] == "option:vram_mode"
+
+
+@pytest.mark.anyio
+async def test_workflow_run_memory_estimate_exposes_selected_models_and_loras() -> None:
+    model = ModelInfo(
+        folder="checkpoints",
+        filename="v1-5-pruned-emaonly-fp16.safetensors",
+    )
+    service, _ = _build_service(
+        RecordingAdapter(models=[model]),
+        memory_observer=StaticMemoryObserver(
+            MachineMemorySnapshot(
+                backend=MemoryBackend.CUDA,
+                total_vram_mb=24_000,
+                free_vram_mb=20_000,
+                memory_pressure=MemoryPressureLevel.LOW,
+            )
+        ),
+    )
+    package = service.run_orchestrator.workflow_loader.get_package("text_to_image_v0")
+    custom_package = package.model_copy(
+        update={
+            "comfyui_graph": {
+                **package.comfyui_graph,
+                "30": {
+                    "class_type": "ControlNetLoader",
+                    "inputs": {"control_net_name": "pose-controlnet.safetensors"},
+                },
+                "31": {
+                    "class_type": "IPAdapterModelLoader",
+                    "inputs": {"ipadapter_file": "ip-adapter-plus.safetensors"},
+                },
+                "32": {
+                    "class_type": "LoraLoader",
+                    "inputs": {
+                        "lora_name": "style-default.safetensors",
+                        "strength_model": 1.0,
+                        "strength_clip": 0.5,
+                    },
+                },
+            },
+            "inputs": [
+                *package.inputs,
+                WorkflowInput(
+                    id="style_lora",
+                    label="Style LoRA",
+                    control="lora_loader",
+                    binding={"node_id": "32", "input_name": "lora_name"},
+                    default="style-default.safetensors",
+                ),
+                WorkflowInput(
+                    id="style_strength",
+                    label="Style strength",
+                    control="slider",
+                    binding={"node_id": "32", "input_name": "strength_model"},
+                    default=1.0,
+                ),
+            ],
+        }
+    )
+    service.run_orchestrator.workflow_loader = SimpleNamespace(
+        get_package=lambda workflow_id: custom_package
+    )
+
+    job = await service.run_workflow(
+        "text_to_image_v0",
+        inputs={
+            "prompt": "a lake",
+            "width": 512,
+            "height": 512,
+            "style_lora": "detail-style.safetensors",
+            "style_strength": 0.75,
+        },
+        options={},
+    )
+
+    assert job.memory_decision is not None
+    estimate = job.memory_decision["workflow_estimate"]
+    features = job.memory_decision["developer_details"]["runtime_estimate_features"]
+
+    assert estimate["selected_model_count"] == 3
+    assert estimate["selected_model_kinds"] == [
+        "checkpoint",
+        "controlnet",
+        "ipadapter",
+    ]
+    assert estimate["lora_count"] == 1
+    assert estimate["lora_strength_total"] == 0.75
+    assert "selected_model_memory_heuristic" in estimate["reasons"]
+    assert "lora_memory_heuristic" in estimate["reasons"]
+    assert features["selected_model_count"] == 3
+    assert features["lora_count"] == 1
+    assert features["selected_loras"][0]["selection"] == "detail-style.safetensors"
+    assert features["selected_loras"][0]["source"] == "input:style_lora"
+    assert features["selected_loras"][0]["strength_model"] == 0.75
+    assert features["selected_loras"][0]["strength_clip"] == 0.5
 
 
 @pytest.mark.anyio
