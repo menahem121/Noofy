@@ -50,6 +50,11 @@ the lifecycle foundation expected for production work:
   inputs, dashboard bindings, graph nodes, and required-model fallback
   metadata; LoRA count and available strengths now feed conservative heuristic
   adjustments and profile fingerprints
+- fifth P2 signature-decomposition groundwork slice: process compatibility,
+  model residency, and execution profile signatures are computed separately,
+  exposed in Memory Governor diagnostics, and persisted in local learning
+  observations/summaries without enabling new cross-workflow reuse or
+  aggressive co-residence behavior
 - first P3 frontend memory-state slice: the workflow run page and default
   canvas run view now render distinct user-facing copy for queueing, cleanup,
   retry, cleanup failure, external pressure, capacity failure, and unattributed
@@ -104,7 +109,7 @@ Ownership after P0/P1:
 | EngineService accumulated lifecycle ownership. | partially fixed | Composition root, `runs/`, `runtime/runners/`, `runtime/memory` | P0/P1 lifecycle behavior lives in domain services. `EngineService` still remains a broad application front door and compatibility facade. | Track long-term EngineService cleanup below. |
 | Compatibility helpers for unreleased internals could outlive the migration. | partially fixed | `EngineService`, tests, API/dependency wiring | Some migration proxies remain for compatibility while callers move to domain services. | Retire proxies when call sites are migrated. |
 | CPU-only/lightweight work may wait behind unrelated GPU-heavy work. | remaining | `runtime/memory`, `runtime/runners`, `runs/lifecycle_service` | Current default queues behind active Noofy work conservatively. | P2 active queueing policy refinement. |
-| Process compatibility, model residency, and execution profile are not fully separated. | remaining | `runtime/runners`, `runtime/memory`, workflow packages | Current compatibility keys and input profiles are useful but not expressive enough for smarter cross-workflow warm reuse. | P2 signature decomposition. |
+| Process compatibility, model residency, and execution profile are not fully separated. | partially fixed | `runtime/memory`, `engine/memory_observation`, workflow packages | P2 now computes separate diagnostic/learning signatures for process compatibility, model residency, and execution profile. Admission and warm reuse still use the older conservative behavior. | Use the signatures for smarter warm reuse and active queueing only after more validation. |
 | Hardware-independent tests cannot prove real GPU allocator behavior. | partially fixed | validation/docs, platform observers, runner probe | A model-free NVIDIA A10G harness now validates real CUDA allocator telemetry, queue handoff, cancellation, isolated stop, observed release, and shutdown. Large-model and platform-specific confidence still needs hardware work. | See hardware validation section. |
 
 ## Remaining P2 Work
@@ -211,6 +216,33 @@ key:
   state are already warm and reusable
 - execution-profile signature: values that affect peak memory for a run, such
   as resolution, batch, frames, precision, and media dimensions
+
+Initial slice completed:
+
+- process compatibility, model residency, and execution profile signatures are
+  computed as separate hashes
+- signatures are exposed in `workflow_estimate` and `memory_signatures`
+  developer diagnostics
+- signatures are persisted into local memory observations and summaries
+- prompt/seed changes keep the signatures stable when model and execution
+  values are unchanged
+- model/LoRA changes alter the model-residency signature without changing the
+  process-compatibility signature
+- resolution/batch/profile changes alter the execution-profile signature
+  without changing model residency
+- different workflows with the same model set can now report the same
+  model-residency signature
+
+Remaining work:
+
+- use model-residency signatures to enable smarter warm reuse across compatible
+  workflows
+- use execution-profile signatures to compare local learning across workflows
+  without conflating dependency compatibility and peak-memory shape
+- add publisher/dashboard declarations so signature payloads do not rely only
+  on heuristic binding inference
+- validate signatures against real large-model CUDA residency before using them
+  for more permissive admission
 
 This decomposition should enable smarter decisions without making dependency
 compatibility, warm model reuse, and peak memory evidence blur together.

@@ -1284,6 +1284,9 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
             machine_profile_id="machine-a",
             backend=MemoryBackend.CUDA,
             input_profile_fingerprint="settings-a",
+            process_compatibility_signature="sha256:process-a",
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-a",
             runner_id="runner-a",
             job_id="job-a",
             runner_root_pid=100,
@@ -1305,6 +1308,9 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
             machine_profile_id="machine-a",
             backend=MemoryBackend.CUDA,
             input_profile_fingerprint="settings-a",
+            process_compatibility_signature="sha256:process-a",
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-a",
             outcome=MemoryObservationOutcome.SUCCESS,
             peak_vram_mb=7100,
             peak_ram_mb=3100,
@@ -1326,6 +1332,9 @@ def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -
     assert loaded is not None
     assert loaded.successful_runs == 2
     assert loaded.observed_peak_vram_mb == 7100
+    assert loaded.process_compatibility_signature == "sha256:process-a"
+    assert loaded.model_residency_signature == "sha256:model-a"
+    assert loaded.execution_profile_signature == "sha256:execution-a"
     assert loaded.process_tree_observed_peak_ram_mb == 2400
     assert loaded.backend_allocator_observed_peak_vram_mb == 6600
     assert loaded.attribution_quality is MemoryAttributionQuality.PROCESS_TREE

@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from app.diagnostics import DiagnosticsStore
@@ -262,6 +262,7 @@ class MemoryObservationCoordinator:
         workflow_id: str | None,
         run_request: tuple[str, dict[str, Any], dict[str, Any]] | None,
         input_profile_fingerprint: str | None = None,
+        memory_signatures: Mapping[str, Any] | None = None,
     ) -> None:
         if self.memory_learning_store is None or workflow_id is None:
             return
@@ -309,6 +310,18 @@ class MemoryObservationCoordinator:
                     if run_request is not None
                     else None
                 ),
+                process_compatibility_signature=_signature_value(
+                    memory_signatures,
+                    "process_compatibility_signature",
+                ),
+                model_residency_signature=_signature_value(
+                    memory_signatures,
+                    "model_residency_signature",
+                ),
+                execution_profile_signature=_signature_value(
+                    memory_signatures,
+                    "execution_profile_signature",
+                ),
                 runner_id=runner.runner_id if runner is not None else None,
                 job_id=result.job_id,
                 runner_root_pid=attribution.get("runner_root_pid"),
@@ -343,6 +356,9 @@ class MemoryObservationCoordinator:
                 "memory_error_runs": summary.memory_error_runs,
                 "observed_peak_vram_mb": summary.observed_peak_vram_mb,
                 "observed_peak_ram_mb": summary.observed_peak_ram_mb,
+                "process_compatibility_signature": summary.process_compatibility_signature,
+                "model_residency_signature": summary.model_residency_signature,
+                "execution_profile_signature": summary.execution_profile_signature,
                 "attribution_quality": summary.attribution_quality.value,
                 "attribution_sources": summary.attribution_sources,
             },
@@ -504,6 +520,16 @@ def _input_is_memory_neutral(workflow_input: Any, control: Any) -> bool:
     if not isinstance(input_name, str):
         return False
     return input_name.lower() in _TEXT_BINDING_INPUT_NAMES
+
+
+def _signature_value(
+    memory_signatures: Mapping[str, Any] | None,
+    key: str,
+) -> str | None:
+    if memory_signatures is None:
+        return None
+    value = memory_signatures.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def _peak_used_memory_delta_from_snapshots(snapshots: list[MachineMemorySnapshot]) -> tuple[int | None, int | None]:

@@ -4,7 +4,10 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from app.engine.memory_observation import memory_input_profile_fingerprint
-from app.runtime.memory.input_features import extract_model_selection_features
+from app.runtime.memory.input_features import (
+    build_memory_signature_set,
+    extract_model_selection_features,
+)
 
 
 def _input(
@@ -254,3 +257,149 @@ def test_selected_model_count_deduplicates_repeated_loader_references() -> None:
 
     assert features.selected_model_count == 8
     assert details["selected_model_reference_count"] == 9
+
+
+def test_memory_signatures_keep_prompt_and_seed_neutral() -> None:
+    package = _package()
+    base_features = extract_model_selection_features(
+        package,
+        {"prompt": "a lake", "seed": 1},
+    )
+    changed_features = extract_model_selection_features(
+        package,
+        {"prompt": "a forest", "seed": 999},
+    )
+    base = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=base_features,
+        execution_profile={
+            "resolution_width": 512,
+            "resolution_height": 512,
+            "effective_batch_size": 1,
+            "workflow_type": "txt2img",
+        },
+    )
+    changed = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=changed_features,
+        execution_profile={
+            "resolution_width": 512,
+            "resolution_height": 512,
+            "effective_batch_size": 1,
+            "workflow_type": "txt2img",
+        },
+    )
+
+    assert changed.signature_fields() == base.signature_fields()
+
+
+def test_memory_signatures_separate_model_residency_from_process_compatibility() -> None:
+    package = _package()
+    base = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=extract_model_selection_features(package, {}),
+        execution_profile={"resolution_width": 512, "resolution_height": 512},
+    )
+    changed = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=extract_model_selection_features(
+            package,
+            {"style_lora": "different-style.safetensors"},
+        ),
+        execution_profile={"resolution_width": 512, "resolution_height": 512},
+    )
+
+    assert changed.process_compatibility_signature == base.process_compatibility_signature
+    assert changed.execution_profile_signature == base.execution_profile_signature
+    assert changed.model_residency_signature != base.model_residency_signature
+
+
+def test_memory_signatures_separate_execution_profile_from_model_residency() -> None:
+    model_features = extract_model_selection_features(_package(), {})
+    base = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=model_features,
+        execution_profile={
+            "resolution_width": 512,
+            "resolution_height": 512,
+            "effective_batch_size": 1,
+            "workflow_type": "txt2img",
+        },
+    )
+    large = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=model_features,
+        execution_profile={
+            "resolution_width": 1024,
+            "resolution_height": 1024,
+            "effective_batch_size": 1,
+            "workflow_type": "txt2img",
+        },
+    )
+
+    assert large.process_compatibility_signature == base.process_compatibility_signature
+    assert large.model_residency_signature == base.model_residency_signature
+    assert large.execution_profile_signature != base.execution_profile_signature
+
+
+def test_model_residency_signature_matches_across_different_workflow_graphs() -> None:
+    left = _package()
+    right = SimpleNamespace(
+        comfyui_graph={
+            "checkpoint_node": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "base-default.safetensors"},
+            },
+            "vae_node": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": "vae-default.safetensors"},
+            },
+            "encoder_node": {
+                "class_type": "DualCLIPLoader",
+                "inputs": {
+                    "clip_name1": "clip-l.safetensors",
+                    "clip_name2": "t5xxl.safetensors",
+                },
+            },
+            "control": {
+                "class_type": "ControlNetLoader",
+                "inputs": {"control_net_name": "pose-controlnet.safetensors"},
+            },
+            "adapter": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {"ipadapter_file": "ip-adapter-plus.safetensors"},
+            },
+            "lora": {
+                "class_type": "LoraLoader",
+                "inputs": {
+                    "lora_name": "style-default.safetensors",
+                    "strength_model": 1.0,
+                    "strength_clip": 0.4,
+                },
+            },
+            "unet": {
+                "class_type": "UNETLoader",
+                "inputs": {"unet_name": "diffusion-model.safetensors"},
+            },
+            "refiner": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"refiner_ckpt_name": "refiner.safetensors"},
+            },
+        },
+        inputs=[],
+        dashboard=SimpleNamespace(inputs=[], sections=[]),
+        required_models=[],
+    )
+
+    left_signature = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=extract_model_selection_features(left, {}),
+        execution_profile={},
+    )
+    right_signature = build_memory_signature_set(
+        runner_process_compatibility_key="compat-a",
+        model_selections=extract_model_selection_features(right, {}),
+        execution_profile={},
+    )
+
+    assert right_signature.model_residency_signature == left_signature.model_residency_signature

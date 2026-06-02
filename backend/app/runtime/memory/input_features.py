@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+MEMORY_SIGNATURE_SCHEMA_VERSION = "0.1.0"
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,58 @@ class ModelSelectionFeatures:
         ]
 
 
+@dataclass(frozen=True)
+class MemorySignatureSet:
+    process_compatibility_signature: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
+    process_compatibility_payload: dict[str, Any] = field(default_factory=dict)
+    model_residency_payload: dict[str, Any] = field(default_factory=dict)
+    execution_profile_payload: dict[str, Any] = field(default_factory=dict)
+
+    def signature_fields(self) -> dict[str, str | None]:
+        return {
+            "process_compatibility_signature": self.process_compatibility_signature,
+            "model_residency_signature": self.model_residency_signature,
+            "execution_profile_signature": self.execution_profile_signature,
+        }
+
+    def diagnostic_details(self) -> dict[str, Any]:
+        return {
+            **self.signature_fields(),
+            "payloads": {
+                "process_compatibility": self.process_compatibility_payload,
+                "model_residency": self.model_residency_payload,
+                "execution_profile": self.execution_profile_payload,
+            },
+        }
+
+
+def build_memory_signature_set(
+    *,
+    runner_process_compatibility_key: str | None,
+    model_selections: ModelSelectionFeatures,
+    execution_profile: Mapping[str, Any],
+) -> MemorySignatureSet:
+    process_payload = _process_compatibility_payload(runner_process_compatibility_key)
+    model_payload = _model_residency_payload(model_selections)
+    execution_payload = _execution_profile_payload(execution_profile)
+    return MemorySignatureSet(
+        process_compatibility_signature=_signature_for_payload(process_payload)
+        if process_payload
+        else None,
+        model_residency_signature=_signature_for_payload(model_payload)
+        if model_payload
+        else None,
+        execution_profile_signature=_signature_for_payload(execution_payload)
+        if execution_payload
+        else None,
+        process_compatibility_payload=process_payload,
+        model_residency_payload=model_payload,
+        execution_profile_payload=execution_payload,
+    )
+
+
 def extract_model_selection_features(
     package: Any,
     submitted_inputs: Mapping[str, Any],
@@ -236,6 +292,92 @@ def extract_model_selection_features(
         )
 
     return ModelSelectionFeatures(selections=selections)
+
+
+def _process_compatibility_payload(
+    runner_process_compatibility_key: str | None,
+) -> dict[str, Any]:
+    if not runner_process_compatibility_key:
+        return {}
+    return {
+        "schema_version": MEMORY_SIGNATURE_SCHEMA_VERSION,
+        "runner_process_compatibility_key": runner_process_compatibility_key,
+    }
+
+
+def _model_residency_payload(
+    model_selections: ModelSelectionFeatures,
+) -> dict[str, Any]:
+    if model_selections.empty:
+        return {}
+    models = sorted(
+        [
+            {
+                "kind": selection.kind,
+                "selection": selection.selection,
+            }
+            for selection in model_selections.unique_selected_models
+        ],
+        key=lambda item: (item["kind"], item["selection"]),
+    )
+    loras = sorted(
+        [
+            {
+                "kind": selection.kind,
+                "selection": selection.selection,
+                "strength_model": selection.strength_model,
+                "strength_clip": selection.strength_clip,
+                "active": selection.active,
+            }
+            for selection in model_selections.selected_loras
+        ],
+        key=lambda item: (
+            item["kind"],
+            item["selection"],
+            item["strength_model"] if item["strength_model"] is not None else -1,
+            item["strength_clip"] if item["strength_clip"] is not None else -1,
+        ),
+    )
+    return {
+        "schema_version": MEMORY_SIGNATURE_SCHEMA_VERSION,
+        "selected_models": models,
+        "selected_loras": loras,
+    }
+
+
+def _execution_profile_payload(
+    execution_profile: Mapping[str, Any],
+) -> dict[str, Any]:
+    fields = {
+        key: execution_profile.get(key)
+        for key in [
+            "resolution_width",
+            "resolution_height",
+            "batch_size",
+            "frame_count",
+            "effective_batch_size",
+            "workflow_type",
+            "precision",
+            "vram_mode",
+        ]
+        if execution_profile.get(key) is not None
+    }
+    if not fields:
+        return {}
+    return {
+        "schema_version": MEMORY_SIGNATURE_SCHEMA_VERSION,
+        **fields,
+    }
+
+
+def _signature_for_payload(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _resolved_graph_inputs(

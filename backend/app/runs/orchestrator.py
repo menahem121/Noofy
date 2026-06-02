@@ -67,6 +67,7 @@ class RunOrchestrator:
         job_started_at: dict[str, datetime],
         job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]],
         job_memory_profile_fingerprints: dict[str, str],
+        job_memory_signatures: dict[str, dict[str, Any]],
         job_run_snapshots: dict[str, RunSubmissionSnapshot],
         memory_retry_roots: dict[str, str],
         workflow_run_queue_service: WorkflowRunQueueService,
@@ -94,6 +95,7 @@ class RunOrchestrator:
         self.job_started_at = job_started_at
         self.job_run_requests = job_run_requests
         self.job_memory_profile_fingerprints = job_memory_profile_fingerprints
+        self.job_memory_signatures = job_memory_signatures
         self.job_run_snapshots = job_run_snapshots
         self.memory_retry_roots = memory_retry_roots
         self.workflow_run_queue_service = workflow_run_queue_service
@@ -633,6 +635,13 @@ class RunOrchestrator:
         self.job_started_at[job.job_id] = datetime.now(UTC)
         self.job_run_requests[job.job_id] = (workflow_id, dict(inputs), safe_options_for_storage(options))
         self.job_memory_profile_fingerprints[job.job_id] = input_profile_fingerprint
+        memory_signatures = (
+            (memory_decision.developer_details or {}).get("memory_signatures")
+            if memory_decision is not None
+            else None
+        )
+        if isinstance(memory_signatures, dict):
+            self.job_memory_signatures[job.job_id] = memory_signatures
         self.job_run_snapshots[job.job_id] = run_submission_snapshot
         self.memory_retry_roots.setdefault(job.job_id, job.job_id)
         self.start_memory_sampling(

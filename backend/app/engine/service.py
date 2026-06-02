@@ -213,6 +213,7 @@ class EngineService:
         self._job_started_at: dict[str, datetime] = {}
         self._job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
         self._job_memory_profile_fingerprints: dict[str, str] = {}
+        self._job_memory_signatures: dict[str, dict[str, Any]] = {}
         self._job_run_snapshots: dict[str, RunSubmissionSnapshot] = {}
 
         # Memory-governor stateful service — owns admission, cleanup, retry,
@@ -228,6 +229,7 @@ class EngineService:
             job_workflows=self._job_workflows,
             job_run_requests=self._job_run_requests,
             job_memory_profile_fingerprints=self._job_memory_profile_fingerprints,
+            job_memory_signatures=self._job_memory_signatures,
             job_run_snapshots=self._job_run_snapshots,
         )
         # Temporary migration alias used by diagnostics and tests.
@@ -262,6 +264,7 @@ class EngineService:
             job_started_at=self._job_started_at,
             job_run_requests=self._job_run_requests,
             job_memory_profile_fingerprints=self._job_memory_profile_fingerprints,
+            job_memory_signatures=self._job_memory_signatures,
             job_run_snapshots=self._job_run_snapshots,
             memory_retry_roots=self.memory_service._memory_retry_roots,
             workflow_run_queue_service=self.workflow_run_queue_service,

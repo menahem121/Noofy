@@ -246,6 +246,9 @@ class LocalMemoryEvidenceSummary(BaseModel):
     machine_profile_id: str | None = None
     backend: MemoryBackend = MemoryBackend.UNKNOWN
     input_profile_fingerprint: str | None = None
+    process_compatibility_signature: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     successful_runs: int = Field(default=0, ge=0)
     memory_error_runs: int = Field(default=0, ge=0)
     other_failed_runs: int = Field(default=0, ge=0)
@@ -292,6 +295,9 @@ class LocalMemoryObservation(BaseModel):
     machine_profile_id: str | None = None
     backend: MemoryBackend = MemoryBackend.UNKNOWN
     input_profile_fingerprint: str | None = None
+    process_compatibility_signature: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     runner_id: str | None = None
     job_id: str | None = None
     runner_root_pid: int | None = Field(default=None, ge=0)
@@ -340,6 +346,9 @@ class WorkflowMemoryEstimate(BaseModel):
     selected_model_kinds: list[str] = Field(default_factory=list)
     lora_count: int = Field(default=0, ge=0)
     lora_strength_total: float = Field(default=0, ge=0)
+    process_compatibility_signature: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     precision: str | None = None
     vram_mode: str | None = None
     reasons: list[str] = Field(default_factory=list)
@@ -396,6 +405,9 @@ class WorkflowMemoryEstimateRequest(BaseModel):
     selected_model_kinds: list[str] = Field(default_factory=list)
     lora_count: int = Field(default=0, ge=0)
     lora_strength_total: float = Field(default=0, ge=0)
+    process_compatibility_signature: str | None = None
+    model_residency_signature: str | None = None
+    execution_profile_signature: str | None = None
     precision: str | None = None
     vram_mode: str | None = None
 
@@ -1486,6 +1498,9 @@ def summarize_local_memory_observations(
         machine_profile_id=first.machine_profile_id,
         backend=first.backend,
         input_profile_fingerprint=first.input_profile_fingerprint,
+        process_compatibility_signature=first.process_compatibility_signature,
+        model_residency_signature=first.model_residency_signature,
+        execution_profile_signature=first.execution_profile_signature,
         successful_runs=successful_runs,
         memory_error_runs=memory_error_runs,
         other_failed_runs=other_failed_runs,
@@ -2742,6 +2757,9 @@ def _estimate_request_fields(request: WorkflowMemoryEstimateRequest) -> dict[str
         "selected_model_kinds": list(request.selected_model_kinds),
         "lora_count": request.lora_count,
         "lora_strength_total": request.lora_strength_total,
+        "process_compatibility_signature": request.process_compatibility_signature,
+        "model_residency_signature": request.model_residency_signature,
+        "execution_profile_signature": request.execution_profile_signature,
         "precision": request.precision,
         "vram_mode": request.vram_mode,
     }

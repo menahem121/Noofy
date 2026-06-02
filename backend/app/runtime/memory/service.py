@@ -44,6 +44,7 @@ from app.runtime.memory.memory_governor import (
 )
 from app.runtime.memory.input_features import (
     ModelSelectionFeatures,
+    build_memory_signature_set,
     extract_model_selection_features,
 )
 from app.runtime.dependencies.isolation import CapsuleLock, InstallState
@@ -104,6 +105,18 @@ class _RunEstimateFeatures:
             "sources": self.sources,
         }
 
+    def execution_profile_payload(self) -> dict[str, Any]:
+        return {
+            "resolution_width": self.resolution_width,
+            "resolution_height": self.resolution_height,
+            "batch_size": self.batch_size,
+            "frame_count": self.frame_count,
+            "effective_batch_size": self.effective_batch_size,
+            "workflow_type": self.workflow_type,
+            "precision": self.precision,
+            "vram_mode": self.vram_mode,
+        }
+
 
 @dataclass(frozen=True)
 class _CustomNodeMemoryUncertainty:
@@ -153,6 +166,7 @@ class MemoryGovernorService:
         job_workflows: dict[str, str],
         job_run_requests: dict[str, tuple[str, dict[str, Any], dict[str, Any]]],
         job_memory_profile_fingerprints: dict[str, str],
+        job_memory_signatures: dict[str, dict[str, Any]],
         job_run_snapshots: dict[str, RunSubmissionSnapshot],
     ) -> None:
         self.runner_supervisor = runner_supervisor
@@ -163,6 +177,7 @@ class MemoryGovernorService:
         self.job_workflows = job_workflows
         self.job_run_requests = job_run_requests
         self.job_memory_profile_fingerprints = job_memory_profile_fingerprints
+        self.job_memory_signatures = job_memory_signatures
         self.job_run_snapshots = job_run_snapshots
 
         self._memory_retry_roots: dict[str, str] = {}
@@ -319,6 +334,11 @@ class MemoryGovernorService:
             input_profile_fingerprint=input_profile_fingerprint,
         )
         estimate_features = _run_estimate_features(package, inputs or {}, options or {})
+        memory_signatures = build_memory_signature_set(
+            runner_process_compatibility_key=runner.runner_process_compatibility_key,
+            model_selections=estimate_features.model_selections,
+            execution_profile=estimate_features.execution_profile_payload(),
+        )
         custom_node_memory = _custom_node_memory_uncertainty(package.custom_nodes)
         estimate = build_workflow_memory_estimate(
             WorkflowMemoryEstimateRequest(
@@ -344,6 +364,9 @@ class MemoryGovernorService:
                 selected_model_kinds=estimate_features.model_selections.selected_model_kinds,
                 lora_count=estimate_features.model_selections.lora_count,
                 lora_strength_total=estimate_features.model_selections.lora_strength_total,
+                process_compatibility_signature=memory_signatures.process_compatibility_signature,
+                model_residency_signature=memory_signatures.model_residency_signature,
+                execution_profile_signature=memory_signatures.execution_profile_signature,
                 custom_node_count=custom_node_memory.count,
                 custom_node_types=custom_node_memory.node_types,
             )
@@ -368,6 +391,10 @@ class MemoryGovernorService:
             )
         )
         developer_details = decision.developer_details
+        developer_details = {
+            **developer_details,
+            "memory_signatures": memory_signatures.diagnostic_details(),
+        }
         if not estimate_features.empty:
             developer_details = {
                 **developer_details,
@@ -725,6 +752,7 @@ class MemoryGovernorService:
             workflow_id=self.job_workflows.get(result.job_id),
             run_request=self.job_run_requests.get(result.job_id),
             input_profile_fingerprint=self.job_memory_profile_fingerprints.get(result.job_id),
+            memory_signatures=self.job_memory_signatures.get(result.job_id),
         )
 
     # ------------------------------------------------------------------
@@ -749,6 +777,7 @@ class MemoryGovernorService:
         input_profile_fingerprint = self.job_memory_profile_fingerprints.get(
             result.job_id
         ) or memory_input_profile_fingerprint(run_request[1], run_request[2])
+        memory_signatures = self.job_memory_signatures.get(result.job_id)
         local_evidence = self._workflow_run_local_evidence(
             workflow_id=workflow_id,
             runner_process_compatibility_key=runner.runner_process_compatibility_key if runner is not None else None,
@@ -764,6 +793,18 @@ class MemoryGovernorService:
                 local_evidence=local_evidence,
                 declared_peak_vram_mb=runner.observed_execution_peak_vram_mb if runner is not None else None,
                 declared_peak_ram_mb=runner.observed_execution_peak_ram_mb if runner is not None else None,
+                process_compatibility_signature=_memory_signature_field(
+                    memory_signatures,
+                    "process_compatibility_signature",
+                ),
+                model_residency_signature=_memory_signature_field(
+                    memory_signatures,
+                    "model_residency_signature",
+                ),
+                execution_profile_signature=_memory_signature_field(
+                    memory_signatures,
+                    "execution_profile_signature",
+                ),
             )
         )
         decision = retry_after_memory_cleanup_decision(
@@ -857,6 +898,16 @@ def _memory_cleanup_failed_job(
             "message": "Noofy could not confirm that enough memory was released for this workflow.",
         },
     )
+
+
+def _memory_signature_field(
+    memory_signatures: dict[str, Any] | None,
+    field: str,
+) -> str | None:
+    if memory_signatures is None:
+        return None
+    value = memory_signatures.get(field)
+    return value if isinstance(value, str) and value else None
 
 
 def _runner_is_active(runner: Any) -> bool:

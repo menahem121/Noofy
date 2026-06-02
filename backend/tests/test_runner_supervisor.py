@@ -1294,6 +1294,7 @@ async def test_workflow_run_memory_estimate_exposes_selected_models_and_loras() 
     assert job.memory_decision is not None
     estimate = job.memory_decision["workflow_estimate"]
     features = job.memory_decision["developer_details"]["runtime_estimate_features"]
+    signatures = job.memory_decision["developer_details"]["memory_signatures"]
 
     assert estimate["selected_model_count"] == 3
     assert estimate["selected_model_kinds"] == [
@@ -1303,6 +1304,17 @@ async def test_workflow_run_memory_estimate_exposes_selected_models_and_loras() 
     ]
     assert estimate["lora_count"] == 1
     assert estimate["lora_strength_total"] == 0.75
+    assert estimate["process_compatibility_signature"] == signatures[
+        "process_compatibility_signature"
+    ]
+    assert estimate["model_residency_signature"] == signatures[
+        "model_residency_signature"
+    ]
+    assert estimate["execution_profile_signature"] == signatures[
+        "execution_profile_signature"
+    ]
+    assert signatures["payloads"]["model_residency"]["selected_models"]
+    assert signatures["payloads"]["execution_profile"]["resolution_width"] == 512
     assert "selected_model_memory_heuristic" in estimate["reasons"]
     assert "lora_memory_heuristic" in estimate["reasons"]
     assert features["selected_model_count"] == 3
@@ -1795,6 +1807,17 @@ async def test_get_result_records_successful_local_observation_without_reusing_s
     assert summary.successful_runs == 1
     assert summary.memory_error_runs == 0
     assert summary.observed_peak_vram_mb is None
+    assert job.memory_decision is not None
+    estimate = job.memory_decision["workflow_estimate"]
+    assert summary.process_compatibility_signature == estimate[
+        "process_compatibility_signature"
+    ]
+    assert summary.model_residency_signature == estimate[
+        "model_residency_signature"
+    ]
+    assert summary.execution_profile_signature == estimate[
+        "execution_profile_signature"
+    ]
 
 
 @pytest.mark.anyio
@@ -2443,6 +2466,18 @@ async def test_get_result_retries_once_after_memory_cleanup(tmp_path: Path) -> N
     assert retry_job.status == "queued"
     assert retry_job.memory_decision is not None
     assert retry_job.memory_decision["action"] == "retry_after_memory_cleanup"
+    retry_estimate = retry_job.memory_decision["workflow_estimate"]
+    assert job.memory_decision is not None
+    initial_estimate = job.memory_decision["workflow_estimate"]
+    assert retry_estimate["process_compatibility_signature"] == initial_estimate[
+        "process_compatibility_signature"
+    ]
+    assert retry_estimate["model_residency_signature"] == initial_estimate[
+        "model_residency_signature"
+    ]
+    assert retry_estimate["execution_profile_signature"] == initial_estimate[
+        "execution_profile_signature"
+    ]
     assert retry_job.memory_status is not None
     assert retry_job.memory_status["state"] == "retrying_after_memory_cleanup"
     assert adapter.run_calls == [("job-1", {"prompt": "hello"}), ("job-2", {"prompt": "hello"})]
