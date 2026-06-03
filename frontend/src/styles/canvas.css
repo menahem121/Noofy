@@ -502,11 +502,12 @@
 
 .widget-output-video {
   flex: 1;
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   min-height: 0;
   overflow: auto;
+  padding-bottom: 2px;
 }
 
 .widget-output-video__item {
@@ -519,10 +520,24 @@
   background: rgba(20, 19, 22, 0.42);
 }
 
+.widget-output-video__item:only-child {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: minmax(96px, 1fr) auto auto;
+}
+
 .widget-output-video__player {
+  display: block;
   width: 100%;
+  height: auto;
+  min-height: 0;
   max-height: 360px;
+  object-fit: contain;
   background: rgba(20, 19, 22, 0.72);
+}
+
+.widget-output-video__item:only-child .widget-output-video__player {
+  height: 100%;
 }
 
 .widget-output-video__meta {
