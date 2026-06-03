@@ -1020,8 +1020,12 @@ function GroupedCanvasControls({
     <div className="canvas-widget-group">
       {item.controls.map((control) => {
         const isOutput = isOutputControlType(control.type);
+        const controlClasses = [
+          "canvas-widget-group__control",
+          control.type === "textarea" ? "canvas-widget-group__control--textarea" : "",
+        ].filter(Boolean).join(" ");
         return (
-          <div className="canvas-widget-group__control" key={control.id}>
+          <div className={controlClasses} key={control.id}>
             {control.type !== "note" && control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
             {control.type === "note" ? (
               <DashboardNoteBody title={control.label} body={control.description} />

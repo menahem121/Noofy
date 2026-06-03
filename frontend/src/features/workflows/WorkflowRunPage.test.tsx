@@ -2237,6 +2237,69 @@ describe("WorkflowRunPage", () => {
     expect(cancelButton.compareDocumentPosition(optionsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("lets grouped multiline text controls expand inside their group widget", async () => {
+    const groupedPackageData = {
+      ...configuredPackageData,
+      inputs: [
+        configuredPackageData.inputs[0],
+        {
+          id: "negative_prompt",
+          label: "Negative Prompt",
+          control: "textarea",
+          binding: { node_id: "7", input_name: "text" },
+          default: "low quality, blurry",
+          validation: {},
+        },
+      ],
+      outputs: [],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "prompt",
+                type: "textarea",
+                label: "Prompt",
+                input_id: "prompt",
+                description: "Describe what you want to create.",
+              },
+              {
+                id: "negative_prompt",
+                type: "textarea",
+                label: "Negative Prompt",
+                input_id: "negative_prompt",
+                description: "Describe what you don't want to create.",
+              },
+            ],
+            groups: [
+              {
+                id: "prompt-group",
+                title: "Prompt + Negative Prompt",
+                control_ids: ["prompt", "negative_prompt"],
+                layout: { x: 0, y: 0, w: 24, h: 18 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, groupedPackageData);
+
+    renderRunPage();
+
+    expect(await screen.findByText("Prompt + Negative Prompt")).toBeInTheDocument();
+    const groupedTextareaControls = document.querySelectorAll(".canvas-widget-group__control--textarea");
+
+    expect(groupedTextareaControls).toHaveLength(2);
+    groupedTextareaControls.forEach((control) => {
+      expect(control.querySelector(".canvas-widget-textarea")).toBeInTheDocument();
+    });
+    expect(canvasCss).toMatch(/\.canvas-widget-group__control--textarea\s*{[^}]*flex:\s*1 1 0;/);
+  });
+
   it("renders generated audio with backend-owned player, download, open, and Auto Save actions", async () => {
     const audioPackageData = {
       ...configuredPackageData,

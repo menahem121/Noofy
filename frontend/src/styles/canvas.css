@@ -346,6 +346,10 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
+.canvas-widget-group__control--textarea {
+  flex: 1 1 0;
+}
+
 .canvas-widget-group__description {
   margin: 0;
   color: var(--text-muted);
