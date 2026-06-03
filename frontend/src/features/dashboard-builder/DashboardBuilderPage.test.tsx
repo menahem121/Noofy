@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderPage } from "./DashboardBuilderPage";
@@ -357,6 +357,32 @@ describe("DashboardBuilderPage", () => {
     await screen.findByTestId("created-widget-ctrl-node-6-text");
     return onContinue;
   }
+
+  it("searches workflow values by their current node value", async () => {
+    await renderDragBuilder(dragSchema());
+    const valuesPanel = screen.getByLabelText("Workflow values");
+
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+      target: { value: "lake" },
+    });
+
+    expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
+    expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
+
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+      target: { value: "positive lake" },
+    });
+
+    expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
+
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+      target: { value: "positive blurry" },
+    });
+
+    expect(within(valuesPanel).queryByText("Positive prompt")).not.toBeInTheDocument();
+    expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
+    expect(within(valuesPanel).getByText("No values match your search.")).toBeInTheDocument();
+  });
 
   it("reorders top-level widgets through horizontal insertion zones and saves that order", async () => {
     const onContinue = await renderDragBuilder(dragSchema());

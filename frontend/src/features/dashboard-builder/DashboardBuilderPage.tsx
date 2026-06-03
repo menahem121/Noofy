@@ -253,18 +253,12 @@ export function DashboardBuilderPage({
 
   const filteredNodes = useMemo(() => {
     if (!builderReady || !workflow) return [];
-    const query = search.trim().toLowerCase();
-    if (!query) return workflow.nodes;
+    const queryTerms = normalizeSearchText(search).split(/\s+/).filter(Boolean);
+    if (queryTerms.length === 0) return workflow.nodes;
 
     return workflow.nodes
       .map((node) => {
-        const filteredValues = node.values.filter((value) => {
-          return (
-            value.label.toLowerCase().includes(query) ||
-            node.title.toLowerCase().includes(query) ||
-            node.classType.toLowerCase().includes(query)
-          );
-        });
+        const filteredValues = node.values.filter((value) => valueMatchesSearch(node, value, queryTerms));
         return { ...node, values: filteredValues };
       })
       .filter((node) => node.values.length > 0);
@@ -988,6 +982,40 @@ function DashboardBuilderLoadingState() {
       </div>
     </div>
   );
+}
+
+function normalizeSearchText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.toLocaleLowerCase();
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).toLocaleLowerCase();
+  }
+  try {
+    return JSON.stringify(value).toLocaleLowerCase();
+  } catch {
+    return String(value).toLocaleLowerCase();
+  }
+}
+
+function valueMatchesSearch(node: WorkflowNode, value: WorkflowNodeValue, queryTerms: string[]): boolean {
+  const searchableText = [
+    node.id,
+    node.title,
+    node.classType,
+    value.id,
+    value.nodeId,
+    value.inputName,
+    value.label,
+    value.valueKind,
+    value.hint,
+    value.rawValue,
+    ...(value.options ?? []),
+  ]
+    .map(normalizeSearchText)
+    .filter(Boolean)
+    .join(" ");
+
+  return queryTerms.every((term) => searchableText.includes(term));
 }
 
 function NodeListItem({
