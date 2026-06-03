@@ -548,6 +548,32 @@ export function CanvasDashboardView({
             </>
           ) : (
             <>
+              <CanvasBatchCountStepper value={batchCount} onChange={onBatchCountChange} />
+              <button
+                className="primary-button canvas-action-cluster__run"
+                type="button"
+                disabled={!runState.canRun}
+                title={!runState.canRun && runState.disabledReason ? runState.disabledReason : undefined}
+                aria-describedby={!runState.canRun && runState.disabledReason ? "canvas-run-disabled-reason" : undefined}
+                onClick={onRun}
+              >
+                {runState.isRunning ? (
+                  <Loader2 className="spin" size={16} aria-hidden="true" />
+                ) : (
+                  <Play size={16} aria-hidden="true" />
+                )}
+                Run Workflow
+              </button>
+              <button
+                className="secondary-button canvas-action-cluster__cancel"
+                type="button"
+                disabled={!runState.canCancel}
+                title={runState.cancelTitle ?? undefined}
+                onClick={onCancel}
+              >
+                <Square size={14} aria-hidden="true" />
+                {runState.cancelLabel ?? "Cancel Run"}
+              </button>
               <div className="canvas-options-menu" ref={optionsRef}>
                 <button
                   className="icon-button canvas-options-menu__trigger"
@@ -622,34 +648,7 @@ export function CanvasDashboardView({
                   </div>
                 ) : null}
               </div>
-
-              <button
-                className="secondary-button canvas-action-cluster__cancel"
-                type="button"
-                disabled={!runState.canCancel}
-                title={runState.cancelTitle ?? undefined}
-                onClick={onCancel}
-              >
-                <Square size={14} aria-hidden="true" />
-                {runState.cancelLabel ?? "Cancel Run"}
-              </button>
               {runState.memoryLoaded ? <CanvasMemoryLoadedPill /> : null}
-              <CanvasBatchCountStepper value={batchCount} onChange={onBatchCountChange} />
-              <button
-                className="primary-button canvas-action-cluster__run"
-                type="button"
-                disabled={!runState.canRun}
-                title={!runState.canRun && runState.disabledReason ? runState.disabledReason : undefined}
-                aria-describedby={!runState.canRun && runState.disabledReason ? "canvas-run-disabled-reason" : undefined}
-                onClick={onRun}
-              >
-                {runState.isRunning ? (
-                  <Loader2 className="spin" size={16} aria-hidden="true" />
-                ) : (
-                  <Play size={16} aria-hidden="true" />
-                )}
-                Run Workflow
-              </button>
               {(runState.showStatusNotice || (!runState.canRun && runState.disabledReason)) ? (
                 <div className="canvas-action-cluster__reason" id="canvas-run-disabled-reason" role="status">
                   <AlertCircle size={14} aria-hidden="true" />

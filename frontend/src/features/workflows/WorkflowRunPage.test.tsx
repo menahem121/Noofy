@@ -2221,6 +2221,22 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("orders workflow toolbar controls as batch, run, cancel, then options", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    await screen.findByRole("button", { name: /workflow options/i });
+    const batch = screen.getByRole("spinbutton", { name: "Batch count" }).closest(".canvas-batch-count-stepper") as HTMLElement;
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    const cancelButton = screen.getByRole("button", { name: /cancel run/i });
+    const optionsButton = screen.getByRole("button", { name: /workflow options/i });
+
+    expect(batch.compareDocumentPosition(runButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(runButton.compareDocumentPosition(cancelButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(cancelButton.compareDocumentPosition(optionsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("renders generated audio with backend-owned player, download, open, and Auto Save actions", async () => {
     const audioPackageData = {
       ...configuredPackageData,
