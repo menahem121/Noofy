@@ -588,6 +588,14 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+.workspace-card--github .workspace-card__avatar {
+  background: #0d1117;
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
 .workspace-card p {
   margin: 0 0 2px;
   font-size: 14px;

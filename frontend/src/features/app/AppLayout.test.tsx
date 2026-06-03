@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +11,8 @@ import { AppLayout, SidebarProvider } from "./AppLayout";
 vi.mock("../../lib/openExternalUrl", () => ({
   openExternalUrl: vi.fn(),
 }));
+
+const layoutCss = readFileSync(resolve(process.cwd(), "src/styles/layout.css"), "utf8");
 
 describe("AppLayout sidebar", () => {
   it("replaces the workspace status card with a GitHub repository card", () => {
@@ -22,6 +27,8 @@ describe("AppLayout sidebar", () => {
     expect(screen.queryByText("AI Workspace")).not.toBeInTheDocument();
     expect(screen.getByText("Noofy on GitHub")).toBeInTheDocument();
     expect(screen.getByText("View source & updates")).toBeInTheDocument();
+    expect(layoutCss).toContain(".workspace-card--github .workspace-card__avatar");
+    expect(layoutCss).toContain("background: #0d1117;");
 
     fireEvent.click(screen.getByRole("button", { name: "Open Noofy on GitHub" }));
 
