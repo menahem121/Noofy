@@ -779,6 +779,19 @@ describe("WorkflowsPage", () => {
     expect(onOpenWorkflow).toHaveBeenCalledWith("native_text");
   });
 
+  it("renders the workflow action menu outside row layout flow", async () => {
+    renderPage();
+
+    const workflowName = await screen.findByText("Native Text");
+    const row = workflowName.closest(".workflow-row");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
+
+    const menu = screen.getByRole("menu");
+    expect(menu.closest(".workflow-row")).toBeNull();
+    expect(row).not.toContainElement(menu);
+    expect(menu).toHaveStyle({ position: "fixed", visibility: "visible" });
+  });
+
   it("loads the workflow package before opening dashboard editing", async () => {
     renderPage();
 

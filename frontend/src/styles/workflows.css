@@ -763,11 +763,11 @@
 }
 
 .workflow-action-menu__content {
-  position: absolute;
+  position: fixed;
   z-index: 40;
-  top: calc(100% + 8px);
-  right: 0;
   width: 210px;
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
   padding: 6px;
   border-radius: 12px;
   background: var(--deep-bg);

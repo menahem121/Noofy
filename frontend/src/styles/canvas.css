@@ -821,8 +821,9 @@
 
 .canvas-widget-textarea {
   width: 100%;
-  flex: 1;
+  flex: 1 1 0;
   min-height: 80px;
+  overflow: auto;
   padding: 10px 11px;
   border-radius: 10px;
   background: var(--surface-2);

@@ -1,8 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderLayoutPage } from "./DashboardBuilderLayoutPage";
 import { dashboardDraftKey, type DashboardSchema } from "./dashboardBuilderContent";
+
+const builderLayoutCss = readFileSync(resolve(process.cwd(), "src/styles/dashboard-builder.css"), "utf8");
+const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -281,6 +286,14 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(document.querySelector(".layout-canvas__surface")).toHaveStyle({
       "--layout-surface-min-height": "768px",
     });
+  });
+
+  it("lets multiline text widgets fill the resized canvas widget height", () => {
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget__preview-surface\s*{[^}]*flex:\s*1;/);
+    expect(builderLayoutCss).toMatch(/\.layout-preview-input--textarea\s*{[^}]*flex:\s*1;/);
+    expect(builderLayoutCss).toMatch(/\.layout-preview-input--textarea\s*{[^}]*overflow:\s*auto;/);
+    expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*flex:\s*1 1 0;/);
+    expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*overflow:\s*auto;/);
   });
 
   it("moves placed widgets by dragging the card body on snapped grid cells", async () => {
