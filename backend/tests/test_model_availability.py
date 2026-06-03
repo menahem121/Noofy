@@ -279,6 +279,54 @@ def test_model_summary_persists_and_reuses_cached_sha256(
     assert second.models[0].matched_sha256 == sha
 
 
+def test_listing_honors_cached_hash_without_rehashing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "checkpoints" / "demo.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db")
+    service = _service(noofy_root=noofy_root, local_model_identity_store=store)
+    package = _package(
+        [
+            RequiredModel(
+                folder="checkpoints",
+                filename="demo.safetensors",
+                checksum=f"sha256:{sha}",
+                size_bytes=len(payload),
+                verification_level="sha256_size",
+            )
+        ]
+    )
+
+    original_sha256_file = availability_module._sha256_file
+
+    def fail_if_hashing(path: Path) -> str:
+        raise AssertionError("listing must not hash model files")
+
+    # Before the file has ever been verified, listing cannot prove the hash and
+    # must not hash while listing, so it reports a possible match (surfaced as
+    # "Never used" in the inventory).
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+    before = service.summarize(package, verify_hashes=False)
+    assert before.models[0].status == "possible_match"
+
+    # A verification (as performed when a workflow is opened or run) caches the
+    # confirmed hash.
+    monkeypatch.setattr(availability_module, "_sha256_file", original_sha256_file)
+    service.summarize(package)
+
+    # Listing then honors that cached hash without re-hashing.
+    monkeypatch.setattr(availability_module, "_sha256_file", fail_if_hashing)
+    after = service.summarize(package, verify_hashes=False)
+    assert after.models[0].status == "available"
+    assert after.models[0].matched_sha256 == sha
+
+
 def test_model_summary_invalidates_cache_when_size_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

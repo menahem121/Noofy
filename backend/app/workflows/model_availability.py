@@ -1172,13 +1172,15 @@ class ModelAvailabilityService:
             if status == "available":
                 # The status check above already hashed (and cached) this file when
                 # needed, so this lookup is a cache hit; pass no metrics to avoid
-                # double-counting the same file.
-                matched_sha256 = (
-                    self._cached_sha256_file(candidate, root=root)
-                    if verify_hashes
-                    and model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
-                    else None
-                )
+                # double-counting the same file. When listing (verify_hashes=False)
+                # nothing is hashed, but an "available" sha256 result came from a
+                # cached verification, so surface that cached hash without computing.
+                if model.verification_level is ModelVerificationLevel.FILENAME_ONLY:
+                    matched_sha256 = None
+                elif verify_hashes:
+                    matched_sha256 = self._cached_sha256_file(candidate, root=root)
+                else:
+                    matched_sha256 = self._remembered_sha256(candidate, root=root)
                 return RequiredModelAvailability(
                     **base,
                     status="available",
@@ -1236,9 +1238,17 @@ class ModelAvailabilityService:
                 return "possible_match"
             if size != model.size_bytes:
                 return "possible_match"
+            expected = _normalize_sha256(model.checksum)
             if not verify_hashes:
-                return "possible_match"
-            return "available" if self._cached_sha256_file(path, root=root, metrics=metrics) == _normalize_sha256(model.checksum) else "possible_match"
+                # Listing must not hash files, but a hash computed during an
+                # earlier verification (opening or running a workflow) is cached.
+                # Honor that cached result so a model that was already verified
+                # stops being reported as an unverified "possible match".
+                cached = self._remembered_sha256(path, root=root)
+                if cached is None:
+                    return "possible_match"
+                return "available" if cached == expected else "possible_match"
+            return "available" if self._cached_sha256_file(path, root=root, metrics=metrics) == expected else "possible_match"
         if model.verification_level is ModelVerificationLevel.FILENAME_SIZE:
             return "available" if model.size_bytes is not None and size == model.size_bytes else "possible_match"
         return "possible_match"
@@ -1556,6 +1566,33 @@ class ModelAvailabilityService:
                 )
             return actual
         return known_sha256
+
+    def _remembered_sha256(self, path: Path, *, root: Path) -> str | None:
+        """Return a previously cached SHA-256 without computing it.
+
+        Used by listing paths (``verify_hashes=False``) so a model already
+        verified during a workflow open or run reflects as available without
+        paying to re-hash the file while listing. A cache miss returns ``None``;
+        the caller treats that as an unverified possible match.
+        """
+        if self.local_model_identity_store is None:
+            return None
+        context = self._local_identity_context(path, root=root)
+        try:
+            return self.local_model_identity_store.get_valid_hash(path, context)
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Local model hash cache lookup failed",
+                "workflow.models.cache",
+                details={
+                    "path": str(path),
+                    "root_type": context.root_type,
+                    "relative_path": context.relative_path,
+                    "error": str(exc),
+                },
+            )
+            return None
 
     def _cached_sha256_file(
         self,
