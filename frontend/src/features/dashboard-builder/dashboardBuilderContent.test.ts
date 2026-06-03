@@ -5,6 +5,7 @@ import {
   addAutomaticVideoOutputWidget,
   addAutomaticImageInputWidgets,
   addAutomaticNoteWidgets,
+  normalizeDashboardSchema,
   buildInitialDashboard,
   createDashboardWidgetForValue,
   dashboardDraftKey,
@@ -292,6 +293,82 @@ describe("saveDashboardDraft", () => {
 
     expect(loadDashboardDraft("wf-1")).toMatchObject({ workflowId: "wf-1", workflowName: "Workflow" });
     expect(loadDashboardDraft("other-workflow")).toBeNull();
+  });
+});
+
+describe("normalizeDashboardSchema", () => {
+  it("collapses duplicate output widgets that target the same node and kind", () => {
+    // Stale state (e.g. a draft saved before the output-dedup fix, reloaded
+    // after a reimport) can hold two display widgets for the same output node,
+    // one keyed by the builder's synthetic value id and one rebuilt from a
+    // saved dashboard. Loading it must heal back to a single widget, keeping
+    // the placed one.
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-75-output_video",
+          valueId: "node-75-output_video",
+          binding: { nodeId: "75", inputName: "output_video" },
+          widgetType: "display_video",
+          title: "Output video",
+          description: "",
+          defaultValue: null,
+        },
+        {
+          id: "c_result",
+          valueId: "video",
+          binding: { nodeId: "75", inputName: "" },
+          widgetType: "display_video",
+          title: "Video Output",
+          description: "",
+          defaultValue: null,
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ],
+    };
+
+    const normalized = normalizeDashboardSchema(schema);
+
+    expect(normalized.widgets).toHaveLength(1);
+    // The placed widget wins so its layout is preserved.
+    expect(normalized.widgets[0].id).toBe("c_result");
+  });
+
+  it("keeps distinct output widgets that target different nodes", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "a",
+          valueId: "node-9-output_image",
+          binding: { nodeId: "9", inputName: "output_image" },
+          widgetType: "display_image",
+          title: "Result A",
+          description: "",
+          defaultValue: null,
+        },
+        {
+          id: "b",
+          valueId: "node-10-output_image",
+          binding: { nodeId: "10", inputName: "output_image" },
+          widgetType: "display_image",
+          title: "Result B",
+          description: "",
+          defaultValue: null,
+        },
+      ],
+    };
+
+    expect(normalizeDashboardSchema(schema).widgets).toHaveLength(2);
   });
 });
 

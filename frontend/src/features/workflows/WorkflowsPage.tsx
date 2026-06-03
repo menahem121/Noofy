@@ -36,7 +36,7 @@ import { workflowDisplayName } from "../../lib/workflowNames";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import { clearDashboardDraft, type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
@@ -254,6 +254,10 @@ export function WorkflowsPage({
     const confirmed = window.confirm(`Remove "${workflowDisplayName(workflow)}" from Noofy?`);
     if (!confirmed) return;
     await removeWorkflow(workflow.id);
+    // Drop the local builder draft so a future reimport (which reuses the same
+    // deterministic workflow id) starts from the freshly imported dashboard
+    // instead of resurrecting stale, possibly-duplicated widgets.
+    clearDashboardDraft(workflow.id);
     if (selectedWorkflowId === workflow.id) {
       setDetailsPanelOpen(false);
       setSelectedWorkflowId(null);

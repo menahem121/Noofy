@@ -1255,8 +1255,42 @@ export function addAutomaticThreeDOutputWidget(schema: DashboardSchema, workflow
   };
 }
 
+/**
+ * Collapse duplicate widgets that can accumulate in stale state. Two output
+ * widgets that target the same node and media kind are always redundant (a
+ * SaveVideo node produces a single video output), so only the first — or the
+ * placed one, if any — is kept. This makes the schema self-healing: a draft or
+ * saved dashboard authored before the output dedup fix is corrected the moment
+ * it is loaded, instead of resurfacing the duplicate after a reimport. Widgets
+ * sharing an id are also collapsed so a corrupt schema cannot break React keys.
+ */
+function dedupeWidgets(widgets: DashboardWidget[]): DashboardWidget[] {
+  const outputKeyOf = (widget: DashboardWidget) =>
+    `${mediaKindForOutputWidget(widget.widgetType)}:${widget.binding.nodeId}`;
+  const chosenOutputByKey = new Map<string, DashboardWidget>();
+  for (const widget of widgets) {
+    if (!isOutputWidgetType(widget.widgetType)) continue;
+    const existing = chosenOutputByKey.get(outputKeyOf(widget));
+    if (!existing || (!existing.layout && widget.layout)) {
+      chosenOutputByKey.set(outputKeyOf(widget), widget);
+    }
+  }
+
+  const seenIds = new Set<string>();
+  const result: DashboardWidget[] = [];
+  for (const widget of widgets) {
+    if (seenIds.has(widget.id)) continue;
+    if (isOutputWidgetType(widget.widgetType) && chosenOutputByKey.get(outputKeyOf(widget)) !== widget) {
+      continue;
+    }
+    seenIds.add(widget.id);
+    result.push(widget);
+  }
+  return result;
+}
+
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
-  const widgets = Array.isArray(schema.widgets) ? schema.widgets : [];
+  const widgets = dedupeWidgets(Array.isArray(schema.widgets) ? schema.widgets : []);
   const widgetIds = new Set(widgets.map((widget) => widget.id));
   const usedWidgetIds = new Set<string>();
   const usedGroupIds = new Set<string>();

@@ -28,7 +28,7 @@ import {
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import { clearDashboardDraft, type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/WorkflowImportModals";
@@ -478,6 +478,9 @@ export function HomePage({
     setCardActionError(null);
     try {
       await removeWorkflow(workflowId);
+      // Drop the local builder draft so a future reimport (same deterministic
+      // workflow id) does not resurrect stale, possibly-duplicated widgets.
+      clearDashboardDraft(workflowId);
       await refreshWorkflows();
     } catch (error) {
       setCardActionError(error instanceof Error ? error.message : String(error));
