@@ -1,9 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
+
+const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -1408,6 +1412,50 @@ describe("WorkflowRunPage", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("does not show generic memory monitoring copy as a warning", async () => {
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, {
+      job_id: "memory-monitoring",
+      workflow_id: "text_to_image_v0",
+      engine: "noofy",
+      status: "running",
+      message: "Noofy will try this workflow and watch memory closely.",
+      memory_decision: {
+        action: "allow_with_monitoring",
+        reason_code: "monitoring_only",
+      },
+      memory_status: {
+        state: "monitoring_memory",
+        message: "Noofy will try this workflow and watch memory closely.",
+        risk_level: "medium",
+        queue_id: null,
+        can_cancel: true,
+        can_retry_after_cleanup: false,
+      },
+    }, (url) => {
+      if (!url.endsWith("/api/jobs/memory-monitoring/progress")) return undefined;
+      return jsonResponse({
+        job_id: "memory-monitoring",
+        status: "running",
+        value: null,
+        max: null,
+        current_node: null,
+        message: "Generating image...",
+      });
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/workflows/text_to_image_v0/run"))).toBe(true);
+    });
+    expect(screen.queryByText("Memory status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy will try this workflow and watch memory closely.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Developer details")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -2958,6 +3006,14 @@ describe("WorkflowRunPage", () => {
           (init as RequestInit | undefined)?.method === "PUT",
       ),
     ).toBe(false);
+  });
+
+  it("keeps the desktop workflow action bar controls on one row", () => {
+    expect(canvasCss).toMatch(/\.canvas-action-cluster\s*{[^}]*flex-wrap:\s*nowrap;/);
+    expect(canvasCss).toMatch(/\.canvas-action-cluster__run\s*,\s*\.canvas-action-cluster__download\s*{[^}]*flex:\s*0 0 auto;/);
+    expect(canvasCss).toMatch(/\.canvas-memory-loaded-pill\s*{[^}]*flex:\s*0 0 auto;/);
+    expect(canvasCss).toMatch(/\.canvas-batch-count-stepper\s*{[^}]*flex:\s*0 0 auto;/);
+    expect(canvasCss).toMatch(/\.canvas-action-cluster:not\(\.canvas-action-cluster--positioned\)\s*{[^}]*flex-wrap:\s*wrap;/);
   });
 
   it("uses a local action bar position before the creator-defined package position", async () => {

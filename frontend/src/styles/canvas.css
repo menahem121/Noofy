@@ -43,7 +43,7 @@
   z-index: 30;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 6px;
   max-width: calc(100% - 20px);
@@ -95,6 +95,7 @@
 
 .canvas-options-menu {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .canvas-options-menu__trigger {
@@ -147,6 +148,7 @@
 .canvas-action-cluster__cancel,
 .canvas-action-cluster__run,
 .canvas-action-cluster__download {
+  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 10px;
   gap: 6px;
@@ -157,6 +159,7 @@
 .canvas-memory-loaded-pill {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 5px;
   min-height: 32px;
   padding: 0 8px;
@@ -170,6 +173,7 @@
 
 .canvas-batch-count-stepper {
   display: inline-grid;
+  flex: 0 0 auto;
   grid-template-columns: 38px 16px;
   height: 32px;
   overflow: hidden;
@@ -949,6 +953,7 @@
   .canvas-action-cluster:not(.canvas-action-cluster--positioned) {
     left: 10px;
     right: 10px;
+    flex-wrap: wrap;
     justify-content: flex-end;
   }
 

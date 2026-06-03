@@ -1192,6 +1192,7 @@ export function WorkflowRunPage({
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
   const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
   const showMemoryLoadedPill = Boolean(memoryStatus && isWarmReusableMemoryState(memoryStatus.state));
+  const showUserFacingMemoryNotice = Boolean(memoryNotice && !showMemoryLoadedPill && memoryNotice.title !== "Memory status");
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
     runtimeStatus.backendStatus === "reachable" &&
@@ -1446,7 +1447,7 @@ export function WorkflowRunPage({
       {memoryStatus && showMemoryLoadedPill ? (
         <MemoryLoadedPill />
       ) : null}
-      {memoryStatus && !showMemoryLoadedPill ? (
+      {memoryStatus && showUserFacingMemoryNotice ? (
         <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
           <AlertCircle size={16} aria-hidden="true" />
           <div>
@@ -1590,12 +1591,12 @@ export function WorkflowRunPage({
             memoryLoaded: showMemoryLoadedPill,
             cancelLabel: remainingTrackedRunCount > 1 ? "Cancel Runs" : "Cancel Run",
             cancelTitle: cancelTooltip,
-            showStatusNotice: Boolean(memoryNotice && !showMemoryLoadedPill),
-            statusTitle: memoryNotice?.title ?? null,
-            statusMessage: memoryNotice?.message ?? null,
+            showStatusNotice: showUserFacingMemoryNotice,
+            statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
+            statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
             disabledReason: runDisabledReason,
             disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
-            developerDetails: memoryDiagnostics,
+            developerDetails: showUserFacingMemoryNotice || runDisabledReason ? memoryDiagnostics : null,
           }}
           batchCount={batchCount}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
