@@ -18,6 +18,7 @@ import type { NativeWorkflowImportRequest } from "../../lib/nativeWorkflowFiles"
 
 // Replace with your real Reddit community URL when ready.
 const REDDIT_URL = "https://www.reddit.com/r/noofy";
+const REDDIT_ICON_URL = "/assets/reddit_icon.svg";
 
 import {
   exportWorkflowComfyJsonUrl,
@@ -628,8 +629,8 @@ export function HomePage({
               </label>
             </article>
 
-            <article className="action-card action-card--accent">
-              <div className="action-card__icon action-card__icon--accent">
+            <article className="action-card action-card--accent action-card--reddit">
+              <div className="action-card__icon action-card__icon--accent action-card__icon--reddit">
                 <Users size={26} aria-hidden="true" />
               </div>
               <div>
@@ -637,11 +638,11 @@ export function HomePage({
                 <p>Share workflows, ask questions, and follow Noofy's progress with other local AI builders.</p>
               </div>
               <button
-                className="primary-button primary-button--compact"
+                className="primary-button primary-button--compact primary-button--reddit"
                 type="button"
                 onClick={() => void openExternalUrl(REDDIT_URL)}
               >
-                <Users size={16} aria-hidden="true" />
+                <img className="reddit-icon" src={REDDIT_ICON_URL} alt="" aria-hidden="true" />
                 Open Reddit
               </button>
             </article>

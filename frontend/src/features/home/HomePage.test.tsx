@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { HomePage } from "./HomePage";
 import { WorkflowLibraryProvider } from "./WorkflowLibraryProvider";
+
+const componentsCss = readFileSync(resolve(process.cwd(), "src/styles/components.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -174,6 +179,24 @@ describe("HomePage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   }
+
+  it("uses Reddit orange accents for the community action", () => {
+    mockSearchableHome();
+
+    renderHomePage();
+
+    const redditButton = screen.getByRole("button", { name: /open reddit/i });
+    const redditCard = screen.getByRole("heading", { name: "Join the Reddit Community" }).closest(".action-card");
+    const redditIcon = redditButton.querySelector(".reddit-icon");
+
+    expect(redditButton).toHaveClass("primary-button--reddit");
+    expect(redditIcon).toBeInTheDocument();
+    expect(redditIcon).toHaveAttribute("src", "/assets/reddit_icon.svg");
+    expect(redditCard).toHaveClass("action-card--reddit");
+    expect(componentsCss).toContain(".primary-button--reddit");
+    expect(componentsCss).toContain("#ff4500");
+    expect(componentsCss).toContain("rgba(255, 69, 0");
+  });
 
   it("loads backend runtime and workflow summaries through the Noofy API", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {

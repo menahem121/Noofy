@@ -340,6 +340,14 @@
   border-color: rgba(139, 92, 246, 0.35);
 }
 
+.action-card--reddit {
+  border-color: rgba(255, 69, 0, 0.5);
+}
+
+.action-card--reddit:hover {
+  border-color: rgba(255, 69, 0, 0.76);
+}
+
 .action-card__icon,
 .workflow-card__icon,
 .recent-row__icon {
@@ -361,6 +369,12 @@
   color: #e9ddff;
   background: var(--purple-soft);
   border-color: rgba(139, 92, 246, 0.38);
+}
+
+.action-card__icon--reddit {
+  color: #fff4ef;
+  background: rgba(255, 69, 0, 0.16);
+  border-color: rgba(255, 69, 0, 0.48);
 }
 
 .action-card h2,
@@ -2903,6 +2917,26 @@ button.dashboard-image-input__surface {
   min-height: 38px;
   padding: 0 14px;
   font-size: 13px;
+}
+
+.primary-button--reddit {
+  background: linear-gradient(135deg, #ff4500, #d83a00);
+}
+
+.primary-button--reddit:hover {
+  background: linear-gradient(135deg, #ff6a33, #ff4500);
+}
+
+.primary-button--reddit:focus-visible {
+  outline-color: rgba(255, 69, 0, 0.92);
+  box-shadow: 0 0 0 3px rgba(255, 69, 0, 0.2);
+}
+
+.primary-button--reddit .reddit-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
 }
 
 .secondary-button {
