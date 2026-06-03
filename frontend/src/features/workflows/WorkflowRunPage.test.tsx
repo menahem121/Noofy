@@ -398,6 +398,9 @@ function mockConfiguredDashboardFetch(
     if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(packageData));
     if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
     if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+    if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+      return Promise.resolve(jsonResponse({ active_count: 0, queued_count: 0, total_count: 0 }));
+    }
     if (url.endsWith("/api/workflows/text_to_image_v0/export") && init?.method === "POST") {
       return Promise.resolve(new Response(new Uint8Array([110, 111, 111, 102, 121])));
     }
@@ -956,7 +959,7 @@ describe("WorkflowRunPage", () => {
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByText("0%")).toBeInTheDocument();
     expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
 
@@ -1337,7 +1340,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText(/Started best-effort job memory sampling/)).toBeInTheDocument();
   });
 
-  it("shows a memory waiting state without polling a queue id", async () => {
+  it("shows a memory waiting state and tracks the queue id", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1374,6 +1377,20 @@ describe("WorkflowRunPage", () => {
         );
       }
 
+      if (url.endsWith("/api/jobs/workflow-run-queue-text_to_image_v0-1/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "workflow-run-queue-text_to_image_v0-1",
+            queue_id: "workflow-run-queue-text_to_image_v0-1",
+            status: "queued_pending_memory",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "This workflow is waiting until the current GPU work finishes.",
+          }),
+        );
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
@@ -1384,11 +1401,13 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText("Waiting for the GPU")).toBeInTheDocument();
     expect(screen.getAllByText("This workflow is waiting until the current GPU work finishes.").length).toBeGreaterThan(0);
-    expect(
-      fetchMock.mock.calls.some(([input]) =>
-        String(input).includes("/api/jobs/workflow-run-queue-text_to_image_v0-1/progress"),
-      ),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/jobs/workflow-run-queue-text_to_image_v0-1/progress"),
+        ),
+      ).toBe(true);
+    });
   });
 
   it.each([
@@ -1459,6 +1478,17 @@ describe("WorkflowRunPage", () => {
         can_cancel: status === "queued_pending_memory",
         can_retry_after_cleanup: state === "retrying_after_memory_cleanup",
       },
+    }, (url) => {
+      if (status !== "queued_pending_memory" || !url.endsWith(`/api/jobs/memory-${state}/progress`)) return undefined;
+      return jsonResponse({
+        job_id: `memory-${state}`,
+        queue_id: `memory-${state}`,
+        status,
+        value: null,
+        max: null,
+        current_node: null,
+        message,
+      });
     });
 
     renderRunPage();
@@ -1474,6 +1504,57 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("Developer details")).toBeInTheDocument();
     expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
   });
+
+  it.each(["ready_warm_co_resident", "ready_reusing_runner"])(
+    "shows a compact models-loaded pill for warm memory state %s",
+    async (memoryState) => {
+      mockConfiguredDashboardFetch(
+        fetchMock,
+        readyRuntime,
+        configuredPackageData,
+        {
+          job_id: `warm-${memoryState}`,
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "running",
+          message: "Runner is ready.",
+          memory_decision: {
+            action: "reuse_runner",
+            reason_code: "warm_runner",
+          },
+          memory_status: {
+            state: memoryState,
+            message: "Runner is ready.",
+            risk_level: "low",
+            queue_id: null,
+            can_cancel: true,
+            can_retry_after_cleanup: false,
+          },
+        },
+        (url) => {
+          if (!url.endsWith(`/api/jobs/warm-${memoryState}/progress`)) return undefined;
+          return jsonResponse({
+            job_id: `warm-${memoryState}`,
+            status: "running",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Generating image...",
+          });
+        },
+      );
+
+      renderRunPage();
+
+      await waitForReadyStatus();
+      fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+      expect(await screen.findByText("Models loaded")).toBeInTheDocument();
+      expect(screen.queryByText("Ready to relaunch")).not.toBeInTheDocument();
+      expect(screen.queryByText("Developer details")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+    },
+  );
 
   it("clears queued memory copy after cancellation", async () => {
     mockConfiguredDashboardFetch(
@@ -1495,15 +1576,29 @@ describe("WorkflowRunPage", () => {
           can_retry_after_cleanup: false,
         },
       },
-      (url) => {
-        if (!url.endsWith("/api/jobs/memory-cancel/cancel")) return undefined;
+      (url, init) => {
+        if (url.endsWith("/api/jobs/memory-cancel/progress")) {
+          return jsonResponse({
+            job_id: "memory-cancel",
+            queue_id: "memory-cancel",
+            status: "queued_pending_memory",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Not enough memory is available for this run.",
+          });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+          return jsonResponse({ active_count: 0, queued_count: 1, total_count: 1 });
+        }
+        if (!url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") || init?.method !== "POST") {
+          return undefined;
+        }
         return jsonResponse({
-          job_id: "memory-cancel",
-          status: "canceled",
-          value: null,
-          max: null,
-          current_node: null,
-          message: "Run canceled.",
+          canceled_active_count: 0,
+          canceled_queued_count: 1,
+          already_terminal_count: 0,
+          failed_to_cancel_count: 0,
         });
       },
     );
@@ -1523,6 +1618,7 @@ describe("WorkflowRunPage", () => {
   });
 
   it("cancels a running job", async () => {
+    let cancelCalls = 0;
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1562,15 +1658,18 @@ describe("WorkflowRunPage", () => {
         );
       }
 
-      if (url.endsWith("/api/jobs/job-3/cancel")) {
+      if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+        return Promise.resolve(jsonResponse({ active_count: 1, queued_count: 0, total_count: 1 }));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued")) {
+        cancelCalls += 1;
         return Promise.resolve(
           jsonResponse({
-            job_id: "job-3",
-            status: "canceled",
-            value: null,
-            max: null,
-            current_node: null,
-            message: "Cancel requested",
+            canceled_active_count: 1,
+            canceled_queued_count: 0,
+            already_terminal_count: 0,
+            failed_to_cancel_count: 0,
           }),
         );
       }
@@ -1583,26 +1682,418 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
     const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
-    expect(topBarProgress).toHaveAttribute("aria-valuenow", "20");
-    expect(screen.getByText("20%")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(topBarProgress).toHaveAttribute("aria-valuenow", "20");
+      expect(screen.getByText("20%")).toBeInTheDocument();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
-    expect(await screen.findByText("Run canceled.")).toBeInTheDocument();
+    await waitFor(() => expect(cancelCalls).toBe(1));
     await waitFor(() => {
       expect(screen.queryByRole("progressbar", { name: /workflow progress/i })).not.toBeInTheDocument();
     });
   });
 
-  it("passes the runtime token to the job event stream URL", async () => {
+  it("submits Batch Count runs with identical captured payloads and no seed mutation", async () => {
+    const seededPackageData = {
+      ...configuredPackageData,
+      inputs: [
+        ...configuredPackageData.inputs,
+        {
+          id: "seed",
+          label: "Seed",
+          control: "seed_widget",
+          binding: { node_id: "7", input_name: "seed" },
+          default: 123,
+          validation: {},
+        },
+      ],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: configuredPackageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls: [
+            ...section.controls,
+            {
+              id: "seed",
+              type: "seed_widget",
+              label: "Seed",
+              input_id: "seed",
+              layout: { x: 16, y: 8, w: 8, h: 4 },
+            },
+          ],
+        })),
+      },
+    };
+    const runBodies: Array<{ inputs: Record<string, unknown>; output_preferences_snapshot: unknown }> = [];
+    let runIndex = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      seededPackageData,
+      (init?: RequestInit) => {
+        runIndex += 1;
+        runBodies.push(JSON.parse(String(init?.body)));
+        return {
+          job_id: `job-batch-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        const match = url.match(/\/api\/jobs\/(job-batch-\d+)\/progress$/);
+        if (!match) return undefined;
+        return jsonResponse({
+          job_id: match[1],
+          status: "queued",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Queued.",
+        });
+      },
+    );
+
+    renderRunPage();
+
+    const textboxes = await screen.findAllByRole("textbox");
+    fireEvent.change(textboxes[0], { target: { value: "batch prompt" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    await waitFor(() => expect(runBodies).toHaveLength(4));
+    const firstBody = runBodies[0];
+    expect(firstBody.inputs.prompt).toBe("batch prompt");
+    expect(firstBody.inputs.seed).toBe(123);
+    expect(runBodies.map((body) => body.inputs)).toEqual([
+      firstBody.inputs,
+      firstBody.inputs,
+      firstBody.inputs,
+      firstBody.inputs,
+    ]);
+    expect(runBodies.map((body) => body.output_preferences_snapshot)).toEqual([
+      firstBody.output_preferences_snapshot,
+      firstBody.output_preferences_snapshot,
+      firstBody.output_preferences_snapshot,
+      firstBody.output_preferences_snapshot,
+    ]);
+  });
+
+  it("keeps initial polling bounded for large batches", async () => {
+    let runIndex = 0;
+    const progressCalls: string[] = [];
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      () => {
+        runIndex += 1;
+        return {
+          job_id: `job-poll-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        const match = url.match(/\/api\/jobs\/(job-poll-\d+)\/progress$/);
+        if (!match) return undefined;
+        progressCalls.push(match[1]);
+        return jsonResponse({
+          job_id: match[1],
+          status: "queued",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Queued.",
+        });
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    await waitFor(() => expect(runIndex).toBe(20));
+    await waitFor(() => expect(progressCalls.length).toBeGreaterThan(0));
+    expect(progressCalls.length).toBeLessThanOrEqual(8);
+  });
+
+  it("shows active plus queued count, exposes Stop, and confirms workflow-scoped cancel-all", async () => {
+    let runIndex = 0;
+    let cancelCalls = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      () => {
+        runIndex += 1;
+        return {
+          job_id: `job-queue-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url, init) => {
+        const progressMatch = url.match(/\/api\/jobs\/(job-queue-\d+)\/progress$/);
+        if (progressMatch) {
+          return jsonResponse({
+            job_id: progressMatch[1],
+            status: "queued",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Queued.",
+          });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+          return jsonResponse({ active_count: 1, queued_count: 2, total_count: 3 });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") && init?.method === "POST") {
+          cancelCalls += 1;
+          return jsonResponse({
+            canceled_active_count: 1,
+            canceled_queued_count: 2,
+            already_terminal_count: 0,
+            failed_to_cancel_count: 0,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByTitle("3 runs remaining")).toBeInTheDocument();
+    const stopButton = screen.getByRole("button", {
+      name: "Cancel current run and all queued runs for this workflow",
+    });
+    fireEvent.click(stopButton);
+
+    expect(await screen.findByRole("dialog", { name: "Cancel 3 runs?" })).toBeInTheDocument();
+    expect(screen.getByText("This will cancel the current run and all queued runs for this workflow.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel all" }));
+
+    await waitFor(() => expect(cancelCalls).toBe(1));
+    expect(screen.queryByTitle("3 runs remaining")).not.toBeInTheDocument();
+  });
+
+  it("uses backend active and queued count before workflow cancellation", async () => {
+    let cancelCalls = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        job_id: "job-known",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      },
+      (url, init) => {
+        if (url.endsWith("/api/jobs/job-known/progress")) {
+          return jsonResponse({
+            job_id: "job-known",
+            status: "queued",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Queued.",
+          });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+          return jsonResponse({ active_count: 1, queued_count: 19, total_count: 20 });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") && init?.method === "POST") {
+          cancelCalls += 1;
+          return jsonResponse({
+            canceled_active_count: 1,
+            canceled_queued_count: 19,
+            already_terminal_count: 0,
+            failed_to_cancel_count: 0,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByTitle("1 run remaining")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /cancel run/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Cancel 20 runs?" })).toBeInTheDocument();
+    expect(cancelCalls).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel all" }));
+
+    await waitFor(() => expect(cancelCalls).toBe(1));
+  });
+
+  it("keeps completed outputs visible after workflow queue cancellation", async () => {
+    let runIndex = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      () => {
+        runIndex += 1;
+        return {
+          job_id: runIndex === 1 ? "job-complete" : `job-cancel-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url, init) => {
+        if (url.endsWith("/api/jobs/job-complete/progress")) {
+          return jsonResponse({
+            job_id: "job-complete",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          });
+        }
+        if (url.endsWith("/api/jobs/job-complete/result")) {
+          return jsonResponse({
+            job_id: "job-complete",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url: "/api/jobs/job-complete/outputs/view?filename=done.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          });
+        }
+        const progressMatch = url.match(/\/api\/jobs\/(job-cancel-\d+)\/progress$/);
+        if (progressMatch) {
+          return jsonResponse({
+            job_id: progressMatch[1],
+            status: "queued",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Queued.",
+          });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+          return jsonResponse({ active_count: 1, queued_count: 1, total_count: 2 });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") && init?.method === "POST") {
+          return jsonResponse({
+            canceled_active_count: 1,
+            canceled_queued_count: 1,
+            already_terminal_count: 0,
+            failed_to_cancel_count: 0,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    const output = await screen.findByRole("img", { name: /generated workflow output/i });
+    expect(output).toHaveAttribute("src", "/api/jobs/job-complete/outputs/view?filename=done.png&subfolder=&type=output");
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByTitle("2 runs remaining")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Cancel current run and all queued runs for this workflow",
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel all" }));
+
+    await waitFor(() => expect(screen.queryByTitle("2 runs remaining")).not.toBeInTheDocument());
+    expect(screen.getByRole("img", { name: /generated workflow output/i })).toHaveAttribute(
+      "src",
+      "/api/jobs/job-complete/outputs/view?filename=done.png&subfolder=&type=output",
+    );
+  });
+
+  it("shows one compact summary for multiple batch failures instead of multiple dialogs", async () => {
+    let runIndex = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      () => {
+        runIndex += 1;
+        return {
+          job_id: `job-fail-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        const progressMatch = url.match(/\/api\/jobs\/(job-fail-\d+)\/progress$/);
+        if (progressMatch) {
+          const failed = progressMatch[1] === "job-fail-1" || progressMatch[1] === "job-fail-2";
+          return jsonResponse({
+            job_id: progressMatch[1],
+            status: failed ? "failed" : "queued",
+            value: failed ? 1 : null,
+            max: failed ? 1 : null,
+            current_node: null,
+            message: failed ? `${progressMatch[1]} failed` : "Queued.",
+          });
+        }
+        const resultMatch = url.match(/\/api\/jobs\/(job-fail-\d+)\/result$/);
+        if (resultMatch) {
+          return jsonResponse({
+            job_id: resultMatch[1],
+            status: "failed",
+            outputs: [],
+            error: `${resultMatch[1]} failed`,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByText("2 runs failed")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Workflow failed" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("job-fail-1 failed")).toBeInTheDocument();
+    expect(screen.getByText("job-fail-2 failed")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Logs" })).toHaveLength(2);
+  });
+
+  it("tracks submitted jobs with bounded polling instead of a job event stream", async () => {
     const eventSourceMock = vi.fn(function (this: { addEventListener: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }) {
       this.addEventListener = vi.fn();
       this.close = vi.fn();
     });
     vi.stubGlobal("EventSource", eventSourceMock);
-    window.__NOOFY_RUNTIME_CONFIG__ = {
-      apiToken: "runtime-secret",
-    };
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1651,8 +2142,9 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     await waitFor(() => {
-      expect(eventSourceMock).toHaveBeenCalledWith("/api/jobs/job-4/events?token=runtime-secret");
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/jobs/job-4/progress"))).toBe(true);
     });
+    expect(eventSourceMock).not.toHaveBeenCalled();
   });
 
   it("renders canvas widgets on the shared builder-style canvas at their configured positions", async () => {

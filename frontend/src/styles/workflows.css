@@ -620,6 +620,140 @@
   white-space: pre-wrap;
 }
 
+.memory-loaded-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 222, 128, 0.24);
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.batch-count-stepper {
+  display: inline-grid;
+  grid-template-columns: 46px 18px;
+  height: 46px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--surface-2);
+}
+
+.batch-count-stepper input {
+  width: 46px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  outline: 0;
+  appearance: textfield;
+}
+
+.batch-count-stepper input::-webkit-outer-spin-button,
+.batch-count-stepper input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.batch-count-stepper__buttons {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.batch-count-stepper__buttons button {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.batch-count-stepper__buttons button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.batch-failure-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(248, 113, 113, 0.26);
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--text-secondary);
+}
+
+.batch-failure-summary > svg,
+.batch-failure-summary strong {
+  color: var(--error);
+}
+
+.batch-failure-summary__details {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 6px;
+}
+
+.batch-failure-summary__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.workflow-cancel-popover {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--surface-1);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.38);
+}
+
+.workflow-cancel-popover h2,
+.workflow-cancel-popover p {
+  margin: 0;
+}
+
+.workflow-cancel-popover h2 {
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.workflow-cancel-popover p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.workflow-cancel-popover__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .workflow-action-menu {
   position: relative;
 }

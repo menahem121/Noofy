@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
   Clipboard,
   CheckCircle2,
   Download,
@@ -18,10 +20,9 @@ import {
 } from "lucide-react";
 
 import {
-  cancelJob,
   cancelModelDownload,
+  cancelWorkflowActiveAndQueuedRuns,
   copyGalleryImageToDashboardAsset,
-  createJobEventsUrl,
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchAssetBlobUrl,
@@ -32,6 +33,7 @@ import {
   fetchJobProgress,
   fetchJobResult,
   fetchLogs,
+  fetchWorkflowActiveAndQueuedRuns,
   fetchWorkflowModelVerificationStatus,
   fetchWorkflowModelSummary,
   fetchWorkflowPackage,
@@ -142,6 +144,29 @@ interface RunFailureDialogState {
   copied: boolean;
 }
 
+interface FailedTrackedRun {
+  handle: string;
+  jobId: string | null;
+  message: string;
+}
+
+interface WorkflowCancelConfirmationState {
+  count: number;
+}
+
+interface TrackedRunBase {
+  clientId: string;
+  status: JobProgress["status"] | string;
+  submittedAt: number;
+  updatedAt: number;
+  lastPolledAt: number | null;
+  message: string | null;
+}
+
+type TrackedRun =
+  | (TrackedRunBase & { type: "queue"; queueId: string; jobId?: string | null })
+  | (TrackedRunBase & { type: "job"; jobId: string; queueId?: string | null });
+
 type PreparationPhaseStatus = "pending" | "active" | "passed" | "failed" | "blocked";
 
 interface PreparationPhase {
@@ -176,7 +201,6 @@ const initialState: RunPageState = {
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const activeWorkflowProgressStatuses = new Set(["queued", "running", "queued_pending_memory"]);
-const watchableJobStatuses = new Set(["queued", "running"]);
 const preparationFailureStatuses = new Set([
   "blocked_by_policy",
   "cannot_prepare_automatically",
@@ -206,6 +230,11 @@ export function WorkflowRunPage({
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
+  const [failedTrackedRuns, setFailedTrackedRuns] = useState<FailedTrackedRun[]>([]);
+  const [failedRunSummaryOpen, setFailedRunSummaryOpen] = useState(false);
+  const [workflowCancelConfirmation, setWorkflowCancelConfirmation] = useState<WorkflowCancelConfirmationState | null>(null);
+  const [batchCount, setBatchCount] = useState(1);
+  const [trackedRuns, setTrackedRuns] = useState<TrackedRun[]>([]);
   const [runPreparationDialog, setRunPreparationDialog] = useState<RunPreparationDialogState | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
@@ -222,22 +251,29 @@ export function WorkflowRunPage({
   const [runComparisonInputAssetId, setRunComparisonInputAssetId] = useState<string | null>(null);
   const [gallerySaveByControlId, setGallerySaveByControlId] = useState<Record<string, GallerySaveRequest>>({});
   const [comparisonInputImageUrl, setComparisonInputImageUrl] = useState<string | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const pollTimerRef = useRef<number | null>(null);
+  const trackedRunsRef = useRef<TrackedRun[]>([]);
+  const trackedRunPollInFlightRef = useRef<Set<string>>(new Set());
+  const runSubmissionInFlightCountRef = useRef(0);
   const modelVerificationStartInFlightRef = useRef(false);
   const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
   const runnerLeaseOpenedForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    trackedRunsRef.current = trackedRuns;
+  }, [trackedRuns]);
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
   const workflowTabs = useOptionalWorkflowTabs();
   const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
   const runtimeProgress = progressFromWorkflowRuntime(workflowRuntime);
-  const displayedProgress = state.progress ?? runtimeProgress;
+  const remainingTrackedRunCount = trackedRuns.filter(isTrackedRunActive).length;
+  const currentTrackedRun = selectCurrentTrackedRun(trackedRuns);
+  const displayedProgress = progressFromTrackedRun(currentTrackedRun, state.progress ?? runtimeProgress) ?? state.progress ?? runtimeProgress;
   const hasTerminalProgress = Boolean(displayedProgress?.status && terminalStatuses.has(displayedProgress.status));
-  const activeJobStatus = state.result || hasTerminalProgress ? null : state.job?.status;
-  const activeRuntimeJobId = workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
-  const isRunning = isSubmittingRun || isActiveWorkflowProgress(displayedProgress);
+  const activeJobStatus = hasTerminalProgress ? null : state.job?.status;
+  const activeRuntimeJobId = currentTrackedRun ? trackedRunHandle(currentTrackedRun) : workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
+  const isRunning = isSubmittingRun || remainingTrackedRunCount > 0 || isActiveWorkflowProgress(displayedProgress);
   const isWaitingForMemory = activeJobStatus === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
   const isBlockedByMemory = activeJobStatus === "blocked_by_memory";
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
@@ -503,9 +539,11 @@ export function WorkflowRunPage({
     setModelVerificationJob(null);
     setModelVerificationError(null);
     setRunComparisonInputAssetId(null);
-    return () => {
-      cleanupJobWatchers();
-    };
+    trackedRunsRef.current = [];
+    setTrackedRuns([]);
+    setFailedTrackedRuns([]);
+    setFailedRunSummaryOpen(false);
+    setWorkflowCancelConfirmation(null);
   }, [workflowId, runtimeStatus.refreshRuntime]);
 
   useEffect(() => {
@@ -557,6 +595,20 @@ export function WorkflowRunPage({
     return () => window.clearInterval(interval);
   }, [modelVerificationJob?.job_id, modelVerificationJob?.status, workflowId]);
 
+  useEffect(() => {
+    if (remainingTrackedRunCount === 0 || isSubmittingRun || runSubmissionInFlightCountRef.current > 0) return undefined;
+    let stopped = false;
+    const poll = () => {
+      if (!stopped) void pollTrackedRunsDue();
+    };
+    poll();
+    const interval = window.setInterval(poll, 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [isSubmittingRun, remainingTrackedRunCount]);
+
   function startRunPreparationStatusPolling() {
     let stopped = false;
     const poll = async () => {
@@ -577,6 +629,21 @@ export function WorkflowRunPage({
     };
   }
 
+  function beginRunSubmission() {
+    runSubmissionInFlightCountRef.current += 1;
+    setIsSubmittingRun(true);
+  }
+
+  function finishRunSubmission() {
+    runSubmissionInFlightCountRef.current = Math.max(0, runSubmissionInFlightCountRef.current - 1);
+    setIsSubmittingRun(runSubmissionInFlightCountRef.current > 0);
+  }
+
+  function cancelRunSubmissions() {
+    runSubmissionInFlightCountRef.current = 0;
+    setIsSubmittingRun(false);
+  }
+
   async function handleRun() {
     if (!canRun) {
       return;
@@ -584,13 +651,15 @@ export function WorkflowRunPage({
 
     const shouldTrackPreparation = shouldShowRunPreparationDialog(state.workflowStatus);
     let stopPreparationPolling: (() => void) | null = null;
+    const runCount = clampBatchCount(batchCount);
+    const submittedValuesSnapshot = { ...submittedInputValues };
+    const outputPreferencesSnapshot = getOutputPreferencesSnapshot();
     const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
       state.packageData,
       allControls,
-      submittedInputValues,
+      submittedValuesSnapshot,
     );
-    cleanupJobWatchers();
-    setIsSubmittingRun(true);
+    beginRunSubmission();
     setRunComparisonInputAssetId(submittedComparisonInputAssetId);
     setFailureDialog(null);
     if (shouldTrackPreparation) {
@@ -603,56 +672,61 @@ export function WorkflowRunPage({
       ...current,
       job: null,
       progress: optimisticProgress(),
-      result: null,
       error: null,
     }));
 
     try {
-      const response = await runWorkflow(workflowId, {
-        inputs: submittedInputValues,
-        options: {},
-        output_preferences_snapshot: getOutputPreferencesSnapshot(),
-      });
+      for (let index = 0; index < runCount; index += 1) {
+        const response = await runWorkflow(workflowId, {
+          inputs: submittedValuesSnapshot,
+          options: {},
+          output_preferences_snapshot: outputPreferencesSnapshot,
+        });
 
-      if (!isEngineJob(response)) {
-        stopPreparationPolling?.();
-        setIsSubmittingRun(false);
-        setRunPreparationDialog(null);
-        setRunComparisonInputAssetId(null);
-        const message = workflowValidationErrorMessage(response);
-        setState((current) => ({
-          ...current,
-          validation: response,
-          progress: null,
-          error: response.valid ? null : message,
-        }));
-        if (!response.valid) {
-          void openFailureDialog(message, null);
+        if (!isEngineJob(response)) {
+          stopPreparationPolling?.();
+          finishRunSubmission();
+          setRunPreparationDialog(null);
+          setRunComparisonInputAssetId(null);
+          const message = workflowValidationErrorMessage(response);
+          setState((current) => ({
+            ...current,
+            validation: response,
+            progress: null,
+            error: response.valid ? null : message,
+          }));
+          if (!response.valid) {
+            void openFailureDialog(message, null);
+          }
+          return;
         }
-        return;
-      }
 
-      stopPreparationPolling?.();
-      setIsSubmittingRun(false);
-      setRunPreparationDialog(null);
-      setSubmittedJob(response);
-      if (isWatchableJob(response)) {
-        watchJob(response.job_id);
-        await pollJobOnce(response.job_id);
+        setSubmittedJob(response);
+        if (isTrackableJob(response)) {
+          addTrackedRun(trackedRunFromJob(response));
+        } else {
+          stopPreparationPolling?.();
+          finishRunSubmission();
+          setRunPreparationDialog(null);
+          return;
+        }
       }
+      stopPreparationPolling?.();
+      finishRunSubmission();
+      setRunPreparationDialog(null);
+      void pollTrackedRunsDue(true);
     } catch (error) {
       stopPreparationPolling?.();
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
-      setIsSubmittingRun(false);
+      finishRunSubmission();
       setRunPreparationDialog(null);
       setRunComparisonInputAssetId(null);
       setState((current) => ({
         ...current,
         job: null,
         progress: null,
-        result: null,
         error: message,
       }));
       void openFailureDialog(message, null);
@@ -660,12 +734,38 @@ export function WorkflowRunPage({
   }
 
   async function handleCancel() {
-    const jobId = state.job?.job_id ?? activeRuntimeJobId;
-    if (!jobId) return;
+    const trackedCount = cancelableWorkflowRunCount(trackedRunsRef.current);
+    const fallbackCount = Math.max(trackedCount, activeRuntimeJobId ? 1 : 0);
+    let count = fallbackCount;
     try {
-      const progress = await cancelJob(jobId);
-      cleanupJobWatchers();
-      setIsSubmittingRun(false);
+      const summary = await fetchWorkflowActiveAndQueuedRuns(workflowId);
+      count = Math.max(summary.total_count, fallbackCount);
+    } catch (error) {
+      if (fallbackCount <= 0) {
+        setState((current) => ({
+          ...current,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        return;
+      }
+    }
+    if (count <= 0) return;
+    if (count > 1) {
+      setWorkflowCancelConfirmation({ count });
+      return;
+    }
+    await cancelWorkflowRunsForCurrentWorkflow();
+  }
+
+  async function cancelWorkflowRunsForCurrentWorkflow() {
+    try {
+      await cancelWorkflowActiveAndQueuedRuns(workflowId);
+      cancelRunSubmissions();
+      const progress = workflowCancelProgress(workflowId);
+      replaceTrackedRuns(
+        trackedRunsRef.current.map((run) => isTrackedRunActive(run) ? trackedRunWithStatus(run, "canceled", "Workflow run canceled.") : run),
+      );
+      setWorkflowCancelConfirmation(null);
       setState((current) => ({ ...current, progress }));
       recordWorkflowProgress(progress);
     } catch (error) {
@@ -830,86 +930,66 @@ export function WorkflowRunPage({
     setFailureDialog((current) => (current ? { ...current, copied: true } : current));
   }
 
-  function watchJob(jobId: string) {
-    if (typeof EventSource === "undefined") {
-      pollTimerRef.current = window.setInterval(() => {
-        void pollJobOnce(jobId);
-      }, 1000);
-      return;
-    }
+  function replaceTrackedRuns(nextRuns: TrackedRun[]) {
+    trackedRunsRef.current = nextRuns;
+    setTrackedRuns(nextRuns);
+  }
 
-    const source = new EventSource(createJobEventsUrl(jobId));
-    eventSourceRef.current = source;
-    source.addEventListener("progress", (event) => {
-      const progress = JSON.parse(event.data) as JobProgress;
-      if (terminalStatuses.has(progress.status)) setIsSubmittingRun(false);
-      setState((current) => ({ ...current, progress }));
-      recordWorkflowProgress(progress);
-    });
-    source.addEventListener("result", (event) => {
-      source.close();
-      eventSourceRef.current = null;
-      const result = JSON.parse(event.data) as JobResult | EngineJob;
+  function addTrackedRun(run: TrackedRun) {
+    const nextRuns = [...trackedRunsRef.current, run];
+    replaceTrackedRuns(nextRuns);
+    recordWorkflowTrackedRuns(nextRuns);
+  }
+
+  async function pollTrackedRunsDue(force = false) {
+    const now = Date.now();
+    const runs = trackedRunsRef.current.filter(isTrackedRunActive);
+    if (runs.length === 0) return;
+    const current = selectCurrentTrackedRun(runs);
+    const due: TrackedRun[] = [];
+    if (current && (force || current.lastPolledAt === null || now - current.lastPolledAt >= 1000)) {
+      due.push(current);
+    }
+    const queuedDue = runs
+      .filter((run) => run.clientId !== current?.clientId)
+      .filter((run) => force || run.lastPolledAt === null || now - run.lastPolledAt >= 4500)
+      .slice(0, 3);
+    due.push(...queuedDue);
+
+    for (const run of due) {
+      const handle = trackedRunHandle(run);
+      if (trackedRunPollInFlightRef.current.has(handle)) continue;
+      trackedRunPollInFlightRef.current.add(handle);
+      markTrackedRunPolled(run.clientId, now);
+      void pollTrackedRun(run).finally(() => {
+        trackedRunPollInFlightRef.current.delete(handle);
+      });
+    }
+  }
+
+  async function pollTrackedRun(run: TrackedRun) {
+    const handle = trackedRunHandle(run);
+    try {
+      const progress = await fetchJobProgress(handle);
+      const nextRun = trackedRunFromProgress(run, progress, Date.now());
+      upsertTrackedRun(nextRun, progress);
+      setState((current) => ({ ...current, progress, error: null }));
+
+      if (!terminalStatuses.has(progress.status)) return;
+      if (isQueueOnlyTerminal(nextRun, progress)) {
+        handleTrackedTerminalProgress(nextRun, progress);
+        return;
+      }
+
+      const result = await fetchJobResult(trackedRunHandle(nextRun));
       if (isEngineJob(result)) {
         setSubmittedJob(result);
-        if (isWatchableJob(result)) {
-          watchJob(result.job_id);
-          void pollJobOnce(result.job_id);
+        if (isTrackableJob(result)) {
+          upsertTrackedRun(trackedRunFromJob(result, nextRun.clientId));
         }
         return;
       }
-      setIsSubmittingRun(false);
-      setState((current) => ({ ...current, result }));
-      recordWorkflowTerminalResult(result);
-      if (result.status === "failed") {
-        void openFailureDialog(result.error ?? "The local engine could not finish this run.", result.job_id);
-      }
-    });
-    source.onerror = () => {
-      source.close();
-      eventSourceRef.current = null;
-      pollTimerRef.current = window.setInterval(() => {
-        void pollJobOnce(jobId);
-      }, 1000);
-    };
-  }
-
-  function setSubmittedJob(job: EngineJob) {
-    const progress = progressFromSubmittedJob(job);
-    setIsSubmittingRun(false);
-    recordWorkflowJob(job, progress);
-    setState((current) => ({
-      ...current,
-      job,
-      progress,
-      result: null,
-    }));
-  }
-
-  async function pollJobOnce(jobId: string) {
-    try {
-      const progress = await fetchJobProgress(jobId);
-      setState((current) => ({ ...current, progress, error: null }));
-      recordWorkflowProgress(progress);
-
-      if (terminalStatuses.has(progress.status)) {
-        setIsSubmittingRun(false);
-        cleanupJobWatchers();
-        const result = await fetchJobResult(jobId);
-        if (isEngineJob(result)) {
-          setSubmittedJob(result);
-          if (isWatchableJob(result)) {
-            watchJob(result.job_id);
-            await pollJobOnce(result.job_id);
-          }
-          return;
-        }
-        setState((current) => ({ ...current, result }));
-        recordWorkflowTerminalResult(result);
-        if (result.status === "failed") {
-          void openFailureDialog(result.error ?? progress.message ?? "The local engine could not finish this run.", jobId);
-        }
-      }
+      handleTrackedResult(nextRun, result);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -918,13 +998,69 @@ export function WorkflowRunPage({
     }
   }
 
-  function cleanupJobWatchers() {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-    if (pollTimerRef.current !== null) {
-      window.clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+  function markTrackedRunPolled(clientId: string, polledAt: number) {
+    replaceTrackedRuns(
+      trackedRunsRef.current.map((run) => run.clientId === clientId ? { ...run, lastPolledAt: polledAt } : run),
+    );
+  }
+
+  function upsertTrackedRun(nextRun: TrackedRun, knownProgress: JobProgress | null = null) {
+    const nextRuns = trackedRunsRef.current.map((run) => run.clientId === nextRun.clientId ? nextRun : run);
+    replaceTrackedRuns(nextRuns);
+    recordWorkflowTrackedRuns(nextRuns, knownProgress);
+  }
+
+  function handleTrackedTerminalProgress(run: TrackedRun, progress: JobProgress) {
+    const nextRun = trackedRunWithStatus(run, progress.status, progress.message);
+    upsertTrackedRun(nextRun);
+    if (progress.status === "failed") {
+      recordTrackedFailure(trackedRunHandle(nextRun), null, progress.message ?? "Workflow run failed.");
     }
+    pollNextTrackedRunAfterTerminal();
+  }
+
+  function handleTrackedResult(run: TrackedRun, result: JobResult) {
+    const nextRun = trackedRunWithStatus(run, result.status, result.error);
+    upsertTrackedRun(nextRun);
+    if (result.status === "completed") {
+      setState((current) => ({ ...current, result }));
+    } else if (result.status === "failed") {
+      setState((current) => ({ ...current, result }));
+      recordTrackedFailure(trackedRunHandle(nextRun), result.job_id, result.error ?? "The local engine could not finish this run.");
+    }
+    if (!selectCurrentTrackedRun(trackedRunsRef.current)) {
+      recordWorkflowTerminalResult(result);
+    }
+    pollNextTrackedRunAfterTerminal();
+  }
+
+  function pollNextTrackedRunAfterTerminal() {
+    if (selectCurrentTrackedRun(trackedRunsRef.current)) {
+      void pollTrackedRunsDue(true);
+    }
+  }
+
+  function recordTrackedFailure(handle: string, jobId: string | null, message: string) {
+    setFailedTrackedRuns((current) => {
+      if (current.some((item) => item.handle === handle)) return current;
+      const next = [...current, { handle, jobId, message }];
+      if (next.length === 1) {
+        void openFailureDialog(message, jobId ?? handle);
+      } else if (next.length > 1) {
+        setFailureDialog(null);
+      }
+      return next;
+    });
+  }
+
+  function setSubmittedJob(job: EngineJob) {
+    const progress = progressFromSubmittedJob(job);
+    recordWorkflowJob(job, progress);
+    setState((current) => ({
+      ...current,
+      job,
+      progress,
+    }));
   }
 
   function recordWorkflowJob(job: EngineJob, progress: JobProgress) {
@@ -935,6 +1071,25 @@ export function WorkflowRunPage({
       activeJobUpdatedAt: Date.now(),
       handleSource: workflowHandleSource(job),
       queueId: job.queue_id ?? (job.status === "queued_pending_memory" ? job.job_id : null),
+    });
+  }
+
+  function recordWorkflowTrackedRuns(runs: TrackedRun[], knownProgress: JobProgress | null = null) {
+    const current = selectCurrentTrackedRun(runs);
+    if (!current) {
+      if (knownProgress && terminalStatuses.has(knownProgress.status)) {
+        recordWorkflowProgress(knownProgress);
+      }
+      return;
+    }
+    const progress = progressFromTrackedRun(current, knownProgress);
+    workflowTabs?.setWorkflowRuntime(workflowId, {
+      activeJobId: trackedRunHandle(current),
+      activeJobStatus: current.status,
+      activeJobProgress: progress,
+      activeJobUpdatedAt: Date.now(),
+      handleSource: trackedRunHandleSource(current),
+      queueId: current.queueId ?? null,
     });
   }
 
@@ -1033,22 +1188,23 @@ export function WorkflowRunPage({
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
     : null;
-  const memoryStatus = state.result || hasTerminalProgress ? null : state.job?.memory_status ?? null;
+  const memoryStatus = remainingTrackedRunCount === 0 && hasTerminalProgress ? null : state.job?.memory_status ?? null;
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
   const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
+  const showMemoryLoadedPill = Boolean(memoryStatus && isWarmReusableMemoryState(memoryStatus.state));
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
+  const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
   const canRun = Boolean(
     state.workflowStatus?.can_prepare !== false
       && activeValidation?.valid
       && activeModelSummary?.ready_to_run !== false
       && !backendKnownUnreachable
       && !engineKnownUnavailable
-      && !isRunning
-      && !isWaitingForMemory
-      && !isBlockedByMemory,
+      && !isBlockedByMemory
+      && !memoryRefusesRun,
   );
   const hasDownloadableRequiredModels = requiredModelDownloadSelections(activeModelSummary, workflowId).length > 0;
   const hasRequiredModelFixAction = Boolean(
@@ -1061,8 +1217,8 @@ export function WorkflowRunPage({
         engineKnownUnavailable,
         installStatus,
         isBlockedByMemory,
-        isRunning,
-        isWaitingForMemory,
+        isRunning: false,
+        isWaitingForMemory: false,
         loading: state.loading,
         memoryStatus,
         missingModels,
@@ -1070,14 +1226,22 @@ export function WorkflowRunPage({
         validation: activeValidation,
         workflowStatus: state.workflowStatus,
       });
-  const canCancel = Boolean(isRunning && (state.job || activeRuntimeJobId) && !isBlockedByMemory);
+  const canCancel = Boolean((remainingTrackedRunCount > 0 || (isRunning && (state.job || activeRuntimeJobId))) && !isBlockedByMemory);
   const progressPercent =
     displayedProgress?.value !== null && displayedProgress?.value !== undefined && displayedProgress.max
       ? Math.min(100, Math.round((displayedProgress.value / displayedProgress.max) * 100))
       : displayedProgress?.status === "completed"
         ? 100
         : 0;
-  const topBarProgress = isRunning ? { percent: progressPercent } : null;
+  const cancelTooltip = remainingTrackedRunCount > 1
+    ? "Cancel current run and all queued runs for this workflow"
+    : "Cancel current run";
+  const topBarProgress = isRunning ? {
+    percent: progressPercent,
+    remainingCount: remainingTrackedRunCount || undefined,
+    onCancelRemaining: remainingTrackedRunCount > 0 ? () => void handleCancel() : undefined,
+    cancelRemainingTitle: "Cancel current run and all queued runs for this workflow",
+  } : null;
 
   const inputControls = allControls.filter(
     (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_video" && c.type !== "display_file" && c.type !== "display_3d" && c.input_id),
@@ -1279,7 +1443,10 @@ export function WorkflowRunPage({
           ) : null}
         </div>
       ) : null}
-      {memoryStatus ? (
+      {memoryStatus && showMemoryLoadedPill ? (
+        <MemoryLoadedPill />
+      ) : null}
+      {memoryStatus && !showMemoryLoadedPill ? (
         <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
           <AlertCircle size={16} aria-hidden="true" />
           <div>
@@ -1303,6 +1470,21 @@ export function WorkflowRunPage({
       workflowId={workflowId}
       onClose={() => setFailureDialog(null)}
       onCopy={() => void handleCopyFailureLogs()}
+    />
+  ) : null;
+  const failedRunSummaryElement = failedTrackedRuns.length > 1 ? (
+    <BatchFailureSummary
+      failedRuns={failedTrackedRuns}
+      expanded={failedRunSummaryOpen}
+      onToggle={() => setFailedRunSummaryOpen((open) => !open)}
+      onOpenLogs={(run) => void openFailureDialog(run.message, run.jobId ?? run.handle)}
+    />
+  ) : null;
+  const workflowCancelConfirmationElement = workflowCancelConfirmation ? (
+    <WorkflowCancelConfirmation
+      count={workflowCancelConfirmation.count}
+      onCancel={() => setWorkflowCancelConfirmation(null)}
+      onConfirm={() => void cancelWorkflowRunsForCurrentWorkflow()}
     />
   ) : null;
   const preparationDialogElement = runPreparationDialog ? (
@@ -1405,11 +1587,17 @@ export function WorkflowRunPage({
             isRunning,
             canRun,
             canCancel,
+            memoryLoaded: showMemoryLoadedPill,
+            cancelLabel: remainingTrackedRunCount > 1 ? "Cancel Runs" : "Cancel Run",
+            cancelTitle: cancelTooltip,
+            showStatusNotice: Boolean(memoryNotice && !showMemoryLoadedPill),
             statusTitle: memoryNotice?.title ?? null,
+            statusMessage: memoryNotice?.message ?? null,
             disabledReason: runDisabledReason,
             disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
             developerDetails: memoryDiagnostics,
           }}
+          batchCount={batchCount}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
           exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
           exportWorkflowName={workflowDisplayTitle}
@@ -1427,6 +1615,7 @@ export function WorkflowRunPage({
           onSaveOutputToGallery={state.result?.status === "completed" ? (controlId) => void handleSaveOutputToGallery(controlId) : undefined}
           onCancelOutputGallerySave={state.result?.status === "completed" ? (controlId) => void handleCancelOutputGallerySave(controlId) : undefined}
           onRun={() => void handleRun()}
+          onBatchCountChange={setBatchCount}
           onCancel={() => void handleCancel()}
           onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
           onRestoreDefaults={() => void handleRestoreDefaults()}
@@ -1446,6 +1635,12 @@ export function WorkflowRunPage({
             void setActionBarPositionOverride(position);
           }}
         />
+        {failedRunSummaryElement ? (
+          <div className="canvas-run-floating-notices">
+            {failedRunSummaryElement}
+          </div>
+        ) : null}
+        {workflowCancelConfirmationElement}
         {failureDialogElement}
         {preparationDialogElement}
         {loraBrowserElement}
@@ -1459,6 +1654,7 @@ export function WorkflowRunPage({
     <AppLayout activeRoute="workflows" onNavigate={onNavigate} progress={topBarProgress}>
       {pageHeader}
       {notices}
+      {failedRunSummaryElement}
 
       <section className="run-workspace">
         <form className="run-panel" onSubmit={(event) => event.preventDefault()}>
@@ -1497,11 +1693,12 @@ export function WorkflowRunPage({
           )}
 
           <div className="button-row">
+            <BatchCountStepper value={batchCount} onChange={setBatchCount} />
             <button className="primary-button" type="button" disabled={!canRun} onClick={() => void handleRun()}>
               {isRunning ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
               Run Workflow
             </button>
-            <button className="secondary-button" type="button" disabled={!canCancel} onClick={() => void handleCancel()}>
+            <button className="secondary-button" type="button" disabled={!canCancel} title={cancelTooltip} onClick={() => void handleCancel()}>
               <Square size={16} aria-hidden="true" />
               Cancel
             </button>
@@ -1600,11 +1797,49 @@ export function WorkflowRunPage({
         </aside>
       </section>
       {failureDialogElement}
+      {workflowCancelConfirmationElement}
       {preparationDialogElement}
       {loraBrowserElement}
       {exportDialogElement}
       {requiredModelsModalElement}
     </AppLayout>
+  );
+}
+
+function MemoryLoadedPill() {
+  return (
+    <div
+      className="memory-loaded-pill"
+      role="status"
+      title="The required models are already loaded, so the next run should start faster."
+    >
+      <CheckCircle2 size={13} aria-hidden="true" />
+      <span>Models loaded</span>
+    </div>
+  );
+}
+
+function BatchCountStepper({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const normalized = clampBatchCount(value);
+  return (
+    <div className="batch-count-stepper" aria-label="Batch count">
+      <input
+        type="number"
+        min={1}
+        max={99}
+        value={normalized}
+        aria-label="Batch count"
+        onChange={(event) => onChange(clampBatchCount(Number(event.target.value)))}
+      />
+      <div className="batch-count-stepper__buttons">
+        <button type="button" aria-label="Increase batch count" onClick={() => onChange(clampBatchCount(normalized + 1))}>
+          <ChevronUp size={12} aria-hidden="true" />
+        </button>
+        <button type="button" aria-label="Decrease batch count" onClick={() => onChange(clampBatchCount(normalized - 1))}>
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1755,6 +1990,67 @@ function WorkflowFailureDialog({
             {dialog.copied ? "Copied" : "Copy logs"}
           </button>
         </footer>
+      </section>
+    </div>
+  );
+}
+
+function BatchFailureSummary({
+  failedRuns,
+  expanded,
+  onToggle,
+  onOpenLogs,
+}: {
+  failedRuns: FailedTrackedRun[];
+  expanded: boolean;
+  onToggle: () => void;
+  onOpenLogs: (run: FailedTrackedRun) => void;
+}) {
+  return (
+    <div className="batch-failure-summary" role="status">
+      <AlertCircle size={16} aria-hidden="true" />
+      <strong>{failedRuns.length} runs failed</strong>
+      <button className="secondary-button secondary-button--small" type="button" onClick={onToggle}>
+        Details
+      </button>
+      {expanded ? (
+        <div className="batch-failure-summary__details">
+          {failedRuns.map((run) => (
+            <div className="batch-failure-summary__row" key={run.handle}>
+              <span>{run.message}</span>
+              <button className="ghost-button" type="button" onClick={() => onOpenLogs(run)}>
+                Logs
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkflowCancelConfirmation({
+  count,
+  onCancel,
+  onConfirm,
+}: {
+  count: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-cancel-title">
+      <section className="workflow-cancel-popover">
+        <h2 id="workflow-cancel-title">Cancel {count} runs?</h2>
+        <p>This will cancel the current run and all queued runs for this workflow.</p>
+        <div className="workflow-cancel-popover__actions">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            Keep running
+          </button>
+          <button className="danger-button" type="button" onClick={onConfirm}>
+            Cancel all
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -2026,12 +2322,124 @@ function FallbackInputs({
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function isWatchableJob(job: EngineJob) {
-  return watchableJobStatuses.has(job.status);
+function isTrackableJob(job: EngineJob) {
+  return activeWorkflowProgressStatuses.has(job.status);
 }
 
 function isActiveWorkflowProgress(progress: JobProgress | null | undefined) {
   return Boolean(progress?.status && activeWorkflowProgressStatuses.has(progress.status));
+}
+
+function isTrackedRunActive(run: TrackedRun) {
+  return activeWorkflowProgressStatuses.has(run.status);
+}
+
+function cancelableWorkflowRunCount(runs: TrackedRun[]) {
+  return runs.filter(isTrackedRunActive).length;
+}
+
+function selectCurrentTrackedRun(runs: TrackedRun[]) {
+  const active = runs.filter(isTrackedRunActive);
+  return (
+    active.find((run) => run.status === "running") ??
+    active.find((run) => run.status === "queued") ??
+    active.find((run) => run.status === "queued_pending_memory") ??
+    active[0] ??
+    null
+  );
+}
+
+function trackedRunHandle(run: TrackedRun) {
+  return run.type === "queue" ? run.queueId : run.jobId;
+}
+
+function trackedRunHandleSource(run: TrackedRun): WorkflowRuntimeHandleSource {
+  return run.type === "queue" ? "workflow_run_queue" : "job";
+}
+
+function progressFromTrackedRun(run: TrackedRun | null, knownProgress: JobProgress | null = null): JobProgress | null {
+  if (!run || !isTrackedRunActive(run)) return null;
+  if (knownProgress && isActiveWorkflowProgress(knownProgress) && progressMatchesTrackedRun(knownProgress, run)) {
+    return knownProgress;
+  }
+  return {
+    job_id: trackedRunHandle(run),
+    queue_id: run.type === "queue" ? run.queueId : run.queueId ?? null,
+    status: run.status as JobProgress["status"],
+    value: null,
+    max: null,
+    current_node: null,
+    message: run.message,
+  };
+}
+
+function progressMatchesTrackedRun(progress: JobProgress, run: TrackedRun) {
+  const handle = trackedRunHandle(run);
+  return (
+    progress.job_id === handle
+    || progress.queue_id === handle
+    || (run.type === "job" && run.queueId ? progress.queue_id === run.queueId : false)
+    || (run.type === "queue" && run.jobId ? progress.job_id === run.jobId : false)
+  );
+}
+
+function trackedRunFromJob(job: EngineJob, existingClientId?: string): TrackedRun {
+  const now = Date.now();
+  const base = {
+    clientId: existingClientId ?? `${job.queue_id ?? job.job_id}-${now}-${Math.random().toString(16).slice(2)}`,
+    status: job.status,
+    submittedAt: now,
+    updatedAt: now,
+    lastPolledAt: null,
+    message: job.memory_status?.message ?? job.message ?? null,
+  };
+  if (job.queue_id && job.queue_id === job.job_id) {
+    return { ...base, type: "queue", queueId: job.queue_id, jobId: null };
+  }
+  return { ...base, type: "job", jobId: job.job_id, queueId: job.queue_id ?? null };
+}
+
+function trackedRunFromProgress(run: TrackedRun, progress: JobProgress, lastPolledAt: number | null = run.lastPolledAt): TrackedRun {
+  const now = Date.now();
+  const queueId = progress.queue_id ?? (run.type === "queue" ? run.queueId : run.queueId ?? null);
+  const base = {
+    ...run,
+    status: progress.status,
+    updatedAt: now,
+    lastPolledAt,
+    message: progress.message,
+  };
+  if (queueId && progress.job_id !== queueId) {
+    return { ...base, type: "job", jobId: progress.job_id, queueId };
+  }
+  if (run.type === "queue") {
+    return { ...base, type: "queue", queueId: queueId ?? run.queueId, jobId: run.jobId ?? null };
+  }
+  return { ...base, type: "job", jobId: progress.job_id, queueId };
+}
+
+function trackedRunWithStatus(run: TrackedRun, status: string, message: string | null | undefined): TrackedRun {
+  return {
+    ...run,
+    status,
+    message: message ?? run.message,
+    updatedAt: Date.now(),
+  };
+}
+
+function isQueueOnlyTerminal(run: TrackedRun, progress: JobProgress) {
+  return run.type === "queue" && progress.queue_id === run.queueId && progress.job_id === run.queueId;
+}
+
+function workflowCancelProgress(workflowId: string): JobProgress {
+  return {
+    job_id: `workflow-cancel-${workflowId}`,
+    status: "canceled",
+    value: null,
+    max: null,
+    current_node: null,
+    message: "Workflow runs canceled.",
+  };
 }
 
 function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): JobProgress | null {
@@ -2062,6 +2470,7 @@ function optimisticProgress(): JobProgress {
 function progressFromSubmittedJob(job: EngineJob): JobProgress {
   return {
     job_id: job.job_id,
+    queue_id: job.queue_id ?? null,
     status: job.status,
     value: null,
     max: null,
@@ -2226,14 +2635,14 @@ function preparationPhaseStatusLabel(status: PreparationPhaseStatus) {
 }
 
 function progressMessage(progress: JobProgress | null, result: JobResult | null, memoryStatus: MemoryStatus | null = null) {
-  if (result?.status === "completed") return "Result saved by the local workflow.";
-  if (result?.status === "failed") return "The local engine could not finish this run.";
-  if (progress?.status === "canceled") return "Run canceled.";
   if (memoryStatus) return memoryStatusDisplay(memoryStatus).message;
   if (progress?.status === "running") return progress.message ?? "Generating image...";
   if (progress?.status === "queued") return progress.message ?? "Preparing workflow...";
   if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for memory.";
   if (progress?.status === "blocked_by_memory") return progress.message ?? "This workflow needs more memory.";
+  if (progress?.status === "canceled") return "Run canceled.";
+  if (result?.status === "completed") return "Result saved by the local workflow.";
+  if (result?.status === "failed") return "The local engine could not finish this run.";
   return "Run the workflow to create your first result.";
 }
 
@@ -2352,6 +2761,19 @@ function memoryStatusTitle(state: string) {
   return memoryStatusFallback(state).title;
 }
 
+function isWarmReusableMemoryState(state: string) {
+  return state === "ready_warm_co_resident" || state === "ready_reusing_runner";
+}
+
+function isBlockingMemoryState(state: string) {
+  return state === "blocked_by_memory" || state === "memory_cleanup_failed" || state.startsWith("blocked_");
+}
+
+function clampBatchCount(value: number) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(99, Math.max(1, Math.round(value)));
+}
+
 interface MemoryStatusDisplay {
   title: string;
   message: string;
@@ -2435,8 +2857,8 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
   }
   if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") {
     return {
-      title: "Ready to relaunch",
-      message: "Noofy can reuse the warm runner for this workflow.",
+      title: "Models loaded",
+      message: "The required models are already loaded, so the next run should start faster.",
     };
   }
   return {

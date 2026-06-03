@@ -62,6 +62,15 @@ def _supervisor(adapter: _Adapter) -> RunnerSupervisor:
     return supervisor
 
 
+def _queued_run(queue: WorkflowRunQueueService, workflow_id: str = "wf"):
+    return queue.enqueue(
+        workflow_id=workflow_id,
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+
+
 def test_workflow_queue_uses_uuid_alias_and_same_id_requeue() -> None:
     queue = WorkflowRunQueueService()
     record = queue.enqueue(
@@ -128,12 +137,131 @@ async def test_job_service_routes_queue_alias_to_submitted_job() -> None:
 
     progress = await service.get_progress(queued.queue_id)
     canceled = await service.cancel_job(queued.queue_id)
+    progress_after_cancel = await service.get_progress(queued.queue_id)
 
     assert progress.job_id == "job-1"
     assert progress.queue_id == queued.queue_id
     assert canceled.job_id == "job-1"
     assert canceled.queue_id == queued.queue_id
+    assert queue.is_terminal(queued.queue_id)
+    assert progress_after_cancel.job_id == queued.queue_id
+    assert progress_after_cancel.queue_id == queued.queue_id
+    assert progress_after_cancel.status == "canceled"
     assert adapter.progress_calls == ["job-1"]
+    assert adapter.cancel_calls == ["job-1"]
+
+
+@pytest.mark.anyio
+async def test_result_service_routes_submitted_queue_alias_to_real_job() -> None:
+    adapter = _Adapter()
+    supervisor = _supervisor(adapter)
+    queue = WorkflowRunQueueService()
+    queued = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+    queue.mark_submitted(queued.queue_id, job_id="job-1")
+    job_service = RunJobService(
+        runner_supervisor=supervisor,
+        log_store=LogStore(),
+        workflow_run_queue_service=queue,
+    )
+
+    async def finish_sampling(job_id: str) -> None:
+        return None
+
+    def record_observation(result: JobResult) -> None:
+        return None
+
+    async def maybe_retry(result: JobResult):
+        return None
+
+    result_service = RunResultService(
+        job_service=job_service,
+        log_store=LogStore(),
+        job_workflows={"job-1": "wf"},
+        job_started_at={"job-1": datetime.now(UTC)},
+        job_run_snapshots={"job-1": _snapshot()},
+        finish_memory_sampling=finish_sampling,
+        record_memory_observation=record_observation,
+        maybe_retry_after_memory_cleanup=maybe_retry,
+        workflow_run_queue_service=queue,
+    )
+
+    result = await result_service.get_result(queued.queue_id)
+
+    assert result.job_id == "job-1"
+    assert result.queue_id == queued.queue_id
+    assert adapter.result_calls == ["job-1"]
+
+
+@pytest.mark.anyio
+async def test_cancel_workflow_active_and_queued_cancels_only_requested_workflow() -> None:
+    adapter = _Adapter()
+    supervisor = _supervisor(adapter)
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "job-1", workflow_id="wf")
+    queue = WorkflowRunQueueService()
+    queued_a = _queued_run(queue, "wf")
+    queued_b = _queued_run(queue, "wf")
+    other = _queued_run(queue, "other-wf")
+    terminal = _queued_run(queue, "wf")
+    queue.mark_terminal(terminal.queue_id, status=WorkflowRunQueueStatus.CANCELED)
+    service = RunJobService(
+        runner_supervisor=supervisor,
+        log_store=LogStore(),
+        workflow_run_queue_service=queue,
+    )
+
+    assert service.workflow_active_and_queued_summary("wf") == {
+        "active_count": 1,
+        "queued_count": 2,
+        "total_count": 3,
+    }
+
+    summary = await service.cancel_workflow_active_and_queued("wf")
+
+    assert summary == {
+        "canceled_active_count": 1,
+        "canceled_queued_count": 2,
+        "already_terminal_count": 1,
+        "failed_to_cancel_count": 0,
+    }
+    assert adapter.cancel_calls == ["job-1"]
+    assert queue.get(queued_a.queue_id).status is WorkflowRunQueueStatus.CANCELED
+    assert queue.get(queued_b.queue_id).status is WorkflowRunQueueStatus.CANCELED
+    assert queue.get(other.queue_id).status is WorkflowRunQueueStatus.QUEUED
+
+
+@pytest.mark.anyio
+async def test_cancel_workflow_active_and_queued_cancels_submitted_queue_once() -> None:
+    adapter = _Adapter()
+    supervisor = _supervisor(adapter)
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "job-1", workflow_id="wf")
+    queue = WorkflowRunQueueService()
+    queued = _queued_run(queue, "wf")
+    queue.mark_submitted(queued.queue_id, job_id="job-1")
+    service = RunJobService(
+        runner_supervisor=supervisor,
+        log_store=LogStore(),
+        workflow_run_queue_service=queue,
+    )
+
+    assert service.workflow_active_and_queued_summary("wf") == {
+        "active_count": 1,
+        "queued_count": 0,
+        "total_count": 1,
+    }
+
+    summary = await service.cancel_workflow_active_and_queued("wf")
+
+    assert summary == {
+        "canceled_active_count": 1,
+        "canceled_queued_count": 0,
+        "already_terminal_count": 0,
+        "failed_to_cancel_count": 0,
+    }
     assert adapter.cancel_calls == ["job-1"]
 
 

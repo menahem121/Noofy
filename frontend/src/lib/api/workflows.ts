@@ -728,6 +728,31 @@ export function runWorkflow(workflowId: string, payload: WorkflowRunPayload) {
   return postJson<WorkflowRunResponse>(`/workflows/${workflowId}/run`, payload);
 }
 
+export interface WorkflowRunsCancelSummary {
+  canceled_active_count: number;
+  canceled_queued_count: number;
+  already_terminal_count: number;
+  failed_to_cancel_count: number;
+}
+
+export interface WorkflowActiveAndQueuedRunSummary {
+  active_count: number;
+  queued_count: number;
+  total_count: number;
+}
+
+export function fetchWorkflowActiveAndQueuedRuns(workflowId: string) {
+  return getJson<WorkflowActiveAndQueuedRunSummary>(
+    `/workflows/${encodeURIComponent(workflowId)}/runs/active-and-queued`,
+  );
+}
+
+export function cancelWorkflowActiveAndQueuedRuns(workflowId: string) {
+  return postJson<WorkflowRunsCancelSummary>(
+    `/workflows/${encodeURIComponent(workflowId)}/runs/cancel-active-and-queued`,
+  );
+}
+
 export function openWorkflowRunnerLease(workflowId: string) {
   return postJson<WorkflowRunnerLeaseResponse>(`/workflows/${encodeURIComponent(workflowId)}/runner/leases`);
 }

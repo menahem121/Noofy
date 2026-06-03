@@ -10,6 +10,7 @@ import {
   Menu,
   PackageOpen,
   Settings,
+  Square,
 } from "lucide-react";
 
 import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
@@ -36,6 +37,9 @@ export interface AppStatusView {
 
 export interface AppTopBarProgress {
   percent: number;
+  remainingCount?: number;
+  onCancelRemaining?: () => void;
+  cancelRemainingTitle?: string;
 }
 
 interface AppLayoutProps {
@@ -93,6 +97,11 @@ export function AppLayout({
   const resources = useTopBarResources();
   const globalProgress = useGlobalWorkflowProgress();
   const effectiveProgress = progress ?? globalProgress;
+  const remainingTitle = effectiveProgress?.remainingCount === 1
+    ? "1 run remaining"
+    : effectiveProgress?.remainingCount
+      ? `${effectiveProgress.remainingCount} runs remaining`
+      : null;
 
   function handleToggle() {
     if (!isHome) setSidebarOpen((o) => !o);
@@ -141,7 +150,26 @@ export function AppLayout({
         </div>
 
         {effectiveProgress ? (
-          <div className="topbar-progress">
+          <div className={effectiveProgress.remainingCount ? "topbar-progress topbar-progress--with-count" : "topbar-progress"}>
+            {effectiveProgress.remainingCount ? (
+              <span
+                className="topbar-progress__remaining"
+                title={remainingTitle ?? undefined}
+              >
+                {effectiveProgress.remainingCount}
+              </span>
+            ) : null}
+            {effectiveProgress.remainingCount && effectiveProgress.onCancelRemaining ? (
+              <button
+                className="topbar-progress__stop"
+                type="button"
+                aria-label={effectiveProgress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
+                title={effectiveProgress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
+                onClick={effectiveProgress.onCancelRemaining}
+              >
+                <Square size={10} aria-hidden="true" />
+              </button>
+            ) : null}
             <div
               className="topbar-progress__track"
               role="progressbar"

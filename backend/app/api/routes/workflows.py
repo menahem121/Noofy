@@ -385,6 +385,22 @@ async def run_workflow(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/workflows/{workflow_id}/runs/cancel-active-and-queued")
+async def cancel_workflow_active_and_queued(
+    workflow_id: str,
+    job_service: RunJobServiceDep,
+):
+    return await job_service.cancel_workflow_active_and_queued(workflow_id)
+
+
+@router.get("/workflows/{workflow_id}/runs/active-and-queued")
+async def workflow_active_and_queued_run_summary(
+    workflow_id: str,
+    job_service: RunJobServiceDep,
+):
+    return job_service.workflow_active_and_queued_summary(workflow_id)
+
+
 # ─── Dashboard authoring ─────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/bindable-inputs")

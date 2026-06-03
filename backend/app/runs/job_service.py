@@ -6,9 +6,11 @@ from typing import cast
 from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, EngineOutputStream, JobProgress, LogLevel
-from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerSupervisor
+from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerStatus, RunnerSupervisor
 from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
 from app.workflows.loader import WorkflowPackageLoader
+
+terminal_statuses = {"completed", "failed", "canceled"}
 
 
 class RunJobService:
@@ -104,7 +106,139 @@ class RunJobService:
         progress = await adapter.cancel_job(resolved.job_id)
         if progress.status in {"completed", "failed", "canceled"}:
             self.mark_job_finished(resolved.job_id)
+            if self.workflow_run_queue_service is not None and resolved.queue_id is not None:
+                queue_status = None
+                if progress.status == "canceled":
+                    queue_status = WorkflowRunQueueStatus.CANCELED
+                elif progress.status == "failed":
+                    queue_status = WorkflowRunQueueStatus.FAILED
+                self.workflow_run_queue_service.mark_terminal(
+                    resolved.queue_id,
+                    status=queue_status,
+                    reason=progress.message,
+                )
         return progress.model_copy(update={"queue_id": resolved.queue_id})
+
+    async def cancel_workflow_active_and_queued(self, workflow_id: str) -> dict[str, int]:
+        summary = {
+            "canceled_active_count": 0,
+            "canceled_queued_count": 0,
+            "already_terminal_count": 0,
+            "failed_to_cancel_count": 0,
+        }
+        seen_job_ids: set[str] = set()
+
+        if self.workflow_run_queue_service is not None:
+            for record in self.workflow_run_queue_service.list_records_for_workflow(workflow_id):
+                if record.submitted_job_id is not None:
+                    seen_job_ids.add(record.submitted_job_id)
+                if (
+                    self.workflow_run_queue_service.is_terminal(record.queue_id)
+                    or record.status in {WorkflowRunQueueStatus.CANCELED, WorkflowRunQueueStatus.FAILED}
+                ):
+                    summary["already_terminal_count"] += 1
+                    continue
+                try:
+                    progress = await self.cancel_job(record.queue_id)
+                except Exception as exc:
+                    self.log_store.add(
+                        "warning",
+                        "Workflow queued run could not be canceled",
+                        "runs.job_service",
+                        workflow_id=workflow_id,
+                        details={"queue_id": record.queue_id, "error": str(exc)},
+                    )
+                    summary["failed_to_cancel_count"] += 1
+                    continue
+                latest_record = self.workflow_run_queue_service.get(record.queue_id)
+                if latest_record is not None and latest_record.submitted_job_id is not None:
+                    seen_job_ids.add(latest_record.submitted_job_id)
+                submitted_record = latest_record or record
+                if progress.status == "canceled":
+                    if (
+                        submitted_record.status is WorkflowRunQueueStatus.SUBMITTED
+                        or submitted_record.submitted_job_id is not None
+                    ):
+                        summary["canceled_active_count"] += 1
+                    else:
+                        summary["canceled_queued_count"] += 1
+                elif progress.status in terminal_statuses:
+                    summary["already_terminal_count"] += 1
+                else:
+                    summary["failed_to_cancel_count"] += 1
+
+        for runner in self.runner_supervisor.list_runners():
+            job_id = runner.current_job_id
+            if (
+                not job_id
+                or job_id in seen_job_ids
+                or runner.current_workflow_id != workflow_id
+                or runner.status is not RunnerStatus.RUNNING
+            ):
+                continue
+            try:
+                progress = await self.cancel_job(job_id)
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Workflow active run could not be canceled",
+                    "runs.job_service",
+                    job_id=job_id,
+                    workflow_id=workflow_id,
+                    details={"runner_id": runner.runner_id, "error": str(exc)},
+                )
+                summary["failed_to_cancel_count"] += 1
+                continue
+            if progress.status == "canceled":
+                summary["canceled_active_count"] += 1
+            elif progress.status in terminal_statuses:
+                summary["already_terminal_count"] += 1
+            else:
+                summary["failed_to_cancel_count"] += 1
+
+        self.log_store.add(
+            "info",
+            "Workflow active and queued runs cancellation requested",
+            "runs.job_service",
+            workflow_id=workflow_id,
+            details=summary,
+        )
+        return summary
+
+    def workflow_active_and_queued_summary(self, workflow_id: str) -> dict[str, int]:
+        active_count = 0
+        queued_count = 0
+        seen_job_ids: set[str] = set()
+
+        if self.workflow_run_queue_service is not None:
+            for record in self.workflow_run_queue_service.list_records_for_workflow(workflow_id):
+                if (
+                    self.workflow_run_queue_service.is_terminal(record.queue_id)
+                    or record.status in {WorkflowRunQueueStatus.CANCELED, WorkflowRunQueueStatus.FAILED}
+                ):
+                    continue
+                if record.submitted_job_id is not None:
+                    active_count += 1
+                    seen_job_ids.add(record.submitted_job_id)
+                else:
+                    queued_count += 1
+
+        for runner in self.runner_supervisor.list_runners():
+            job_id = runner.current_job_id
+            if (
+                not job_id
+                or job_id in seen_job_ids
+                or runner.current_workflow_id != workflow_id
+                or runner.status is not RunnerStatus.RUNNING
+            ):
+                continue
+            active_count += 1
+
+        return {
+            "active_count": active_count,
+            "queued_count": queued_count,
+            "total_count": active_count + queued_count,
+        }
 
     async def fetch_output(
         self,

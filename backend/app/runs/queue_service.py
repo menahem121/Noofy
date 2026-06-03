@@ -130,6 +130,17 @@ class WorkflowRunQueueService:
         with self._lock:
             return sorted(self._records.values(), key=lambda item: (item.created_at, item.queue_id))
 
+    def list_records_for_workflow(self, workflow_id: str) -> list[WorkflowRunQueueRecord]:
+        with self._lock:
+            return sorted(
+                (
+                    record
+                    for record in self._records.values()
+                    if record.workflow_id == workflow_id
+                ),
+                key=lambda item: (item.created_at, item.queue_id),
+            )
+
     def claim_next(
         self,
         *,
@@ -281,6 +292,11 @@ class WorkflowRunQueueService:
             record = self._records.get(queue_id) if queue_id is not None else None
             job_id = record.submitted_job_id if record is not None and record.submitted_job_id else handle
             return WorkflowRunHandle(queue_id=queue_id, job_id=job_id, record=record)
+
+    def is_terminal(self, handle: str) -> bool:
+        with self._lock:
+            queue_id = self._queue_id_locked(handle)
+            return queue_id in self._terminal_queue_id_set if queue_id is not None else False
 
     def progress(self, handle: str) -> JobProgress | None:
         resolved = self.resolve(handle)
