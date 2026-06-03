@@ -147,7 +147,7 @@ function imageWorkflowBindableInputsResponse() {
         inputs: [
           {
             input_name: "image",
-            current_value: null,
+            current_value: "123e4567-e89b-12d3-a456-426614174000.png",
             kind: "image_input",
             suggested_widget_type: "load_image",
             widget_types: ["load_image", "load_image_mask"],
@@ -787,6 +787,64 @@ describe("DashboardBuilderPage", () => {
       }),
     );
     expect(onContinue.mock.calls[0][0].widgets).toHaveLength(2);
+  });
+
+  it("preserves a removed input image widget as a hidden workflow input", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    fireEvent.click(screen.getAllByRole("button", { name: /remove widget/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    const continuedSchema = onContinue.mock.calls[0][0] as DashboardSchema;
+    const payload = toBackendPayload(continuedSchema);
+    expect(continuedSchema.widgets).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ valueId: "node-10-image" })]),
+    );
+    expect(continuedSchema.hiddenWidgets).toEqual([
+      expect.objectContaining({
+        valueId: "node-10-image",
+        binding: { nodeId: "10", inputName: "image" },
+        widgetType: "load_image",
+      }),
+    ]);
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-10-image",
+        binding: { node_id: "10", input_name: "image" },
+        control: "load_image",
+      }),
+    ]);
+    expect(payload.dashboard.sections[0].controls).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ input_id: "ctrl-node-10-image" })]),
+    );
   });
 
   it("hides the previous workflow while builder data for the next workflow is loading", async () => {

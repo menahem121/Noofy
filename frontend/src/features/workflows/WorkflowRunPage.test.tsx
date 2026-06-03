@@ -2878,6 +2878,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage({ onEditWidgets });
 
+    fireEvent.change(await screen.findByRole("textbox"), { target: { value: "current visible prompt" } });
     fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: /edit widgets/i }));
 
@@ -2889,7 +2890,84 @@ describe("WorkflowRunPage", () => {
           expect.objectContaining({
             id: "prompt",
             widgetType: "textarea",
+            defaultValue: "current visible prompt",
             layout: expect.objectContaining({ x: 0, y: 0, w: 16, h: 6 }),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("opens image input widgets with the current uploaded asset value", async () => {
+    const onEditWidgets = vi.fn();
+    const assetId = "123e4567-e89b-12d3-a456-426614174000.png";
+    const imagePackageData = {
+      ...configuredPackageData,
+      inputs: [
+        {
+          id: "source_image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: assetId,
+          validation: {},
+        },
+      ],
+      outputs: [{ id: "image", label: "Image", node_id: "9", type: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "source_image",
+                type: "load_image",
+                label: "Input image",
+                input_id: "source_image",
+                layout: { x: 0, y: 0, w: 10, h: 8 },
+              },
+              {
+                id: "result",
+                type: "display_image",
+                label: "Result",
+                output_id: "image",
+                layout: { x: 10, y: 0, w: 14, h: 10 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, imagePackageData, null, (url) => {
+      if (url.endsWith(`/api/assets/${assetId}/metadata`)) {
+        return jsonResponse({
+          asset_id: assetId,
+          original_filename: "portrait.png",
+          content_type: "image/png",
+          kind: "image",
+        });
+      }
+      if (url.endsWith(`/api/assets/${assetId}`)) {
+        return new Response(new Blob(["input"], { type: "image/png" }), { status: 200 });
+      }
+      return undefined;
+    });
+
+    renderRunPage({ onEditWidgets });
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit widgets/i }));
+
+    expect(onEditWidgets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: expect.arrayContaining([
+          expect.objectContaining({
+            id: "source_image",
+            widgetType: "load_image",
+            defaultValue: assetId,
           }),
         ]),
       }),

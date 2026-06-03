@@ -16,9 +16,13 @@ from typing import Any
 from app.diagnostics import DiagnosticsSink
 from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
-    filter_resolved_runtime_inputs,
 )
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.media_values import (
+    MEDIA_LOAD_CONTROLS,
+    is_gallery_media_reference,
+    is_uploaded_asset_value,
+)
 from app.workflows.package import (
     DashboardSchema,
     UnresolvedRuntimeInput,
@@ -332,8 +336,39 @@ def _unbound_required_runtime_inputs(
     required = _required_runtime_inputs(candidate)
     if not required:
         return []
-    unresolved = filter_resolved_runtime_inputs(required, parsed_inputs)
-    return [runtime_input for runtime_input in unresolved if runtime_input.required]
+    input_by_binding = {
+        (workflow_input.binding.node_id, workflow_input.binding.input_name): workflow_input
+        for workflow_input in parsed_inputs
+    }
+    visible_input_ids = _dashboard_visible_input_ids(candidate.dashboard)
+    missing: list[UnresolvedRuntimeInput] = []
+    for runtime_input in required:
+        if not runtime_input.required:
+            continue
+        workflow_input = input_by_binding.get((runtime_input.node_id, runtime_input.input_name))
+        if workflow_input is None:
+            missing.append(runtime_input)
+            continue
+        if workflow_input.id in visible_input_ids:
+            continue
+        if not _hidden_runtime_input_has_usable_default(workflow_input):
+            missing.append(runtime_input)
+    return missing
+
+
+def _dashboard_visible_input_ids(dashboard: DashboardSchema) -> set[str]:
+    return {
+        control.input_id
+        for section in dashboard.sections
+        for control in section.controls
+        if control.input_id
+    }
+
+
+def _hidden_runtime_input_has_usable_default(workflow_input: WorkflowInput) -> bool:
+    if workflow_input.control not in MEDIA_LOAD_CONTROLS:
+        return workflow_input.default is not None and workflow_input.default != ""
+    return is_uploaded_asset_value(workflow_input.default) or is_gallery_media_reference(workflow_input.default)
 
 
 def _required_runtime_inputs(

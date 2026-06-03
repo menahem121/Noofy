@@ -117,6 +117,45 @@ describe("buildDashboardSchemaForEditing", () => {
     expect(schema.widgets[0].binding).toEqual({ nodeId: "30", inputName: "video_path" });
   });
 
+  it("keeps dashboard inputs without visible controls as hidden widgets", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-image", name: "Image Workflow", version: "1.0.0", description: "" },
+      inputs: [
+        {
+          id: "source-image",
+          label: "Source image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: "123e4567-e89b-12d3-a456-426614174000.png",
+          validation: {},
+        },
+      ],
+      outputs: [{ id: "result-image", label: "Image", node_id: "20", type: "image", kind: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [
+            { id: "result", type: "display_image", label: "Result image", output_id: "result-image" },
+          ],
+        }],
+      },
+    });
+
+    expect(schema.widgets.map((widget) => widget.widgetType)).toEqual(["display_image"]);
+    expect(schema.hiddenWidgets).toEqual([
+      expect.objectContaining({
+        id: "source-image",
+        valueId: "source-image",
+        binding: { nodeId: "10", inputName: "image" },
+        widgetType: "load_image",
+        defaultValue: "123e4567-e89b-12d3-a456-426614174000.png",
+      }),
+    ]);
+  });
+
   it("round-trips generic file accept rules and output widgets", () => {
     const schema = buildDashboardSchemaForEditing({
       metadata: { id: "wf-file", name: "File Workflow", version: "1.0.0", description: "" },

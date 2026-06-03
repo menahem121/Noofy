@@ -34,6 +34,7 @@ import {
   VALUE_KIND_ICONS,
   addAutomaticDashboardWidgets,
   buildInitialDashboard,
+  canPreserveWidgetAsHiddenInput,
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
   isOutputWidgetType,
@@ -890,7 +891,20 @@ function ungroupWidget(schema: DashboardSchema, widgetId: string): DashboardSche
 }
 
 function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): DashboardSchema {
+  const removedWidget = schema.widgets.find((widget) => widget.id === widgetId) ?? null;
   let widgets = schema.widgets.filter((widget) => widget.id !== widgetId);
+  let hiddenWidgets = schema.hiddenWidgets ?? [];
+  if (removedWidget && canPreserveWidgetAsHiddenInput(removedWidget)) {
+    hiddenWidgets = [
+      ...hiddenWidgets.filter(
+        (widget) =>
+          widget.id !== removedWidget.id &&
+          `${widget.binding.nodeId}:${widget.binding.inputName}` !==
+            `${removedWidget.binding.nodeId}:${removedWidget.binding.inputName}`,
+      ),
+      withoutWidgetLayout(removedWidget),
+    ];
+  }
   const groups: DashboardWidgetGroup[] = [];
 
   for (const group of schema.groups) {
@@ -906,7 +920,7 @@ function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): Dash
     }
   }
 
-  return normalizeDashboardSchema({ ...schema, widgets, groups });
+  return normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets, groups });
 }
 
 function withoutWidgetLayout(widget: DashboardWidget): DashboardWidget {

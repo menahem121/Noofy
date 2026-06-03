@@ -260,6 +260,53 @@ describe("toBackendPayload", () => {
     expect(section.controls[0].layout).toBeUndefined();
     expect(section.controls[1].layout).toBeUndefined();
   });
+
+  it("saves hidden widgets as workflow inputs without visible dashboard controls", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-result",
+          valueId: "node-9-output_image",
+          binding: { nodeId: "9", inputName: "output_image" },
+          widgetType: "display_image",
+          title: "Result",
+          description: "",
+          defaultValue: null,
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ],
+      hiddenWidgets: [
+        {
+          id: "ctrl-node-10-image",
+          valueId: "node-10-image",
+          binding: { nodeId: "10", inputName: "image" },
+          widgetType: "load_image",
+          title: "Input image",
+          description: "",
+          defaultValue: "123e4567-e89b-12d3-a456-426614174000.png",
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-10-image",
+        control: "load_image",
+        binding: { node_id: "10", input_name: "image" },
+        default: "123e4567-e89b-12d3-a456-426614174000.png",
+      }),
+    ]);
+    expect(payload.dashboard.sections[0].controls).toEqual([
+      expect.objectContaining({ id: "ctrl-result", type: "display_image", output_id: "image" }),
+    ]);
+  });
 });
 
 describe("saveDashboardDraft", () => {
@@ -369,6 +416,40 @@ describe("normalizeDashboardSchema", () => {
     };
 
     expect(normalizeDashboardSchema(schema).widgets).toHaveLength(2);
+  });
+
+  it("drops a hidden widget when the same binding is visible again", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-10-image",
+          valueId: "node-10-image",
+          binding: { nodeId: "10", inputName: "image" },
+          widgetType: "load_image",
+          title: "Input image",
+          description: "",
+          defaultValue: null,
+        },
+      ],
+      hiddenWidgets: [
+        {
+          id: "hidden-node-10-image",
+          valueId: "node-10-image",
+          binding: { nodeId: "10", inputName: "image" },
+          widgetType: "load_image",
+          title: "Input image",
+          description: "",
+          defaultValue: "old.png",
+        },
+      ],
+    };
+
+    expect(normalizeDashboardSchema(schema).hiddenWidgets).toBeUndefined();
   });
 });
 
@@ -659,6 +740,41 @@ describe("workflowFromBindableInputs", () => {
       widgetType: "load_image",
     });
     expect(roundTrip.widgets).toHaveLength(1);
+  });
+
+  it("preserves current media input values when auto-adding input widgets", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "10",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "123e4567-e89b-12d3-a456-426614174000.png",
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+          },
+        ],
+      },
+    ]);
+    const baseSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+
+    const schema = addAutomaticImageInputWidgets(baseSchema, workflow);
+
+    expect(schema.widgets[0]).toMatchObject({
+      valueId: "node-10-image",
+      defaultValue: "123e4567-e89b-12d3-a456-426614174000.png",
+    });
   });
 
   it("adds only the selected final image output widget to an existing builder schema", () => {

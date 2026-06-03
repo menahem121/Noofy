@@ -300,13 +300,13 @@ def _prompt_input() -> dict[str, Any]:
     }
 
 
-def _image_input() -> dict[str, Any]:
+def _image_input(default: Any = None) -> dict[str, Any]:
     return {
         "id": "img",
         "label": "Image",
         "control": "load_image",
         "binding": {"node_id": "10", "input_name": "image"},
-        "default": None,
+        "default": default,
         "validation": {},
     }
 
@@ -362,7 +362,7 @@ def test_save_dashboard_allows_removing_output_when_required_input_bound(
     archive = _make_minimal_archive(graph=_graph_with_required_image_input())
     service, workflow_id = _import_and_setup(tmp_path, archive)
 
-    inputs = [_prompt_input(), _image_input()]
+    inputs = [_prompt_input(), _image_input("123e4567-e89b-12d3-a456-426614174000.png")]
     dashboard = {
         "version": "0.1.0",
         "status": "not_configured",
@@ -391,6 +391,68 @@ def test_save_dashboard_allows_removing_output_when_required_input_bound(
     # Binding the load_image input resolves the runtime requirement, so the
     # workflow is no longer flagged as needing dashboard setup.
     assert not reloaded.unresolved_runtime_inputs
+
+
+def test_save_dashboard_allows_hidden_required_runtime_input(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_image_input())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [_prompt_input(), _image_input("123e4567-e89b-12d3-a456-426614174000.png")]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    result = service.save_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["status"] == "configured"
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    reloaded = loader.get_package(workflow_id)
+    assert any(workflow_input.id == "img" for workflow_input in reloaded.inputs)
+    assert all(control.input_id != "img" for section in reloaded.dashboard.sections for control in section.controls)
+
+
+def test_save_dashboard_rejects_hidden_required_runtime_input_without_default(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_image_input())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [_prompt_input(), _image_input()]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="required input"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
 
 
 def test_validate_dashboard_flags_removed_required_runtime_input(tmp_path: Path) -> None:

@@ -145,6 +145,7 @@ export interface DashboardSchema {
   workflowId: string;
   workflowName: string;
   widgets: DashboardWidget[];
+  hiddenWidgets?: DashboardWidget[];
   groups: DashboardWidgetGroup[];
   layout: DashboardCanvasLayout;
   presentation?: DashboardPresentation;
@@ -833,7 +834,8 @@ export function workflowFromBindableInputs(
 export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const normalized = normalizeDashboardSchema(schema);
   const groupedWidgetIds = groupedWidgetIdSet(normalized);
-  const inputs: BackendWorkflowInput[] = normalized.widgets
+  const inputWidgets = [...normalized.widgets, ...(normalized.hiddenWidgets ?? [])];
+  const inputs: BackendWorkflowInput[] = inputWidgets
     .filter((w) => !isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w))
     .map((w) => ({
       id: w.id,
@@ -932,8 +934,46 @@ function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "vid
   return "image";
 }
 
+function mediaInputDefaultValue(value: WorkflowNodeValue): unknown {
+  if (isPersistedMediaValue(value.rawValue)) return value.rawValue;
+  return null;
+}
+
+function isUploadedAssetId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[a-z0-9_-]+)+$/i.test(value)
+  );
+}
+
+function isGalleryMediaReference(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { source?: unknown }).source === "gallery" &&
+    typeof (value as { gallery_item_id?: unknown }).gallery_item_id === "string" &&
+    ((value as { gallery_item_id: string }).gallery_item_id).trim() !== "" &&
+    ["image", "audio", "video", "3d"].includes(String((value as { kind?: unknown }).kind))
+  );
+}
+
+function isPersistedMediaValue(value: unknown): boolean {
+  return isUploadedAssetId(value) || isGalleryMediaReference(value);
+}
+
+function isMediaInputWidgetType(widgetType: WidgetType): boolean {
+  return ["load_image", "load_image_mask", "load_audio", "load_video", "load_file", "load_3d"].includes(widgetType);
+}
+
 function hasExecutableWorkflowBinding(widget: DashboardWidget): boolean {
   return widget.widgetType !== "note" || widget.hasExecutableBinding === true;
+}
+
+export function canPreserveWidgetAsHiddenInput(widget: DashboardWidget): boolean {
+  if (isOutputWidgetType(widget.widgetType) || !hasExecutableWorkflowBinding(widget)) return false;
+  if (!widget.binding.nodeId || !widget.binding.inputName) return false;
+  if (isMediaInputWidgetType(widget.widgetType)) return isPersistedMediaValue(widget.defaultValue);
+  return true;
 }
 
 export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
@@ -1026,7 +1066,7 @@ export function addAutomaticThreeDInputWidgets(schema: DashboardSchema, workflow
       if (value.valueKind !== "three_d_input" || existingValueIds.has(value.id)) continue;
       const bindingKey = `${value.nodeId}:${value.inputName}`;
       if (existingBindings.has(bindingKey)) continue;
-      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_3d", defaultValue: null });
+      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_3d", defaultValue: mediaInputDefaultValue(value) });
       existingValueIds.add(value.id);
       existingBindings.add(bindingKey);
     }
@@ -1045,7 +1085,7 @@ export function addAutomaticFileInputWidgets(schema: DashboardSchema, workflow: 
       if (value.valueKind !== "file_input" || existingValueIds.has(value.id)) continue;
       const bindingKey = `${value.nodeId}:${value.inputName}`;
       if (existingBindings.has(bindingKey)) continue;
-      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_file", defaultValue: null });
+      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_file", defaultValue: mediaInputDefaultValue(value) });
       existingValueIds.add(value.id);
       existingBindings.add(bindingKey);
     }
@@ -1064,7 +1104,7 @@ export function addAutomaticVideoInputWidgets(schema: DashboardSchema, workflow:
       if (value.valueKind !== "video_input" || existingValueIds.has(value.id)) continue;
       const bindingKey = `${value.nodeId}:${value.inputName}`;
       if (existingBindings.has(bindingKey)) continue;
-      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_video", defaultValue: null });
+      widgets.push({ ...createDashboardWidgetForValue(value, node), widgetType: "load_video", defaultValue: mediaInputDefaultValue(value) });
       existingValueIds.add(value.id);
       existingBindings.add(bindingKey);
     }
@@ -1114,7 +1154,7 @@ export function addAutomaticImageInputWidgets(schema: DashboardSchema, workflow:
       widgets.push({
         ...widget,
         widgetType: "load_image",
-        defaultValue: null,
+        defaultValue: mediaInputDefaultValue(value),
         drawMask: undefined,
       });
       existingValueIds.add(value.id);
@@ -1142,7 +1182,7 @@ export function addAutomaticAudioInputWidgets(schema: DashboardSchema, workflow:
       widgets.push({
         ...createDashboardWidgetForValue(value, node),
         widgetType: "load_audio",
-        defaultValue: null,
+        defaultValue: mediaInputDefaultValue(value),
       });
       existingValueIds.add(value.id);
       existingBindings.add(bindingKey);
@@ -1289,8 +1329,17 @@ function dedupeWidgets(widgets: DashboardWidget[]): DashboardWidget[] {
   return result;
 }
 
+function widgetBindingKey(widget: DashboardWidget): string {
+  return `${widget.binding.nodeId}:${widget.binding.inputName}`;
+}
+
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
   const widgets = dedupeWidgets(Array.isArray(schema.widgets) ? schema.widgets : []);
+  const visibleBindings = new Set(widgets.map(widgetBindingKey));
+  const visibleIds = new Set(widgets.map((widget) => widget.id));
+  const hiddenWidgets = dedupeWidgets(Array.isArray(schema.hiddenWidgets) ? schema.hiddenWidgets : [])
+    .filter(canPreserveWidgetAsHiddenInput)
+    .filter((widget) => !visibleIds.has(widget.id) && !visibleBindings.has(widgetBindingKey(widget)));
   const widgetIds = new Set(widgets.map((widget) => widget.id));
   const usedWidgetIds = new Set<string>();
   const usedGroupIds = new Set<string>();
@@ -1316,11 +1365,17 @@ export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSche
     });
   }
 
-  return {
+  const nextSchema: DashboardSchema = {
     ...schema,
     widgets,
     groups,
   };
+  if (hiddenWidgets.length > 0) {
+    nextSchema.hiddenWidgets = hiddenWidgets;
+  } else {
+    delete nextSchema.hiddenWidgets;
+  }
+  return nextSchema;
 }
 
 export function groupedWidgetIdSet(schema: DashboardSchema): Set<string> {

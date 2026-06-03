@@ -1,7 +1,8 @@
-import type {
-  DashboardSchema,
-  DashboardWidget,
-  WidgetType,
+import {
+  canPreserveWidgetAsHiddenInput,
+  type DashboardSchema,
+  type DashboardWidget,
+  type WidgetType,
 } from "../dashboard-builder/dashboardBuilderContent";
 import type {
   DashboardControlDef,
@@ -19,6 +20,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
   for (const output of packageData.outputs) outputIndex.set(output.id, output);
 
   const widgets: DashboardWidget[] = [];
+  const referencedInputIds = new Set<string>();
   const groups = packageData.dashboard.sections.flatMap((section) =>
     dashboardGroupsForBuilder(section.groups ?? [], section.controls),
   );
@@ -38,6 +40,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
 
       if (control.type === "note") {
         const input = control.input_id ? inputIndex.get(control.input_id) : undefined;
+        if (input) referencedInputIds.add(input.id);
         widgets.push({
           id: control.id,
           valueId: input?.id ?? `note:${control.id}`,
@@ -54,6 +57,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
       } else if (control.input_id) {
         const input = inputIndex.get(control.input_id);
         if (!input) continue;
+        referencedInputIds.add(input.id);
         widgets.push({
           id: control.id,
           valueId: input.id,
@@ -87,12 +91,17 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
       }
     }
   }
+  const hiddenWidgets = packageData.inputs
+    .filter((input) => !referencedInputIds.has(input.id))
+    .map(hiddenWidgetForInput)
+    .filter((widget): widget is DashboardWidget => Boolean(widget));
 
   return {
     version: 1,
     workflowId: packageData.metadata.id,
     workflowName: packageData.metadata.display_name ?? packageData.display_name ?? packageData.metadata.name,
     widgets,
+    hiddenWidgets: hiddenWidgets.length > 0 ? hiddenWidgets : undefined,
     groups,
     layout: {
       gridColumns: 32,
@@ -101,6 +110,28 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
       responsive: true,
     },
   };
+}
+
+function hiddenWidgetForInput(input: WorkflowInputDef): DashboardWidget | null {
+  const widgetType = inputWidgetTypeForBuilder(input.control);
+  if (!widgetType) return null;
+  const widget: DashboardWidget = {
+    id: input.id,
+    valueId: input.id,
+    binding: { nodeId: input.binding.node_id, inputName: input.binding.input_name },
+    widgetType,
+    title: input.label,
+    description: "",
+    defaultValue: input.default,
+    min: numberValidation(input.validation.min),
+    max: numberValidation(input.validation.max),
+    step: numberValidation(input.validation.step),
+    options: stringArrayValidation(input.validation.options),
+    acceptedExtensions: stringArrayValidation(input.validation.accepted_extensions),
+    acceptedMimeTypes: stringArrayValidation(input.validation.accepted_mime_types),
+  };
+  if (widget.widgetType === "note") widget.hasExecutableBinding = true;
+  return canPreserveWidgetAsHiddenInput(widget) ? widget : null;
 }
 
 function dashboardGroupsForBuilder(groups: DashboardControlGroupDef[], controls: DashboardControlDef[]) {
@@ -137,6 +168,10 @@ function groupForBuilder(group: DashboardControlGroupDef, childTypes: string[]) 
 
 function toBuilderWidgetType(type: string): WidgetType {
   if (type === "result_image") return "display_image";
+  return inputWidgetTypeForBuilder(type) ?? "string_field";
+}
+
+function inputWidgetTypeForBuilder(type: string): WidgetType | null {
   const knownTypes = new Set<WidgetType>([
     "slider",
     "int_field",
@@ -159,7 +194,7 @@ function toBuilderWidgetType(type: string): WidgetType {
     "lora_loader",
     "select",
   ]);
-  return knownTypes.has(type as WidgetType) ? (type as WidgetType) : "string_field";
+  return knownTypes.has(type as WidgetType) ? (type as WidgetType) : null;
 }
 
 function numberValidation(value: unknown): number | undefined {
