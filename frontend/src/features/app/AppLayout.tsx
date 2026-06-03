@@ -133,7 +133,11 @@ export function AppLayout({
         <WorkflowTabsTopBar />
 
         <div className="topbar__actions">
-          <ResourceMonitor snapshot={resources} />
+          <ResourceMonitor
+            snapshot={resources}
+            progress={effectiveProgress}
+            remainingTitle={remainingTitle}
+          />
           <div className={`status-pill status-pill--${effectiveStatus.tone}`}>
             {effectiveStatus.loading ? <Loader2 className="spin" size={14} aria-hidden="true" /> : <span />}
             <span>{effectiveStatus.label}</span>
@@ -150,26 +154,7 @@ export function AppLayout({
         </div>
 
         {effectiveProgress ? (
-          <div className={effectiveProgress.remainingCount ? "topbar-progress topbar-progress--with-count" : "topbar-progress"}>
-            {effectiveProgress.remainingCount ? (
-              <span
-                className="topbar-progress__remaining"
-                title={remainingTitle ?? undefined}
-              >
-                {effectiveProgress.remainingCount}
-              </span>
-            ) : null}
-            {effectiveProgress.remainingCount && effectiveProgress.onCancelRemaining ? (
-              <button
-                className="topbar-progress__stop"
-                type="button"
-                aria-label={effectiveProgress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
-                title={effectiveProgress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
-                onClick={effectiveProgress.onCancelRemaining}
-              >
-                <Square size={10} aria-hidden="true" />
-              </button>
-            ) : null}
+          <div className="topbar-progress">
             <div
               className="topbar-progress__track"
               role="progressbar"
@@ -310,9 +295,40 @@ function useTopBarResources() {
   return snapshot;
 }
 
-function ResourceMonitor({ snapshot }: { snapshot: MachineResourceSnapshot | null }) {
+function ResourceMonitor({
+  snapshot,
+  progress,
+  remainingTitle,
+}: {
+  snapshot: MachineResourceSnapshot | null;
+  progress: AppTopBarProgress | null;
+  remainingTitle: string | null;
+}) {
+  const showRunControls = Boolean(progress?.remainingCount);
+
   return (
-    <div className="resource-monitor" aria-label="Resource monitor">
+    <div className={`resource-monitor${showRunControls ? " resource-monitor--with-runs" : ""}`} aria-label="Resource monitor">
+      {showRunControls && progress?.remainingCount ? (
+        <div className="resource-monitor__runs" aria-label="Active workflow runs">
+          <span
+            className="resource-monitor__run-count"
+            title={remainingTitle ?? undefined}
+          >
+            {progress.remainingCount}
+          </span>
+          {progress.onCancelRemaining ? (
+            <button
+              className="resource-monitor__run-stop"
+              type="button"
+              aria-label={progress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
+              title={progress.cancelRemainingTitle ?? "Cancel current run and all queued runs for this workflow"}
+              onClick={progress.onCancelRemaining}
+            >
+              <Square size={10} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <ResourceMonitorItem label="CPU" metric={snapshot?.cpu ?? null} value={formatPercent(snapshot?.cpu ?? null)} />
       <ResourceMonitorItem label="RAM" metric={snapshot?.ram ?? null} value={formatMemory(snapshot?.ram ?? null)} />
       <ResourceMonitorItem label="VRAM" metric={snapshot?.vram ?? null} value={formatMemory(snapshot?.vram ?? null)} />

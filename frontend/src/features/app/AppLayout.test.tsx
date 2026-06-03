@@ -27,4 +27,41 @@ describe("AppLayout sidebar", () => {
 
     expect(openExternalUrl).toHaveBeenCalledWith(NOOFY_GITHUB_REPO_URL);
   });
+
+  it("places active workflow run controls inside the resource monitor before CPU", () => {
+    const onCancelRemaining = vi.fn();
+
+    render(
+      <SidebarProvider>
+        <AppLayout
+          activeRoute="workflows"
+          onNavigate={vi.fn()}
+          progress={{
+            percent: 37,
+            remainingCount: 3,
+            onCancelRemaining,
+            cancelRemainingTitle: "Cancel current run and all queued runs for this workflow",
+          }}
+        >
+          <div>Dashboard</div>
+        </AppLayout>
+      </SidebarProvider>,
+    );
+
+    const resourceMonitor = screen.getByLabelText("Resource monitor");
+    const runControls = screen.getByLabelText("Active workflow runs");
+    const cpuLabel = screen.getByText("CPU");
+
+    expect(resourceMonitor).toContainElement(runControls);
+    expect(runControls.compareDocumentPosition(cpuLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTitle("3 runs remaining")).toHaveClass("resource-monitor__run-count");
+    expect(screen.getByRole("button", { name: "Cancel current run and all queued runs for this workflow" })).toHaveClass(
+      "resource-monitor__run-stop",
+    );
+    expect(document.querySelector(".topbar-progress__remaining")).not.toBeInTheDocument();
+    expect(document.querySelector(".topbar-progress__stop")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel current run and all queued runs for this workflow" }));
+    expect(onCancelRemaining).toHaveBeenCalledTimes(1);
+  });
 });
