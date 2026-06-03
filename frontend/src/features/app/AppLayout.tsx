@@ -2,6 +2,7 @@ import { createContext, useContext, ReactNode, useEffect, useRef, useState } fro
 import {
   Coffee,
   FolderClock,
+  Github,
   Images,
   Layers,
   Library,
@@ -9,10 +10,10 @@ import {
   Menu,
   PackageOpen,
   Settings,
-  ShieldCheck,
 } from "lucide-react";
 
 import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
+import { NOOFY_GITHUB_REPO_URL } from "../../lib/noofyLinks";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 import { WorkflowTabsTopBar, useOptionalWorkflowTabs, type WorkflowTabRuntimeState } from "./WorkflowTabs";
@@ -158,15 +159,20 @@ export function AppLayout({
 
       <aside className="sidebar" aria-hidden={!effectiveOpen}>
         <div className="sidebar__inner">
-          <div className="workspace-card">
+          <button
+            className="workspace-card workspace-card--github"
+            type="button"
+            onClick={() => void openExternalUrl(NOOFY_GITHUB_REPO_URL)}
+            aria-label="Open Noofy on GitHub"
+          >
             <div className="workspace-card__avatar" aria-hidden="true">
-              <ShieldCheck size={19} />
+              <Github size={21} />
             </div>
             <div>
-              <p>AI Workspace</p>
-              <span>{effectiveStatus.label}</span>
+              <p>Noofy on GitHub</p>
+              <span>View source & updates</span>
             </div>
-          </div>
+          </button>
 
           <nav className="sidebar-nav" aria-label="Main navigation">
             {navItems.map(({ id, label, Icon }) => (

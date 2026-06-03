@@ -575,7 +575,7 @@ describe("HomePage", () => {
     renderHomePage();
 
     expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
-    expect(screen.getAllByText("Service offline")).toHaveLength(2);
+    expect(screen.getAllByText("Service offline")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Reconnect")).toBeInTheDocument();
   });
