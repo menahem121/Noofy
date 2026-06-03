@@ -280,6 +280,145 @@ def test_save_dashboard_rejects_invalid_binding(tmp_path: Path) -> None:
         service.save_dashboard(workflow_id, inputs, dashboard)
 
 
+def _graph_with_required_image_input() -> dict[str, Any]:
+    return {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello", "clip": ["4", 0]}},
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1.safetensors"}},
+        "10": {"class_type": "LoadImage", "inputs": {"image": "reference.png"}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": "out"}},
+    }
+
+
+def _prompt_input() -> dict[str, Any]:
+    return {
+        "id": "prompt",
+        "label": "Prompt",
+        "control": "textarea",
+        "binding": {"node_id": "1", "input_name": "text"},
+        "default": "hi",
+        "validation": {},
+    }
+
+
+def _image_input() -> dict[str, Any]:
+    return {
+        "id": "img",
+        "label": "Image",
+        "control": "load_image",
+        "binding": {"node_id": "10", "input_name": "image"},
+        "default": None,
+        "validation": {},
+    }
+
+
+def test_save_dashboard_rejects_removed_required_runtime_input(tmp_path: Path) -> None:
+    # A LoadImage referencing an unbundled creator-local file is a required
+    # runtime input. Removing its auto-created widget must not save a dashboard
+    # that still reports as needing setup (which silently bounces the user back
+    # to the builder); it must raise a clear, actionable validation error.
+    archive = _make_minimal_archive(graph=_graph_with_required_image_input())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    pkg = service.workflow_loader.get_package(workflow_id)
+    assert any(
+        runtime_input.node_id == "10" for runtime_input in pkg.unresolved_runtime_inputs
+    )
+
+    # Dashboard omits the load_image input (user removed it) but keeps the
+    # output display widget.
+    inputs = [_prompt_input()]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="required input"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+    # Nothing was persisted: the dashboard is still not_configured.
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    assert loader.get_package(workflow_id).dashboard.status == "not_configured"
+
+
+def test_save_dashboard_allows_removing_output_when_required_input_bound(
+    tmp_path: Path,
+) -> None:
+    # Output/display widgets are not mandatory. Removing one while the required
+    # input stays bound must save successfully and report the workflow ready.
+    archive = _make_minimal_archive(graph=_graph_with_required_image_input())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [_prompt_input(), _image_input()]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_img", "type": "load_image", "label": "Image", "input_id": "img"},
+                ],
+            }
+        ],
+    }
+
+    result = service.save_dashboard(workflow_id, inputs, dashboard)
+    assert result["status"] == "configured"
+
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    reloaded = loader.get_package(workflow_id)
+    assert reloaded.dashboard.status == "configured"
+    # Binding the load_image input resolves the runtime requirement, so the
+    # workflow is no longer flagged as needing dashboard setup.
+    assert not reloaded.unresolved_runtime_inputs
+
+
+def test_validate_dashboard_flags_removed_required_runtime_input(tmp_path: Path) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_image_input())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [_prompt_input()]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+    assert result["valid"] is False
+    assert any("required input" in error for error in result["errors"])
+
+
 def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)

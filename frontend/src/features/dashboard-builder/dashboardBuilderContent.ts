@@ -974,6 +974,34 @@ export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
   );
 }
 
+/**
+ * Whether the schema already exposes an output widget for one of the given
+ * output records. A display/output widget is identified by its source node: a
+ * SaveVideo node yields exactly one video output, so a second display widget on
+ * the same node is always a duplicate. Matching on node id (in addition to
+ * value id and binding) is important because output widgets are created through
+ * different paths — the builder's auto-add uses a synthetic value id like
+ * `node-75-output_video`, while a widget rebuilt from a saved dashboard uses the
+ * backend output id (e.g. `video`) with an empty input name. Without node-id
+ * matching those look unrelated and the output widget gets duplicated.
+ */
+function schemaHasOutputWidgetForRecords(
+  schema: DashboardSchema,
+  records: Array<{ value: WorkflowNodeValue }>,
+  matchesType: (widgetType: WidgetType) => boolean,
+): boolean {
+  const valueIds = new Set(records.map((record) => record.value.id));
+  const bindings = new Set(records.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
+  const nodeIds = new Set(records.map((record) => record.value.nodeId));
+  return schema.widgets.some(
+    (widget) =>
+      matchesType(widget.widgetType) &&
+      (valueIds.has(widget.valueId) ||
+        bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`) ||
+        nodeIds.has(widget.binding.nodeId)),
+  );
+}
+
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
   let next = addAutomaticNoteWidgets(schema, workflow);
   next = addAutomaticImageInputWidgets(next, workflow);
@@ -1134,17 +1162,9 @@ export function addAutomaticImageOutputWidget(schema: DashboardSchema, workflow:
     imageOutputRecords.find((record) => record.value.autoSelect) ??
     imageOutputRecords[imageOutputRecords.length - 1];
   if (!selected) return schema;
-  const imageOutputValueIds = new Set(imageOutputRecords.map((record) => record.value.id));
-  const imageOutputBindings = new Set(
-    imageOutputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`),
-  );
-
-  const hasOutputWidget = schema.widgets.some((widget) =>
-    isOutputWidgetType(widget.widgetType) &&
-    (imageOutputValueIds.has(widget.valueId) ||
-      imageOutputBindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
-  );
-  if (hasOutputWidget) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, imageOutputRecords, isOutputWidgetType)) {
+    return schema;
+  }
 
   const widget = createDashboardWidgetForValue(selected.value, selected.node);
   return {
@@ -1170,17 +1190,9 @@ export function addAutomaticAudioOutputWidget(schema: DashboardSchema, workflow:
     audioOutputRecords.find((record) => record.value.autoSelect) ??
     audioOutputRecords[audioOutputRecords.length - 1];
   if (!selected) return schema;
-  const audioOutputValueIds = new Set(audioOutputRecords.map((record) => record.value.id));
-  const audioOutputBindings = new Set(
-    audioOutputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`),
-  );
-
-  const hasOutputWidget = schema.widgets.some((widget) =>
-    widget.widgetType === "display_audio" &&
-    (audioOutputValueIds.has(widget.valueId) ||
-      audioOutputBindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
-  );
-  if (hasOutputWidget) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, audioOutputRecords, (type) => type === "display_audio")) {
+    return schema;
+  }
 
   return {
     ...schema,
@@ -1201,13 +1213,9 @@ export function addAutomaticVideoOutputWidget(schema: DashboardSchema, workflow:
   );
   const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
   if (!selected) return schema;
-  const valueIds = new Set(outputRecords.map((record) => record.value.id));
-  const bindings = new Set(outputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
-  const hasOutputWidget = schema.widgets.some((widget) =>
-    widget.widgetType === "display_video" &&
-    (valueIds.has(widget.valueId) || bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
-  );
-  if (hasOutputWidget) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, outputRecords, (type) => type === "display_video")) {
+    return schema;
+  }
 
   return {
     ...schema,
@@ -1221,13 +1229,9 @@ export function addAutomaticFileOutputWidget(schema: DashboardSchema, workflow: 
   );
   const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
   if (!selected) return schema;
-  const valueIds = new Set(outputRecords.map((record) => record.value.id));
-  const bindings = new Set(outputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
-  const hasOutputWidget = schema.widgets.some((widget) =>
-    widget.widgetType === "display_file" &&
-    (valueIds.has(widget.valueId) || bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
-  );
-  if (hasOutputWidget) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, outputRecords, (type) => type === "display_file")) {
+    return schema;
+  }
 
   return {
     ...schema,
@@ -1241,13 +1245,9 @@ export function addAutomaticThreeDOutputWidget(schema: DashboardSchema, workflow
   );
   const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
   if (!selected) return schema;
-  const valueIds = new Set(outputRecords.map((record) => record.value.id));
-  const bindings = new Set(outputRecords.map((record) => `${record.value.nodeId}:${record.value.inputName}`));
-  const hasOutputWidget = schema.widgets.some((widget) =>
-    widget.widgetType === "display_3d" &&
-    (valueIds.has(widget.valueId) || bindings.has(`${widget.binding.nodeId}:${widget.binding.inputName}`)),
-  );
-  if (hasOutputWidget) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, outputRecords, (type) => type === "display_3d")) {
+    return schema;
+  }
 
   return {
     ...schema,

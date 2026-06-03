@@ -14,9 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from app.diagnostics import DiagnosticsSink
+from app.workflows.import_normalization import (
+    detect_unresolved_runtime_inputs,
+    filter_resolved_runtime_inputs,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import (
     DashboardSchema,
+    UnresolvedRuntimeInput,
     WorkflowInput,
     WorkflowOutput,
     WorkflowPackage,
@@ -107,10 +112,14 @@ class DashboardAuthoringService:
             }
         )
         result = self.validator.validate_structure(candidate)
+        missing_required = _unbound_required_runtime_inputs(candidate, parsed_inputs)
+        errors = list(result.errors)
+        if missing_required:
+            errors.append(_format_missing_required_inputs_error(missing_required))
         return {
             "workflow_id": workflow_id,
-            "valid": result.valid,
-            "errors": result.errors,
+            "valid": result.valid and not missing_required,
+            "errors": errors,
             "warnings": result.warnings,
         }
 
@@ -139,6 +148,17 @@ class DashboardAuthoringService:
         if not result.valid:
             raise DashboardAuthoringError(
                 f"Dashboard validation failed: {'; '.join(result.errors)}"
+            )
+
+        # A required runtime input (an unbundled creator-local file such as an
+        # image or audio clip) must stay bound to a dashboard widget. Removing
+        # the auto-created widget would otherwise produce a dashboard that saves
+        # but still reports as needing setup, silently bouncing the user back to
+        # the builder. Reject it here with a clear, actionable error instead.
+        missing_required = _unbound_required_runtime_inputs(candidate, parsed_inputs)
+        if missing_required:
+            raise DashboardAuthoringError(
+                _format_missing_required_inputs_error(missing_required)
             )
 
         # Determine where to write dashboard.json. Bundled package files stay
@@ -294,6 +314,64 @@ def _parse_dashboard_payload(
         raise DashboardAuthoringError(f"Invalid dashboard schema: {exc}") from exc
 
     return inputs, outputs, schema
+
+
+def _unbound_required_runtime_inputs(
+    candidate: WorkflowPackage,
+    parsed_inputs: list[WorkflowInput],
+) -> list[UnresolvedRuntimeInput]:
+    """Return required runtime inputs the saved dashboard does not bind.
+
+    A community workflow that references an unbundled creator-local file (image,
+    audio, video, 3D, or generic file) must expose that input as a dashboard
+    widget so an end user can supply their own file. The original requirement is
+    recomputed from the immutable graph — so an input that was bound by a prior
+    save and is later removed is detected again — and unioned with any declared
+    runtime inputs that are still unresolved on the loaded package.
+    """
+    required = _required_runtime_inputs(candidate)
+    if not required:
+        return []
+    unresolved = filter_resolved_runtime_inputs(required, parsed_inputs)
+    return [runtime_input for runtime_input in unresolved if runtime_input.required]
+
+
+def _required_runtime_inputs(
+    candidate: WorkflowPackage,
+) -> list[UnresolvedRuntimeInput]:
+    detected = detect_unresolved_runtime_inputs(candidate.comfyui_graph)
+    merged: list[UnresolvedRuntimeInput] = []
+    seen: set[tuple[str, str]] = set()
+    for runtime_input in (*candidate.unresolved_runtime_inputs, *detected):
+        key = (runtime_input.node_id, runtime_input.input_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(runtime_input)
+    return merged
+
+
+def _format_missing_required_inputs_error(
+    missing: list[UnresolvedRuntimeInput],
+) -> str:
+    descriptions = [
+        f"{_friendly_runtime_input_label(item)} "
+        f"({item.expected_kind or 'file'} input on node {item.node_id})"
+        for item in missing
+    ]
+    return (
+        "Add a widget for the required input(s) below before saving so people "
+        "can provide them when they run the workflow: "
+        + "; ".join(descriptions)
+        + "."
+    )
+
+
+def _friendly_runtime_input_label(item: UnresolvedRuntimeInput) -> str:
+    name = (item.input_name or "").replace("_", " ").strip()
+    if not name:
+        return "Input"
+    return name[:1].upper() + name[1:]
 
 
 # ------------------------------------------------------------------

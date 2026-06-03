@@ -531,6 +531,14 @@ export function DashboardBuilderLayoutPage({
           </div>
         </header>
 
+        {saveError ? (
+          <div className="builder-layout-save-error" role="alert">
+            <strong>Dashboard not saved</strong>
+            <span>{saveError}</span>
+            <span className="builder-layout-save-error__hint">Your local draft was kept.</span>
+          </div>
+        ) : null}
+
         {!schemaReady ? (
           <div className="builder-layout-loading" aria-live="polite" aria-busy="true">
             <div className="builder-loading__panel builder-loading__panel--layout" role="status">

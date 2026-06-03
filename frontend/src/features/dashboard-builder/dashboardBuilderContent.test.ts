@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addAutomaticImageOutputWidget,
+  addAutomaticVideoOutputWidget,
   addAutomaticImageInputWidgets,
   addAutomaticNoteWidgets,
   buildInitialDashboard,
@@ -698,6 +699,55 @@ describe("workflowFromBindableInputs", () => {
 
     expect(schema.widgets).toHaveLength(1);
     expect(schema.widgets[0].valueId).toBe("node-8-output_image");
+  });
+
+  it("does not duplicate an output widget rebuilt from a saved dashboard for the same node", () => {
+    // A saved dashboard control rebuilt for editing uses the backend output id
+    // (e.g. "video") with an empty input name, which differs from the builder's
+    // synthetic value id ("node-75-output_video"). The auto-add must still match
+    // it by node id so the output widget is not duplicated.
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "75",
+        node_type: "SaveVideo",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_video",
+            current_value: null,
+            kind: "video_output",
+            suggested_widget_type: "display_video",
+            widget_types: ["display_video"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+    const baseSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "c_result",
+          valueId: "video",
+          binding: { nodeId: "75", inputName: "" },
+          widgetType: "display_video",
+          title: "Video Output",
+          description: "",
+          defaultValue: null,
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ],
+    };
+
+    const schema = addAutomaticVideoOutputWidget(baseSchema, workflow);
+
+    expect(schema.widgets).toHaveLength(1);
+    expect(schema.widgets[0].id).toBe("c_result");
   });
 
   it("suggests sliders with image-dimension defaults for width and height inputs", () => {

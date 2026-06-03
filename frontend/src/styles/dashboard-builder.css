@@ -1451,6 +1451,30 @@
   color: var(--success);
 }
 
+.builder-layout-save-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 12px 24px 0;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 107, 107, 0.32);
+  border-radius: 12px;
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.builder-layout-save-error strong {
+  color: var(--error, #ff6b6b);
+  font-weight: 700;
+}
+
+.builder-layout-save-error__hint {
+  color: var(--text-muted);
+}
+
 .builder-layout-workspace {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);

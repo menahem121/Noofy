@@ -128,6 +128,10 @@ describe("DashboardBuilderLayoutPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /save dashboard/i }));
 
     expect(await screen.findByText("Save failed. Draft kept.")).toBeInTheDocument();
+    // The clear validation reason is shown, not just hidden in a tooltip.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("invalid payload");
+    expect(alert).toHaveTextContent("Your local draft was kept.");
     expect(onSaveComplete).not.toHaveBeenCalled();
     const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
     expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
