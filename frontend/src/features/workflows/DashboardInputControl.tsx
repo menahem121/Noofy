@@ -718,6 +718,36 @@ function GallerySelectedActions({
   );
 }
 
+function ImageSelectedOverlayActions({
+  disabled,
+  masking = false,
+  onMask,
+  onReplace,
+  onRemove,
+}: {
+  disabled: boolean;
+  masking?: boolean;
+  onMask?: () => void;
+  onReplace: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="dashboard-image-input__preview-actions" role="group" aria-label="Selected image actions">
+      {onMask ? (
+        <button className="dashboard-image-input__preview-action" type="button" disabled={disabled || masking} onClick={onMask} aria-label="Mask" title={masking ? "Opening mask editor" : "Mask"}>
+          <Brush size={15} aria-hidden="true" />
+        </button>
+      ) : null}
+      <button className="dashboard-image-input__preview-action" type="button" disabled={disabled} onClick={onReplace} aria-label="Replace" title="Replace">
+        <RefreshCw size={15} aria-hidden="true" />
+      </button>
+      <button className="dashboard-image-input__preview-action dashboard-image-input__preview-action--danger" type="button" disabled={disabled} onClick={onRemove} aria-label="Remove" title="Remove">
+        <Trash2 size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 interface ImageMaskEditorState {
   sourceAssetId: string;
   sourceUrl: string;
@@ -973,39 +1003,45 @@ function AssetImageInput({
         />
       ) : null}
       {blobUrl || galleryImageUrl || missing || hasSelection ? (
-      <button
-        className="dashboard-image-input__surface"
-        type="button"
-        disabled={disabled}
-        onClick={handleSurfaceClick}
-        onKeyDown={handleKeyDown}
-      >
-        {blobUrl || galleryImageUrl ? (
-          <>
-            <img src={blobUrl ?? galleryImageUrl ?? ""} alt={galleryReference ? "Gallery input" : "Uploaded input"} className="dashboard-image-input__preview" />
-            <span className="dashboard-image-input__overlay">
-              <span className="dashboard-image-input__filename">{selectedFilename}</span>
-              <span className="dashboard-image-input__action">Replace image</span>
-            </span>
-          </>
-        ) : missing ? (
-          <>
-            <span className="dashboard-image-input__icon" aria-hidden="true">
-              <ImagePlus size={24} />
-            </span>
-            <span className="dashboard-image-input__title">Image could not be loaded</span>
-            <span className="dashboard-image-input__hint">Upload from computer</span>
-          </>
-        ) : hasSelection ? (
-          <>
-            <span className="dashboard-image-input__icon" aria-hidden="true">
-              <ImagePlus size={24} />
-            </span>
-            <span className="dashboard-image-input__title">Loading image...</span>
-            <span className="dashboard-image-input__hint">{selectedFilename}</span>
-          </>
-        ) : null}
-      </button>
+        <div className="dashboard-image-input__preview-frame">
+          <button
+            className="dashboard-image-input__surface"
+            type="button"
+            disabled={disabled}
+            onClick={handleSurfaceClick}
+            onKeyDown={handleKeyDown}
+            aria-label={selectedFilename ? `Replace selected image ${selectedFilename}` : "Replace selected image"}
+          >
+            {blobUrl || galleryImageUrl ? (
+              <img src={blobUrl ?? galleryImageUrl ?? ""} alt={selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image"} className="dashboard-image-input__preview" />
+            ) : missing ? (
+              <>
+                <span className="dashboard-image-input__icon" aria-hidden="true">
+                  <ImagePlus size={24} />
+                </span>
+                <span className="dashboard-image-input__title">Image could not be loaded</span>
+                <span className="dashboard-image-input__hint">Upload from computer</span>
+              </>
+            ) : hasSelection ? (
+              <>
+                <span className="dashboard-image-input__icon" aria-hidden="true">
+                  <ImagePlus size={24} />
+                </span>
+                <span className="dashboard-image-input__title">Loading image...</span>
+                <span className="dashboard-image-input__hint">{selectedFilename}</span>
+              </>
+            ) : null}
+          </button>
+          {hasSelection ? (
+            <ImageSelectedOverlayActions
+              disabled={disabled}
+              masking={maskOpening}
+              onMask={maskAvailable ? () => void openMaskEditor() : undefined}
+              onReplace={() => (galleryEnabled ? setReplaceChoiceOpen((current) => !current) : openFilePicker())}
+              onRemove={removeImage}
+            />
+          ) : null}
+        </div>
       ) : (
         <MediaSourceChooser
           icon={<ImagePlus size={24} aria-hidden="true" />}
@@ -1017,15 +1053,6 @@ function AssetImageInput({
           onGallery={() => setGalleryOpen(true)}
         />
       )}
-      {hasSelection ? (
-        <GallerySelectedActions
-          disabled={disabled}
-          masking={maskOpening}
-          onMask={maskAvailable ? () => void openMaskEditor() : undefined}
-          onReplace={() => (galleryEnabled ? setReplaceChoiceOpen((current) => !current) : openFilePicker())}
-          onRemove={removeImage}
-        />
-      ) : null}
       {hasSelection && replaceChoiceOpen ? (
         <MediaSourceChooser
           icon={<ImagePlus size={22} aria-hidden="true" />}

@@ -3375,7 +3375,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByAltText("Uploaded input")).toBeInTheDocument();
+    expect(await screen.findByAltText("Selected image: portrait.png")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     const slider = await screen.findByRole("slider", { name: /compare original image/i });

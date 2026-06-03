@@ -1738,6 +1738,19 @@
   gap: 6px;
 }
 
+.dashboard-image-input__preview-frame {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.dashboard-image-input--canvas .dashboard-image-input__preview-frame {
+  flex: 1;
+  min-height: 0;
+}
+
 .field-group .dashboard-image-input__surface,
 .dashboard-image-input__surface {
   position: relative;
@@ -1786,6 +1799,7 @@ button.dashboard-image-input__surface {
 }
 
 .dashboard-image-input--canvas.dashboard-image-input--preview .dashboard-image-input__surface {
+  height: 100%;
   min-height: 0;
 }
 
@@ -1855,35 +1869,81 @@ button.dashboard-image-input__surface {
   max-height: none;
 }
 
-.dashboard-image-input__overlay {
+.dashboard-image-input__preview-actions {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
   display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-  padding: 30px 14px 12px;
-  background: linear-gradient(180deg, transparent, rgba(28, 27, 29, 0.92));
-  text-align: left;
+  max-width: calc(100% - 16px);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  transform: translateY(-2px);
 }
 
-.field-group .dashboard-image-input__filename,
-.dashboard-image-input__filename {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dashboard-image-input__preview-frame:hover .dashboard-image-input__preview-actions,
+.dashboard-image-input__preview-frame:focus-within .dashboard-image-input__preview-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
-.field-group .dashboard-image-input__action,
-.dashboard-image-input__action {
+.dashboard-image-input__preview-action {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(28, 27, 29, 0.78);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
   color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 120ms ease;
+}
+
+.dashboard-image-input__preview-action:hover,
+.dashboard-image-input__preview-action:focus-visible {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(55, 54, 59, 0.9);
+  color: var(--text-primary);
+}
+
+.dashboard-image-input__preview-action:focus-visible {
+  outline: 2px solid var(--primary-hover);
+  outline-offset: 2px;
+}
+
+.dashboard-image-input__preview-action:active {
+  transform: scale(0.96);
+}
+
+.dashboard-image-input__preview-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.dashboard-image-input__preview-action--danger {
+  color: #fca5a5;
+}
+
+.dashboard-image-input__preview-action--danger:hover,
+.dashboard-image-input__preview-action--danger:focus-visible {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(69, 33, 38, 0.9);
+  color: #fca5a5;
 }
 
 .dashboard-image-input--missing .dashboard-image-input__surface {
@@ -1897,6 +1957,14 @@ button.dashboard-image-input__surface {
 .dashboard-image-input--missing .dashboard-image-input__icon {
   background: rgba(248, 113, 113, 0.12);
   color: var(--error);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .dashboard-image-input__preview-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
 }
 
 .mask-editor-backdrop {

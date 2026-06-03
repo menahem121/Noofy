@@ -281,7 +281,7 @@ describe("DashboardInputControl", () => {
     expect(onImageUpload).toHaveBeenCalledWith(file);
   });
 
-  it("shows the uploaded asset preview and original filename in classic image controls", async () => {
+  it("shows the uploaded asset preview with compact overlay actions in classic image controls", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/metadata")) {
@@ -314,9 +314,11 @@ describe("DashboardInputControl", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByAltText("Uploaded input")).toHaveAttribute("src", "blob:noofy-upload-preview");
-      expect(screen.getByText("reference portrait.png")).toBeInTheDocument();
-      expect(screen.getByText("Replace image")).toBeInTheDocument();
+      expect(screen.getByAltText("Selected image: reference portrait.png")).toHaveAttribute("src", "blob:noofy-upload-preview");
+      expect(screen.getByRole("group", { name: "Selected image actions" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Replace" })).toHaveClass("dashboard-image-input__preview-action");
+      expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("dashboard-image-input__preview-action");
+      expect(screen.queryByText("Replace image")).not.toBeInTheDocument();
     });
   });
 
@@ -603,7 +605,7 @@ describe("DashboardInputControl", () => {
       />,
     );
 
-    expect(screen.getByAltText("Gallery input")).toHaveAttribute(
+    expect(screen.getByAltText("Selected image: portrait.png")).toHaveAttribute(
       "src",
       expect.stringContaining("/api/gallery/gallery-image-1/content"),
     );
