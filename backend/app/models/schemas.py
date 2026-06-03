@@ -8,7 +8,7 @@ from app.engine.models import ImportModelDownloadProgressItem
 
 MODEL_INVENTORY_SCHEMA_VERSION = "2026-05-13"
 
-ModelInventoryStatus = Literal["ready", "missing", "needs_attention"]
+ModelInventoryStatus = Literal["ready", "missing", "needs_attention", "never_used"]
 ModelInventorySource = Literal[
     "noofy",
     "external_comfyui",

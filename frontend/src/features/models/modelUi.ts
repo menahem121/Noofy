@@ -48,6 +48,7 @@ export const STATUS_LABELS: Record<ModelInventoryStatus, string> = {
   ready: "Ready",
   missing: "Missing",
   needs_attention: "Needs attention",
+  never_used: "Never used",
 };
 
 export const TYPE_ICONS: Record<Exclude<ModelTypeFilter, "all">, typeof Box> = {

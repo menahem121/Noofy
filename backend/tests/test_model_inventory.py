@@ -249,10 +249,14 @@ def test_models_inventory_uses_shallow_workflow_requirement_scan(
 
     assert response.status_code == 200
     by_key = {model["model_key"]: model for model in response.json()["models"]}
-    assert (
-        by_key["checkpoints/hashed.safetensors"]["workflow_usage"][0]["status"]
-        == "possible_match"
-    )
+    entry = by_key["checkpoints/hashed.safetensors"]
+    assert entry["workflow_usage"][0]["status"] == "possible_match"
+    # A local file the user already has, referenced by a workflow but not yet
+    # hash-verified, is benign: present it as a neutral "Never used" state instead
+    # of the alarming "Needs attention" warning that implies required user action.
+    assert entry["status"] == "never_used"
+    assert entry["status_label"] == "Never used"
+    assert "hasn't been used in a workflow yet" in entry["message"]
 
 
 def test_models_inventory_omits_unused_bundled_workflow_missing_requirements(tmp_path: Path) -> None:

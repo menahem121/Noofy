@@ -316,14 +316,16 @@ class ModelInventoryService:
                 )
                 existing = entries.get(key)
                 if existing is None:
+                    inventory_status = _inventory_status_for_required_status(item.status)
+                    never_used = inventory_status == "never_used"
                     existing = ModelInventoryEntry(
                         model_key=key,
                         filename=item.filename,
                         folder=item.folder,
                         model_type=_model_type_for(item.folder, item.model_type),
                         size_bytes=item.size_bytes,
-                        status=_inventory_status_for_required_status(item.status),
-                        status_label=item.status_label,
+                        status=inventory_status,
+                        status_label="Never used" if never_used else item.status_label,
                         source="required_by_workflow",
                         source_label="Required by workflow",
                         ownership="workflow_requirement",
@@ -335,14 +337,18 @@ class ModelInventoryService:
                         verification_level=str(item.verification_level),
                         matched_sha256=item.matched_sha256,
                         source_availability=item.source_availability,
-                        message=item.message,
+                        message=_NEVER_USED_MESSAGE if never_used else item.message,
                     )
                     entries[key] = existing
                 else:
                     if item.status == "possible_match" and existing.status == "ready":
-                        existing.status = "needs_attention"
-                        existing.status_label = "Needs attention"
-                        existing.message = item.message
+                        # A local file the user already has is referenced by a
+                        # workflow but not yet hash-verified. This is benign, so
+                        # present it as a neutral "Never used" state rather than a
+                        # red "Needs attention" warning that implies user action.
+                        existing.status = "never_used"
+                        existing.status_label = "Never used"
+                        existing.message = _NEVER_USED_MESSAGE
                     if existing.size_bytes is None:
                         existing.size_bytes = item.size_bytes
                     if existing.verification_level is None:
@@ -410,11 +416,22 @@ def _model_type_for(folder: str, model_type: str | None) -> str:
     return folder if folder in COMFYUI_MODEL_CATEGORIES else "other"
 
 
+_NEVER_USED_MESSAGE = (
+    "This model is saved on your computer but hasn't been used in a workflow yet. "
+    "Noofy will check it automatically the first time a workflow needs it."
+)
+
+
 def _inventory_status_for_required_status(status: str) -> ModelInventoryStatus:
     if status == "available":
         return "ready"
     if status == "missing":
         return "missing"
+    if status == "possible_match":
+        # A local file matches by name but Noofy has not hash-verified it yet.
+        # Nothing is wrong and no user action is needed: verification happens
+        # automatically the first time a workflow that needs it is opened.
+        return "never_used"
     return "needs_attention"
 
 

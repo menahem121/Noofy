@@ -1252,6 +1252,14 @@
   background: var(--error);
 }
 
+.model-status--never_used {
+  color: var(--text-muted);
+}
+
+.model-status--never_used .model-status__dot {
+  background: var(--text-muted);
+}
+
 .models-layout--panel-open .model-col-source {
   display: none;
 }

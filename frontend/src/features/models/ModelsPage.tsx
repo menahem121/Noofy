@@ -65,6 +65,7 @@ const modelStatusSortOrder: Record<string, number> = {
   downloading: 1,
   ready: 2,
   available: 2,
+  never_used: 2,
   failed: 3,
   needs_attention: 3,
 };
@@ -549,6 +550,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
           >
             <option value="all">All status</option>
             <option value="ready">Ready</option>
+            <option value="never_used">Never used</option>
             <option value="missing">Missing</option>
             <option value="needs_attention">Needs attention</option>
           </select>
