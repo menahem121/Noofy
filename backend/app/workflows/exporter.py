@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import mimetypes
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,14 @@ from app.workflows.library import (
     workflow_package_display_name,
 )
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.media_values import MEDIA_LOAD_CONTROLS, is_package_asset_value, is_uploaded_asset_value, target_media_kind_for_input
+from app.workflows.media_values import (
+    MEDIA_LOAD_CONTROLS,
+    is_empty_media_value,
+    is_package_asset_value,
+    is_uploaded_asset_value,
+    media_metadata_matches_input,
+    target_media_kind_for_input,
+)
 from app.workflows.package import WorkflowInput, WorkflowPackage
 from app.workflows.package_assets import (
     PackageAssetError,
@@ -35,6 +43,8 @@ from app.workflows.package_assets import (
 )
 from app.workflows.store_paths import mutable_package_dir, path_is_within, safe_store_segment
 from app.workflows.user_state import UserStateService
+
+MAX_EXPORTED_DEFAULT_ASSET_BYTES = 512 * 1024 * 1024
 
 
 class WorkflowExportError(Exception):
@@ -88,8 +98,9 @@ class WorkflowExporter:
             zf.writestr("package.json", json.dumps(package_json, indent=2, sort_keys=True))
             self._write_workflow_icon_asset(zf, package_json)
 
-            # comfyui_graph.json — the stored opaque execution graph. Portable
-            # package export must not leak local user-state values.
+            # comfyui_graph.json — the stored opaque execution graph. Current
+            # export defaults are written to dashboard.json so media values can
+            # remain safe package assets instead of graph-local paths.
             bound_graph = self._portable_comfyui_graph(package, package_dir=package_dir)
             zf.writestr(
                 "comfyui_graph.json",
@@ -103,6 +114,11 @@ class WorkflowExporter:
             )
             dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
             dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
+            dashboard_data = self._dashboard_with_export_defaults(
+                dashboard_data,
+                package,
+                input_values=input_values,
+            )
             dashboard_data = self._portable_dashboard(dashboard_data)
             self._write_dashboard_package_assets(
                 zf,
@@ -163,6 +179,32 @@ class WorkflowExporter:
             input_id = item.get("id")
             if isinstance(input_id, str) and input_id in credential_input_ids:
                 item["default"] = None
+        return exported
+
+    def _dashboard_with_export_defaults(
+        self,
+        dashboard_data: dict[str, Any],
+        package: WorkflowPackage,
+        *,
+        input_values: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        exported = json.loads(json.dumps(dashboard_data))
+        values = self._export_input_values(package, input_values=input_values)
+        package_inputs_by_id = {workflow_input.id: workflow_input for workflow_input in package.inputs}
+        for item in exported.get("inputs") or []:
+            if not isinstance(item, dict):
+                continue
+            workflow_input = _workflow_input_for_dashboard_item(item, package_inputs_by_id)
+            if workflow_input is None:
+                continue
+            if workflow_input.id not in values:
+                continue
+            if workflow_input.control == "api_credential":
+                item["default"] = None
+                continue
+            value = _export_safe_user_value(values[workflow_input.id])
+            item["default"] = value
+            item["default_pinned"] = True
         return exported
 
     # ------------------------------------------------------------------
@@ -248,34 +290,89 @@ class WorkflowExporter:
                 item["default"] = reference
                 self._write_package_asset_file(zf, source_path, reference, written)
                 continue
-            if not item.get("default_pinned") or not is_uploaded_asset_value(default):
+            if is_empty_media_value(default):
                 continue
-            if self.dashboard_assets_dir is None:
-                raise WorkflowExportError("Noofy could not package an uploaded creator default because dashboard assets are unavailable.")
-            source_path = self.dashboard_assets_dir / str(default)
-            if not source_path.is_file():
-                raise WorkflowExportError("Noofy could not package an uploaded creator default because the source file is missing.")
-            metadata = self._dashboard_asset_metadata(str(default))
-            kind = str(metadata.get("kind") or target_media_kind_for_input(workflow_input) or "file")
-            content_type = metadata.get("content_type") if isinstance(metadata.get("content_type"), str) else None
-            original_filename = (
-                metadata.get("original_filename")
-                if isinstance(metadata.get("original_filename"), str)
-                else source_path.name
-            )
-            try:
-                reference, _asset_id = make_package_asset_reference(
-                    source_path=source_path,
-                    kind=kind,
-                    original_filename=original_filename,
-                    content_type=content_type,
+            if is_uploaded_asset_value(default):
+                if self.dashboard_assets_dir is None:
+                    raise WorkflowExportError("Noofy could not package an uploaded creator default because dashboard assets are unavailable.")
+                source_path = self.dashboard_assets_dir / str(default)
+                if not source_path.is_file():
+                    raise WorkflowExportError("Noofy could not package an uploaded creator default because the source file is missing.")
+                metadata = self._dashboard_asset_metadata(str(default))
+                self._write_export_media_default(
+                    zf,
+                    item,
+                    workflow_input,
+                    source_path,
+                    written,
+                    kind=str(metadata.get("kind") or target_media_kind_for_input(workflow_input) or "file"),
+                    content_type=metadata.get("content_type") if isinstance(metadata.get("content_type"), str) else None,
+                    original_filename=(
+                        metadata.get("original_filename")
+                        if isinstance(metadata.get("original_filename"), str)
+                        else source_path.name
+                    ),
                 )
-                reference = validate_package_asset_reference(reference, workflow_input=workflow_input)
-            except (OSError, PackageAssetError) as exc:
-                raise WorkflowExportError("Noofy could not package an uploaded creator default.") from exc
-            item["default"] = reference
-            item["default_pinned"] = True
-            self._write_package_asset_file(zf, source_path, reference, written)
+                continue
+            local_source_path = _local_media_default_path(default)
+            if local_source_path is not None:
+                self._write_export_media_default(
+                    zf,
+                    item,
+                    workflow_input,
+                    local_source_path,
+                    written,
+                    kind=target_media_kind_for_input(workflow_input) or "file",
+                    content_type=mimetypes.guess_type(local_source_path.name)[0],
+                    original_filename=local_source_path.name,
+                )
+                continue
+            raise WorkflowExportError(_nonportable_media_default_message(workflow_input, default))
+
+    def _write_export_media_default(
+        self,
+        zf: zipfile.ZipFile,
+        item: dict[str, Any],
+        workflow_input: WorkflowInput,
+        source_path: Path,
+        written: set[str],
+        *,
+        kind: str,
+        content_type: str | None,
+        original_filename: str,
+    ) -> None:
+        try:
+            stat = source_path.stat()
+        except OSError as exc:
+            raise WorkflowExportError(f"Workflow input '{workflow_input.id}' has a media default that could not be read.") from exc
+        if not source_path.is_file():
+            raise WorkflowExportError(f"Workflow input '{workflow_input.id}' has a media default that is not a file.")
+        if stat.st_size > MAX_EXPORTED_DEFAULT_ASSET_BYTES:
+            raise WorkflowExportError(
+                f"Workflow input '{workflow_input.id}' has a media default that is too large to bundle in a .noofy package."
+            )
+        if not media_metadata_matches_input(
+            workflow_input,
+            kind=kind,
+            extension=source_path.suffix,
+            mime_type=content_type,
+        ):
+            raise WorkflowExportError(
+                f"Workflow input '{workflow_input.id}' has a media default that is not compatible with this input."
+            )
+        try:
+            reference, _asset_id = make_package_asset_reference(
+                source_path=source_path,
+                kind=kind,
+                original_filename=original_filename,
+                content_type=content_type,
+            )
+            reference = validate_package_asset_reference(reference, workflow_input=workflow_input)
+        except (OSError, PackageAssetError) as exc:
+            raise WorkflowExportError(f"Workflow input '{workflow_input.id}' has a media default that could not be packaged.") from exc
+        item["default"] = reference
+        item["default_pinned"] = True
+        self._write_package_asset_file(zf, source_path, reference, written)
 
     def _write_package_asset_file(
         self,
@@ -340,12 +437,18 @@ class WorkflowExporter:
         package: WorkflowPackage,
         input_values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        values = {item.id: item.default for item in package.inputs}
+        values = {item.id: item.default for item in package.inputs if item.default is not None}
+        package_defaults = {item.id: item.default for item in package.inputs}
+        saved_value_ids: set[str] = set()
         if self.user_state_service is not None:
             user_state = self.user_state_service.get(package.metadata.id)
+            saved_value_ids = set(user_state.values or {})
             values.update(user_state.values or {})
         if input_values is not None:
-            values.update(input_values)
+            for input_id, value in input_values.items():
+                if value is None and package_defaults.get(input_id) is None and input_id not in saved_value_ids:
+                    continue
+                values[input_id] = value
 
         credential_input_ids = {
             item.id for item in package.inputs if item.control == "api_credential"
@@ -681,6 +784,52 @@ def _export_safe_user_value(value: Any, *, credential: bool = False) -> Any:
             and isinstance(item, str)
         }
     return value
+
+
+def _local_media_default_path(value: Any) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        path = Path(value).expanduser()
+    except (OSError, ValueError):
+        return None
+    if not path.is_absolute():
+        return None
+    try:
+        if not path.is_file():
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def _nonportable_media_default_message(workflow_input: WorkflowInput, value: Any) -> str:
+    label = workflow_input.label or workflow_input.id
+    if isinstance(value, dict) and value.get("source") == "gallery":
+        return (
+            f"Workflow input '{label}' uses a Gallery item as its current default. "
+            "Choose or upload a Noofy asset for this input before exporting the .noofy package."
+        )
+    if isinstance(value, str) and value.strip():
+        try:
+            path = Path(value).expanduser()
+        except (OSError, ValueError):
+            path = None
+        if path is not None and path.is_absolute():
+            try:
+                if not path.exists():
+                    return f"Workflow input '{label}' has a media default file that could not be found."
+                if not path.is_file():
+                    return f"Workflow input '{label}' has a media default path that is not a file."
+            except OSError:
+                return f"Workflow input '{label}' has a media default file that could not be read."
+        return (
+            f"Workflow input '{label}' has a media default that cannot be bundled into the .noofy package. "
+            "Use a Noofy upload, an existing package asset, or a readable absolute local file before exporting."
+        )
+    return (
+        f"Workflow input '{label}' has a media default that cannot be bundled into the .noofy package."
+    )
 
 
 def _safe_filename(name: str) -> str:

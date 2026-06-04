@@ -1524,7 +1524,7 @@ export function WorkflowRunPage({
       workflowName={workflowDisplayTitle}
       exportUrl={exportDialog.url}
       extension={exportDialog.extension}
-      inputValues={exportDialog.extension === ".json" ? submittedInputValues : undefined}
+      inputValues={submittedInputValues}
       review={exportDialog.extension === ".noofy" ? exportReview : undefined}
       onClose={() => setExportDialog(null)}
     />

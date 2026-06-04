@@ -94,13 +94,13 @@ describe("WorkflowExportDialog", () => {
     await flushPendingEffects();
   });
 
-  it("exports edited noofy metadata in the export payload", async () => {
+  it("exports edited noofy metadata and current input values in the export payload", async () => {
     render(
       <WorkflowExportDialog
         workflowName="Cleanup Flow"
         exportUrl="/api/workflows/cleanup/export"
         extension=".noofy"
-        inputValues={{ prompt: "local prompt should stay local" }}
+        inputValues={{ prompt: "current export prompt" }}
         review={{ name: "Cleanup Flow", description: "Clean up images." }}
         onClose={vi.fn()}
       />,
@@ -123,6 +123,9 @@ describe("WorkflowExportDialog", () => {
     const [, init] = exportCall as [RequestInfo | URL, RequestInit | undefined];
     expect((init as RequestInit).method).toBe("POST");
     expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+      input_values: {
+        prompt: "current export prompt",
+      },
       export_metadata: {
         name: "Reviewed Cleanup",
         description: "Export-ready package.",
@@ -133,7 +136,42 @@ describe("WorkflowExportDialog", () => {
         icon: "sparkles",
       },
     });
-    expect(JSON.parse(String((init as RequestInit).body))).not.toHaveProperty("input_values");
+  });
+
+  it("shows export warnings returned by the backend", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflow-icons")) {
+        return Promise.resolve(new Response(JSON.stringify({ icons: [] }), {
+          headers: { "Content-Type": "application/json" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/cleanup/export") && init?.method === "POST") {
+        return Promise.resolve(new Response(JSON.stringify({
+          detail: "Workflow input 'Input image' has a media default that cannot be bundled into the .noofy package.",
+        }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return Promise.resolve(new Response(new Uint8Array([110, 111, 111, 102, 121])));
+    });
+    const onClose = vi.fn();
+    render(
+      <WorkflowExportDialog
+        workflowName="Cleanup Flow"
+        exportUrl="/api/workflows/cleanup/export"
+        extension=".noofy"
+        inputValues={{ image: "ComfyUI/input/current.png" }}
+        review={{ name: "Cleanup Flow" }}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Export .noofy" }));
+
+    expect(await screen.findByText(/cannot be bundled into the \.noofy package/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("imports and deletes custom icons", async () => {

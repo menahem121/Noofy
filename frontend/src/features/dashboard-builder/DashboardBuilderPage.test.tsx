@@ -846,7 +846,12 @@ describe("DashboardBuilderPage", () => {
     );
 
     expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    expect(screen.queryByText("Default saved.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No creator default file saved.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /save as default/i }));
+    expect(screen.getByRole("button", { name: /save as default/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /default saved/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Default saved.")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: /remove widget/i })[0]);
     fireEvent.click(screen.getByRole("button", { name: /keep hidden default/i }));
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
@@ -874,6 +879,108 @@ describe("DashboardBuilderPage", () => {
     expect(payload.dashboard.sections[0].controls).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ input_id: "ctrl-node-10-image" })]),
     );
+  });
+
+  it("shows creator default upload success only after a file upload", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      if (url.endsWith("/api/workflows/wf-image/assets/image")) {
+        return Promise.resolve(jsonResponse({ asset_id: "assets/defaults/creator.png", original_filename: "creator.png" }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const view = render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    expect(screen.queryByText("No creator default file saved.")).not.toBeInTheDocument();
+    expect(screen.queryByText("creator.png saved as default.")).not.toBeInTheDocument();
+
+    const fileInput = view.container.querySelector<HTMLInputElement>('.builder-default-asset input[type="file"]');
+    expect(fileInput).toBeInTheDocument();
+    fireEvent.change(fileInput!, {
+      target: { files: [new File(["image"], "creator.png", { type: "image/png" })] },
+    });
+
+    expect(await screen.findByText("creator.png saved as default.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          control: "load_image",
+          default: "assets/defaults/creator.png",
+          default_pinned: true,
+        }),
+      ]),
+    );
+  });
+
+  it("shows creator default upload errors only after an upload attempt", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      if (url.endsWith("/api/workflows/wf-image/assets/image")) {
+        return Promise.resolve(jsonResponse({ detail: "Unsupported default file." }, 400));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const view = render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    expect(screen.queryByText("Unsupported default file.")).not.toBeInTheDocument();
+
+    const fileInput = view.container.querySelector<HTMLInputElement>('.builder-default-asset input[type="file"]');
+    expect(fileInput).toBeInTheDocument();
+    fireEvent.change(fileInput!, {
+      target: { files: [new File(["bad"], "bad.txt", { type: "text/plain" })] },
+    });
+
+    expect(await screen.findByText("Unsupported default file.")).toBeInTheDocument();
   });
 
   it("hides the previous workflow while builder data for the next workflow is loading", async () => {

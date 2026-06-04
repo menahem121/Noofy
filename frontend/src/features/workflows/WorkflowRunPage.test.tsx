@@ -3186,6 +3186,33 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("posts the current dashboard values when exporting Noofy packages from the canvas", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+    const createObjectUrl = vi.fn(() => "blob:workflow-noofy");
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    renderRunPage();
+
+    const promptInput = await screen.findByRole("textbox");
+    fireEvent.change(promptInput, { target: { value: "current noofy prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /export as noofy/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Export .noofy" }));
+
+    await waitFor(() => {
+      const exportCall = fetchMock.mock.calls.find(([input, init]) =>
+        String(input).endsWith("/api/workflows/text_to_image_v0/export") &&
+        (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(exportCall).toBeTruthy();
+      const body = JSON.parse(String((exportCall?.[1] as RequestInit).body));
+      expect(body.input_values.prompt).toBe("current noofy prompt");
+    });
+  });
+
   it("disables input controls while editing the canvas layout", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 

@@ -17,9 +17,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.diagnostics import LogStore
 from app.workflows.assets import DashboardAssetService
-from app.workflows.exporter import WorkflowExporter, stored_comfyui_graph_file
+from app.workflows.exporter import WorkflowExportError, WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.user_state import (
@@ -175,14 +177,16 @@ def _setup_with_configured_dashboard(
     *,
     user_state_service: UserStateService | None = None,
     dashboard_assets_dir: Path | None = None,
+    dashboard: dict[str, Any] | None = None,
 ):
-    archive_bytes = _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD)
+    configured_dashboard = dashboard if dashboard is not None else _CONFIGURED_DASHBOARD
+    archive_bytes = _make_archive(with_signature=True, dashboard=configured_dashboard)
     log_store = LogStore()
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
     pkg = store.import_archive(archive_bytes, original_filename="export_test.noofy")
     workflow_id = pkg.metadata.id
     (store.package_dir(pkg) / "dashboard.json").write_text(
-        json.dumps(_CONFIGURED_DASHBOARD),
+        json.dumps(configured_dashboard),
         encoding="utf-8",
     )
 
@@ -287,6 +291,263 @@ def test_export_archive_includes_packaged_default_from_dashboard_override(tmp_pa
     assert dashboard["inputs"][0]["default"] == asset_ref
 
 
+def test_export_archive_packages_uploaded_user_state_media_default(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "assets"
+    asset_service = DashboardAssetService(assets_dir)
+    uploaded = asset_service.store(_png_bytes(), "image/png", "current.png")
+    user_state_service = UserStateService(tmp_path / "user-state")
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "input-image", "type": "load_image", "label": "Input image", "input_id": "input-image"}
+                ],
+            }
+        ],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="media_default.noofy")
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=pkg.metadata.id,
+            values={"input-image": uploaded["asset_id"]},
+        )
+    )
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+        user_state_service=user_state_service,
+        dashboard_assets_dir=assets_dir,
+    )
+
+    exported, _ = exporter.export_archive(pkg.metadata.id)
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        names = set(zf.namelist())
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
+        default = dashboard_data["inputs"][0]["default"]
+        archive_asset_path = f"assets/{default['asset_id']}"
+        packaged_bytes = zf.read(archive_asset_path)
+        archive_text = b"".join(zf.read(name) for name in names if name.endswith((".json", ".txt")))
+
+    assert default["source"] == "package_asset"
+    assert default["kind"] == "image"
+    assert default["filename"] == "current.png"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
+    assert packaged_bytes == (assets_dir / uploaded["asset_id"]).read_bytes()
+    assert graph_data["10"]["inputs"]["image"] == "original.png"
+    assert uploaded["asset_id"].encode("utf-8") not in archive_text
+
+
+def test_export_archive_packages_accessible_local_media_default(tmp_path: Path) -> None:
+    local_default = tmp_path / "current.png"
+    local_default.write_bytes(_png_bytes())
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="local_media_default.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    exported, _ = exporter.export_archive(
+        pkg.metadata.id,
+        input_values={"input-image": str(local_default)},
+    )
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+        default = dashboard_data["inputs"][0]["default"]
+        packaged_bytes = zf.read(f"assets/{default['asset_id']}")
+        exported_json = b"".join(zf.read(name) for name in zf.namelist() if name.endswith(".json"))
+
+    assert default["source"] == "package_asset"
+    assert default["kind"] == "image"
+    assert default["filename"] == "current.png"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
+    assert packaged_bytes == local_default.read_bytes()
+    assert str(local_default).encode("utf-8") not in exported_json
+
+
+def test_export_archive_warns_when_media_default_is_nonportable(tmp_path: Path) -> None:
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="bad_media_default.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    with pytest.raises(WorkflowExportError, match="cannot be bundled into the .noofy package"):
+        exporter.export_archive(pkg.metadata.id, input_values={"input-image": "ComfyUI/input/current.png"})
+
+
+def test_export_archive_warns_when_media_default_file_is_missing(tmp_path: Path) -> None:
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="missing_media_default.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    missing = tmp_path / "missing.png"
+    with pytest.raises(WorkflowExportError, match="could not be found"):
+        exporter.export_archive(pkg.metadata.id, input_values={"input-image": str(missing)})
+
+
+def test_export_archive_warns_when_media_default_is_too_large(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    local_default = tmp_path / "current.png"
+    local_default.write_bytes(_png_bytes())
+    monkeypatch.setattr("app.workflows.exporter.MAX_EXPORTED_DEFAULT_ASSET_BYTES", 1)
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="too_large_media_default.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+    )
+
+    with pytest.raises(WorkflowExportError, match="too large"):
+        exporter.export_archive(pkg.metadata.id, input_values={"input-image": str(local_default)})
+
+
 def test_export_does_not_modify_original_file(tmp_path: Path) -> None:
     exporter, workflow_id, original_bytes = _setup_with_configured_dashboard(tmp_path)
 
@@ -348,7 +609,7 @@ def test_export_backfills_dashboard_inputs_when_stored_dashboard_lost_them(tmp_p
     assert [item["id"] for item in exported_dashboard["inputs"]] == ["prompt"]
 
 
-def test_exported_archive_does_not_leak_user_state(tmp_path: Path) -> None:
+def test_exported_archive_promotes_user_state_values_to_creator_defaults(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -370,7 +631,8 @@ def test_exported_archive_does_not_leak_user_state(tmp_path: Path) -> None:
         dashboard_data = json.loads(zf.read("dashboard.json"))
         graph_data = json.loads(zf.read("comfyui_graph.json"))
 
-    assert dashboard_data["inputs"][0]["default"] == "hello"
+    assert dashboard_data["inputs"][0]["default"] == "latest prompt"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
     assert graph_data["1"]["inputs"]["text"] == "hi"
     first_control = dashboard_data["sections"][0]["controls"][0]
     assert "layout" not in first_control
@@ -449,7 +711,7 @@ def test_exported_archive_keeps_creator_action_bar_position_not_user_override(tm
     assert exported_dashboard["presentation"]["action_bar"] == {"x": 32, "y": 24}
 
 
-def test_exported_archive_ignores_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
+def test_exported_archive_applies_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
     exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
     package_dir = exporter._find_package_dir(workflow_id)
     assert package_dir is not None
@@ -466,7 +728,8 @@ def test_exported_archive_ignores_explicit_dashboard_values_without_mutating_sto
         dashboard_data = json.loads(zf.read("dashboard.json"))
 
     assert graph_data["1"]["inputs"]["text"] == "hi"
-    assert dashboard_data["inputs"][0]["default"] == "hello"
+    assert dashboard_data["inputs"][0]["default"] == "visible dashboard prompt"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
     assert json.loads(graph_file.read_text(encoding="utf-8")) == before
 
 
@@ -610,6 +873,66 @@ def test_comfyui_json_export_applies_explicit_dashboard_values(tmp_path: Path) -
 
     assert filename.endswith(".comfyui.json")
     assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "json export prompt"
+
+
+def test_comfyui_json_export_applies_saved_user_state_values(tmp_path: Path) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            values={"prompt": "saved json export prompt"},
+        )
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(workflow_id)
+
+    assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "saved json export prompt"
+
+
+def test_comfyui_json_export_uses_original_graph_when_no_default_exists(tmp_path: Path) -> None:
+    dashboard = json.loads(json.dumps(_CONFIGURED_DASHBOARD))
+    dashboard["inputs"][0]["default"] = None
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path, dashboard=dashboard)
+
+    graph_bytes, _ = exporter.export_comfyui_graph(workflow_id)
+
+    assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "hi"
+
+
+def test_comfyui_json_export_ignores_explicit_null_when_no_default_exists(tmp_path: Path) -> None:
+    dashboard = json.loads(json.dumps(_CONFIGURED_DASHBOARD))
+    dashboard["inputs"][0]["default"] = None
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path, dashboard=dashboard)
+
+    graph_bytes, _ = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": None},
+    )
+
+    assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "hi"
+
+
+def test_exported_archive_ignores_explicit_null_when_no_default_exists(tmp_path: Path) -> None:
+    dashboard = json.loads(json.dumps(_CONFIGURED_DASHBOARD))
+    dashboard["inputs"][0]["default"] = None
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path, dashboard=dashboard)
+
+    archive_bytes, _ = exporter.export_archive(
+        workflow_id,
+        input_values={"prompt": None},
+    )
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
+
+    assert dashboard_data["inputs"][0]["default"] is None
+    assert dashboard_data["inputs"][0].get("default_pinned") is not True
+    assert graph_data["1"]["inputs"]["text"] == "hi"
 
 
 def test_exported_archive_strips_api_credential_status_and_raw_values(tmp_path: Path) -> None:
@@ -800,6 +1123,7 @@ def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Pat
     assert "dashboard" not in package_data
     assert package_data["required_models"][0]["size_bytes"] == 2132696762
     assert package_data["required_models"][0]["verification_level"] == "sha256_size"
-    assert dashboard_data["inputs"][0]["default"] == "a cinematic photo of a mountain lake"
+    assert dashboard_data["inputs"][0]["default"] == "native export prompt"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
     assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 0, "y": 0, "w": 32, "h": 6}
     assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"

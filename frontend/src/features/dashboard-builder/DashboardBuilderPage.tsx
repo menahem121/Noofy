@@ -88,6 +88,7 @@ type CreatedDropPreview =
   | null;
 
 type PendingWidgetRemoval = { widget: DashboardWidget } | null;
+type WidgetScopedStatus = { widgetId: string; message: string };
 
 function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
   return {
@@ -1255,6 +1256,18 @@ function WidgetEditor({
   onRemove: () => void;
   onSaveDefault: () => void;
 }) {
+  const [saveStatus, setSaveStatus] = useState<WidgetScopedStatus | null>(null);
+  const saveStatusMessage = saveStatus?.widgetId === widget.id ? saveStatus.message : null;
+
+  useEffect(() => {
+    setSaveStatus(null);
+  }, [widget.id]);
+
+  function handleSaveDefault() {
+    onSaveDefault();
+    setSaveStatus({ widgetId: widget.id, message: "Default saved." });
+  }
+
   return (
     <div className="builder-config__inner">
       <div className="builder-config__top">
@@ -1270,9 +1283,9 @@ function WidgetEditor({
           </p>
         </div>
         <div className="builder-config__header-actions">
-          <button className="secondary-button secondary-button--small" type="button" onClick={onSaveDefault}>
-            {widget.defaultPinned ? <CheckCircle2 size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
-            {widget.defaultPinned ? "Default saved" : "Save as default"}
+          <button className="secondary-button secondary-button--small" type="button" onClick={handleSaveDefault}>
+            <Save size={14} aria-hidden="true" />
+            Save as default
           </button>
           <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
             <Trash2 size={16} aria-hidden="true" />
@@ -1280,6 +1293,7 @@ function WidgetEditor({
         </div>
       </div>
 
+      {saveStatusMessage ? <p className="builder-config__hint">{saveStatusMessage}</p> : null}
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
       <WidgetBehaviorCard widget={widget} value={value} workflowId={workflowId} onPatch={onPatch} />
       <WidgetBinding widget={widget} />
@@ -1298,6 +1312,18 @@ function NoteWidgetEditor({
   onRemove: () => void;
   onSaveDefault: () => void;
 }) {
+  const [saveStatus, setSaveStatus] = useState<WidgetScopedStatus | null>(null);
+  const saveStatusMessage = saveStatus?.widgetId === widget.id ? saveStatus.message : null;
+
+  useEffect(() => {
+    setSaveStatus(null);
+  }, [widget.id]);
+
+  function handleSaveDefault() {
+    onSaveDefault();
+    setSaveStatus({ widgetId: widget.id, message: "Default saved." });
+  }
+
   return (
     <div className="builder-config__inner">
       <div className="builder-config__top">
@@ -1310,9 +1336,9 @@ function NoteWidgetEditor({
         </div>
         <div className="builder-config__header-actions">
           {widget.hasExecutableBinding ? (
-            <button className="secondary-button secondary-button--small" type="button" onClick={onSaveDefault}>
-              {widget.defaultPinned ? <CheckCircle2 size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
-              {widget.defaultPinned ? "Default saved" : "Save as default"}
+            <button className="secondary-button secondary-button--small" type="button" onClick={handleSaveDefault}>
+              <Save size={14} aria-hidden="true" />
+              Save as default
             </button>
           ) : null}
           <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
@@ -1321,6 +1347,7 @@ function NoteWidgetEditor({
         </div>
       </div>
 
+      {saveStatusMessage ? <p className="builder-config__hint">{saveStatusMessage}</p> : null}
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
       <WidgetBinding widget={widget} />
     </div>
@@ -1858,18 +1885,24 @@ function DefaultAssetUploader({
   workflowId: string;
   onPatch: (patch: Partial<DashboardWidget>) => void;
 }) {
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<WidgetScopedStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const accept = uploadAcceptForWidget(widget);
+  const statusMessage = status?.widgetId === widget.id ? status.message : null;
+
+  useEffect(() => {
+    setStatus(null);
+  }, [widget.id]);
+
   async function handleFile(file: File | null) {
     if (!file) return;
-    setStatus("Uploading...");
+    setStatus(null);
     try {
       const result = await uploadDefaultAssetForWidget(workflowId, widget, file);
       onPatch({ defaultValue: result.asset_id, defaultPinned: true });
-      setStatus(`${file.name} saved as default.`);
+      setStatus({ widgetId: widget.id, message: `${file.name} saved as default.` });
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Default upload failed.");
+      setStatus({ widgetId: widget.id, message: error instanceof Error ? error.message : "Default upload failed." });
     }
   }
   return (
@@ -1888,10 +1921,7 @@ function DefaultAssetUploader({
           event.currentTarget.value = "";
         }}
       />
-      <p className="builder-config__hint">
-        {defaultAssetSummary(widget.defaultValue) || "No creator default file saved."}
-      </p>
-      {status ? <p className="builder-config__hint">{status}</p> : null}
+      {statusMessage ? <p className="builder-config__hint">{statusMessage}</p> : null}
     </div>
   );
 }
@@ -1919,15 +1949,6 @@ function uploadAcceptForWidget(widget: DashboardWidget): string | undefined {
   if (widget.widgetType === "load_3d") return ".glb,.gltf,.obj,.stl,.fbx,.ply,.usdz,.dae,.spz,.splat,.ksplat";
   if (widget.widgetType === "load_file") return (widget.acceptedExtensions ?? DEFAULT_FILE_ACCEPTED_EXTENSIONS).join(",");
   return undefined;
-}
-
-function defaultAssetSummary(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) return `Saved default: ${value}`;
-  if (typeof value === "object" && value !== null && (value as { source?: unknown }).source === "package_asset") {
-    const filename = (value as { filename?: unknown }).filename;
-    return `Packaged default: ${typeof filename === "string" && filename ? filename : "asset"}`;
-  }
-  return null;
 }
 
 function splitCsvList(value: string): string[] {
