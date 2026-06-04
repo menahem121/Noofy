@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 EXPORTER_NAME = "Noofy ComfyUI Export Extension"
@@ -71,6 +72,35 @@ NETWORK_VERIFICATION_FILESYSTEM_TYPES = frozenset(
     {"nfs", "nfs4", "cifs", "smbfs", "smb3", "afpfs", "ncpfs", "9p", "sshfs"}
 )
 MAX_BUNDLED_INPUT_ASSET_BYTES = 512 * 1024 * 1024
+DISCOVERY_METADATA_FIELDS = ("description", "author", "website", "category", "tags")
+CANONICAL_CATEGORY_OPTIONS = frozenset(
+    {
+        "Txt2img",
+        "Img2img",
+        "txt2audio",
+        "audio2audio",
+        "txt2vid",
+        "img2vid",
+        "imgTo3D",
+        "txtTo3D",
+        "img2text",
+        "audio2txt",
+        "vid2vid",
+        "Inpainting",
+        "Outpainting",
+        "Upscaling",
+        "Style Transfer",
+        "Swapping",
+        "Character Consistency",
+        "Pose Control",
+        "Depth Control",
+        "Canny / Line Control",
+        "Background Replacement",
+        "Background Removal",
+        "Restoration",
+        "All-in-one",
+    }
+)
 
 
 MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
@@ -640,6 +670,138 @@ def normalize_gpu_backend(device_type: str | None) -> str:
     return "unknown"
 
 
+def normalize_discovery_metadata(
+    *,
+    package_id: str,
+    version: str,
+    workflow_name: str | None,
+    export_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = export_metadata if isinstance(export_metadata, dict) else {}
+    display_name = clean_metadata_text(metadata.get("name")) or clean_metadata_text(
+        metadata.get("display_name")
+    )
+    if display_name is None:
+        display_name = clean_metadata_text(workflow_name) or "Exported ComfyUI Workflow"
+
+    category = clean_metadata_text(metadata.get("category"))
+    if category not in CANONICAL_CATEGORY_OPTIONS:
+        category = None
+
+    return {
+        "id": package_id,
+        "name": display_name,
+        "display_name": display_name,
+        "version": version,
+        "description": clean_metadata_text(metadata.get("description")) or "",
+        "author": clean_metadata_text(metadata.get("author")) or "",
+        "website": clean_metadata_text(metadata.get("website")) or "",
+        "category": category or "",
+        "tags": clean_metadata_tags(metadata.get("tags")),
+    }
+
+
+def apply_metadata_mirrors(package_json: dict[str, Any], metadata: dict[str, Any]) -> None:
+    package_json["metadata"] = dict(metadata)
+    package_json["display_name"] = metadata["display_name"]
+    for key in DISCOVERY_METADATA_FIELDS:
+        package_json[key] = metadata[key]
+
+
+def assert_metadata_mirrors_consistent(package_json: dict[str, Any]) -> None:
+    metadata = package_json.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("package.json metadata must be an object.")
+    if package_json.get("display_name") != metadata.get("display_name"):
+        raise ValueError("package.json display_name does not match metadata.display_name.")
+    for key in DISCOVERY_METADATA_FIELDS:
+        if package_json.get(key) != metadata.get(key):
+            raise ValueError(f"package.json {key} does not match metadata.{key}.")
+
+
+def clean_metadata_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return cleaned or None
+
+
+def clean_metadata_tags(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items: Iterable[Any] = value.split(",")
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = clean_metadata_text(item)
+        if cleaned is None:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(cleaned)
+    return tags
+
+
+def infer_suggested_category(
+    *,
+    input_kinds: Iterable[str],
+    output_kinds: Iterable[str],
+) -> str | None:
+    normalized_inputs = {kind for kind in input_kinds if kind in MEDIA_KINDS and kind != "text"}
+    normalized_outputs = [kind for kind in MEDIA_KINDS_IN_ORDER if kind in set(output_kinds)]
+    if len(normalized_outputs) != 1:
+        return None
+    output_kind = normalized_outputs[0]
+    if output_kind == "file":
+        return None
+
+    media_inputs = {kind for kind in normalized_inputs if kind in {"image", "audio", "video", "3d", "file"}}
+    if len(media_inputs) > 1:
+        return None
+    input_kind = next(iter(media_inputs), None)
+    mapping = {
+        (None, "image"): "Txt2img",
+        ("image", "image"): "Img2img",
+        (None, "audio"): "txt2audio",
+        ("audio", "audio"): "audio2audio",
+        (None, "video"): "txt2vid",
+        ("image", "video"): "img2vid",
+        ("video", "video"): "vid2vid",
+        (None, "3d"): "txtTo3D",
+        ("image", "3d"): "imgTo3D",
+        ("image", "text"): "img2text",
+        ("audio", "text"): "audio2txt",
+    }
+    return mapping.get((input_kind, output_kind))
+
+
+def infer_static_output_kinds(graph: dict[str, Any]) -> list[str]:
+    kinds: list[str] = []
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if not isinstance(class_type, str):
+            continue
+        normalized = class_type.casefold()
+        if any(token in normalized for token in ("saveaudio", "previewaudio", "displayaudio")):
+            kinds.append("audio")
+        elif any(token in normalized for token in ("savevideo", "videocombine", "displayvideo")):
+            kinds.append("video")
+        elif "saveimage" in normalized or "previewimage" in normalized:
+            kinds.append("image")
+        elif "save3d" in normalized or "export3d" in normalized or "display3d" in normalized:
+            kinds.append("3d")
+        elif "textoutput" in normalized or "savetext" in normalized:
+            kinds.append("text")
+    return [kind for kind in MEDIA_KINDS_IN_ORDER if kind in set(kinds)]
+
+
 def prepare_graph_for_export(
     prompt: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1140,6 +1302,7 @@ def detect_model_references(
     hash_cache: ModelHashCache | None = None,
     *,
     metrics: VerifyHashMetrics | None = None,
+    workflow: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     resolved_records: list[tuple[dict[str, Any], Path]] = []
@@ -1201,7 +1364,143 @@ def detect_model_references(
             records.append(record)
 
     annotate_model_identities(resolved_records, hash_cache=hash_cache, metrics=metrics)
+    attach_model_source_url_candidates(records, workflow)
     return records
+
+
+def attach_model_source_url_candidates(
+    records: list[dict[str, Any]],
+    workflow: dict[str, Any] | None,
+) -> None:
+    if not records or not isinstance(workflow, dict):
+        return
+    candidates = collect_workflow_model_source_url_candidates(workflow)
+    if not candidates:
+        return
+    for record in records:
+        filename = record.get("filename")
+        if not isinstance(filename, str) or not filename:
+            continue
+        node_id = record.get("node_id")
+        matched_urls: list[str] = []
+        for candidate in candidates:
+            candidate_name = candidate.get("name")
+            if isinstance(candidate_name, str) and os.path.basename(candidate_name) != os.path.basename(filename):
+                continue
+            candidate_node_id = candidate.get("node_id")
+            if candidate_node_id is not None and node_id is not None and str(candidate_node_id) != str(node_id):
+                continue
+            for url in candidate.get("urls", []):
+                if isinstance(url, str):
+                    matched_urls.append(url)
+        if matched_urls:
+            record["source_urls"] = dedupe_strings(
+                [*(record.get("source_urls") if isinstance(record.get("source_urls"), list) else []), *matched_urls]
+            )
+
+
+def collect_workflow_model_source_url_candidates(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    nodes = workflow.get("nodes")
+    if isinstance(nodes, list):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = node.get("id")
+            properties = node.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            for model in collect_model_property_dicts(properties):
+                name = clean_metadata_text(
+                    model.get("name")
+                    or model.get("filename")
+                    or model.get("model")
+                    or model.get("model_name")
+                )
+                urls = collect_source_urls_from_value(model)
+                if name and urls:
+                    candidates.append({"node_id": node_id, "name": name, "urls": urls})
+    return candidates
+
+
+def collect_model_property_dicts(value: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        models = value.get("models")
+        if isinstance(models, list):
+            found.extend(item for item in models if isinstance(item, dict))
+        if value.keys() & {"url", "source_url", "download_url", "source_urls"}:
+            found.append(value)
+        for nested in value.values():
+            if isinstance(nested, (dict, list)):
+                found.extend(collect_model_property_dicts(nested))
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, (dict, list)):
+                found.extend(collect_model_property_dicts(item))
+    return found
+
+
+def collect_source_urls_from_value(value: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for key in ("url", "source_url", "download_url"):
+        url = sanitize_source_url(value.get(key))
+        if url is not None:
+            urls.append(url)
+    raw_urls = value.get("source_urls")
+    if isinstance(raw_urls, list):
+        for item in raw_urls:
+            url = sanitize_source_url(item)
+            if url is not None:
+                urls.append(url)
+    return dedupe_strings(urls)
+
+
+def sanitize_source_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        return None
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return None
+    if any(is_secret_query_key(key) for key, _value in parse_qsl(parts.query, keep_blank_values=True)):
+        return None
+    return urlunsplit(parts)
+
+
+def is_secret_query_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return normalized in {
+        "api_key",
+        "apikey",
+        "access_token",
+        "token",
+        "auth",
+        "authorization",
+        "secret",
+        "password",
+        "signature",
+        "x_amz_signature",
+        "x_goog_signature",
+    }
+
+
+def dedupe_strings(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def annotate_model_identities(
@@ -1629,18 +1928,28 @@ def build_package_documents(
     graph_adjustments: dict[str, Any],
     warnings: list[str],
     bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     graph_hash = sha256_bytes(canonical_json_bytes(graph))
-    package_id = build_package_id(workflow_name, graph_hash)
-    display_name = workflow_name or "Exported ComfyUI Workflow"
+    metadata_name = (
+        clean_metadata_text(export_metadata.get("name"))
+        if isinstance(export_metadata, dict)
+        else None
+    )
+    package_id = build_package_id(metadata_name or workflow_name, graph_hash)
+    package_version = "0.1.0"
+    package_metadata = normalize_discovery_metadata(
+        package_id=package_id,
+        version=package_version,
+        workflow_name=workflow_name,
+        export_metadata=export_metadata,
+    )
 
     package_json = {
         "schema_version": SCHEMA_VERSION,
         "publisher_id": "unknown",
         "package_id": package_id,
-        "version": "0.1.0",
-        "display_name": display_name,
-        "description": "",
+        "version": package_version,
         "source": "comfyui_noofy_export_extension",
         "trust_level": TRUST_LEVEL,
         "created_at": finished_at,
@@ -1653,6 +1962,8 @@ def build_package_documents(
         },
         "unresolved_runtime_inputs": unresolved_runtime_inputs or [],
     }
+    apply_metadata_mirrors(package_json, package_metadata)
+    assert_metadata_mirrors_consistent(package_json)
 
     bundled_assets = list((bundled_input_assets or {}).values())
     dashboard_inputs = [dashboard_input_for_bundled_asset(asset) for asset in bundled_assets]

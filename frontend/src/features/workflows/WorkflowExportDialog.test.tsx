@@ -138,6 +138,33 @@ describe("WorkflowExportDialog", () => {
     });
   });
 
+  it("does not force Txt2img when no category was selected", async () => {
+    render(
+      <WorkflowExportDialog
+        workflowName="Ambiguous Flow"
+        exportUrl="/api/workflows/ambiguous/export"
+        extension=".noofy"
+        review={{ name: "Ambiguous Flow", category: "" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Category")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Export .noofy" }));
+
+    let exportCall: unknown[] | undefined;
+    await waitFor(() => {
+      exportCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST");
+      expect(exportCall).toBeTruthy();
+    });
+    const [, init] = exportCall as [RequestInfo | URL, RequestInit | undefined];
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+      export_metadata: {
+        category: "",
+      },
+    });
+  });
+
   it("shows export warnings returned by the backend", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

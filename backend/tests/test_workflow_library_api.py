@@ -603,6 +603,42 @@ def test_workflow_list_returns_lightweight_table_fields(tmp_path: Path) -> None:
     assert "overview" not in row
 
 
+def test_workflow_list_uses_package_discovery_category_and_tags(tmp_path: Path) -> None:
+    service = _workflow_library_service_for_package(
+        tmp_path,
+        {
+            "metadata": {
+                "id": "export2noofy_discovery",
+                "name": "Creator Video Tool",
+                "version": "1.0.0",
+                "description": "Turns a still image into motion.",
+                "author": "Noofy Creator",
+                "website": "https://example.test",
+                "category": "img2vid",
+                "tags": ["video", "starter"],
+            },
+            "engine": "comfyui",
+            "required_models": [],
+            "comfyui_graph": {"1": {"class_type": "SaveVideo", "inputs": {}}},
+            "inputs": [],
+            "outputs": [{"id": "video", "label": "Video", "type": "video", "kind": "video", "node_id": "1"}],
+            "custom_nodes": [],
+            "unresolved_runtime_inputs": [],
+        },
+    )
+
+    row = service.list_workflows()[0]
+    details = service.workflow_details("export2noofy_discovery")
+
+    assert row["category"] == "img2vid"
+    assert row["tags"] == ["video", "starter"]
+    assert details["overview"]["description"] == "Turns a still image into motion."
+    assert details["overview"]["author"] == "Noofy Creator"
+    assert details["overview"]["website"] == "https://example.test"
+    assert details["organization"]["category"] == "img2vid"
+    assert details["organization"]["tags"] == ["video", "starter"]
+
+
 def test_workflow_list_infers_media_workflow_type_categories_from_declared_interfaces(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     cases = [

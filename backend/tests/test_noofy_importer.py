@@ -130,6 +130,39 @@ def test_normalized_display_name_prefers_top_level_display_over_legacy_metadata_
     ) == "Friendly Workflow"
 
 
+def test_imported_export2noofy_package_preserves_discovery_metadata(tmp_path: Path) -> None:
+    archive = _archive_bytes_with_package_update(
+        {
+            "display_name": "Discovery Workflow",
+            "description": "Top-level fallback should match.",
+            "author": "Top Author",
+            "website": "https://top.example.test",
+            "category": "Txt2img",
+            "tags": ["top"],
+            "metadata": {
+                "name": "Discovery Workflow",
+                "display_name": "Discovery Workflow",
+                "description": "Searchable package description.",
+                "author": "Noofy Creator",
+                "website": "https://example.test",
+                "category": "img2vid",
+                "tags": ["video", "starter"],
+            },
+        }
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+
+    package = store.import_archive(archive, original_filename="discovery.noofy")
+
+    assert package.metadata.name == "Discovery Workflow"
+    assert package.metadata.display_name == "Discovery Workflow"
+    assert package.metadata.description == "Searchable package description."
+    assert package.metadata.author == "Noofy Creator"
+    assert package.metadata.website == "https://example.test"
+    assert package.metadata.category == "img2vid"
+    assert package.metadata.tags == ["video", "starter"]
+
+
 def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() -> None:
     custom_nodes_was_loaded = "custom_nodes" in sys.modules
 

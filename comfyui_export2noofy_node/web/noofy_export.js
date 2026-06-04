@@ -8,6 +8,32 @@ const BUTTON_CLASS = "noofy-export-button";
 const BUTTON_TEXT = "Export2Noofy";
 const MOUNT_RETRY_MS = 500;
 const MOUNT_RETRY_LIMIT = 60;
+const CATEGORY_OPTIONS = [
+  "Txt2img",
+  "Img2img",
+  "txt2audio",
+  "audio2audio",
+  "txt2vid",
+  "img2vid",
+  "imgTo3D",
+  "txtTo3D",
+  "img2text",
+  "audio2txt",
+  "vid2vid",
+  "Inpainting",
+  "Outpainting",
+  "Upscaling",
+  "Style Transfer",
+  "Swapping",
+  "Character Consistency",
+  "Pose Control",
+  "Depth Control",
+  "Canny / Line Control",
+  "Background Replacement",
+  "Background Removal",
+  "Restoration",
+  "All-in-one",
+];
 let mountPromise = null;
 
 function showMessage(message) {
@@ -107,7 +133,10 @@ async function fetchAssetCandidates(payload) {
     throw new Error(await parseErrorResponse(response));
   }
   const data = await response.json();
-  return Array.isArray(data?.assets) ? data.assets : [];
+  return {
+    assets: Array.isArray(data?.assets) ? data.assets : [],
+    suggested_category: typeof data?.suggested_category === "string" ? data.suggested_category : "",
+  };
 }
 
 function chooseIncludedAssets(candidates) {
@@ -226,6 +255,178 @@ function chooseIncludedAssets(candidates) {
   });
 }
 
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function tagsFromInput(value) {
+  const tags = [];
+  const seen = new Set();
+  for (const part of String(value || "").split(",")) {
+    const tag = cleanText(part);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function createDialogOverlay() {
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.zIndex = "100000";
+  overlay.style.background = "rgba(10, 10, 16, 0.56)";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "20px";
+
+  const panel = document.createElement("div");
+  panel.style.width = "min(560px, 100%)";
+  panel.style.maxHeight = "80vh";
+  panel.style.overflow = "auto";
+  panel.style.background = "var(--comfy-menu-bg, #20212a)";
+  panel.style.color = "var(--fg-color, #fff)";
+  panel.style.border = "1px solid rgba(255,255,255,0.16)";
+  panel.style.borderRadius = "8px";
+  panel.style.boxShadow = "0 20px 60px rgba(0,0,0,0.45)";
+  panel.style.padding = "18px";
+  overlay.appendChild(panel);
+  return { overlay, panel };
+}
+
+function appendTextField(panel, labelText, value, options = {}) {
+  const label = document.createElement("label");
+  label.style.display = "grid";
+  label.style.gap = "6px";
+  label.style.marginTop = "12px";
+
+  const labelSpan = document.createElement("span");
+  labelSpan.textContent = labelText;
+  labelSpan.style.fontSize = "12px";
+  labelSpan.style.fontWeight = "700";
+  label.appendChild(labelSpan);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value || "";
+  input.placeholder = options.placeholder || "";
+  input.style.width = "100%";
+  input.style.boxSizing = "border-box";
+  input.style.padding = "9px 10px";
+  input.style.borderRadius = "6px";
+  input.style.border = "1px solid rgba(255,255,255,0.14)";
+  input.style.background = "rgba(255,255,255,0.06)";
+  input.style.color = "inherit";
+  label.appendChild(input);
+  panel.appendChild(label);
+  return input;
+}
+
+function chooseWorkflowDetails(payload, suggestedCategory) {
+  return new Promise((resolve, reject) => {
+    const { overlay, panel } = createDialogOverlay();
+
+    const title = document.createElement("h2");
+    title.textContent = "Workflow details";
+    title.style.margin = "0 0 6px";
+    title.style.fontSize = "18px";
+    panel.appendChild(title);
+
+    const intro = document.createElement("p");
+    intro.textContent = "These details help Noofy show the workflow in the library.";
+    intro.style.margin = "0 0 14px";
+    intro.style.opacity = "0.78";
+    intro.style.fontSize = "13px";
+    panel.appendChild(intro);
+
+    const name = appendTextField(panel, "Name", payload.workflow_name || "Exported ComfyUI Workflow");
+    const description = appendTextField(panel, "One-line description", "", {
+      placeholder: "What this workflow helps someone make",
+    });
+
+    const categoryLabel = document.createElement("label");
+    categoryLabel.style.display = "grid";
+    categoryLabel.style.gap = "6px";
+    categoryLabel.style.marginTop = "12px";
+    const categorySpan = document.createElement("span");
+    categorySpan.textContent = suggestedCategory ? "Suggested category" : "Category";
+    categorySpan.style.fontSize = "12px";
+    categorySpan.style.fontWeight = "700";
+    categoryLabel.appendChild(categorySpan);
+    const category = document.createElement("select");
+    category.style.width = "100%";
+    category.style.boxSizing = "border-box";
+    category.style.padding = "9px 10px";
+    category.style.borderRadius = "6px";
+    category.style.border = "1px solid rgba(255,255,255,0.14)";
+    category.style.background = "rgba(255,255,255,0.06)";
+    category.style.color = "inherit";
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "No category";
+    category.appendChild(emptyOption);
+    for (const option of CATEGORY_OPTIONS) {
+      const item = document.createElement("option");
+      item.value = option;
+      item.textContent = option;
+      category.appendChild(item);
+    }
+    category.value = CATEGORY_OPTIONS.includes(suggestedCategory) ? suggestedCategory : "";
+    categoryLabel.appendChild(category);
+    panel.appendChild(categoryLabel);
+
+    const tags = appendTextField(panel, "Tags", "", { placeholder: "portrait, cleanup, starter" });
+    const author = appendTextField(panel, "Author", "");
+    const website = appendTextField(panel, "Website", "");
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "16px";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.style.padding = "8px 12px";
+    cancel.addEventListener("click", () => {
+      overlay.remove();
+      reject(new Error("Noofy export canceled."));
+    });
+    actions.appendChild(cancel);
+
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.textContent = "Export package";
+    confirm.style.padding = "8px 12px";
+    confirm.style.fontWeight = "700";
+    confirm.addEventListener("click", () => {
+      const workflowName = cleanText(name.value);
+      if (!workflowName) {
+        name.focus();
+        return;
+      }
+      overlay.remove();
+      resolve({
+        name: workflowName,
+        description: cleanText(description.value),
+        category: category.value,
+        tags: tagsFromInput(tags.value),
+        author: cleanText(author.value),
+        website: cleanText(website.value),
+      });
+    });
+    actions.appendChild(confirm);
+    panel.appendChild(actions);
+    document.body.appendChild(overlay);
+    name.focus();
+    name.select();
+  });
+}
+
 async function exportToNoofy(button) {
   const previousText = button.textContent;
   button.disabled = true;
@@ -234,13 +435,14 @@ async function exportToNoofy(button) {
   try {
     const payload = await collectPromptPayload();
     button.textContent = "Checking assets...";
-    const assetCandidates = await fetchAssetCandidates(payload);
-    const selectedAssetIds = await chooseIncludedAssets(assetCandidates);
+    const assetPreflight = await fetchAssetCandidates(payload);
+    const selectedAssetIds = await chooseIncludedAssets(assetPreflight.assets);
+    const exportMetadata = await chooseWorkflowDetails(payload, assetPreflight.suggested_category);
     button.textContent = "Exporting to Noofy...";
     const response = await api.fetchApi("/noofy/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, selected_asset_ids: selectedAssetIds }),
+      body: JSON.stringify({ ...payload, selected_asset_ids: selectedAssetIds, export_metadata: exportMetadata }),
     });
 
     if (!response.ok) {

@@ -166,6 +166,125 @@ def test_build_export_filename_uses_only_package_id() -> None:
     assert exporter.build_export_filename("eraserv4.5") == "eraserv4.5.noofy"
 
 
+def test_package_metadata_is_canonical_and_mirrored_to_top_level() -> None:
+    documents = exporter.build_package_documents(
+        graph={},
+        workflow_name="Original Name",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-04T00:00:00Z",
+        finished_at="2026-06-04T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        export_metadata={
+            "name": "Reviewed Export",
+            "description": " Export ready. ",
+            "author": " Noofy User ",
+            "website": " https://example.test ",
+            "category": "Restoration",
+            "tags": [" cleanup ", "portrait", "cleanup", ""],
+        },
+    )
+
+    package_json = documents["package_json"]
+    metadata = package_json["metadata"]
+    assert metadata == {
+        "id": package_json["package_id"],
+        "name": "Reviewed Export",
+        "display_name": "Reviewed Export",
+        "version": "0.1.0",
+        "description": "Export ready.",
+        "author": "Noofy User",
+        "website": "https://example.test",
+        "category": "Restoration",
+        "tags": ["cleanup", "portrait"],
+    }
+    for key in ("display_name", "description", "author", "website", "category", "tags"):
+        assert package_json[key] == metadata[key]
+    exporter.assert_metadata_mirrors_consistent(package_json)
+
+
+def test_metadata_mirror_consistency_helper_rejects_drift() -> None:
+    package_json = {
+        "display_name": "Top Level",
+        "description": "Description",
+        "author": "",
+        "website": "",
+        "category": "Txt2img",
+        "tags": [],
+        "metadata": {
+            "display_name": "Nested",
+            "description": "Description",
+            "author": "",
+            "website": "",
+            "category": "Txt2img",
+            "tags": [],
+        },
+    }
+
+    with pytest.raises(ValueError, match="display_name"):
+        exporter.assert_metadata_mirrors_consistent(package_json)
+
+
+def test_empty_optional_metadata_fields_normalize_without_forcing_category() -> None:
+    documents = exporter.build_package_documents(
+        graph={},
+        workflow_name="Ambiguous Workflow",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-04T00:00:00Z",
+        finished_at="2026-06-04T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        export_metadata={"category": "", "tags": "  portrait, portrait, cleanup  "},
+    )
+
+    metadata = documents["package_json"]["metadata"]
+    assert metadata["category"] == ""
+    assert metadata["description"] == ""
+    assert metadata["author"] == ""
+    assert metadata["website"] == ""
+    assert metadata["tags"] == ["portrait", "cleanup"]
+
+
+def test_suggested_category_uses_only_confident_media_flow_matches() -> None:
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["image"]) == "Txt2img"
+    assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["image"]) == "Img2img"
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["audio"]) == "txt2audio"
+    assert exporter.infer_suggested_category(input_kinds=["audio"], output_kinds=["audio"]) == "audio2audio"
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["video"]) == "txt2vid"
+    assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["video"]) == "img2vid"
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["3d"]) == "txtTo3D"
+    assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["3d"]) == "imgTo3D"
+    assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["text"]) == "img2text"
+    assert exporter.infer_suggested_category(input_kinds=["audio"], output_kinds=["text"]) == "audio2txt"
+    assert exporter.infer_suggested_category(input_kinds=["video"], output_kinds=["video"]) == "vid2vid"
+
+    assert exporter.infer_suggested_category(input_kinds=["image", "audio"], output_kinds=["video"]) is None
+    assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["image", "video"]) is None
+    assert exporter.infer_suggested_category(input_kinds=["file"], output_kinds=["file"]) is None
+
+
+def test_creator_selected_category_overrides_any_suggestion() -> None:
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["image"]) == "Txt2img"
+    metadata = exporter.normalize_discovery_metadata(
+        package_id="wf",
+        version="0.1.0",
+        workflow_name="Workflow",
+        export_metadata={"category": "Inpainting"},
+    )
+
+    assert metadata["category"] == "Inpainting"
+
+
 def test_detect_model_references_hashes_existing_models(tmp_path: Path) -> None:
     model = tmp_path / "checkpoints" / "model.safetensors"
     model.parent.mkdir()
@@ -202,6 +321,61 @@ def test_detect_model_references_hashes_existing_models(tmp_path: Path) -> None:
             "identity_warnings": [],
             "source_urls": [],
         }
+    ]
+
+
+def test_detect_model_references_extracts_safe_source_urls_without_changing_identity(tmp_path: Path) -> None:
+    model = tmp_path / "checkpoints" / "model.safetensors"
+    model.parent.mkdir()
+    model.write_bytes(b"fake model")
+
+    prompt = {
+        "12": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "model.safetensors"},
+        }
+    }
+    workflow = {
+        "nodes": [
+            {
+                "id": 12,
+                "type": "CheckpointLoaderSimple",
+                "properties": {
+                    "models": [
+                        {
+                            "name": "model.safetensors",
+                            "url": "https://example.test/model.safetensors",
+                            "source_urls": [
+                                "file:///home/user/model.safetensors",
+                                "/home/user/model.safetensors",
+                                "not a url",
+                                "https://example.test/model.safetensors?token=secret",
+                                "https://mirror.test/model.safetensors",
+                            ],
+                            "sha256": "0" * 64,
+                            "size_bytes": 999,
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    records = exporter.detect_model_references(
+        prompt,
+        lambda folder, filename: str(tmp_path / folder / filename),
+        workflow=workflow,
+    )
+
+    expected_hash = hashlib.sha256(b"fake model").hexdigest()
+    assert records[0]["filename"] == "model.safetensors"
+    assert records[0]["sha256"] == expected_hash
+    assert records[0]["size_bytes"] == len(b"fake model")
+    assert records[0]["verification_level"] == "sha256_size"
+    assert records[0]["identity_verified_by_exporter"] is True
+    assert records[0]["source_urls"] == [
+        "https://example.test/model.safetensors",
+        "https://mirror.test/model.safetensors",
     ]
 
 

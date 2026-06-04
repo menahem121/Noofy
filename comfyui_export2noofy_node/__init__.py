@@ -51,6 +51,8 @@ if PromptServer is not None:
         detect_custom_nodes,
         detect_model_references,
         flatten_warnings,
+        infer_static_output_kinds,
+        infer_suggested_category,
         output_export_path,
         prepare_graph_for_export,
         redact_local_inputs_for_package,
@@ -167,7 +169,16 @@ if PromptServer is not None:
                 graph,
                 resolve_input_path=_resolve_comfyui_input_path,
             )
-            return web.json_response({"assets": [candidate.public_dict() for candidate in candidates]})
+            suggested_category = infer_suggested_category(
+                input_kinds=[candidate.expected_kind for candidate in candidates],
+                output_kinds=infer_static_output_kinds(graph),
+            )
+            return web.json_response(
+                {
+                    "assets": [candidate.public_dict() for candidate in candidates],
+                    "suggested_category": suggested_category,
+                }
+            )
         except NoofyExportError as exc:
             return web.json_response({"error": exc.message, "details": exc.details}, status=exc.status)
         except Exception:
@@ -193,6 +204,10 @@ if PromptServer is not None:
             workflow_name = body.get("workflow_name")
             if workflow_name is not None and not isinstance(workflow_name, str):
                 workflow_name = None
+
+            export_metadata = body.get("export_metadata")
+            if export_metadata is not None and not isinstance(export_metadata, dict):
+                export_metadata = None
 
             timeout_seconds = int(body.get("timeout_seconds") or 24 * 60 * 60)
             client_id = body.get("client_id")
@@ -254,6 +269,7 @@ if PromptServer is not None:
                 lambda folder, filename: folder_paths.get_full_path(folder, filename),
                 hash_cache=_model_hash_cache(),
                 metrics=model_hash_metrics,
+                workflow=workflow,
             )
             duration_seconds = time.monotonic() - started_at
 
@@ -277,6 +293,7 @@ if PromptServer is not None:
                 graph_adjustments=adjustments,
                 warnings=warnings,
                 bundled_input_assets=bundled_input_assets,
+                export_metadata=export_metadata,
             )
             filename = build_export_filename(documents["package_id"])
             target_path = output_export_path(folder_paths.get_output_directory(), filename)
