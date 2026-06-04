@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 
 describe("buildDashboardSchemaForEditing", () => {
-  it("keeps dashboard-only notes editable without inventing workflow bindings", () => {
+  it("keeps loaded note dimensions and replaces incoming minimums with current policy", () => {
     const schema = buildDashboardSchemaForEditing({
       metadata: { id: "wf-1", name: "Workflow", version: "1.0.0", description: "" },
       inputs: [],
@@ -21,7 +21,7 @@ describe("buildDashboardSchemaForEditing", () => {
                 type: "note",
                 label: "Before you run",
                 description: "Use a square source image.\nLarge images take longer.",
-                layout: { x: 0, y: 0, w: 6, h: 4, min_w: 6, min_h: 4 },
+                layout: { x: 2, y: 3, w: 3, h: 2, min_w: 99, min_h: 99 },
               },
             ],
           },
@@ -38,7 +38,7 @@ describe("buildDashboardSchemaForEditing", () => {
         title: "Before you run",
         description: "Use a square source image.\nLarge images take longer.",
         defaultValue: null,
-        layout: { x: 0, y: 0, w: 6, h: 4, minW: 6, minH: 4 },
+        layout: { x: 2, y: 3, w: 3, h: 2, minW: 4, minH: 3 },
       },
     ]);
   });
@@ -85,6 +85,51 @@ describe("buildDashboardSchemaForEditing", () => {
       defaultValue: "runtime value",
       hasExecutableBinding: true,
     });
+  });
+
+  it("keeps loaded group dimensions and replaces the group minimum", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-1", name: "Workflow", version: "1.0.0", description: "" },
+      inputs: [
+        {
+          id: "prompt",
+          label: "Prompt",
+          control: "textarea",
+          binding: { node_id: "1", input_name: "text" },
+          default: "",
+          validation: {},
+        },
+        {
+          id: "steps",
+          label: "Steps",
+          control: "int_field",
+          binding: { node_id: "2", input_name: "steps" },
+          default: 20,
+          validation: {},
+        },
+      ],
+      outputs: [],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [
+            { id: "prompt", type: "textarea", label: "Prompt", input_id: "prompt" },
+            { id: "steps", type: "int_field", label: "Steps", input_id: "steps" },
+          ],
+          groups: [{
+            id: "settings",
+            title: "Settings",
+            control_ids: ["prompt", "steps"],
+            layout: { x: 2, y: 3, w: 5, h: 4, min_w: 99, min_h: 99 },
+          }],
+        }],
+      },
+    });
+
+    expect(schema.groups[0].layout).toEqual({ x: 2, y: 3, w: 5, h: 4, minW: 6, minH: 6 });
   });
 
   it("round-trips declared video input and output widgets", () => {

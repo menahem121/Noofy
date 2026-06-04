@@ -8,6 +8,7 @@ import { dashboardDraftKey, type DashboardSchema } from "./dashboardBuilderConte
 
 const builderLayoutCss = readFileSync(resolve(process.cwd(), "src/styles/dashboard-builder.css"), "utf8");
 const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
+const componentsCss = readFileSync(resolve(process.cwd(), "src/styles/components.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -239,6 +240,104 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.queryByRole("button", { name: "Media Large" })).not.toBeInTheDocument();
   });
 
+  it("marks widgets compact only when their layout is below the widget default", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const schema: DashboardSchema = {
+      ...placedSchema,
+      widgets: [
+        {
+          ...placedSchema.widgets[0],
+          id: "default-prompt",
+          title: "Default prompt",
+          layout: { x: 0, y: 0, w: 8, h: 6 },
+        },
+        {
+          ...placedSchema.widgets[0],
+          id: "compact-prompt",
+          title: "Compact prompt",
+          layout: { x: 8, y: 0, w: 5, h: 4 },
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={schema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect((await screen.findByText("Default prompt")).closest("article")).not.toHaveClass("layout-canvas-widget--compact");
+    expect(screen.getByText("Compact prompt").closest("article")).toHaveClass("layout-canvas-widget--compact");
+  });
+
+  it("resizes a widget down to the current Noofy minimum and serializes that minimum", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-1/dashboard")) {
+        return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const resizeHandle = await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    dispatchPointer(resizeHandle, "pointerdown", { clientX: 600, clientY: 192 });
+    dispatchPointer(window, "pointermove", { clientX: 0, clientY: 0 });
+    dispatchPointer(window, "pointerup", { clientX: 0, clientY: 0 });
+
+    const promptCell = screen.getByRole("textbox").closest("article");
+    expect(promptCell).toHaveStyle({ width: "15.625%", minHeight: "128px" });
+    expect(promptCell).toHaveClass("layout-canvas-widget--compact");
+
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      const body = JSON.parse((putCall?.[1] as RequestInit).body as string);
+      expect(body.dashboard.sections[0].controls[0].layout).toEqual({
+        x: 0,
+        y: 0,
+        w: 5,
+        h: 4,
+        min_w: 5,
+        min_h: 4,
+      });
+    });
+  });
+
   it("treats a group as one canvas item instead of child widget blocks", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -294,6 +393,80 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(builderLayoutCss).toMatch(/\.layout-preview-input--textarea\s*{[^}]*overflow:\s*auto;/);
     expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*flex:\s*1 1 0;/);
     expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*overflow:\s*auto;/);
+  });
+
+  it("keeps compact widget content contained with scrolling and flexible minimum heights", () => {
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget--compact \.layout-canvas-widget__preview-surface\s*{[^}]*overflow:\s*auto;/);
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget--compact \.layout-preview-input--textarea,[^}]*min-height:\s*0;/);
+    expect(canvasCss).toMatch(/\.layout-canvas-widget--compact \.widget-canvas-cell__content\s*{[^}]*overflow:\s*auto;/);
+    expect(canvasCss).toMatch(/\.layout-canvas-widget--compact \.widget-output-placeholder\s*{[^}]*min-height:\s*0;/);
+    expect(componentsCss).toMatch(/\.layout-canvas-widget--compact :where\([^}]*\.dashboard-media-source[^}]*\)\s*{[^}]*min-height:\s*0;/);
+    expect(componentsCss).toMatch(/\.layout-canvas-widget--compact :where\([^}]*\.three-d-viewer[^}]*\)\s*{[^}]*min-height:\s*0;/);
+    expect(canvasCss).toMatch(/\.layout-canvas-widget--compact \.canvas-widget-group__description\s*{[^}]*display:\s*none;/);
+  });
+
+  it("moves a loaded below-minimum widget without changing its dimensions", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-1/dashboard")) {
+        expect(init?.method).toBe("PUT");
+        return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const compactSchema: DashboardSchema = {
+      ...placedSchema,
+      widgets: placedSchema.widgets.map((widget) => ({
+        ...widget,
+        layout: { x: 0, y: 0, w: 3, h: 2, minW: 99, minH: 99 },
+      })),
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={compactSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = (await screen.findByRole("textbox")).closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 60, clientY: 32 });
+    dispatchPointer(window, "pointermove", { clientX: 60, clientY: 96 });
+    dispatchPointer(window, "pointerup", { clientX: 60, clientY: 96 });
+
+    expect(promptCell).toHaveStyle({ top: "64px", width: "9.375%", height: "64px" });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      const body = JSON.parse((putCall?.[1] as RequestInit).body as string);
+      expect(body.dashboard.sections[0].controls[0].layout).toEqual({
+        x: 0,
+        y: 2,
+        w: 3,
+        h: 2,
+        min_w: 5,
+        min_h: 4,
+      });
+    });
   });
 
   it("moves placed widgets by dragging the card body on snapped grid cells", async () => {
@@ -360,7 +533,14 @@ describe("DashboardBuilderLayoutPage", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
-      expect(body.dashboard.sections[0].controls[0].layout).toEqual({ x: 0, y: 4, w: 16, h: 6 });
+      expect(body.dashboard.sections[0].controls[0].layout).toEqual({
+        x: 0,
+        y: 4,
+        w: 16,
+        h: 6,
+        min_w: 5,
+        min_h: 4,
+      });
     });
   });
 

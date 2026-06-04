@@ -85,7 +85,12 @@ import {
   type WidgetType,
 } from "../dashboard-builder/dashboardBuilderContent";
 import type { GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import {
+  minimumSizeForWidgetGroup,
+  minimumSizeForWidgetType,
+  withCurrentWidgetGroupMinimum,
+  withCurrentWidgetMinimum,
+} from "../../lib/widgetSizes";
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { workflowDisplayName } from "../../lib/workflowNames";
@@ -3709,12 +3714,52 @@ function dashboardSavePayloadWithActionBarPosition(
   packageData: WorkflowPackageResponse,
   position: CanvasActionBarPosition,
 ): DashboardSavePayload {
+  const sections = packageData.dashboard.sections.map((section) => {
+    const controlTypeById = new Map(section.controls.map((control) => [control.id, control.type]));
+    return {
+      ...section,
+      controls: section.controls.map((control) => {
+        if (!control.layout) return control;
+        const minimum = minimumSizeForWidgetType(control.type);
+        return {
+          ...control,
+          layout: {
+            x: control.layout.x,
+            y: control.layout.y,
+            w: control.layout.w,
+            h: control.layout.h,
+            min_w: minimum.w,
+            min_h: minimum.h,
+          },
+        };
+      }),
+      groups: (section.groups ?? []).map((group) => {
+        if (!group.layout) return group;
+        const childTypes = group.control_ids
+          .map((controlId) => controlTypeById.get(controlId))
+          .filter((controlType): controlType is string => Boolean(controlType));
+        const minimum = minimumSizeForWidgetGroup(childTypes);
+        return {
+          ...group,
+          layout: {
+            x: group.layout.x,
+            y: group.layout.y,
+            w: group.layout.w,
+            h: group.layout.h,
+            min_w: minimum.w,
+            min_h: minimum.h,
+          },
+        };
+      }),
+    };
+  });
   return {
     inputs: packageData.inputs,
     dashboard: {
       ...packageData.dashboard,
       status: "configured",
       outputs: packageData.outputs,
+      sections,
       presentation: {
         ...(packageData.dashboard.presentation ?? {}),
         action_bar: {
@@ -3908,59 +3953,45 @@ function layoutForBuilderGroup(
   childTypes: string[],
   override?: GridItemLayout,
 ): DashboardWidget["layout"] {
-  const fallback = defaultLayoutForWidgetGroup(childTypes);
   if (override) {
-    const minW = override.minW ?? group.layout?.min_w ?? fallback.minW;
-    const minH = override.minH ?? group.layout?.min_h ?? fallback.minH;
-    return {
+    return withCurrentWidgetGroupMinimum({
       x: override.x,
       y: override.y,
-      w: Math.max(override.w, minW ?? 2),
-      h: Math.max(override.h, minH ?? 2),
-      minW,
-      minH,
-    };
+      w: override.w,
+      h: override.h,
+    }, childTypes);
   }
 
   if (!group.layout) return undefined;
-  const minW = group.layout.min_w ?? fallback.minW;
-  const minH = group.layout.min_h ?? fallback.minH;
-  return {
+  return withCurrentWidgetGroupMinimum({
     x: group.layout.x,
     y: group.layout.y,
-    w: Math.max(group.layout.w, minW ?? 2),
-    h: Math.max(group.layout.h, minH ?? 2),
-    minW,
-    minH,
-  };
+    w: group.layout.w,
+    h: group.layout.h,
+  }, childTypes);
 }
 
 function layoutForBuilderControl(
   control: DashboardControlDef,
   override?: GridItemLayout,
 ): DashboardWidget["layout"] {
-  const fallback = defaultLayoutForWidgetType(control.type);
   if (override) {
-    return {
+    return withCurrentWidgetMinimum({
       x: override.x,
       y: override.y,
       w: override.w,
       h: override.h,
-      minW: override.minW ?? control.layout?.min_w ?? fallback.minW,
-      minH: override.minH ?? control.layout?.min_h ?? fallback.minH,
-    };
+    }, control.type);
   }
 
   if (!control.layout) return undefined;
 
-  return {
+  return withCurrentWidgetMinimum({
     x: control.layout.x,
     y: control.layout.y,
     w: control.layout.w,
     h: control.layout.h,
-    minW: control.layout.min_w ?? fallback.minW,
-    minH: control.layout.min_h ?? fallback.minH,
-  };
+  }, control.type);
 }
 
 function toBuilderWidgetType(type: string): WidgetType {

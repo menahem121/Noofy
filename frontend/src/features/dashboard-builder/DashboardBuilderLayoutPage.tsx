@@ -23,8 +23,19 @@ import {
 } from "lucide-react";
 
 import { saveDashboard } from "../../lib/api/noofyApi";
-import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import {
+  findAvailableLayout,
+  findNearestAvailablePosition,
+  fitLayout,
+  layoutsOverlap,
+  type GridItemLayout,
+} from "../../lib/gridLayout";
+import {
+  defaultLayoutForWidgetGroup,
+  defaultLayoutForWidgetType,
+  isWidgetGroupLayoutCompact,
+  isWidgetLayoutCompact,
+} from "../../lib/widgetSizes";
 import {
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
@@ -334,7 +345,7 @@ export function DashboardBuilderLayoutPage({
         }),
         currentSchema.layout.gridColumns,
       );
-      const dropLayout = findNearestAvailableLayout(
+      const dropLayout = findNearestAvailablePosition(
         moveState.itemId,
         candidate,
         topLevelDashboardItems(currentSchema).map((item) => ({ id: item.id, layout: dashboardItemLayout(item) })),
@@ -728,6 +739,9 @@ function PlacedDashboardItem({
   const title = item.kind === "group" ? item.group.title : item.widget.title;
   const subtitle = item.kind === "group" ? `${item.widgets.length} grouped widgets` : WIDGET_TYPE_LABELS[item.widget.widgetType];
   const description = item.kind === "group" ? item.group.description : undefined;
+  const compact = item.kind === "group"
+    ? isWidgetGroupLayoutCompact(layout, item.widgets.map((widget) => widget.widgetType))
+    : isWidgetLayoutCompact(layout, item.widget.widgetType);
 
   return (
     <DashboardCanvasWidgetShell
@@ -737,9 +751,10 @@ function PlacedDashboardItem({
       rowHeight={rowHeight}
       selected={selected}
       preview={preview}
+      style={{ height: `${layout.h * rowHeight}px` }}
       className={`${dragging ? "layout-canvas-widget--moving" : ""}${
         dropPreview ? " layout-canvas-widget--drop-preview" : ""
-      }`}
+      }${compact ? " layout-canvas-widget--compact" : ""}`}
       aria-hidden={preview ? true : undefined}
       onClick={onSelect}
       onPointerDown={!preview ? onMoveStart : undefined}
@@ -1011,7 +1026,12 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
     );
   }
   if (widget.widgetType === "load_3d" || widget.widgetType === "display_3d") {
-    return <div className="layout-preview-media"><Box size={24} /><span>{widget.widgetType === "load_3d" ? "Click here to upload a 3D model" : "Generated 3D model will appear here"}</span></div>;
+    return (
+      <div className={widget.widgetType === "load_3d" ? "layout-preview-image-input" : "layout-preview-output"}>
+        <Box size={24} aria-hidden="true" />
+        <span>{widget.widgetType === "load_3d" ? "Click here to upload a 3D model" : "Generated 3D model will appear here"}</span>
+      </div>
+    );
   }
 
   if (widget.widgetType === "display_image") {

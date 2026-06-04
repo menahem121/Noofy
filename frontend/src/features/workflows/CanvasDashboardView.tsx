@@ -48,8 +48,20 @@ import {
   type WorkflowOutputDef,
   type GallerySaveRequest,
 } from "../../lib/api/noofyApi";
-import { findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "../../lib/gridLayout";
-import { defaultLayoutForWidgetGroup, defaultLayoutForWidgetType } from "../../lib/widgetSizes";
+import {
+  findNearestAvailablePosition,
+  fitLayout,
+  layoutsOverlap,
+  type GridItemLayout,
+} from "../../lib/gridLayout";
+import {
+  defaultLayoutForWidgetGroup,
+  defaultLayoutForWidgetType,
+  isWidgetGroupLayoutCompact,
+  isWidgetLayoutCompact,
+  withCurrentWidgetGroupMinimum,
+  withCurrentWidgetMinimum,
+} from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
   DASHBOARD_CANVAS_ROW_HEIGHT,
@@ -293,19 +305,19 @@ export function CanvasDashboardView({
   ]);
 
   function effectiveLayout(item: DashboardTopLevelControlItem): GridItemLayout {
-    if (layoutOverrides[item.id]) return withLayoutMinimums(layoutOverrides[item.id], item);
+    if (layoutOverrides[item.id]) return withCurrentTopLevelItemMinimum(layoutOverrides[item.id], item);
     if (item.kind === "group") {
-      const fallback = defaultLayoutForWidgetGroup(item.controls.map((control) => control.type));
-      if (item.group.layout) return fromBackendLayout(item.group, fallback);
-      return fallback;
+      const childTypes = item.controls.map((control) => control.type);
+      if (item.group.layout) return fromBackendGroupLayout(item.group, childTypes);
+      return defaultLayoutForWidgetGroup(childTypes);
     }
-    if (item.control.layout) return fromBackendLayout(item.control);
+    if (item.control.layout) return fromBackendControlLayout(item.control);
     return defaultLayoutForWidgetType(item.control.type);
   }
 
   function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const fitted = fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS);
-    return findNearestAvailableLayout(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
+    return findNearestAvailablePosition(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
   }
 
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
@@ -851,12 +863,17 @@ function CanvasWidgetCell({
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
   const description = isGroup ? item.group.description : control!.type === "note" ? undefined : control!.description;
+  const compact = isGroup
+    ? isWidgetGroupLayoutCompact(layout, item.controls.map((child) => child.type))
+    : isWidgetLayoutCompact(layout, control!.type);
 
   return (
     <DashboardCanvasWidgetShell
       className={`layout-canvas-widget--run${
         isEditingLayout ? " layout-canvas-widget--run-editing" : " layout-canvas-widget--readonly"
-      }${isMoving ? " layout-canvas-widget--moving" : ""}`}
+      }${isMoving ? " layout-canvas-widget--moving" : ""}${
+        compact ? " layout-canvas-widget--compact" : ""
+      }`}
       layout={layout}
       style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
       onPointerDown={isEditingLayout ? onMoveStart : undefined}
@@ -1838,44 +1855,34 @@ function filenameFromImageUrl(imageUrl: string) {
   }
 }
 
-function fromBackendLayout(item: DashboardControlDef | DashboardControlGroupDef, fallbackOverride?: GridItemLayout): GridItemLayout {
-  const fallback = fallbackOverride ?? ("type" in item
-    ? defaultLayoutForWidgetType(item.type)
-    : defaultLayoutForWidgetGroup([]));
-  const layout = item.layout;
-  return withLayoutMinimums({
-    x: layout?.x ?? 0,
-    y: layout?.y ?? 0,
-    w: layout?.w ?? 4,
-    h: layout?.h ?? 2,
-    minW: layout?.min_w ?? fallback.minW,
-    minH: layout?.min_h ?? fallback.minH,
-  }, item, fallback);
+function fromBackendControlLayout(control: DashboardControlDef): GridItemLayout {
+  const layout = control.layout!;
+  return withCurrentWidgetMinimum({
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }, control.type);
 }
 
-function withLayoutMinimums(
+function fromBackendGroupLayout(group: DashboardControlGroupDef, childTypes: string[]): GridItemLayout {
+  const layout = group.layout!;
+  return withCurrentWidgetGroupMinimum({
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }, childTypes);
+}
+
+function withCurrentTopLevelItemMinimum(
   layout: GridItemLayout,
-  item: DashboardControlDef | DashboardControlGroupDef | DashboardTopLevelControlItem,
-  fallbackOverride?: GridItemLayout,
+  item: DashboardTopLevelControlItem,
 ): GridItemLayout {
-  const source = "kind" in item ? (item.kind === "group" ? item.group : item.control) : item;
-  const fallback = fallbackOverride ?? (
-    "kind" in item && item.kind === "group"
-      ? defaultLayoutForWidgetGroup(item.controls.map((control) => control.type))
-      : "type" in source
-        ? defaultLayoutForWidgetType(source.type)
-        : defaultLayoutForWidgetGroup([])
-  );
-  const minW = layout.minW ?? source.layout?.min_w ?? fallback.minW;
-  const minH = layout.minH ?? source.layout?.min_h ?? fallback.minH;
-  const isGroup = "kind" in item ? item.kind === "group" : !("type" in item);
-  return {
-    ...layout,
-    w: isGroup ? Math.max(layout.w, minW ?? 2) : layout.w,
-    h: isGroup ? Math.max(layout.h, minH ?? 2) : layout.h,
-    minW,
-    minH,
-  };
+  if (item.kind === "group") {
+    return withCurrentWidgetGroupMinimum(layout, item.controls.map((control) => control.type));
+  }
+  return withCurrentWidgetMinimum(layout, item.control.type);
 }
 
 function CanvasMemoryLoadedPill() {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { resizeLayoutFromPointerDelta } from "./DashboardCanvasPresentation";
+import { fitMovedLayoutPosition, resizeLayoutFromPointerDelta } from "./DashboardCanvasPresentation";
 
 function mockCanvas(width = 320): HTMLElement {
   const canvas = document.createElement("div");
@@ -96,5 +96,30 @@ describe("resizeLayoutFromPointerDelta", () => {
         rowHeight: 32,
       }),
     ).toMatchObject({ x: 4, y: 4, w: 10, h: 8 });
+  });
+
+  it("enforces current minimums when resizing a loaded layout that starts below them", () => {
+    const result = resizeLayoutFromPointerDelta({
+      startLayout: { x: 0, y: 0, w: 3, h: 2, minW: 5, minH: 4 },
+      startClientX: 100,
+      startClientY: 100,
+      clientX: 120,
+      clientY: 132,
+      canvas: mockCanvas(),
+      handle: "northwest",
+      columns: 32,
+      rowHeight: 32,
+    });
+
+    expect(result).toEqual({ x: 0, y: 0, w: 5, h: 4, minW: 5, minH: 4 });
+  });
+
+  it("keeps oversized loaded layouts at the left edge while moving", () => {
+    expect(fitMovedLayoutPosition({ x: 4, y: 2, w: 40, h: 4 }, 32)).toEqual({
+      x: 0,
+      y: 2,
+      w: 40,
+      h: 4,
+    });
   });
 });

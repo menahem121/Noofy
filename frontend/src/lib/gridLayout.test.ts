@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { findAvailableLayout, findNearestAvailableLayout, fitLayout, layoutsOverlap, type GridItemLayout } from "./gridLayout";
+import {
+  findAvailableLayout,
+  findNearestAvailableLayout,
+  findNearestAvailablePosition,
+  fitLayout,
+  layoutsOverlap,
+  type GridItemLayout,
+} from "./gridLayout";
 
 describe("layoutsOverlap", () => {
   it("returns true for identical cells", () => {
@@ -121,5 +128,24 @@ describe("findNearestAvailableLayout", () => {
     const result = findNearestAvailableLayout("new", desired, items, 12);
 
     expect(result).toEqual({ x: 4, y: 2, w: 4, h: 2 });
+  });
+});
+
+describe("findNearestAvailablePosition", () => {
+  it("preserves dimensions below the current minimum while moving", () => {
+    const desired: GridItemLayout = { x: 4, y: 3, w: 3, h: 2, minW: 5, minH: 4 };
+
+    expect(findNearestAvailablePosition("item", desired, [], 12)).toEqual(desired);
+  });
+
+  it("finds a collision-free position without fitting dimensions", () => {
+    const desired: GridItemLayout = { x: 0, y: 4, w: 3, h: 2, minW: 5, minH: 4 };
+    const items = [{ id: "blocker", layout: { x: 0, y: 4, w: 3, h: 2 } }];
+
+    const result = findNearestAvailablePosition("item", desired, items, 12);
+
+    expect(result.w).toBe(3);
+    expect(result.h).toBe(2);
+    expect(layoutsOverlap(result, items[0].layout)).toBe(false);
   });
 });

@@ -2064,6 +2064,56 @@
   pointer-events: none;
 }
 
+.layout-canvas-widget--compact {
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.layout-canvas-widget--compact .layout-canvas-widget__header {
+  gap: 8px;
+}
+
+.layout-canvas-widget--compact .layout-canvas-widget__title {
+  gap: 6px;
+}
+
+.layout-canvas-widget--compact .layout-canvas-widget__title > span {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.layout-canvas-widget--compact .layout-canvas-widget__title p {
+  display: none;
+}
+
+.layout-canvas-widget--compact .layout-canvas-widget__preview-surface {
+  overflow: auto;
+}
+
+.layout-canvas-widget--compact .layout-group-preview {
+  overflow: auto;
+}
+
+.layout-canvas-widget--compact .layout-group-preview__label small {
+  display: none;
+}
+
+.layout-canvas-widget--compact .layout-preview-input--textarea,
+.layout-canvas-widget--compact .layout-preview-image-input,
+.layout-canvas-widget--compact .layout-preview-output {
+  min-height: 0;
+  overflow: auto;
+}
+
+.layout-canvas-widget--compact .layout-preview-image-input,
+.layout-canvas-widget--compact .layout-preview-output {
+  gap: 6px;
+  padding: 8px;
+}
+
 .preview-note-card,
 .layout-preview-note-card {
   margin: 0;

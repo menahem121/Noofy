@@ -15,6 +15,12 @@ import {
   Type,
   Video,
 } from "lucide-react";
+import {
+  minimumSizeForWidgetGroup,
+  minimumSizeForWidgetType,
+  withCurrentWidgetGroupMinimum,
+  withCurrentWidgetMinimum,
+} from "../../lib/widgetSizes";
 
 export type WidgetType =
   | "slider"
@@ -165,7 +171,10 @@ export function dashboardDraftKey(workflowId: string) {
 }
 
 export function saveDashboardDraft(schema: DashboardSchema, status: DashboardDraftStatus = "draft") {
-  window.localStorage.setItem(dashboardDraftKey(schema.workflowId), JSON.stringify({ ...schema, status }));
+  window.localStorage.setItem(
+    dashboardDraftKey(schema.workflowId),
+    JSON.stringify({ ...normalizeDashboardSchema(schema), status }),
+  );
 }
 
 export function loadDashboardDraft(workflowId: string): DashboardSchema | null {
@@ -836,6 +845,7 @@ export function workflowFromBindableInputs(
 export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const normalized = normalizeDashboardSchema(schema);
   const groupedWidgetIds = groupedWidgetIdSet(normalized);
+  const widgetById = new Map(normalized.widgets.map((widget) => [widget.id, widget]));
   const inputWidgets = [...normalized.widgets, ...(normalized.hiddenWidgets ?? [])];
   const inputs: BackendWorkflowInput[] = inputWidgets
     .filter((w) => !isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w))
@@ -879,35 +889,51 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     kind: mediaKindForOutputWidget(w.widgetType),
   }));
 
-  const controls: BackendDashboardControl[] = normalized.widgets.map((w, i) => ({
-    id: w.id,
-    type: w.widgetType,
-    label: w.title,
-    ...(!isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w) ? { input_id: w.id } : {}),
-    ...(isOutputWidgetType(w.widgetType) ? { output_id: outputIdForWidget(w.id) } : {}),
-    description: w.description,
-    layout: !groupedWidgetIds.has(w.id) && w.layout
-      ? { x: w.layout.x, y: w.layout.y, w: w.layout.w, h: w.layout.h, min_w: w.layout.minW, min_h: w.layout.minH }
-      : !groupedWidgetIds.has(w.id)
-        ? { x: 0, y: i * 4, w: 32, h: 4 }
+  const controls: BackendDashboardControl[] = normalized.widgets.map((widget, index) => {
+    const minimum = minimumSizeForWidgetType(widget.widgetType);
+    const sourceLayout = widget.layout ?? { x: 0, y: index * 4, w: 32, h: 4 };
+    const layout = groupedWidgetIds.has(widget.id)
+      ? undefined
+      : {
+          x: sourceLayout.x,
+          y: sourceLayout.y,
+          w: sourceLayout.w,
+          h: sourceLayout.h,
+          min_w: minimum.w,
+          min_h: minimum.h,
+        };
+    return {
+      id: widget.id,
+      type: widget.widgetType,
+      label: widget.title,
+      ...(!isOutputWidgetType(widget.widgetType) && hasExecutableWorkflowBinding(widget) ? { input_id: widget.id } : {}),
+      ...(isOutputWidgetType(widget.widgetType) ? { output_id: outputIdForWidget(widget.id) } : {}),
+      description: widget.description,
+      layout,
+    };
+  });
+  const groups: BackendDashboardGroup[] = normalized.groups.map((group) => {
+    const childTypes = group.widgetIds
+      .map((widgetId) => widgetById.get(widgetId)?.widgetType)
+      .filter((widgetType): widgetType is WidgetType => Boolean(widgetType));
+    const minimum = minimumSizeForWidgetGroup(childTypes);
+    return {
+      id: group.id,
+      title: group.title,
+      description: group.description,
+      control_ids: group.widgetIds,
+      layout: group.layout
+        ? {
+            x: group.layout.x,
+            y: group.layout.y,
+            w: group.layout.w,
+            h: group.layout.h,
+            min_w: minimum.w,
+            min_h: minimum.h,
+          }
         : undefined,
-  }));
-  const groups: BackendDashboardGroup[] = normalized.groups.map((group) => ({
-    id: group.id,
-    title: group.title,
-    description: group.description,
-    control_ids: group.widgetIds,
-    layout: group.layout
-      ? {
-          x: group.layout.x,
-          y: group.layout.y,
-          w: group.layout.w,
-          h: group.layout.h,
-          min_w: group.layout.minW,
-          min_h: group.layout.minH,
-        }
-      : undefined,
-  }));
+    };
+  });
 
   const dashboard: BackendDashboardPayload = {
     version: "0.1.0",
@@ -1348,13 +1374,20 @@ function widgetBindingKey(widget: DashboardWidget): string {
 }
 
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
-  const widgets = dedupeWidgets(Array.isArray(schema.widgets) ? schema.widgets : []);
+  const widgets = dedupeWidgets(Array.isArray(schema.widgets) ? schema.widgets : [])
+    .map((widget) => widget.layout
+      ? { ...widget, layout: withCurrentWidgetMinimum(widget.layout, widget.widgetType) }
+      : widget);
   const visibleBindings = new Set(widgets.map(widgetBindingKey));
   const visibleIds = new Set(widgets.map((widget) => widget.id));
   const hiddenWidgets = dedupeWidgets(Array.isArray(schema.hiddenWidgets) ? schema.hiddenWidgets : [])
     .filter(canPreserveWidgetAsHiddenInput)
-    .filter((widget) => !visibleIds.has(widget.id) && !visibleBindings.has(widgetBindingKey(widget)));
+    .filter((widget) => !visibleIds.has(widget.id) && !visibleBindings.has(widgetBindingKey(widget)))
+    .map((widget) => widget.layout
+      ? { ...widget, layout: withCurrentWidgetMinimum(widget.layout, widget.widgetType) }
+      : widget);
   const widgetIds = new Set(widgets.map((widget) => widget.id));
+  const widgetById = new Map(widgets.map((widget) => [widget.id, widget]));
   const usedWidgetIds = new Set<string>();
   const usedGroupIds = new Set<string>();
   const groups: DashboardWidgetGroup[] = [];
@@ -1370,12 +1403,17 @@ export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSche
     if (widgetIdsForGroup.length < 2) continue;
     widgetIdsForGroup.forEach((widgetId) => usedWidgetIds.add(widgetId));
     usedGroupIds.add(rawGroup.id);
+    const childTypes = widgetIdsForGroup
+      .map((widgetId) => widgetById.get(widgetId)?.widgetType)
+      .filter((widgetType): widgetType is WidgetType => Boolean(widgetType));
     groups.push({
       id: rawGroup.id,
       title: typeof rawGroup.title === "string" && rawGroup.title.trim() ? rawGroup.title : "Widget group",
       description: typeof rawGroup.description === "string" ? rawGroup.description : "",
       widgetIds: widgetIdsForGroup,
-      layout: rawGroup.layout,
+      layout: rawGroup.layout
+        ? withCurrentWidgetGroupMinimum(rawGroup.layout, childTypes)
+        : undefined,
     });
   }
 

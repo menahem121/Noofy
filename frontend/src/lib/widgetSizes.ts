@@ -1,20 +1,14 @@
 import type { GridItemLayout } from "./gridLayout";
 
-export type WidgetSizePreset = "compact" | "standard" | "wide" | "media" | "media-large";
-
-export interface WidgetPresetDef {
-  name: string;
+export interface WidgetDimensions {
   w: number;
   h: number;
 }
 
-export const WIDGET_SIZE_PRESETS: Record<WidgetSizePreset, WidgetPresetDef> = {
-  compact: { name: "Compact", w: 6, h: 4 },
-  standard: { name: "Standard", w: 8, h: 6 },
-  wide: { name: "Wide", w: 10, h: 4 },
-  media: { name: "Media", w: 10, h: 10 },
-  "media-large": { name: "Media Large", w: 14, h: 14 },
-};
+export interface WidgetSizingPolicy {
+  default: WidgetDimensions;
+  minimum: WidgetDimensions;
+}
 
 export type WidgetTypeKey =
   | "slider"
@@ -29,7 +23,6 @@ export type WidgetTypeKey =
   | "load_video"
   | "load_file"
   | "load_3d"
-  | "display_mask"
   | "display_image"
   | "display_audio"
   | "display_video"
@@ -38,56 +31,99 @@ export type WidgetTypeKey =
   | "result_image"
   | "seed_widget"
   | "lora_loader"
-  | "select";
+  | "select"
+  | "api_credential";
 
-const DEFAULT_PRESETS: Record<WidgetTypeKey, WidgetSizePreset> = {
-  slider: "wide",
-  int_field: "compact",
-  toggle: "compact",
-  string_field: "compact",
-  note: "compact",
-  seed_widget: "compact",
-  select: "standard",
-  load_image: "media",
-  load_image_mask: "media",
-  load_audio: "wide",
-  load_video: "media-large",
-  load_file: "standard",
-  load_3d: "media",
-  display_mask: "media",
-  lora_loader: "standard",
-  textarea: "standard",
-  display_image: "media-large",
-  display_audio: "standard",
-  display_video: "media-large",
-  display_file: "standard",
-  display_3d: "media-large",
-  result_image: "media-large",
+const FALLBACK_WIDGET_SIZING: WidgetSizingPolicy = {
+  default: { w: 8, h: 6 },
+  minimum: { w: 5, h: 4 },
 };
 
+export const WIDGET_SIZING_POLICY: Record<WidgetTypeKey, WidgetSizingPolicy> = {
+  slider: { default: { w: 10, h: 4 }, minimum: { w: 6, h: 4 } },
+  int_field: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
+  string_field: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
+  textarea: { default: { w: 8, h: 6 }, minimum: { w: 5, h: 4 } },
+  note: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
+  toggle: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
+  load_image: { default: { w: 10, h: 10 }, minimum: { w: 6, h: 6 } },
+  load_image_mask: { default: { w: 10, h: 10 }, minimum: { w: 6, h: 6 } },
+  load_audio: { default: { w: 10, h: 4 }, minimum: { w: 6, h: 4 } },
+  load_video: { default: { w: 14, h: 12 }, minimum: { w: 7, h: 6 } },
+  load_file: { default: { w: 10, h: 6 }, minimum: { w: 5, h: 4 } },
+  load_3d: { default: { w: 12, h: 10 }, minimum: { w: 7, h: 6 } },
+  display_image: { default: { w: 14, h: 14 }, minimum: { w: 6, h: 6 } },
+  display_audio: { default: { w: 12, h: 6 }, minimum: { w: 8, h: 5 } },
+  display_video: { default: { w: 16, h: 14 }, minimum: { w: 8, h: 7 } },
+  display_file: { default: { w: 10, h: 6 }, minimum: { w: 6, h: 5 } },
+  display_3d: { default: { w: 16, h: 14 }, minimum: { w: 8, h: 8 } },
+  result_image: { default: { w: 14, h: 14 }, minimum: { w: 6, h: 6 } },
+  seed_widget: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
+  lora_loader: { default: { w: 8, h: 6 }, minimum: { w: 6, h: 4 } },
+  select: { default: { w: 8, h: 6 }, minimum: { w: 5, h: 3 } },
+  api_credential: { default: { w: 8, h: 6 }, minimum: { w: 6, h: 4 } },
+};
+
+export function defaultSizeForWidgetType(widgetType: string): WidgetDimensions {
+  return sizingPolicyForWidgetType(widgetType).default;
+}
+
+export function minimumSizeForWidgetType(widgetType: string): WidgetDimensions {
+  return sizingPolicyForWidgetType(widgetType).minimum;
+}
+
 export function defaultLayoutForWidgetType(widgetType: string): GridItemLayout {
-  if (widgetType === "load_audio") return { x: 0, y: 0, w: 10, h: 4, minW: 10, minH: 4 };
-  if (widgetType === "display_audio") return { x: 0, y: 0, w: 12, h: 6, minW: 12, minH: 6 };
-  if (widgetType === "load_video") return { x: 0, y: 0, w: 14, h: 12, minW: 14, minH: 12 };
-  if (widgetType === "display_video") return { x: 0, y: 0, w: 16, h: 14, minW: 16, minH: 14 };
-  if (widgetType === "load_file") return { x: 0, y: 0, w: 10, h: 6, minW: 10, minH: 6 };
-  if (widgetType === "load_3d") return { x: 0, y: 0, w: 12, h: 10, minW: 12, minH: 10 };
-  if (widgetType === "display_file") return { x: 0, y: 0, w: 10, h: 6, minW: 10, minH: 6 };
-  if (widgetType === "display_3d") return { x: 0, y: 0, w: 16, h: 14, minW: 16, minH: 14 };
-  const preset = DEFAULT_PRESETS[widgetType as WidgetTypeKey] ?? "standard";
-  const def = WIDGET_SIZE_PRESETS[preset];
-  return { x: 0, y: 0, w: def.w, h: def.h, minW: def.w, minH: def.h };
+  const size = defaultSizeForWidgetType(widgetType);
+  const minimum = minimumSizeForWidgetType(widgetType);
+  return { x: 0, y: 0, w: size.w, h: size.h, minW: minimum.w, minH: minimum.h };
+}
+
+export function defaultSizeForWidgetGroup(widgetTypes: string[]): WidgetDimensions {
+  const childSizes = widgetTypes.length > 0
+    ? widgetTypes.map(defaultSizeForWidgetType)
+    : [defaultSizeForWidgetType("slider")];
+  return {
+    w: Math.min(32, Math.max(12, ...childSizes.map((size) => size.w))),
+    h: Math.max(6, childSizes.reduce((sum, size) => sum + Math.max(3, size.h), 0)),
+  };
+}
+
+export function minimumSizeForWidgetGroup(widgetTypes: string[]): WidgetDimensions {
+  const childMinimums = widgetTypes.length > 0
+    ? widgetTypes.map(minimumSizeForWidgetType)
+    : [minimumSizeForWidgetType("slider")];
+  return {
+    w: Math.max(6, ...childMinimums.map((size) => size.w)),
+    h: 6,
+  };
 }
 
 export function defaultLayoutForWidgetGroup(widgetTypes: string[]): GridItemLayout {
-  const childLayouts = widgetTypes.length > 0
-    ? widgetTypes.map((widgetType) => defaultLayoutForWidgetType(widgetType))
-    : [defaultLayoutForWidgetType("slider")];
-  const minW = Math.max(10, ...childLayouts.map((layout) => layout.minW ?? layout.w));
-  const minH = Math.max(6, childLayouts.reduce((sum, layout) => sum + Math.max(3, layout.minH ?? layout.h), 0));
-  return { x: 0, y: 0, w: Math.min(32, Math.max(minW, 12)), h: minH, minW, minH };
+  const size = defaultSizeForWidgetGroup(widgetTypes);
+  const minimum = minimumSizeForWidgetGroup(widgetTypes);
+  return { x: 0, y: 0, w: size.w, h: size.h, minW: minimum.w, minH: minimum.h };
 }
 
-export function presetForWidgetType(widgetType: string): WidgetSizePreset {
-  return DEFAULT_PRESETS[widgetType as WidgetTypeKey] ?? "standard";
+export function withCurrentWidgetMinimum(layout: GridItemLayout, widgetType: string): GridItemLayout {
+  const minimum = minimumSizeForWidgetType(widgetType);
+  return { ...layout, minW: minimum.w, minH: minimum.h };
+}
+
+export function withCurrentWidgetGroupMinimum(layout: GridItemLayout, widgetTypes: string[]): GridItemLayout {
+  const minimum = minimumSizeForWidgetGroup(widgetTypes);
+  return { ...layout, minW: minimum.w, minH: minimum.h };
+}
+
+export function isWidgetLayoutCompact(layout: GridItemLayout, widgetType: string): boolean {
+  const size = defaultSizeForWidgetType(widgetType);
+  return layout.w < size.w || layout.h < size.h;
+}
+
+export function isWidgetGroupLayoutCompact(layout: GridItemLayout, widgetTypes: string[]): boolean {
+  const size = defaultSizeForWidgetGroup(widgetTypes);
+  return layout.w < size.w || layout.h < size.h;
+}
+
+function sizingPolicyForWidgetType(widgetType: string): WidgetSizingPolicy {
+  return WIDGET_SIZING_POLICY[widgetType as WidgetTypeKey] ?? FALLBACK_WIDGET_SIZING;
 }

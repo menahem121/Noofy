@@ -3049,6 +3049,30 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
   });
 
+  it("marks a loaded below-default widget compact without changing its dimensions", async () => {
+    const compactPackage = {
+      ...configuredPackageData,
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: configuredPackageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls: section.controls.map((control) =>
+            control.id === "prompt"
+              ? { ...control, layout: { x: 0, y: 0, w: 5, h: 4, min_w: 99, min_h: 99 } }
+              : control,
+          ),
+        })),
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, compactPackage);
+
+    renderRunPage();
+
+    const promptCell = (await screen.findByRole("textbox")).closest("article");
+    expect(promptCell).toHaveClass("layout-canvas-widget--compact");
+    expect(promptCell).toHaveStyle({ width: "15.625%", height: "128px" });
+  });
+
   it("saves normal action bar drags only to user state", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 
@@ -3268,6 +3292,14 @@ describe("WorkflowRunPage", () => {
       expect(dashboardPut).toBeDefined();
       const body = JSON.parse((dashboardPut![1] as RequestInit).body as string);
       expect(body.dashboard.presentation.action_bar).toEqual({ x: 84, y: 78 });
+      expect(body.dashboard.sections[0].controls[0].layout).toMatchObject({
+        x: 0,
+        y: 0,
+        w: 16,
+        h: 6,
+        min_w: 5,
+        min_h: 4,
+      });
     });
   });
 
@@ -3346,6 +3378,119 @@ describe("WorkflowRunPage", () => {
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
       expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 16, h: 8 });
+    });
+  });
+
+  it("ignores package minimums and lets runtime edit mode shrink to the current Noofy minimum", async () => {
+    const packageWithCreatorMinimum = {
+      ...configuredPackageData,
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: configuredPackageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls: section.controls.map((control) =>
+            control.id === "prompt"
+              ? { ...control, layout: { ...control.layout!, min_w: 99, min_h: 99 } }
+              : control,
+          ),
+        })),
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, packageWithCreatorMinimum);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    dispatchPointer(screen.getByRole("button", { name: /resize prompt from bottom-right/i }), "pointerdown", {
+      clientX: 600,
+      clientY: 192,
+    });
+    dispatchPointer(window, "pointermove", { clientX: 0, clientY: 0 });
+    dispatchPointer(window, "pointerup", { clientX: 0, clientY: 0 });
+
+    expect(screen.getByRole("textbox").closest("article")).toHaveClass("layout-canvas-widget--compact");
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const userStatePut = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/user-state") &&
+          (init as RequestInit | undefined)?.method === "PUT" &&
+          JSON.parse(String((init as RequestInit).body)).layout_overrides?.prompt,
+      );
+      expect(userStatePut).toBeDefined();
+      const body = JSON.parse((userStatePut![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 0, w: 5, h: 4 });
+    });
+  });
+
+  it("moves a loaded below-minimum runtime widget without changing its dimensions", async () => {
+    const compactPackage = {
+      ...configuredPackageData,
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: configuredPackageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls: section.controls.map((control) =>
+            control.id === "prompt"
+              ? { ...control, layout: { x: 0, y: 0, w: 3, h: 2, min_w: 99, min_h: 99 } }
+              : control,
+          ),
+        })),
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, compactPackage);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 60, clientY: 32 });
+    dispatchPointer(window, "pointermove", { clientX: 60, clientY: 96 });
+    dispatchPointer(window, "pointerup", { clientX: 60, clientY: 96 });
+
+    expect(promptCell).toHaveStyle({ top: "64px", width: "9.375%", height: "64px" });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const userStatePut = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/user-state") &&
+          (init as RequestInit | undefined)?.method === "PUT" &&
+          JSON.parse(String((init as RequestInit).body)).layout_overrides?.prompt,
+      );
+      const body = JSON.parse((userStatePut?.[1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 2, w: 3, h: 2 });
     });
   });
 

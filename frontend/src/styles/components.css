@@ -2434,6 +2434,54 @@ button.dashboard-image-input__surface {
   transition: width 120ms ease;
 }
 
+.layout-canvas-widget--compact :where(
+  .dashboard-media-source,
+  .dashboard-media-source--single,
+  .dashboard-audio-input__empty,
+  .dashboard-video-input__empty,
+  .dashboard-file-input__empty
+) {
+  min-height: 0;
+  padding: 8px;
+}
+
+.layout-canvas-widget--compact :where(
+  .dashboard-audio-input,
+  .dashboard-video-input,
+  .dashboard-file-input,
+  .dashboard-three-d-input,
+  .dashboard-media-source-split
+) {
+  min-height: 0;
+  overflow: auto;
+}
+
+.layout-canvas-widget--compact :where(
+  .dashboard-media-actions,
+  .dashboard-audio-input__actions,
+  .dashboard-video-input__actions,
+  .dashboard-file-input__actions
+) {
+  flex-wrap: wrap;
+}
+
+.layout-canvas-widget--compact :where(
+  .three-d-viewer,
+  .three-d-viewer__stage,
+  .three-d-viewer__canvas,
+  .three-d-viewer__canvas canvas
+) {
+  min-height: 0;
+}
+
+.layout-canvas-widget--compact .three-d-viewer {
+  overflow: auto;
+}
+
+.layout-canvas-widget--compact .three-d-viewer__stage {
+  aspect-ratio: 16 / 9;
+}
+
 .field-group input[type="range"]::-webkit-slider-runnable-track,
 .dashboard-slider__input::-webkit-slider-runnable-track {
   height: 8px;

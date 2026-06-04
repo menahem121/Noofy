@@ -73,7 +73,7 @@ export function layoutFromCanvasPointer(
 
   return {
     ...currentLayout,
-    x: clamp(rawX, 0, columns - currentLayout.w),
+    x: clamp(rawX, 0, Math.max(0, columns - currentLayout.w)),
     y: Math.max(0, rawY),
   };
 }
@@ -113,8 +113,8 @@ export function resizeLayoutFromPointerDelta({
   }
 
   if (handle === "northwest" || handle === "southwest") {
-    nextLayout.x = clamp(startLayout.x + deltaColumns, 0, right - minW);
-    nextLayout.w = right - nextLayout.x;
+    nextLayout.x = clamp(startLayout.x + deltaColumns, 0, Math.max(0, right - minW));
+    nextLayout.w = Math.max(minW, right - nextLayout.x);
   }
 
   if (handle === "southwest" || handle === "southeast") {
@@ -122,8 +122,8 @@ export function resizeLayoutFromPointerDelta({
   }
 
   if (handle === "northwest" || handle === "northeast") {
-    nextLayout.y = clamp(startLayout.y + deltaRows, 0, bottom - minH);
-    nextLayout.h = bottom - nextLayout.y;
+    nextLayout.y = clamp(startLayout.y + deltaRows, 0, Math.max(0, bottom - minH));
+    nextLayout.h = Math.max(minH, bottom - nextLayout.y);
   }
 
   return nextLayout;
@@ -153,7 +153,7 @@ export function moveLayoutFromPointerDelta({
 
   return {
     ...startLayout,
-    x: clamp(startLayout.x + deltaColumns, 0, columns - startLayout.w),
+    x: clamp(startLayout.x + deltaColumns, 0, Math.max(0, columns - startLayout.w)),
     y: Math.max(0, startLayout.y + deltaRows),
   };
 }
@@ -164,7 +164,7 @@ export function fitMovedLayoutPosition(
 ): GridItemLayout {
   return {
     ...layout,
-    x: clamp(layout.x, 0, columns - layout.w),
+    x: clamp(layout.x, 0, Math.max(0, columns - layout.w)),
     y: Math.max(0, layout.y),
   };
 }

@@ -11,7 +11,10 @@ import type {
   WorkflowOutputDef,
   WorkflowPackageResponse,
 } from "../../lib/api/noofyApi";
-import { defaultLayoutForWidgetGroup } from "../../lib/widgetSizes";
+import {
+  withCurrentWidgetGroupMinimum,
+  withCurrentWidgetMinimum,
+} from "../../lib/widgetSizes";
 
 export function buildDashboardSchemaForEditing(packageData: WorkflowPackageResponse): DashboardSchema {
   const inputIndex = new Map<string, WorkflowInputDef>();
@@ -28,14 +31,12 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
   for (const section of packageData.dashboard.sections) {
     for (const control of section.controls) {
       const layout = !groupedControlIds.has(control.id) && control.layout
-        ? {
+        ? withCurrentWidgetMinimum({
             x: control.layout.x,
             y: control.layout.y,
             w: control.layout.w,
             h: control.layout.h,
-            minW: control.layout.min_w,
-            minH: control.layout.min_h,
-          }
+          }, control.type)
         : undefined;
 
       if (control.type === "note") {
@@ -148,23 +149,18 @@ function dashboardGroupsForBuilder(groups: DashboardControlGroupDef[], controls:
 }
 
 function groupForBuilder(group: DashboardControlGroupDef, childTypes: string[]) {
-  const fallback = defaultLayoutForWidgetGroup(childTypes);
-  const minW = group.layout?.min_w ?? fallback.minW;
-  const minH = group.layout?.min_h ?? fallback.minH;
   return {
     id: group.id,
     title: group.title,
     description: group.description ?? "",
     widgetIds: group.control_ids,
     layout: group.layout
-      ? {
+      ? withCurrentWidgetGroupMinimum({
           x: group.layout.x,
           y: group.layout.y,
-          w: Math.max(group.layout.w, minW ?? 2),
-          h: Math.max(group.layout.h, minH ?? 2),
-          minW,
-          minH,
-        }
+          w: group.layout.w,
+          h: group.layout.h,
+        }, childTypes)
       : undefined,
   };
 }

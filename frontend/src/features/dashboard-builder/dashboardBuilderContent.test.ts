@@ -190,8 +190,12 @@ describe("toBackendPayload", () => {
     });
     expect(payload.dashboard.sections[0].controls[1]).not.toHaveProperty("show_download");
     expect(payload.dashboard.sections[0].controls[0].layout).toMatchObject({
-      min_w: 16,
-      min_h: 6,
+      x: 0,
+      y: 0,
+      w: 16,
+      h: 6,
+      min_w: 5,
+      min_h: 4,
     });
   });
 
@@ -254,7 +258,7 @@ describe("toBackendPayload", () => {
         title: "Image size",
         description: "Output dimensions.",
         control_ids: ["ctrl-width", "ctrl-height"],
-        layout: { x: 0, y: 0, w: 12, h: 8, min_w: undefined, min_h: undefined },
+        layout: { x: 0, y: 0, w: 12, h: 8, min_w: 6, min_h: 6 },
       },
     ]);
     expect(section.controls[0].layout).toBeUndefined();
@@ -333,17 +337,84 @@ describe("saveDashboardDraft", () => {
       workflowName: "Workflow",
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
       groups: [],
-      widgets: [],
+      widgets: [{
+        id: "prompt",
+        valueId: "prompt",
+        binding: { nodeId: "1", inputName: "text" },
+        widgetType: "textarea",
+        title: "Prompt",
+        description: "",
+        defaultValue: "",
+        layout: { x: 2, y: 3, w: 3, h: 2, minW: 99, minH: 99 },
+      }],
     };
 
     saveDashboardDraft(schema);
 
+    expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}").widgets[0].layout).toEqual({
+      x: 2,
+      y: 3,
+      w: 3,
+      h: 2,
+      minW: 5,
+      minH: 4,
+    });
     expect(loadDashboardDraft("wf-1")).toMatchObject({ workflowId: "wf-1", workflowName: "Workflow" });
+    expect(loadDashboardDraft("wf-1")?.widgets[0].layout).toEqual({
+      x: 2,
+      y: 3,
+      w: 3,
+      h: 2,
+      minW: 5,
+      minH: 4,
+    });
     expect(loadDashboardDraft("other-workflow")).toBeNull();
   });
 });
 
 describe("normalizeDashboardSchema", () => {
+  it("preserves loaded dimensions while replacing widget and group minimums", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [{
+        id: "compact-group",
+        title: "Compact group",
+        description: "",
+        widgetIds: ["prompt", "steps"],
+        layout: { x: 1, y: 2, w: 5, h: 4, minW: 99, minH: 99 },
+      }],
+      widgets: [
+        {
+          id: "prompt",
+          valueId: "prompt",
+          binding: { nodeId: "1", inputName: "text" },
+          widgetType: "textarea",
+          title: "Prompt",
+          description: "",
+          defaultValue: "",
+          layout: { x: 3, y: 4, w: 3, h: 2, minW: 99, minH: 99 },
+        },
+        {
+          id: "steps",
+          valueId: "steps",
+          binding: { nodeId: "2", inputName: "steps" },
+          widgetType: "int_field",
+          title: "Steps",
+          description: "",
+          defaultValue: 20,
+        },
+      ],
+    };
+
+    const normalized = normalizeDashboardSchema(schema);
+
+    expect(normalized.widgets[0].layout).toEqual({ x: 3, y: 4, w: 3, h: 2, minW: 5, minH: 4 });
+    expect(normalized.groups[0].layout).toEqual({ x: 1, y: 2, w: 5, h: 4, minW: 6, minH: 6 });
+  });
+
   it("collapses duplicate output widgets that target the same node and kind", () => {
     // Stale state (e.g. a draft saved before the output-dedup fix, reloaded
     // after a reimport) can hold two display widgets for the same output node,

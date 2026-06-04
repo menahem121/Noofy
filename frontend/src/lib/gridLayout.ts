@@ -51,7 +51,29 @@ export function findNearestAvailableLayout(
   items: Array<{ id: string; layout?: GridItemLayout | null }>,
   columns: number,
 ): GridItemLayout {
-  const fitted = fitLayout(desired, columns);
+  return findNearestAvailableLayoutFromFitted(itemId, fitLayout(desired, columns), items, columns);
+}
+
+export function findNearestAvailablePosition(
+  itemId: string,
+  desired: GridItemLayout,
+  items: Array<{ id: string; layout?: GridItemLayout | null }>,
+  columns: number,
+): GridItemLayout {
+  const positioned = {
+    ...desired,
+    x: clamp(desired.x, 0, Math.max(0, columns - desired.w)),
+    y: Math.max(0, desired.y),
+  };
+  return findNearestAvailableLayoutFromFitted(itemId, positioned, items, columns);
+}
+
+function findNearestAvailableLayoutFromFitted(
+  itemId: string,
+  fitted: GridItemLayout,
+  items: Array<{ id: string; layout?: GridItemLayout | null }>,
+  columns: number,
+): GridItemLayout {
   if (!hasLayoutCollision(itemId, fitted, items)) return fitted;
 
   const maxY = items.reduce(
