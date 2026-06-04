@@ -1211,7 +1211,7 @@ class ModelAvailabilityService:
                 status="missing",
                 status_label="Missing",
                 asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
-                message="Noofy can try to resolve and download this model before the workflow runs.",
+                message="Noofy can grab this model for you before the workflow runs.",
             )
         return RequiredModelAvailability(
             **base,

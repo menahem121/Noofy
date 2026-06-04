@@ -197,7 +197,7 @@ export function RequiredModelsModal({
           {duplicate ? (
             <>
               {!readyToRun ? (
-                <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
+                <button className="primary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
                   <Download size={16} aria-hidden="true" />
                   {activeDownload ? "Downloading..." : "Download Missing Models"}
                 </button>
@@ -207,7 +207,12 @@ export function RequiredModelsModal({
                   Cancel Download
                 </button>
               ) : null}
-              <button className="primary-button" type="button" disabled={busy || activeVerification} onClick={onReplace}>
+              <button
+                className={readyToRun ? "primary-button" : "secondary-button"}
+                type="button"
+                disabled={busy || activeVerification}
+                onClick={onReplace}
+              >
                 {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
                 {importing ? "Replacing..." : "Replace Existing Workflow"}
               </button>
@@ -225,7 +230,7 @@ export function RequiredModelsModal({
             </button>
           ) : (
             <>
-              <button className="secondary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
+              <button className="primary-button" type="button" disabled={busy || activeVerification || !hasDownloadable} onClick={onDownload}>
                 <Download size={16} aria-hidden="true" />
                 {activeDownload ? "Downloading..." : "Download Missing Models"}
               </button>

@@ -535,7 +535,7 @@
 .required-model-row__message {
   display: block;
   margin-top: 8px;
-  color: var(--warning);
+  color: var(--text-secondary);
 }
 
 .required-model-row__usage {

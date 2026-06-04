@@ -63,7 +63,65 @@ const importResult = {
   duplicate_identity: null,
 } satisfies WorkflowImportResponse;
 
+const duplicateIdentity = {
+  status: "conflict",
+  user_facing_message: "A workflow with this identity already exists in Noofy.",
+  existing_workflow: { id: "flux-workflow", name: "Flux Workflow", version: "0.1.0", description: "" },
+  incoming_workflow: { id: "flux-workflow", name: "Flux Workflow", version: "0.1.0", description: "" },
+  actions: ["replace", "copy", "cancel"],
+};
+
+const duplicateMissingImport = {
+  ...importResult,
+  status: "duplicate_identity",
+  duplicate_identity: duplicateIdentity,
+} satisfies WorkflowImportResponse;
+
+const duplicateReadyImport = {
+  ...duplicateMissingImport,
+  model_summary: {
+    ...importResult.model_summary,
+    available_count: 1,
+    missing_count: 0,
+    ready_to_run: true,
+    models: [{ ...missingModel, status: "available", status_label: "Available" }],
+  },
+} satisfies WorkflowImportResponse;
+
+function renderImportModal(result: WorkflowImportResponse) {
+  return render(
+    <RequiredModelsModal
+      importResult={result}
+      busy={false}
+      importing={false}
+      downloadJob={null}
+      verificationJob={null}
+      onDownload={vi.fn()}
+      onCancelDownload={vi.fn()}
+      onContinue={vi.fn()}
+      onReplace={vi.fn()}
+      onCopy={vi.fn()}
+      onReadyAction={vi.fn()}
+      onCancel={vi.fn()}
+      onViewModels={vi.fn()}
+    />,
+  );
+}
+
 describe("RequiredModelsModal", () => {
+  it("highlights Download Missing Models until models resolve, then makes Replace primary", () => {
+    const { unmount } = renderImportModal(duplicateMissingImport);
+
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toHaveClass("primary-button");
+    expect(screen.getByRole("button", { name: "Replace Existing Workflow" })).toHaveClass("secondary-button");
+    expect(screen.getByRole("button", { name: "Replace Existing Workflow" })).not.toHaveClass("primary-button");
+    unmount();
+
+    renderImportModal(duplicateReadyImport);
+    expect(screen.queryByRole("button", { name: "Download Missing Models" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replace Existing Workflow" })).toHaveClass("primary-button");
+  });
+
   it("keeps variable import content inside one scrollable modal body and wires the X button to cancel", () => {
     const onCancel = vi.fn();
     render(
