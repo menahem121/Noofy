@@ -57,6 +57,7 @@ import {
   clearDashboardDraft,
   loadDashboardDraft,
   normalizeDashboardSchema,
+  removeDashboardWidgetsFromSchema,
   saveDashboardDraft,
   topLevelDashboardItems,
   toBackendPayload,
@@ -185,7 +186,11 @@ export function DashboardBuilderLayoutPage({
   const unplacedItems = topLevelItems.filter((item) => !dashboardItemLayout(item));
   const placedItems = topLevelItems.filter((item) => dashboardItemLayout(item));
   const allWidgetsPlaced = schemaReady && topLevelItems.length > 0 && unplacedItems.length === 0;
-  const helperCopy = allWidgetsPlaced ? "Dashboard ready to save." : "Place all widgets on the canvas before saving.";
+  const helperCopy = topLevelItems.length === 0
+    ? "Add at least one viewable widget before saving."
+    : allWidgetsPlaced
+      ? "Dashboard ready to save."
+      : "Place all widgets on the canvas before saving.";
   const canvasRows = schemaReady ? canvasRowsForItems(topLevelItems.map((item) => ({ layout: dashboardItemLayout(item) }))) : 0;
 
   function handleTrayPointerStart(event: PointerEvent<HTMLElement>, itemId: string) {
@@ -304,6 +309,19 @@ export function DashboardBuilderLayoutPage({
   function removeItem(itemId: string) {
     setSchema((current) => removeDashboardItemLayout(current, itemId));
     setSelectedItemId((current) => (current === itemId ? null : current));
+  }
+
+  function removeVisibleItem(itemId: string) {
+    setSchema((current) => {
+      const item = topLevelDashboardItems(current).find((candidate) => candidate.id === itemId);
+      if (!item) return current;
+      const widgetIds = item.kind === "group" ? item.widgets.map((widget) => widget.id) : [item.widget.id];
+      const nextSchema = removeDashboardWidgetsFromSchema(current, widgetIds, true);
+      schemaRef.current = nextSchema;
+      return nextSchema;
+    });
+    setSelectedItemId((current) => (current === itemId ? null : current));
+    clearDragState();
   }
 
   function handleMoveStart(
@@ -588,10 +606,14 @@ export function DashboardBuilderLayoutPage({
 
             <div className="layout-widget-tray__list">
               {unplacedItems.length === 0 ? (
-                <div className="layout-widget-tray__empty">
-                  <CheckCircle2 size={24} aria-hidden="true" />
-                  <h3>All widgets placed</h3>
-                  <p>Remove a Widget from the canvas to make it available again.</p>
+                <div className={`layout-widget-tray__empty${topLevelItems.length === 0 ? " layout-widget-tray__empty--removed" : ""}`}>
+                  {topLevelItems.length === 0 ? <LayoutGrid size={24} aria-hidden="true" /> : <CheckCircle2 size={24} aria-hidden="true" />}
+                  <h3>{topLevelItems.length === 0 ? "No viewable widgets" : "All widgets placed"}</h3>
+                  <p>
+                    {topLevelItems.length === 0
+                      ? "Go back to widgets to add controls to this workflow."
+                      : "Remove a widget from the canvas to make it available again."}
+                  </p>
                 </div>
               ) : (
                 unplacedItems.map((item) => (
@@ -599,6 +621,7 @@ export function DashboardBuilderLayoutPage({
                     key={item.id}
                     item={item}
                     onPointerStart={handleTrayPointerStart}
+                    onRemove={() => removeVisibleItem(item.id)}
                   />
                 ))
               )}
@@ -680,9 +703,11 @@ export function DashboardBuilderLayoutPage({
 function TrayDashboardItem({
   item,
   onPointerStart,
+  onRemove,
 }: {
   item: DashboardTopLevelItem;
   onPointerStart: (event: PointerEvent<HTMLElement>, itemId: string) => void;
+  onRemove: () => void;
 }) {
   const Icon = item.kind === "group" ? LayoutGrid : WIDGET_ICONS[item.widget.widgetType];
   const title = item.kind === "group" ? item.group.title : item.widget.title;
@@ -693,6 +718,19 @@ function TrayDashboardItem({
       className="layout-tray-widget"
       onPointerDown={(event) => onPointerStart(event, item.id)}
     >
+      <button
+        className="layout-tray-widget__remove"
+        type="button"
+        aria-label={`Remove ${title} from viewable widgets`}
+        title="Remove from viewable widgets"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
+      >
+        <Trash2 size={14} aria-hidden="true" />
+      </button>
       <div className="layout-tray-widget__icon" aria-hidden="true">
         <Icon size={17} />
       </div>

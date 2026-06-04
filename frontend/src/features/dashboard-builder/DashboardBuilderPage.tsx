@@ -47,6 +47,7 @@ import {
   isOutputWidgetType,
   loadDashboardDraft,
   normalizeDashboardSchema,
+  removeDashboardWidgetsFromSchema,
   saveDashboardDraft,
   topLevelDashboardItems,
   widgetGroupIdMap,
@@ -365,7 +366,7 @@ export function DashboardBuilderPage({
   }
 
   function commitRemoveWidget(widgetId: string, keepHiddenDefault: boolean) {
-    setSchema((current) => removeWidgetFromSchema(current, widgetId, keepHiddenDefault));
+    setSchema((current) => removeDashboardWidgetsFromSchema(current, [widgetId], keepHiddenDefault));
     if (selectedWidgetId === widgetId) {
       setSelectedWidgetId(null);
       setSelectedValueId(null);
@@ -913,39 +914,6 @@ function ungroupWidget(schema: DashboardSchema, widgetId: string): DashboardSche
   }
 
   return normalizeDashboardSchema({ ...schema, widgets, groups });
-}
-
-function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string, keepHiddenDefault = false): DashboardSchema {
-  const removedWidget = schema.widgets.find((widget) => widget.id === widgetId) ?? null;
-  let widgets = schema.widgets.filter((widget) => widget.id !== widgetId);
-  let hiddenWidgets = schema.hiddenWidgets ?? [];
-  if (removedWidget && keepHiddenDefault && canPreserveWidgetAsHiddenInput(removedWidget)) {
-    hiddenWidgets = [
-      ...hiddenWidgets.filter(
-        (widget) =>
-          widget.id !== removedWidget.id &&
-          `${widget.binding.nodeId}:${widget.binding.inputName}` !==
-            `${removedWidget.binding.nodeId}:${removedWidget.binding.inputName}`,
-      ),
-      withoutWidgetLayout({ ...removedWidget, defaultPinned: true }),
-    ];
-  }
-  const groups: DashboardWidgetGroup[] = [];
-
-  for (const group of schema.groups) {
-    const nextWidgetIds = group.widgetIds.filter((id) => id !== widgetId);
-    if (nextWidgetIds.length >= 2) {
-      groups.push({ ...group, widgetIds: nextWidgetIds });
-      continue;
-    }
-    if (nextWidgetIds.length === 1 && group.layout) {
-      widgets = widgets.map((widget) =>
-        widget.id === nextWidgetIds[0] ? { ...widget, layout: widget.layout ?? group.layout } : widget,
-      );
-    }
-  }
-
-  return normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets, groups });
 }
 
 function widgetHasSavedDefault(widget: DashboardWidget): boolean {

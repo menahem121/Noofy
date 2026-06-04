@@ -1430,6 +1430,47 @@ export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSche
   return nextSchema;
 }
 
+export function removeDashboardWidgetsFromSchema(
+  schema: DashboardSchema,
+  widgetIds: Iterable<string>,
+  keepHiddenDefaults = false,
+): DashboardSchema {
+  const removedIds = new Set(widgetIds);
+  const removedWidgets = schema.widgets.filter((widget) => removedIds.has(widget.id));
+  let widgets = schema.widgets.filter((widget) => !removedIds.has(widget.id));
+  let hiddenWidgets = schema.hiddenWidgets ?? [];
+
+  if (keepHiddenDefaults) {
+    for (const removedWidget of removedWidgets) {
+      if (!canPreserveWidgetAsHiddenInput(removedWidget)) continue;
+      hiddenWidgets = [
+        ...hiddenWidgets.filter(
+          (widget) =>
+            widget.id !== removedWidget.id &&
+            widgetBindingKey(widget) !== widgetBindingKey(removedWidget),
+        ),
+        withoutWidgetLayout({ ...removedWidget, defaultPinned: true }),
+      ];
+    }
+  }
+
+  const groups: DashboardWidgetGroup[] = [];
+  for (const group of schema.groups) {
+    const nextWidgetIds = group.widgetIds.filter((id) => !removedIds.has(id));
+    if (nextWidgetIds.length >= 2) {
+      groups.push({ ...group, widgetIds: nextWidgetIds });
+      continue;
+    }
+    if (nextWidgetIds.length === 1 && group.layout) {
+      widgets = widgets.map((widget) =>
+        widget.id === nextWidgetIds[0] ? { ...widget, layout: widget.layout ?? group.layout } : widget,
+      );
+    }
+  }
+
+  return normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets, groups });
+}
+
 export function groupedWidgetIdSet(schema: DashboardSchema): Set<string> {
   const grouped = new Set<string>();
   for (const group of schema.groups ?? []) {
@@ -1475,4 +1516,9 @@ export function topLevelDashboardItems(schema: DashboardSchema): DashboardTopLev
   }
 
   return items;
+}
+
+function withoutWidgetLayout(widget: DashboardWidget): DashboardWidget {
+  const { layout: _layout, ...withoutLayout } = widget;
+  return withoutLayout;
 }

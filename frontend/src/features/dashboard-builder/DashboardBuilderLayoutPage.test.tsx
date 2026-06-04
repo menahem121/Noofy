@@ -210,6 +210,80 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.getByText("Start building your dashboard")).toBeInTheDocument();
   });
 
+  it("removes an unplaced widget from viewable controls and preserves its saved default", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const onBackToWidgets = vi.fn();
+    const { layout: _layout, ...unplacedPrompt } = placedSchema.widgets[0];
+    const schema: DashboardSchema = {
+      ...placedSchema,
+      widgets: [{ ...unplacedPrompt, defaultPinned: true }],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={schema}
+        onBackToWidgets={onBackToWidgets}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const removeButton = await screen.findByRole("button", { name: /remove prompt from viewable widgets/i });
+    expect(removeButton.closest("article")?.firstElementChild).toBe(removeButton);
+    fireEvent.click(removeButton);
+
+    expect(screen.queryByRole("button", { name: /remove prompt from viewable widgets/i })).not.toBeInTheDocument();
+    expect(screen.getByText("No viewable widgets")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /back to widgets/i }));
+
+    const nextSchema = onBackToWidgets.mock.calls[0][0] as DashboardSchema;
+    expect(nextSchema.widgets).toEqual([]);
+    expect(nextSchema.hiddenWidgets).toEqual([
+      expect.objectContaining({
+        id: "ctrl-prompt",
+        defaultPinned: true,
+        binding: { nodeId: "6", inputName: "text" },
+      }),
+    ]);
+  });
+
+  it("removes every member of an unplaced group from viewable controls", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const onBackToWidgets = vi.fn();
+    const schema: DashboardSchema = {
+      ...groupedPlacedSchema,
+      groups: groupedPlacedSchema.groups.map(({ layout: _layout, ...group }) => group),
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={schema}
+        onBackToWidgets={onBackToWidgets}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /remove main group from viewable widgets/i }));
+    fireEvent.click(screen.getByRole("button", { name: /back to widgets/i }));
+
+    const nextSchema = onBackToWidgets.mock.calls[0][0] as DashboardSchema;
+    expect(nextSchema.widgets).toEqual([]);
+    expect(nextSchema.groups).toEqual([]);
+  });
+
   it("uses resize handles instead of bottom size preset buttons", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -393,6 +467,18 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(builderLayoutCss).toMatch(/\.layout-preview-input--textarea\s*{[^}]*overflow:\s*auto;/);
     expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*flex:\s*1 1 0;/);
     expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*overflow:\s*auto;/);
+  });
+
+  it("lets media placeholder frames fill resized preview widgets", () => {
+    expect(builderLayoutCss).toMatch(
+      /\.layout-canvas-widget__preview-surface > :is\(\.layout-preview-image-input, \.layout-preview-output\)\s*{[^}]*flex:\s*1 1 0;/,
+    );
+    expect(builderLayoutCss).toMatch(
+      /\.layout-canvas-widget__preview-surface > :is\(\.layout-preview-image-input, \.layout-preview-output\)\s*{[^}]*width:\s*100%;/,
+    );
+    expect(builderLayoutCss).toMatch(
+      /\.layout-canvas-widget__preview-surface > :is\(\.layout-preview-image-input, \.layout-preview-output\)\s*{[^}]*min-height:\s*0;/,
+    );
   });
 
   it("keeps compact widget content contained with scrolling and flexible minimum heights", () => {
