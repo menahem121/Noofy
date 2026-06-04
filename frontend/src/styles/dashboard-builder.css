@@ -335,6 +335,13 @@
   font-weight: 650;
 }
 
+.builder-config__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .builder-config__breadcrumb {
   display: inline-flex;
   align-items: center;
@@ -361,6 +368,49 @@
   font-size: 13px;
   line-height: 1.5;
   max-width: 560px;
+}
+
+.builder-default-asset {
+  display: grid;
+  gap: 8px;
+}
+
+.builder-remove-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(9, 10, 18, 0.56);
+}
+
+.builder-remove-dialog__panel {
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-xl);
+}
+
+.builder-remove-dialog__panel h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.builder-remove-dialog__panel p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.builder-remove-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+  flex-wrap: wrap;
 }
 
 .builder-card {

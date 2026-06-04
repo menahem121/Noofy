@@ -154,6 +154,93 @@ def test_uploaded_asset_value_still_stages_through_dashboard_asset_path(tmp_path
     assert result.staged_files[0].read_bytes() == b"uploaded"
 
 
+def test_package_asset_default_stages_from_imported_source_files(tmp_path: Path) -> None:
+    package_dir = tmp_path / "store" / "unknown" / "wf" / "1"
+    (package_dir / "package.json").parent.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        '{"metadata":{"id":"wf","name":"Workflow","version":"1"},"engine":"comfyui","comfyui_graph":{}}',
+        encoding="utf-8",
+    )
+    source_asset = package_dir / "source-files" / "assets" / "input-defaults" / "default.png"
+    source_asset.parent.mkdir(parents=True)
+    source_asset.write_bytes(b"packaged")
+    resolver = MediaInputStagingResolver(
+        dashboard_assets_dir=tmp_path / "assets",
+        gallery_store=None,
+        log_store=None,
+        package_search_roots=[tmp_path / "store"],
+    )
+    package = _package([
+        WorkflowInput(
+            id="image",
+            label="Image",
+            control="load_image",
+            binding=InputBinding(node_id="1", input_name="image"),
+        )
+    ])
+
+    result = resolver.stage_media_inputs(
+        package=package,
+        inputs={
+            "image": {
+                "source": "package_asset",
+                "asset_id": "input-defaults/default.png",
+                "kind": "image",
+                "content_type": "image/png",
+            }
+        },
+        runner=_runner(tmp_path),
+        adapter=_Adapter(tmp_path / "input"),
+        job_id="job-package",
+    )
+
+    assert result.inputs["image"] == "staging/job-package_package_default.png"
+    assert result.staged_files[0].read_bytes() == b"packaged"
+
+
+def test_package_asset_default_blocks_mismatched_integrity(tmp_path: Path) -> None:
+    package_dir = tmp_path / "store" / "unknown" / "wf" / "1"
+    (package_dir / "package.json").parent.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        '{"metadata":{"id":"wf","name":"Workflow","version":"1"},"engine":"comfyui","comfyui_graph":{}}',
+        encoding="utf-8",
+    )
+    source_asset = package_dir / "source-files" / "assets" / "input-defaults" / "default.png"
+    source_asset.parent.mkdir(parents=True)
+    source_asset.write_bytes(b"changed")
+    resolver = MediaInputStagingResolver(
+        dashboard_assets_dir=tmp_path / "assets",
+        gallery_store=None,
+        log_store=None,
+        package_search_roots=[tmp_path / "store"],
+    )
+
+    with pytest.raises(MediaInputStagingError, match="integrity"):
+        resolver.stage_media_inputs(
+            package=_package([
+                WorkflowInput(
+                    id="image",
+                    label="Image",
+                    control="load_image",
+                    binding=InputBinding(node_id="1", input_name="image"),
+                )
+            ]),
+            inputs={
+                "image": {
+                    "source": "package_asset",
+                    "asset_id": "input-defaults/default.png",
+                    "kind": "image",
+                    "content_type": "image/png",
+                    "size_bytes": 8,
+                    "sha256": "sha256:" + "0" * 64,
+                }
+            },
+            runner=_runner(tmp_path),
+            adapter=_Adapter(tmp_path / "input"),
+            job_id="job-package-bad",
+        )
+
+
 def test_missing_uploaded_asset_blocks_run_staging(tmp_path: Path) -> None:
     assets_dir = tmp_path / "assets"
     assets_dir.mkdir()

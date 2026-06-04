@@ -70,6 +70,7 @@ MODEL_HASH_CONCURRENCY_ENV = "NOOFY_EXPORT_MODEL_HASH_CONCURRENCY"
 NETWORK_VERIFICATION_FILESYSTEM_TYPES = frozenset(
     {"nfs", "nfs4", "cifs", "smbfs", "smb3", "afpfs", "ncpfs", "9p", "sshfs"}
 )
+MAX_BUNDLED_INPUT_ASSET_BYTES = 512 * 1024 * 1024
 
 
 MODEL_INPUTS: dict[str, dict[str, tuple[str, str]]] = {
@@ -277,6 +278,45 @@ class VerifyHashMetrics:
             "cache_misses": self.cache_misses,
             "bytes_hashed": self.bytes_hashed,
         }
+
+
+@dataclass
+class InputAssetCandidate:
+    id: str
+    node_id: str
+    node_type: str
+    input_name: str
+    expected_kind: str
+    source_path: Path | None
+    filename: str
+    extension: str | None
+    mime_type: str | None
+    size_bytes: int | None
+    selectable: bool
+    reason: str | None = None
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "input_name": self.input_name,
+            "expected_kind": self.expected_kind,
+            "filename": self.filename,
+            "extension": self.extension,
+            "mime_type": self.mime_type,
+            "size_bytes": self.size_bytes,
+            "selectable": self.selectable,
+            "included": self.selectable,
+            **({"reason": self.reason} if self.reason else {}),
+        }
+
+
+@dataclass
+class BundledInputAsset:
+    candidate: InputAssetCandidate
+    asset_id: str
+    reference: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -624,8 +664,117 @@ def prepare_graph_for_export(
     return graph, adjustments
 
 
+def collect_input_asset_candidates(
+    graph: dict[str, Any],
+    resolve_input_path: Callable[[str], str | Path | None] | None = None,
+) -> list[InputAssetCandidate]:
+    candidates: list[InputAssetCandidate] = []
+    for node_id, node in graph.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs")
+        if not isinstance(class_type, str) or not isinstance(inputs, dict):
+            continue
+        for input_name, input_value in inputs.items():
+            redaction = input_redaction_for(class_type, str(input_name), input_value)
+            if redaction is None:
+                continue
+            raw_path = first_local_reference(input_value)
+            source_path = resolve_local_input_path(raw_path, resolve_input_path) if raw_path else None
+            extension_hint = redaction["extension_hint"]
+            mime_type = redaction["mime_type_hint"]
+            filename = safe_display_filename(Path(raw_path).name if raw_path else f"{redaction['expected_kind']} input")
+            size_bytes: int | None = None
+            selectable = False
+            reason: str | None = "File could not be resolved from this ComfyUI input."
+            if source_path is not None and source_path.is_file():
+                try:
+                    size_bytes = source_path.stat().st_size
+                    selectable = size_bytes <= MAX_BUNDLED_INPUT_ASSET_BYTES
+                    reason = None if selectable else "File is too large to bundle in a .noofy package."
+                    filename = safe_display_filename(source_path.name)
+                    extension_hint = source_path.suffix.lower() or extension_hint
+                    mime_type = mimetypes.guess_type(source_path.name)[0] or mime_type
+                except OSError:
+                    selectable = False
+                    reason = "File could not be read."
+            candidate_id = input_asset_candidate_id(
+                str(node_id),
+                class_type,
+                str(input_name),
+                raw_path or "",
+            )
+            candidates.append(
+                InputAssetCandidate(
+                    id=candidate_id,
+                    node_id=str(node_id),
+                    node_type=class_type,
+                    input_name=str(input_name),
+                    expected_kind=redaction["expected_kind"],
+                    source_path=source_path if selectable else None,
+                    filename=filename,
+                    extension=extension_hint,
+                    mime_type=mime_type,
+                    size_bytes=size_bytes,
+                    selectable=selectable,
+                    reason=reason,
+                )
+            )
+    return candidates
+
+
+def bundle_selected_input_assets(
+    candidates: Iterable[InputAssetCandidate],
+    selected_asset_ids: Iterable[str],
+) -> dict[tuple[str, str], BundledInputAsset]:
+    selected = {str(item) for item in selected_asset_ids}
+    bundled: dict[tuple[str, str], BundledInputAsset] = {}
+    total_size = 0
+    for candidate in candidates:
+        if candidate.id not in selected:
+            continue
+        if not candidate.selectable or candidate.source_path is None:
+            continue
+        total_size += candidate.size_bytes or 0
+        if total_size > MAX_BUNDLED_INPUT_ASSET_BYTES:
+            raise ValueError("Selected input assets are too large to bundle in a .noofy package.")
+        reference, asset_id = package_asset_reference_for_candidate(candidate)
+        bundled[(candidate.node_id, candidate.input_name)] = BundledInputAsset(
+            candidate=candidate,
+            asset_id=asset_id,
+            reference=reference,
+        )
+    return bundled
+
+
+def package_asset_reference_for_candidate(candidate: InputAssetCandidate) -> tuple[dict[str, Any], str]:
+    if candidate.source_path is None:
+        raise ValueError("Cannot package an unresolved input asset.")
+    data = candidate.source_path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    suffix = candidate.source_path.suffix.lower() or candidate.extension or ".bin"
+    stem = slugify(Path(candidate.filename).stem or candidate.expected_kind)
+    asset_id = f"input-defaults/{digest[:16]}-{stem}{suffix}"
+    reference = {
+        "source": "package_asset",
+        "asset_id": asset_id,
+        "kind": package_asset_kind_for_candidate(candidate.expected_kind),
+        "filename": candidate.filename,
+        "content_type": candidate.mime_type or mimetypes.guess_type(candidate.filename)[0] or "application/octet-stream",
+        "size_bytes": len(data),
+        "sha256": f"sha256:{digest}",
+    }
+    return reference, asset_id
+
+
+def package_asset_kind_for_candidate(expected_kind: str) -> str:
+    return "file" if expected_kind == "text" else expected_kind
+
+
 def redact_local_inputs_for_package(
     graph: dict[str, Any],
+    bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     package_graph = copy.deepcopy(graph)
     adjustments = {
@@ -656,19 +805,20 @@ def redact_local_inputs_for_package(
             inputs[input_name] = placeholder
             adjustment_key = f"{'three_d' if expected_kind == '3d' else expected_kind}_inputs_redacted"
             adjustments[adjustment_key] += 1
-            unresolved_inputs.append(
-                {
-                    "node_id": str(node_id),
-                    "node_type": class_type,
-                    "input_name": str(input_name),
-                    "current_value": placeholder,
-                    "reason": f"creator_local_{expected_kind}_not_bundled",
-                    "expected_kind": expected_kind,
-                    "required": redaction["required"],
-                    "extension_hint": redaction["extension_hint"],
-                    "mime_type_hint": redaction["mime_type_hint"],
-                }
-            )
+            if (str(node_id), str(input_name)) not in (bundled_input_assets or {}):
+                unresolved_inputs.append(
+                    {
+                        "node_id": str(node_id),
+                        "node_type": class_type,
+                        "input_name": str(input_name),
+                        "current_value": placeholder,
+                        "reason": f"creator_local_{expected_kind}_not_bundled",
+                        "expected_kind": expected_kind,
+                        "required": redaction["required"],
+                        "extension_hint": redaction["extension_hint"],
+                        "mime_type_hint": redaction["mime_type_hint"],
+                    }
+                )
 
     return package_graph, adjustments, unresolved_inputs
 
@@ -738,6 +888,51 @@ def value_contains_local_reference(value: Any) -> bool:
     if isinstance(value, list):
         return any(value_contains_local_reference(item) for item in value)
     return False
+
+
+def first_local_reference(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip() and not is_graph_link(value):
+        return value.strip()
+    if isinstance(value, dict):
+        for nested in value.values():
+            found = first_local_reference(nested)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for nested in value:
+            found = first_local_reference(nested)
+            if found is not None:
+                return found
+    return None
+
+
+def resolve_local_input_path(
+    value: str,
+    resolve_input_path: Callable[[str], str | Path | None] | None,
+) -> Path | None:
+    if resolve_input_path is not None:
+        try:
+            resolved = resolve_input_path(value)
+        except Exception:
+            resolved = None
+        if resolved:
+            path = Path(resolved)
+            if path.is_file():
+                return path
+    path = Path(value).expanduser()
+    if path.is_file():
+        return path
+    return None
+
+
+def safe_display_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(value.replace("\\", "/")).name).strip("._ ")
+    return cleaned[:120] or "default.bin"
+
+
+def input_asset_candidate_id(node_id: str, node_type: str, input_name: str, value: str) -> str:
+    digest = hashlib.sha256(f"{node_id}\0{node_type}\0{input_name}\0{value}".encode("utf-8")).hexdigest()
+    return f"asset-{digest[:20]}"
 
 
 def is_graph_link(value: str) -> bool:
@@ -1433,6 +1628,7 @@ def build_package_documents(
     duration_seconds: float,
     graph_adjustments: dict[str, Any],
     warnings: list[str],
+    bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
 ) -> dict[str, Any]:
     graph_hash = sha256_bytes(canonical_json_bytes(graph))
     package_id = build_package_id(workflow_name, graph_hash)
@@ -1458,11 +1654,13 @@ def build_package_documents(
         "unresolved_runtime_inputs": unresolved_runtime_inputs or [],
     }
 
+    bundled_assets = list((bundled_input_assets or {}).values())
+    dashboard_inputs = [dashboard_input_for_bundled_asset(asset) for asset in bundled_assets]
     dashboard_json = {
         "version": SCHEMA_VERSION,
         "schema_version": SCHEMA_VERSION,
         "status": "not_configured",
-        "inputs": [],
+        "inputs": dashboard_inputs,
         "outputs": [record.to_dict() for record in outputs or []],
         "sections": [],
         "controls": [],
@@ -1509,6 +1707,7 @@ def build_package_documents(
             "custom_nodes_count": count_custom_node_instances(graph, custom_nodes),
             "models_count": len(models),
             "custom_node_packages_count": len(custom_nodes),
+            "input_assets_included_count": len(bundled_assets),
         },
         "runtime": {
             "comfyui_version": runtime.comfyui_version,
@@ -1542,6 +1741,35 @@ def count_core_nodes(graph: dict[str, Any], custom_nodes: list[CustomNodeRecord]
     return total
 
 
+def dashboard_input_for_bundled_asset(asset: BundledInputAsset) -> dict[str, Any]:
+    candidate = asset.candidate
+    control = {
+        "image": "load_image",
+        "audio": "load_audio",
+        "video": "load_video",
+        "3d": "load_3d",
+    }.get(candidate.expected_kind, "load_file")
+    validation: dict[str, Any] = {}
+    if control == "load_file" and candidate.extension:
+        validation["accepted_extensions"] = [candidate.extension]
+    return {
+        "id": f"input-{candidate.node_id}-{candidate.input_name}",
+        "label": friendly_input_label(candidate.input_name, candidate.expected_kind),
+        "control": control,
+        "binding": {"node_id": candidate.node_id, "input_name": candidate.input_name},
+        "default": asset.reference,
+        "default_pinned": True,
+        "validation": validation,
+    }
+
+
+def friendly_input_label(input_name: str, kind: str) -> str:
+    name = input_name.replace("_", " ").strip()
+    if not name:
+        return f"{kind.title()} input"
+    return name[:1].upper() + name[1:]
+
+
 def count_custom_node_instances(graph: dict[str, Any], custom_nodes: list[CustomNodeRecord]) -> int:
     custom_types = {node_type for record in custom_nodes for node_type in record.node_types}
     total = 0
@@ -1561,6 +1789,7 @@ def write_noofy_package(
     documents: dict[str, Any],
     custom_nodes: list[CustomNodeRecord],
     thumbnail_bytes: bytes,
+    bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
 ) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as package:
@@ -1570,6 +1799,15 @@ def write_noofy_package(
         package.writestr("capsule.lock.json", pretty_json_bytes(documents["capsule_lock"]))
         package.writestr("export-report.json", pretty_json_bytes(documents["export_report"]))
         package.writestr("assets/thumbnail.png", thumbnail_bytes)
+
+        for asset in (bundled_input_assets or {}).values():
+            if asset.candidate.source_path is None:
+                continue
+            package.write(asset.candidate.source_path, f"assets/{asset.asset_id}")
+            package.writestr(
+                f"assets/{asset.asset_id}.meta.json",
+                pretty_json_bytes(asset.reference),
+            )
 
         for record in custom_nodes:
             if record.included and record.source_path:

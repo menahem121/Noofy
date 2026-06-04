@@ -24,7 +24,14 @@ import {
   X,
 } from "lucide-react";
 
-import { fetchBindableInputs } from "../../lib/api/noofyApi";
+import {
+  fetchBindableInputs,
+  uploadDashboardAsset,
+  uploadDashboardAudioAsset,
+  uploadDashboardFileAsset,
+  uploadDashboardThreeDAsset,
+  uploadDashboardVideoAsset,
+} from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import {
   WIDGET_TYPE_LABELS,
@@ -79,6 +86,8 @@ type CreatedDropPreview =
   | { kind: "group-add"; targetGroupId: string; targetWidgetId?: string }
   | { kind: "insert"; targetGroupId: string | null; beforeId: string | null }
   | null;
+
+type PendingWidgetRemoval = { widget: DashboardWidget } | null;
 
 function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
   return {
@@ -152,6 +161,7 @@ export function DashboardBuilderPage({
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
+  const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<PendingWidgetRemoval>(null);
 
   useEffect(() => {
     if (!workflowId) {
@@ -345,11 +355,21 @@ export function DashboardBuilderPage({
   }
 
   function removeWidget(widgetId: string) {
-    setSchema((current) => removeWidgetFromSchema(current, widgetId));
+    const widget = schema.widgets.find((item) => item.id === widgetId);
+    if (widget && widgetHasSavedDefault(widget)) {
+      setPendingWidgetRemoval({ widget });
+      return;
+    }
+    commitRemoveWidget(widgetId, false);
+  }
+
+  function commitRemoveWidget(widgetId: string, keepHiddenDefault: boolean) {
+    setSchema((current) => removeWidgetFromSchema(current, widgetId, keepHiddenDefault));
     if (selectedWidgetId === widgetId) {
       setSelectedWidgetId(null);
       setSelectedValueId(null);
     }
+    setPendingWidgetRemoval(null);
   }
 
   function handleCreatedDragStart(widgetId: string) {
@@ -598,6 +618,7 @@ export function DashboardBuilderPage({
             {selectedGroup ? (
               <GroupEditor
                 group={selectedGroup}
+                workflowId={activeWorkflowId}
                 widgets={selectedGroup.widgetIds
                   .map((widgetId) => schema.widgets.find((widget) => widget.id === widgetId))
                   .filter((widget): widget is DashboardWidget => Boolean(widget))}
@@ -611,14 +632,17 @@ export function DashboardBuilderPage({
                 widget={selectedWidget}
                 onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
                 onRemove={() => removeWidget(selectedWidget.id)}
+                onSaveDefault={() => patchWidget(selectedWidget.id, { defaultPinned: true })}
               />
             ) : selectedWidget && selectedValueRecord ? (
               <WidgetEditor
                 widget={selectedWidget}
                 value={selectedValueRecord.value}
                 node={selectedValueRecord.node}
+                workflowId={activeWorkflowId}
                 onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
                 onRemove={() => removeWidget(selectedWidget.id)}
+                onSaveDefault={() => patchWidget(selectedWidget.id, { defaultPinned: true })}
               />
             ) : (
               <BuilderEmptyState />
@@ -683,6 +707,12 @@ export function DashboardBuilderPage({
           </div>
         )}
       </div>
+      <RemoveDefaultDialog
+        removal={pendingWidgetRemoval}
+        onCancel={() => setPendingWidgetRemoval(null)}
+        onKeep={(widgetId) => commitRemoveWidget(widgetId, true)}
+        onDelete={(widgetId) => commitRemoveWidget(widgetId, false)}
+      />
     </AppLayout>
   );
 }
@@ -884,11 +914,11 @@ function ungroupWidget(schema: DashboardSchema, widgetId: string): DashboardSche
   return normalizeDashboardSchema({ ...schema, widgets, groups });
 }
 
-function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): DashboardSchema {
+function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string, keepHiddenDefault = false): DashboardSchema {
   const removedWidget = schema.widgets.find((widget) => widget.id === widgetId) ?? null;
   let widgets = schema.widgets.filter((widget) => widget.id !== widgetId);
   let hiddenWidgets = schema.hiddenWidgets ?? [];
-  if (removedWidget && canPreserveWidgetAsHiddenInput(removedWidget)) {
+  if (removedWidget && keepHiddenDefault && canPreserveWidgetAsHiddenInput(removedWidget)) {
     hiddenWidgets = [
       ...hiddenWidgets.filter(
         (widget) =>
@@ -896,7 +926,7 @@ function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): Dash
           `${widget.binding.nodeId}:${widget.binding.inputName}` !==
             `${removedWidget.binding.nodeId}:${removedWidget.binding.inputName}`,
       ),
-      withoutWidgetLayout(removedWidget),
+      withoutWidgetLayout({ ...removedWidget, defaultPinned: true }),
     ];
   }
   const groups: DashboardWidgetGroup[] = [];
@@ -915,6 +945,45 @@ function removeWidgetFromSchema(schema: DashboardSchema, widgetId: string): Dash
   }
 
   return normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets, groups });
+}
+
+function widgetHasSavedDefault(widget: DashboardWidget): boolean {
+  return widget.defaultPinned === true && canPreserveWidgetAsHiddenInput(widget);
+}
+
+function RemoveDefaultDialog({
+  removal,
+  onCancel,
+  onKeep,
+  onDelete,
+}: {
+  removal: PendingWidgetRemoval;
+  onCancel: () => void;
+  onKeep: (widgetId: string) => void;
+  onDelete: (widgetId: string) => void;
+}) {
+  if (!removal) return null;
+  return (
+    <div className="builder-remove-dialog" role="dialog" aria-modal="true" aria-label="Remove saved default">
+      <div className="builder-remove-dialog__panel">
+        <h2>Remove widget?</h2>
+        <p>
+          This widget has a saved default. Keep it as a hidden default, or delete it to restore the original workflow default.
+        </p>
+        <div className="builder-remove-dialog__actions">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="secondary-button" type="button" onClick={() => onDelete(removal.widget.id)}>
+            Delete default
+          </button>
+          <button className="primary-button" type="button" onClick={() => onKeep(removal.widget.id)}>
+            Keep hidden default
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function withoutWidgetLayout(widget: DashboardWidget): DashboardWidget {
@@ -1173,14 +1242,18 @@ function WidgetEditor({
   widget,
   value,
   node,
+  workflowId,
   onPatch,
   onRemove,
+  onSaveDefault,
 }: {
   widget: DashboardWidget;
   value: WorkflowNodeValue;
   node: WorkflowNode;
+  workflowId: string;
   onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
+  onSaveDefault: () => void;
 }) {
   return (
     <div className="builder-config__inner">
@@ -1196,13 +1269,19 @@ function WidgetEditor({
             This widget is connected to a workflow value. People running this workflow will see your clear label instead of the ComfyUI node name.
           </p>
         </div>
-        <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
-          <Trash2 size={16} aria-hidden="true" />
-        </button>
+        <div className="builder-config__header-actions">
+          <button className="secondary-button secondary-button--small" type="button" onClick={onSaveDefault}>
+            {widget.defaultPinned ? <CheckCircle2 size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
+            {widget.defaultPinned ? "Default saved" : "Save as default"}
+          </button>
+          <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
+            <Trash2 size={16} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
-      <WidgetBehaviorCard widget={widget} value={value} onPatch={onPatch} />
+      <WidgetBehaviorCard widget={widget} value={value} workflowId={workflowId} onPatch={onPatch} />
       <WidgetBinding widget={widget} />
     </div>
   );
@@ -1212,10 +1291,12 @@ function NoteWidgetEditor({
   widget,
   onPatch,
   onRemove,
+  onSaveDefault,
 }: {
   widget: DashboardWidget;
   onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
+  onSaveDefault: () => void;
 }) {
   return (
     <div className="builder-config__inner">
@@ -1227,9 +1308,17 @@ function NoteWidgetEditor({
             Notes give people instructions, explanations, or warnings without changing the workflow.
           </p>
         </div>
-        <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
-          <Trash2 size={16} aria-hidden="true" />
-        </button>
+        <div className="builder-config__header-actions">
+          {widget.hasExecutableBinding ? (
+            <button className="secondary-button secondary-button--small" type="button" onClick={onSaveDefault}>
+              {widget.defaultPinned ? <CheckCircle2 size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
+              {widget.defaultPinned ? "Default saved" : "Save as default"}
+            </button>
+          ) : null}
+          <button className="icon-button icon-button--danger" type="button" onClick={onRemove} aria-label="Remove widget" title="Remove widget">
+            <Trash2 size={16} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
@@ -1287,15 +1376,17 @@ function WidgetDetailsFields({
 function WidgetBehaviorCard({
   widget,
   value,
+  workflowId,
   onPatch,
 }: {
   widget: DashboardWidget;
   value: WorkflowNodeValue;
+  workflowId: string;
   onPatch: (patch: Partial<DashboardWidget>) => void;
 }) {
   return (
     <FormCard title="Widget behavior">
-      <WidgetBehaviorFields widget={widget} value={value} onPatch={onPatch} />
+      <WidgetBehaviorFields widget={widget} value={value} workflowId={workflowId} onPatch={onPatch} />
     </FormCard>
   );
 }
@@ -1303,10 +1394,12 @@ function WidgetBehaviorCard({
 function WidgetBehaviorFields({
   widget,
   value,
+  workflowId,
   onPatch,
 }: {
   widget: DashboardWidget;
   value: WorkflowNodeValue;
+  workflowId: string;
   onPatch: (patch: Partial<DashboardWidget>) => void;
 }) {
   const allowedTypes = widgetTypesForKind(value.valueKind);
@@ -1466,7 +1559,7 @@ function WidgetBehaviorFields({
       ) : null}
 
       {widget.widgetType !== "display_image" && widget.widgetType !== "slider" ? (
-        <DefaultValueEditor widget={widget} value={value} onPatch={onPatch} />
+        <DefaultValueEditor widget={widget} value={value} workflowId={workflowId} onPatch={onPatch} />
       ) : null}
     </>
   );
@@ -1493,6 +1586,7 @@ function WidgetBinding({ widget }: { widget: DashboardWidget }) {
 
 function GroupEditor({
   group,
+  workflowId,
   widgets,
   valueIndex,
   onPatchGroup,
@@ -1500,6 +1594,7 @@ function GroupEditor({
   onSelectWidget,
 }: {
   group: DashboardWidgetGroup;
+  workflowId: string;
   widgets: DashboardWidget[];
   valueIndex: Map<string, { node: WorkflowNode; value: WorkflowNodeValue }>;
   onPatchGroup: (patch: Partial<DashboardWidgetGroup>) => void;
@@ -1564,7 +1659,7 @@ function GroupEditor({
                 <WidgetDetailsFields widget={widget} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
                 <div className="builder-card__divider" />
                 {record && widget.widgetType !== "note" ? (
-                  <WidgetBehaviorFields widget={widget} value={record.value} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
+                  <WidgetBehaviorFields widget={widget} value={record.value} workflowId={workflowId} onPatch={(patch) => onPatchWidget(widget.id, patch)} />
                 ) : null}
                 <WidgetBinding widget={widget} />
               </div>
@@ -1670,10 +1765,12 @@ function DropdownOptionsEditor({
 function DefaultValueEditor({
   widget,
   value,
+  workflowId,
   onPatch,
 }: {
   widget: DashboardWidget;
   value: WorkflowNodeValue;
+  workflowId: string;
   onPatch: (patch: Partial<DashboardWidget>) => void;
 }) {
   if (widget.widgetType === "textarea") {
@@ -1739,21 +1836,97 @@ function DefaultValueEditor({
 
   if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") {
     return (
-      <p className="builder-config__hint">
-        End-users will pick an image from their computer when they open the dashboard.
-      </p>
+      <DefaultAssetUploader widget={widget} workflowId={workflowId} onPatch={onPatch} />
     );
   }
 
   if (widget.widgetType === "load_audio" || widget.widgetType === "load_video" || widget.widgetType === "load_3d" || widget.widgetType === "load_file") {
-    const mediaName = widget.widgetType === "load_audio" ? "audio" : widget.widgetType === "load_video" ? "video" : widget.widgetType === "load_3d" ? "3D model" : "file";
     return (
-      <p className="builder-config__hint">
-        End-users will pick a {mediaName} from their computer when they open the dashboard.
-      </p>
+      <DefaultAssetUploader widget={widget} workflowId={workflowId} onPatch={onPatch} />
     );
   }
 
+  return null;
+}
+
+function DefaultAssetUploader({
+  widget,
+  workflowId,
+  onPatch,
+}: {
+  widget: DashboardWidget;
+  workflowId: string;
+  onPatch: (patch: Partial<DashboardWidget>) => void;
+}) {
+  const [status, setStatus] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const accept = uploadAcceptForWidget(widget);
+  async function handleFile(file: File | null) {
+    if (!file) return;
+    setStatus("Uploading...");
+    try {
+      const result = await uploadDefaultAssetForWidget(workflowId, widget, file);
+      onPatch({ defaultValue: result.asset_id, defaultPinned: true });
+      setStatus(`${file.name} saved as default.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Default upload failed.");
+    }
+  }
+  return (
+    <div className="builder-default-asset">
+      <button className="secondary-button secondary-button--small" type="button" onClick={() => fileInputRef.current?.click()}>
+        <File size={14} aria-hidden="true" />
+        Upload default
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={accept}
+        style={{ display: "none" }}
+        onChange={(event) => {
+          void handleFile(event.target.files?.[0] ?? null);
+          event.currentTarget.value = "";
+        }}
+      />
+      <p className="builder-config__hint">
+        {defaultAssetSummary(widget.defaultValue) || "No creator default file saved."}
+      </p>
+      {status ? <p className="builder-config__hint">{status}</p> : null}
+    </div>
+  );
+}
+
+async function uploadDefaultAssetForWidget(workflowId: string, widget: DashboardWidget, file: File) {
+  if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") {
+    return uploadDashboardAsset(workflowId, file);
+  }
+  if (widget.widgetType === "load_audio") {
+    return uploadDashboardAudioAsset(workflowId, file);
+  }
+  if (widget.widgetType === "load_video") {
+    return uploadDashboardVideoAsset(workflowId, file);
+  }
+  if (widget.widgetType === "load_3d") {
+    return uploadDashboardThreeDAsset(workflowId, file);
+  }
+  return uploadDashboardFileAsset(workflowId, widget.id, file);
+}
+
+function uploadAcceptForWidget(widget: DashboardWidget): string | undefined {
+  if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") return "image/*";
+  if (widget.widgetType === "load_audio") return "audio/*";
+  if (widget.widgetType === "load_video") return "video/*";
+  if (widget.widgetType === "load_3d") return ".glb,.gltf,.obj,.stl,.fbx,.ply,.usdz,.dae,.spz,.splat,.ksplat";
+  if (widget.widgetType === "load_file") return (widget.acceptedExtensions ?? DEFAULT_FILE_ACCEPTED_EXTENSIONS).join(",");
+  return undefined;
+}
+
+function defaultAssetSummary(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return `Saved default: ${value}`;
+  if (typeof value === "object" && value !== null && (value as { source?: unknown }).source === "package_asset") {
+    const filename = (value as { filename?: unknown }).filename;
+    return `Packaged default: ${typeof filename === "string" && filename ? filename : "asset"}`;
+  }
   return null;
 }
 

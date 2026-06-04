@@ -456,6 +456,7 @@ export interface WorkflowInputDef {
   control: string;
   binding: { node_id: string; input_name: string };
   default: unknown;
+  default_pinned?: boolean;
   validation: Record<string, unknown>;
 }
 

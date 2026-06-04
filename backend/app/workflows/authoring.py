@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -21,7 +22,10 @@ from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.media_values import (
     MEDIA_LOAD_CONTROLS,
     is_gallery_media_reference,
+    is_package_asset_value,
     is_uploaded_asset_value,
+    media_metadata_matches_input,
+    target_media_kind_for_input,
 )
 from app.workflows.package import (
     DashboardSchema,
@@ -29,6 +33,13 @@ from app.workflows.package import (
     WorkflowInput,
     WorkflowOutput,
     WorkflowPackage,
+)
+from app.workflows.package_assets import (
+    PackageAssetError,
+    copy_package_asset,
+    make_package_asset_reference,
+    validate_package_asset_reference,
+    write_package_asset_metadata,
 )
 from app.workflows.model_architecture import (
     ArchitectureFilterEvent,
@@ -54,6 +65,7 @@ class DashboardAuthoringService:
         validator: WorkflowPackageValidator | None = None,
         object_info_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
         dashboard_overrides_dir: Path | None = None,
+        dashboard_assets_dir: Path | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
@@ -61,6 +73,7 @@ class DashboardAuthoringService:
         self.log_store = log_store
         self.object_info_provider = object_info_provider
         self.dashboard_overrides_dir = dashboard_overrides_dir
+        self.dashboard_assets_dir = dashboard_assets_dir
 
     # ------------------------------------------------------------------
     # Read
@@ -169,6 +182,11 @@ class DashboardAuthoringService:
         # immutable; their editable dashboard schema lives in a user-owned
         # override directory.
         package_dir, persistence = self._dashboard_write_target(workflow_id, package)
+        parsed_inputs = self._package_pinned_uploaded_defaults(
+            parsed_inputs,
+            package_dir=package_dir,
+            workflow_id=workflow_id,
+        )
 
         # Build the on-disk dashboard.json payload.
         schema_configured = parsed_schema.model_copy(update={"status": "configured"})
@@ -243,13 +261,9 @@ class DashboardAuthoringService:
                 purpose="reset dashboard override",
             )
             dashboard_file = target / "dashboard.json"
-            if dashboard_file.exists():
-                dashboard_file.unlink()
+            if target.exists():
+                shutil.rmtree(target)
                 removed = True
-            try:
-                target.rmdir()
-            except OSError:
-                pass
         if not removed:
             self._get_package(workflow_id)
         self.log_store.add(
@@ -262,6 +276,79 @@ class DashboardAuthoringService:
             "workflow_id": workflow_id,
             "removed": removed,
         }
+
+    def _package_pinned_uploaded_defaults(
+        self,
+        inputs: list[WorkflowInput],
+        *,
+        package_dir: Path,
+        workflow_id: str,
+    ) -> list[WorkflowInput]:
+        converted: list[WorkflowInput] = []
+        converted_count = 0
+        for workflow_input in inputs:
+            if is_package_asset_value(workflow_input.default):
+                try:
+                    reference = validate_package_asset_reference(
+                        workflow_input.default,
+                        workflow_input=workflow_input,
+                    )
+                except PackageAssetError as exc:
+                    raise DashboardAuthoringError(
+                        f"Input '{workflow_input.id}' has an invalid packaged default asset."
+                    ) from exc
+                converted.append(workflow_input.model_copy(update={"default": reference}))
+                continue
+            if (
+                not workflow_input.default_pinned
+                or workflow_input.control not in MEDIA_LOAD_CONTROLS
+                or not is_uploaded_asset_value(workflow_input.default)
+            ):
+                converted.append(workflow_input)
+                continue
+            if self.dashboard_assets_dir is None:
+                raise DashboardAuthoringError("Noofy could not save the uploaded file as a packaged default.")
+            source_path = self.dashboard_assets_dir / str(workflow_input.default)
+            if not source_path.is_file():
+                raise DashboardAuthoringError("The uploaded default file could not be found.")
+            metadata = _dashboard_asset_metadata(self.dashboard_assets_dir, str(workflow_input.default))
+            kind = str(metadata.get("kind") or target_media_kind_for_input(workflow_input) or "file")
+            content_type = metadata.get("content_type") if isinstance(metadata.get("content_type"), str) else None
+            original_filename = (
+                metadata.get("original_filename")
+                if isinstance(metadata.get("original_filename"), str)
+                else source_path.name
+            )
+            extension = source_path.suffix or (metadata.get("extension") if isinstance(metadata.get("extension"), str) else None)
+            if not media_metadata_matches_input(
+                workflow_input,
+                kind=kind,
+                extension=extension,
+                mime_type=content_type,
+            ):
+                raise DashboardAuthoringError("The uploaded default file is not compatible with this input.")
+            try:
+                reference, asset_id = make_package_asset_reference(
+                    source_path=source_path,
+                    kind=kind,
+                    original_filename=original_filename,
+                    content_type=content_type,
+                )
+                copy_package_asset(source_path, package_dir, asset_id)
+                write_package_asset_metadata(package_dir, reference)
+            except (OSError, PackageAssetError) as exc:
+                raise DashboardAuthoringError("Noofy could not save the uploaded file as a packaged default.") from exc
+            converted_count += 1
+            converted.append(workflow_input.model_copy(update={"default": reference, "default_pinned": True}))
+        if converted_count:
+            self.log_store.add(
+                "info",
+                "Converted uploaded dashboard default media to packaged assets",
+                "workflow.authoring",
+                workflow_id=workflow_id,
+                details={"converted_count": converted_count},
+            )
+        return converted
 
     def _log_architecture_filter_events(
         self,
@@ -368,7 +455,25 @@ def _dashboard_visible_input_ids(dashboard: DashboardSchema) -> set[str]:
 def _hidden_runtime_input_has_usable_default(workflow_input: WorkflowInput) -> bool:
     if workflow_input.control not in MEDIA_LOAD_CONTROLS:
         return workflow_input.default is not None and workflow_input.default != ""
-    return is_uploaded_asset_value(workflow_input.default) or is_gallery_media_reference(workflow_input.default)
+    return (
+        is_uploaded_asset_value(workflow_input.default)
+        or is_gallery_media_reference(workflow_input.default)
+        or is_package_asset_value(workflow_input.default)
+    )
+
+
+def _dashboard_asset_metadata(assets_dir: Path, asset_id: str) -> dict[str, Any]:
+    meta_path = assets_dir / f"{asset_id}.meta.json"
+    metadata: dict[str, Any] = {"asset_id": asset_id, "original_filename": asset_id}
+    if not meta_path.exists():
+        return metadata
+    try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return metadata
+    if isinstance(raw, dict):
+        metadata.update(raw)
+    return metadata
 
 
 def _required_runtime_inputs(

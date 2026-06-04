@@ -273,7 +273,9 @@ export function WorkflowRunPage({
   const hasTerminalProgress = Boolean(displayedProgress?.status && terminalStatuses.has(displayedProgress.status));
   const activeJobStatus = hasTerminalProgress ? null : state.job?.status;
   const activeRuntimeJobId = currentTrackedRun ? trackedRunHandle(currentTrackedRun) : workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
-  const isRunning = isSubmittingRun || remainingTrackedRunCount > 0 || isActiveWorkflowProgress(displayedProgress);
+  const activeMemoryStatus = remainingTrackedRunCount === 0 && hasTerminalProgress ? null : state.job?.memory_status ?? null;
+  const warmReusableMemoryReady = Boolean(activeMemoryStatus && isWarmReusableMemoryState(activeMemoryStatus.state));
+  const isRunning = !warmReusableMemoryReady && (isSubmittingRun || remainingTrackedRunCount > 0 || isActiveWorkflowProgress(displayedProgress));
   const isWaitingForMemory = activeJobStatus === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
   const isBlockedByMemory = activeJobStatus === "blocked_by_memory";
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
@@ -1188,7 +1190,7 @@ export function WorkflowRunPage({
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status
     : null;
-  const memoryStatus = remainingTrackedRunCount === 0 && hasTerminalProgress ? null : state.job?.memory_status ?? null;
+  const memoryStatus = activeMemoryStatus;
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
   const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
   const showMemoryLoadedPill = Boolean(memoryStatus && isWarmReusableMemoryState(memoryStatus.state));
@@ -1597,7 +1599,7 @@ export function WorkflowRunPage({
             statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
             disabledReason: runDisabledReason,
             disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
-            developerDetails: showUserFacingMemoryNotice || runDisabledReason ? memoryDiagnostics : null,
+            developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
           }}
           batchCount={batchCount}
           exportNoofyUrl={exportWorkflowUrl(workflowId)}
@@ -3782,6 +3784,7 @@ function buildDashboardSchemaForEditing(
         title: control.label,
         description: control.description ?? "",
         defaultValue,
+        ...(input?.default_pinned === true ? { defaultPinned: true } : {}),
         ...(input ? { hasExecutableBinding: true } : {}),
         layout,
       });
@@ -3800,6 +3803,7 @@ function buildDashboardSchemaForEditing(
         title: control.label,
         description: control.description ?? "",
         defaultValue: builderDefaultValueForInput(input, inputValues),
+        ...(input.default_pinned === true ? { defaultPinned: true } : {}),
         min: numberValidation(input.validation.min),
         max: numberValidation(input.validation.max),
         step: numberValidation(input.validation.step),
@@ -3878,6 +3882,7 @@ function hiddenBuilderWidgetForInput(
     title: input.label,
     description: "",
     defaultValue: builderDefaultValueForInput(input, inputValues),
+    ...(input.default_pinned === true ? { defaultPinned: true } : {}),
     min: numberValidation(input.validation.min),
     max: numberValidation(input.validation.max),
     step: numberValidation(input.validation.step),

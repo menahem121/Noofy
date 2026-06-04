@@ -41,6 +41,8 @@ if PromptServer is not None:
         VerifyHashMetrics,
         build_export_filename,
         build_package_documents,
+        bundle_selected_input_assets,
+        collect_input_asset_candidates,
         collect_history_output_declarations,
         collect_model_warnings,
         collect_runtime_metadata,
@@ -146,6 +148,32 @@ if PromptServer is not None:
 
             await asyncio.sleep(0.5)
 
+    def _resolve_comfyui_input_path(value: str) -> str | Path | None:
+        try:
+            return folder_paths.get_annotated_filepath(value)
+        except Exception:
+            path = Path(value).expanduser()
+            return path if path.is_file() else None
+
+    @PromptServer.instance.routes.post("/noofy/export/assets")
+    async def export_asset_candidates(request: web.Request) -> web.StreamResponse:
+        try:
+            body = await request.json()
+            prompt = body.get("prompt")
+            if not isinstance(prompt, dict):
+                raise NoofyExportError("Request body must include a ComfyUI API prompt object.")
+            graph, _adjustments = prepare_graph_for_export(prompt)
+            candidates = collect_input_asset_candidates(
+                graph,
+                resolve_input_path=_resolve_comfyui_input_path,
+            )
+            return web.json_response({"assets": [candidate.public_dict() for candidate in candidates]})
+        except NoofyExportError as exc:
+            return web.json_response({"error": exc.message, "details": exc.details}, status=exc.status)
+        except Exception:
+            logging.exception("[Noofy Export] unexpected asset preflight failure")
+            return web.json_response({"error": "Noofy export asset detection failed."}, status=500)
+
     @PromptServer.instance.routes.post("/noofy/export")
     async def export_to_noofy(request: web.Request) -> web.StreamResponse:
         started_at = time.monotonic()
@@ -178,6 +206,21 @@ if PromptServer is not None:
                 started_at_iso = utc_now_iso()
 
             test_graph, adjustments = prepare_graph_for_export(prompt)
+            raw_selected_asset_ids = body.get("selected_asset_ids")
+            selected_asset_ids = [
+                item for item in raw_selected_asset_ids if isinstance(item, str)
+            ] if isinstance(raw_selected_asset_ids, list) else []
+            input_asset_candidates = collect_input_asset_candidates(
+                test_graph,
+                resolve_input_path=_resolve_comfyui_input_path,
+            )
+            try:
+                bundled_input_assets = bundle_selected_input_assets(
+                    input_asset_candidates,
+                    selected_asset_ids,
+                )
+            except ValueError as exc:
+                raise NoofyExportError(str(exc)) from exc
 
             model_management = _model_management()
             runtime = collect_runtime_metadata(_comfyui_version(), model_management)
@@ -198,7 +241,8 @@ if PromptServer is not None:
 
             output_records = collect_history_output_declarations(history, test_graph)
             package_graph, privacy_adjustments, unresolved_runtime_inputs = redact_local_inputs_for_package(
-                test_graph
+                test_graph,
+                bundled_input_assets=bundled_input_assets,
             )
             adjustments.update(privacy_adjustments)
             thumbnail_bytes = create_thumbnail_bytes(None)
@@ -232,6 +276,7 @@ if PromptServer is not None:
                 duration_seconds=duration_seconds,
                 graph_adjustments=adjustments,
                 warnings=warnings,
+                bundled_input_assets=bundled_input_assets,
             )
             filename = build_export_filename(documents["package_id"])
             target_path = output_export_path(folder_paths.get_output_directory(), filename)
@@ -241,6 +286,7 @@ if PromptServer is not None:
                 documents=documents,
                 custom_nodes=custom_nodes,
                 thumbnail_bytes=thumbnail_bytes,
+                bundled_input_assets=bundled_input_assets,
             )
 
             headers = {

@@ -10,6 +10,7 @@ Verifies:
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import struct
 import zipfile
@@ -226,6 +227,64 @@ def test_exported_archive_omits_dashboard_three_d_asset_bytes(tmp_path: Path) ->
 
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
         assert all(model["asset_id"] not in name for name in zf.namelist())
+
+
+def test_export_archive_includes_packaged_default_from_dashboard_override(tmp_path: Path) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(_make_archive(with_signature=True), original_filename="override_asset.noofy")
+    override_dir = tmp_path / "dashboard-overrides" / pkg.metadata.id
+    asset_path = override_dir / "assets" / "input-defaults" / "default.png"
+    asset_path.parent.mkdir(parents=True)
+    asset_bytes = b"default-image"
+    asset_path.write_bytes(asset_bytes)
+    asset_ref = {
+        "source": "package_asset",
+        "asset_id": "input-defaults/default.png",
+        "kind": "image",
+        "filename": "default.png",
+        "content_type": "image/png",
+        "size_bytes": len(asset_bytes),
+        "sha256": f"sha256:{hashlib.sha256(asset_bytes).hexdigest()}",
+    }
+    (override_dir / "dashboard.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "status": "configured",
+                "inputs": [
+                    {
+                        "id": "input-image",
+                        "label": "Input image",
+                        "control": "load_image",
+                        "binding": {"node_id": "10", "input_name": "image"},
+                        "default": asset_ref,
+                        "default_pinned": True,
+                        "validation": {},
+                    }
+                ],
+                "outputs": [],
+                "sections": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+        dashboard_overrides_dir=tmp_path / "dashboard-overrides",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+        dashboard_overrides_dir=tmp_path / "dashboard-overrides",
+    )
+
+    exported, _ = exporter.export_archive(pkg.metadata.id)
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        assert zf.read("assets/input-defaults/default.png") == asset_bytes
+        dashboard = json.loads(zf.read("dashboard.json"))
+    assert dashboard["inputs"][0]["default"] == asset_ref
 
 
 def test_export_does_not_modify_original_file(tmp_path: Path) -> None:

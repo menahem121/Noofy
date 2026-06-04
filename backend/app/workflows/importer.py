@@ -43,6 +43,12 @@ from app.workflows.package import (
     WorkflowPackageSignature,
     WorkflowSmokeTests,
 )
+from app.workflows.package_assets import (
+    PackageAssetError,
+    is_package_asset_value,
+    package_asset_archive_path,
+    validate_package_asset_reference,
+)
 from app.workflows.archive_validation import (
     ArchiveValidationError,
     ignored_archive_member,
@@ -486,6 +492,7 @@ class NoofyArchiveImporter:
             for i in (dashboard_json.get("inputs") or [])
             if isinstance(i, dict)
         ]
+        self._validate_package_asset_defaults(dashboard_inputs)
         dashboard_outputs = [
             WorkflowOutput.model_validate(o)
             for o in (dashboard_json.get("outputs") or [])
@@ -624,6 +631,37 @@ class NoofyArchiveImporter:
             target.parent.mkdir(parents=True, exist_ok=True)
             with self.archive.open(info, "r") as source, target.open("wb") as dest:
                 shutil.copyfileobj(source, dest)
+
+    def _validate_package_asset_defaults(self, inputs: list[WorkflowInput]) -> None:
+        for workflow_input in inputs:
+            if not is_package_asset_value(workflow_input.default):
+                continue
+            try:
+                reference = validate_package_asset_reference(
+                    workflow_input.default,
+                    workflow_input=workflow_input,
+                )
+                member_name = package_asset_archive_path(reference["asset_id"])
+            except PackageAssetError as exc:
+                raise NoofyImportError(
+                    f"Workflow input '{workflow_input.id}' has an invalid packaged default asset."
+                ) from exc
+            if member_name not in self.members:
+                raise NoofyImportError(
+                    f"Workflow input '{workflow_input.id}' references a packaged default asset that is missing from the archive."
+                )
+            info = self.members[member_name]
+            if isinstance(reference.get("size_bytes"), int) and info.file_size != reference["size_bytes"]:
+                raise NoofyImportError(
+                    f"Workflow input '{workflow_input.id}' references a packaged default asset with mismatched size metadata."
+                )
+            sha256 = reference.get("sha256")
+            if isinstance(sha256, str):
+                digest = hashlib.sha256(self.archive.read(info)).hexdigest()
+                if digest != sha256.removeprefix("sha256:"):
+                    raise NoofyImportError(
+                        f"Workflow input '{workflow_input.id}' references a packaged default asset with mismatched content metadata."
+                    )
 
     def _read_json(self, name: str) -> dict[str, Any]:
         cached = self._json_cache.get(name)

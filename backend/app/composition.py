@@ -195,6 +195,13 @@ def create_api_services(
             dashboard_assets_dir=getattr(assets, "assets_dir", settings.paths.dashboard_assets_dir),
             gallery_store=gallery,
             log_store=getattr(engine_service, "log_store", None),
+            workflow_store_dir=settings.paths.workflow_packages_store_dir,
+            dashboard_overrides_dir=settings.paths.workflow_dashboard_overrides_dir,
+            package_search_roots=[
+                settings.workflows_dir,
+                settings.paths.user_workflows_dir,
+                settings.paths.workflow_packages_store_dir,
+            ],
         )
     model_availability_service = getattr(engine_service, "model_availability_service", None)
     provider_resolver = getattr(model_availability_service, "provider_resolver", None)

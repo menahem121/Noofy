@@ -76,6 +76,92 @@ def test_redact_local_inputs_for_package_removes_creator_image_references() -> N
     assert graph["2"]["inputs"]["image"] == "private-mask.png"
 
 
+def test_selected_input_asset_becomes_pinned_dashboard_default(tmp_path: Path) -> None:
+    image = tmp_path / "private-portrait.png"
+    image.write_bytes(b"image-bytes")
+    graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": str(image)},
+        },
+    }
+    candidates = exporter.collect_input_asset_candidates(graph)
+    bundled = exporter.bundle_selected_input_assets(candidates, [candidates[0].id])
+
+    package_graph, _adjustments, unresolved = exporter.redact_local_inputs_for_package(
+        graph,
+        bundled_input_assets=bundled,
+    )
+    documents = exporter.build_package_documents(
+        graph=package_graph,
+        workflow_name="Asset Workflow",
+        runtime=exporter.RuntimeMetadata(
+            comfyui_version="test",
+            python_version="test",
+            platform_name="linux",
+            gpu_backend="cpu",
+            gpu_name=None,
+        ),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        unresolved_runtime_inputs=unresolved,
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-04T00:00:00Z",
+        finished_at="2026-06-04T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        bundled_input_assets=bundled,
+    )
+
+    assert package_graph["1"]["inputs"]["image"] == exporter.REDACTED_IMAGE_INPUT_VALUE
+    assert unresolved == []
+    dashboard_input = documents["dashboard_json"]["inputs"][0]
+    assert dashboard_input["default_pinned"] is True
+    assert dashboard_input["default"]["source"] == "package_asset"
+    assert dashboard_input["default"]["asset_id"].startswith("input-defaults/")
+    assert str(image) not in json.dumps(documents)
+
+
+def test_oversized_input_asset_candidate_is_not_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image = tmp_path / "large.png"
+    image.write_bytes(b"123456")
+    monkeypatch.setattr(exporter, "MAX_BUNDLED_INPUT_ASSET_BYTES", 4)
+
+    candidates = exporter.collect_input_asset_candidates(
+        {
+            "1": {
+                "class_type": "LoadImage",
+                "inputs": {"image": str(image)},
+            }
+        }
+    )
+
+    assert candidates[0].selectable is False
+    assert "too large" in str(candidates[0].reason)
+
+
+def test_text_input_asset_is_exported_as_generic_file_default(tmp_path: Path) -> None:
+    text_file = tmp_path / "captions.srt"
+    text_file.write_text("caption", encoding="utf-8")
+    candidates = exporter.collect_input_asset_candidates(
+        {
+            "7": {
+                "class_type": "LoadTextFile",
+                "inputs": {"file": str(text_file)},
+            }
+        }
+    )
+
+    bundled = exporter.bundle_selected_input_assets(candidates, [candidates[0].id])
+    asset = next(iter(bundled.values()))
+
+    assert candidates[0].expected_kind == "text"
+    assert asset.reference["kind"] == "file"
+    assert exporter.dashboard_input_for_bundled_asset(asset)["control"] == "load_file"
+
+
 def test_build_export_filename_uses_only_package_id() -> None:
     assert exporter.build_export_filename("eraserv4.5") == "eraserv4.5.noofy"
 

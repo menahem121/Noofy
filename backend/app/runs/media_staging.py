@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -19,6 +20,15 @@ from app.workflows.media_values import (
     target_media_kind_for_input,
 )
 from app.workflows.package import WorkflowPackage
+from app.workflows.package_assets import (
+    PackageAssetError,
+    is_package_asset_value,
+    package_asset_source_candidates,
+    safe_package_asset_id,
+    validate_package_asset_file,
+    validate_package_asset_reference,
+)
+from app.workflows.store_paths import mutable_package_dir, safe_store_segment
 
 
 class MediaInputStagingError(ValueError):
@@ -40,10 +50,16 @@ class MediaInputStagingResolver:
         dashboard_assets_dir: Path | None,
         gallery_store: GalleryStore | None,
         log_store: DiagnosticsSink | None = None,
+        workflow_store_dir: Path | None = None,
+        dashboard_overrides_dir: Path | None = None,
+        package_search_roots: list[Path] | None = None,
     ) -> None:
         self.dashboard_assets_dir = dashboard_assets_dir
         self.gallery_store = gallery_store
         self.log_store = log_store
+        self.workflow_store_dir = workflow_store_dir
+        self.dashboard_overrides_dir = dashboard_overrides_dir
+        self.package_search_roots = package_search_roots or []
 
     def stage_media_inputs(
         self,
@@ -96,6 +112,44 @@ class MediaInputStagingResolver:
                         package.metadata.id,
                         job_id,
                         {"input_id": workflow_input.id, "asset_id": str(value), "control": workflow_input.control},
+                    )
+                    continue
+                if is_package_asset_value(value):
+                    source_path = self._package_asset_path(package, value)
+                    asset_id = safe_package_asset_id(str(value["asset_id"]))
+                    kind = value.get("kind") if isinstance(value.get("kind"), str) else None
+                    extension = Path(asset_id).suffix
+                    mime_type = value.get("content_type") if isinstance(value.get("content_type"), str) else None
+                    if not media_metadata_matches_input(
+                        workflow_input,
+                        kind=kind,
+                        extension=extension,
+                        mime_type=mime_type,
+                    ):
+                        self._log(
+                            "warning",
+                            "Packaged media default is not compatible with the workflow input",
+                            package.metadata.id,
+                            job_id,
+                            {"input_id": workflow_input.id, "asset_id": asset_id, "control": workflow_input.control},
+                        )
+                        raise MediaInputStagingError("The packaged default media is not compatible with this input.")
+                    staged_path = self._stage_once(
+                        staging_dir,
+                        source_path,
+                        key=f"package_asset:{package.metadata.id}:{asset_id}",
+                        staged_name=f"{job_id}_package_{Path(asset_id).name}",
+                        staged_by_key=staged_by_key,
+                        staged_files=staged_files,
+                    )
+                    resolved_inputs = dict(inputs) if resolved_inputs is None else resolved_inputs
+                    resolved_inputs[workflow_input.id] = f"staging/{staged_path.name}"
+                    self._log(
+                        "debug",
+                        "Staged packaged media default",
+                        package.metadata.id,
+                        job_id,
+                        {"input_id": workflow_input.id, "asset_id": asset_id, "control": workflow_input.control},
                     )
                     continue
                 if not is_gallery_media_reference(value):
@@ -174,6 +228,61 @@ class MediaInputStagingResolver:
             raise
 
         return MediaInputStagingResult(inputs=resolved_inputs or inputs, staged_files=staged_files)
+
+    def _package_asset_path(self, package: WorkflowPackage, value: dict[str, Any]) -> Path:
+        try:
+            asset_id = safe_package_asset_id(str(value.get("asset_id", "")))
+        except PackageAssetError as exc:
+            raise MediaInputStagingError("The packaged default media reference is invalid.") from exc
+
+        for package_dir in self._package_asset_dirs(package):
+            for candidate in package_asset_source_candidates(package_dir, asset_id):
+                if candidate.is_file():
+                    try:
+                        reference = validate_package_asset_reference(value)
+                        validate_package_asset_file(candidate, reference)
+                    except PackageAssetError as exc:
+                        raise MediaInputStagingError("The packaged default media failed integrity validation.") from exc
+                    return candidate
+        self._log(
+            "warning",
+            "Packaged media default file was not found",
+            package.metadata.id,
+            "",
+            {"asset_id": asset_id},
+        )
+        raise MediaInputStagingError("The packaged default media for this input could not be found.")
+
+    def _package_asset_dirs(self, package: WorkflowPackage) -> list[Path]:
+        dirs: list[Path] = []
+        if self.dashboard_overrides_dir is not None:
+            override = self.dashboard_overrides_dir / safe_store_segment(package.metadata.id)
+            if override.exists():
+                dirs.append(override)
+        if self.workflow_store_dir is not None:
+            candidate = mutable_package_dir(self.workflow_store_dir, package)
+            if candidate is not None and candidate.exists():
+                dirs.append(candidate)
+        for root in self.package_search_roots:
+            if not root.exists():
+                continue
+            for package_file in sorted({*root.glob("*/package.json"), *root.glob("*/*/*/package.json")}):
+                try:
+                    data = json.loads(package_file.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                metadata = data.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("id") == package.metadata.id:
+                    dirs.append(package_file.parent)
+        seen: set[Path] = set()
+        unique: list[Path] = []
+        for path in dirs:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            unique.append(path)
+        return unique
 
     def _input_dir_for_runner(self, runner: RunnerDescriptor, adapter: object) -> Path | None:
         adapter_input_dir = getattr(adapter, "comfyui_input_dir", None)

@@ -13,7 +13,7 @@ The package is designed for Noofy’s runtime isolation model: Noofy treats the 
 - Runs the workflow once before export.
 - Fails the export if the test run fails.
 - Uses the local media already selected in loader nodes for the export test.
-- Does not bundle creator-local image, audio, video, 3D, text, or generic file inputs.
+- Shows detected workflow input assets and bundles only the checked creator defaults.
 - Forces detected `batch_size` inputs to `1` for the export test.
 - Records ComfyUI, Python, platform, GPU backend, and PyTorch metadata.
 - Samples RAM and VRAM usage while the test run is active.
@@ -53,7 +53,7 @@ Export is intentionally blocking. If the workflow takes 20 minutes to run, the e
 
 When **Export to Noofy** is clicked, the frontend asks ComfyUI to convert the current graph to API prompt format. The extension backend then prepares an export graph, queues the graph in ComfyUI using the current loader selections, and waits for the prompt history result.
 
-During the run, the extension samples memory usage and keeps the workflow’s selected models and local input media intact except for the export-test batch-size normalization described above. If execution succeeds, the extension uses prompt history only as temporary evidence for app-owned output categories, then writes the `.noofy` archive with creator-local input file values redacted to runtime-input placeholders. If execution fails, the response contains an error and no package is created.
+During the run, the extension samples memory usage and keeps the workflow’s selected models and local input media intact except for the export-test batch-size normalization described above. If execution succeeds, the extension uses prompt history only as temporary evidence for app-owned output categories, then writes the `.noofy` archive with creator-local input file values redacted to runtime-input placeholders. Checked input assets are copied under `assets/input-defaults/...` and referenced as dashboard creator defaults, not as local paths in `comfyui_graph.json`. If execution fails, the response contains an error and no package is created.
 
 ## Package Contents
 
@@ -68,6 +68,8 @@ workflow.noofy
   export-report.json
   assets/
     thumbnail.png
+    input-defaults/
+      <checked-creator-default-files>
   custom_nodes/
     <custom-node-folder>/
       .noofy-file-manifest.json
@@ -117,7 +119,7 @@ Noofy treats this graph as engine-specific execution data. Noofy uses package me
 
 ## dashboard.json
 
-`dashboard.json` is intentionally minimal:
+`dashboard.json` is intentionally minimal unless checked input assets were included:
 
 ```json
 {
@@ -141,7 +143,7 @@ Noofy treats this graph as engine-specific execution data. Noofy uses package me
 }
 ```
 
-The extension does not add Noofy marker nodes to the ComfyUI canvas. Dashboard configuration belongs to Noofy creator-mode tooling, not to the exported ComfyUI graph. Exported dashboard outputs are declaration records only: they contain stable IDs, generic labels, node IDs, source node types, `type`, and `kind`. They must not contain generated filenames, subfolders, ComfyUI temp/output paths, runtime bucket `type` values, or generated media bytes.
+When input assets are checked in the export dialog, `inputs` includes pinned defaults whose `default.source` is `package_asset`. The extension does not add Noofy marker nodes to the ComfyUI canvas. Dashboard configuration belongs to Noofy creator-mode tooling, not to the exported ComfyUI graph. Exported dashboard outputs are declaration records only: they contain stable IDs, generic labels, node IDs, source node types, `type`, and `kind`. They must not contain generated filenames, subfolders, ComfyUI temp/output paths, runtime bucket `type` values, or generated media bytes.
 
 ## capsule.lock.json
 
@@ -182,7 +184,7 @@ Persisted output labels are generic or derived from stable node metadata, never 
 
 `assets/thumbnail.png` is a generic placeholder by default. The exporter does not use generated workflow outputs as thumbnails by default, even when the workflow generates images.
 
-The source files selected in loader nodes are not copied into the `.noofy` archive, and their creator-local filenames are not preserved in the packaged graph. Imported workflows should receive image, audio, video, 3D, text, or generic file inputs through Noofy dashboard controls or user-supplied runtime inputs.
+Unchecked source files selected in loader nodes are not copied into the `.noofy` archive, and creator-local paths are never preserved in the packaged graph. Checked source files are copied as safe package assets under `assets/input-defaults/...` and used as creator defaults after import. User changes after import stay in Noofy user state and do not mutate the original `.noofy` package.
 
 ## Model Records
 

@@ -51,6 +51,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           title: control.label,
           description: control.description ?? "",
           defaultValue: input?.default ?? null,
+          ...(input?.default_pinned === true ? { defaultPinned: true } : {}),
           ...(input ? { hasExecutableBinding: true } : {}),
           layout,
         });
@@ -66,6 +67,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           title: control.label,
           description: control.description ?? "",
           defaultValue: input.default,
+          ...(input.default_pinned === true ? { defaultPinned: true } : {}),
           min: numberValidation(input.validation.min),
           max: numberValidation(input.validation.max),
           step: numberValidation(input.validation.step),
@@ -123,6 +125,7 @@ function hiddenWidgetForInput(input: WorkflowInputDef): DashboardWidget | null {
     title: input.label,
     description: "",
     defaultValue: input.default,
+    ...(input.default_pinned === true ? { defaultPinned: true } : {}),
     min: numberValidation(input.validation.min),
     max: numberValidation(input.validation.max),
     step: numberValidation(input.validation.step),

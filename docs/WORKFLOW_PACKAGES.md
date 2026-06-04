@@ -118,13 +118,19 @@ strict: image widgets bind only to `image`, audio widgets only to `audio`, video
 widgets only to `video`, 3D widgets only to `3d`, and generic file widgets only
 to `file`.
 
-Portable `.noofy` archives must not contain creator-local input media, generated
-output media, generated filenames, output subfolders, temp/output paths, creator
-machine paths, runtime file bucket identity, file bytes, or base64 media content.
+Portable `.noofy` archives must not contain unchecked creator-local input media,
+generated output media, generated filenames, output subfolders, temp/output
+paths, creator machine paths, runtime file bucket identity, raw local path
+values, or base64 media content. Creator-approved input defaults may be bundled
+only as package assets under `assets/input-defaults/...` and referenced from
+dashboard input defaults with `source: "package_asset"`; `comfyui_graph.json`
+must still use runtime placeholders instead of local machine paths.
 Exporter-generated dashboards should persist only stable output records: stable
 ID, generic or stable label, node ID, source node type when useful, `type`, and
 `kind`. Uploaded dashboard media and generic files are user-local app data and
-must not be embedded in portable `.noofy` archives.
+must not be embedded in portable `.noofy` archives unless the creator explicitly
+saves them as pinned defaults, in which case export copies them into package
+assets without mutating the original imported archive.
 Generic `load_file` inputs must declare `validation.accepted_extensions` and/or
 `validation.accepted_mime_types`; those fields are allow-list checks for that
 dashboard input, not a trust signal for backend parsing or execution.

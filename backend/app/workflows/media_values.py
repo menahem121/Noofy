@@ -37,6 +37,16 @@ def is_gallery_media_reference(value: Any) -> bool:
     )
 
 
+def is_package_asset_value(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("source") != "package_asset":
+        return False
+    asset_id = value.get("asset_id")
+    kind = value.get("kind")
+    return isinstance(asset_id, str) and asset_id.strip() != "" and kind in {"image", "audio", "video", "3d", "file"}
+
+
 def is_empty_media_value(value: Any) -> bool:
     return value is None or value == ""
 

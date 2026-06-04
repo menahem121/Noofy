@@ -22,8 +22,18 @@ from app.workflows.library import (
     workflow_package_display_name,
 )
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.package import WorkflowPackage
-from app.workflows.store_paths import mutable_package_dir, path_is_within
+from app.workflows.media_values import MEDIA_LOAD_CONTROLS, is_package_asset_value, is_uploaded_asset_value, target_media_kind_for_input
+from app.workflows.package import WorkflowInput, WorkflowPackage
+from app.workflows.package_assets import (
+    PackageAssetError,
+    make_package_asset_reference,
+    package_asset_archive_path,
+    package_asset_source_candidates,
+    safe_package_asset_id,
+    validate_package_asset_file,
+    validate_package_asset_reference,
+)
+from app.workflows.store_paths import mutable_package_dir, path_is_within, safe_store_segment
 from app.workflows.user_state import UserStateService
 
 
@@ -39,12 +49,14 @@ class WorkflowExporter:
         user_state_service: UserStateService | None = None,
         workflow_library_store: WorkflowLibraryStore | None = None,
         dashboard_assets_dir: Path | None = None,
+        dashboard_overrides_dir: Path | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
         self.user_state_service = user_state_service
         self.workflow_library_store = workflow_library_store
         self.dashboard_assets_dir = dashboard_assets_dir
+        self.dashboard_overrides_dir = dashboard_overrides_dir
 
     def export_archive(
         self,
@@ -85,19 +97,19 @@ class WorkflowExporter:
             )
 
             # dashboard.json — the configured dashboard (inputs, outputs, sections, status).
-            dashboard_file = package_dir / "dashboard.json" if package_dir is not None else None
-            if dashboard_file is not None and dashboard_file.exists():
-                dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
-            else:
-                # Fall back to generating from in-memory model.
-                dashboard_data: dict[str, Any] = package.dashboard.model_dump(
-                    mode="json", exclude_none=True
-                )
-            if not dashboard_data.get("inputs") and package.inputs:
-                dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
-            if not dashboard_data.get("outputs") and package.outputs:
-                dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
+            dashboard_data: dict[str, Any] = package.dashboard.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
+            dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
             dashboard_data = self._portable_dashboard(dashboard_data)
+            self._write_dashboard_package_assets(
+                zf,
+                dashboard_data,
+                package=package,
+                package_dir=package_dir,
+            )
             zf.writestr("dashboard.json", json.dumps(dashboard_data, indent=2, sort_keys=True))
 
             # capsule.lock.json — if present.
@@ -202,6 +214,118 @@ class WorkflowExporter:
         meta_path = self.dashboard_assets_dir / f"{asset_id}.meta.json"
         if meta_path.exists():
             zf.write(meta_path, f"assets/workflow-icons/{asset_id}.meta.json")
+
+    def _write_dashboard_package_assets(
+        self,
+        zf: zipfile.ZipFile,
+        dashboard_data: dict[str, Any],
+        *,
+        package: WorkflowPackage,
+        package_dir: Path | None,
+    ) -> None:
+        written: set[str] = set()
+        package_inputs_by_id = {workflow_input.id: workflow_input for workflow_input in package.inputs}
+        for item in dashboard_data.get("inputs") or []:
+            if not isinstance(item, dict):
+                continue
+            workflow_input = _workflow_input_for_dashboard_item(item, package_inputs_by_id)
+            if workflow_input is None or workflow_input.control not in MEDIA_LOAD_CONTROLS:
+                continue
+            default = item.get("default")
+            if is_package_asset_value(default):
+                try:
+                    reference = validate_package_asset_reference(default, workflow_input=workflow_input)
+                    asset_id = safe_package_asset_id(reference["asset_id"])
+                except PackageAssetError:
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' has an invalid packaged default asset.")
+                source_path = self._find_package_asset_file(package_dir, asset_id, workflow_id=package.metadata.id)
+                if source_path is None:
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' references a missing packaged default asset.")
+                try:
+                    validate_package_asset_file(source_path, reference)
+                except PackageAssetError as exc:
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' has a packaged default asset that failed integrity validation.") from exc
+                item["default"] = reference
+                self._write_package_asset_file(zf, source_path, reference, written)
+                continue
+            if not item.get("default_pinned") or not is_uploaded_asset_value(default):
+                continue
+            if self.dashboard_assets_dir is None:
+                raise WorkflowExportError("Noofy could not package an uploaded creator default because dashboard assets are unavailable.")
+            source_path = self.dashboard_assets_dir / str(default)
+            if not source_path.is_file():
+                raise WorkflowExportError("Noofy could not package an uploaded creator default because the source file is missing.")
+            metadata = self._dashboard_asset_metadata(str(default))
+            kind = str(metadata.get("kind") or target_media_kind_for_input(workflow_input) or "file")
+            content_type = metadata.get("content_type") if isinstance(metadata.get("content_type"), str) else None
+            original_filename = (
+                metadata.get("original_filename")
+                if isinstance(metadata.get("original_filename"), str)
+                else source_path.name
+            )
+            try:
+                reference, _asset_id = make_package_asset_reference(
+                    source_path=source_path,
+                    kind=kind,
+                    original_filename=original_filename,
+                    content_type=content_type,
+                )
+                reference = validate_package_asset_reference(reference, workflow_input=workflow_input)
+            except (OSError, PackageAssetError) as exc:
+                raise WorkflowExportError("Noofy could not package an uploaded creator default.") from exc
+            item["default"] = reference
+            item["default_pinned"] = True
+            self._write_package_asset_file(zf, source_path, reference, written)
+
+    def _write_package_asset_file(
+        self,
+        zf: zipfile.ZipFile,
+        source_path: Path,
+        reference: dict[str, Any],
+        written: set[str],
+    ) -> None:
+        archive_path = package_asset_archive_path(reference["asset_id"])
+        if archive_path not in written:
+            zf.write(source_path, archive_path)
+            written.add(archive_path)
+        meta_path = f"{archive_path}.meta.json"
+        if meta_path not in written:
+            zf.writestr(meta_path, json.dumps(reference, indent=2, sort_keys=True))
+            written.add(meta_path)
+
+    def _find_package_asset_file(
+        self,
+        package_dir: Path | None,
+        asset_id: str,
+        *,
+        workflow_id: str,
+    ) -> Path | None:
+        if self.dashboard_overrides_dir is not None:
+            override_dir = self.dashboard_overrides_dir / safe_store_segment(workflow_id)
+            for candidate in package_asset_source_candidates(override_dir, asset_id):
+                if candidate.is_file():
+                    return candidate
+        if package_dir is None:
+            return None
+        for candidate in package_asset_source_candidates(package_dir, asset_id):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _dashboard_asset_metadata(self, asset_id: str) -> dict[str, Any]:
+        metadata: dict[str, Any] = {"asset_id": asset_id, "original_filename": asset_id}
+        if self.dashboard_assets_dir is None:
+            return metadata
+        meta_path = self.dashboard_assets_dir / f"{asset_id}.meta.json"
+        if not meta_path.exists():
+            return metadata
+        try:
+            raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return metadata
+        if isinstance(raw, dict):
+            metadata.update(raw)
+        return metadata
 
     def _stored_comfyui_graph(self, package_dir: Path | None) -> dict[str, Any] | None:
         if package_dir is None:
@@ -353,6 +477,30 @@ def _read_stored_package_json(path: Path | None) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _workflow_input_for_dashboard_item(
+    item: dict[str, Any],
+    package_inputs_by_id: dict[str, WorkflowInput],
+) -> WorkflowInput | None:
+    input_id = item.get("id")
+    if isinstance(input_id, str) and input_id in package_inputs_by_id:
+        base = package_inputs_by_id[input_id]
+        try:
+            return base.model_copy(
+                update={
+                    "default": item.get("default"),
+                    "default_pinned": bool(item.get("default_pinned")),
+                    "validation": item.get("validation") if isinstance(item.get("validation"), dict) else base.validation,
+                    "control": item.get("control") if isinstance(item.get("control"), str) else base.control,
+                }
+            )
+        except Exception:
+            return base
+    try:
+        return WorkflowInput.model_validate(item)
+    except Exception:
+        return None
 
 
 def _stored_string(data: dict[str, Any], key: str, fallback: str) -> str:

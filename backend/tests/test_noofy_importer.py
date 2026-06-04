@@ -1453,6 +1453,115 @@ def test_noofy_importer_rejects_zip_path_traversal() -> None:
         NoofyArchiveImporter(payload.getvalue()).normalize()
 
 
+def test_noofy_importer_rejects_missing_packaged_default_asset() -> None:
+    payload = _source_archive_bytes(
+        {
+            "package.json": json.dumps(
+                {
+                    "publisher_id": "creator",
+                    "package_id": "asset-default",
+                    "version": "0.1.0",
+                    "display_name": "Asset default",
+                    "trust_level": "public_unverified",
+                }
+            ),
+            "comfyui_graph.json": json.dumps(
+                {
+                    "1": {
+                        "class_type": "LoadImage",
+                        "inputs": {"image": "__noofy_runtime_image_input_required__"},
+                    }
+                }
+            ),
+            "dashboard.json": json.dumps(
+                {
+                    "version": "0.1.0",
+                    "status": "not_configured",
+                    "inputs": [
+                        {
+                            "id": "input-1-image",
+                            "label": "Image",
+                            "control": "load_image",
+                            "binding": {"node_id": "1", "input_name": "image"},
+                            "default": {
+                                "source": "package_asset",
+                                "asset_id": "input-defaults/missing.png",
+                                "kind": "image",
+                                "content_type": "image/png",
+                            },
+                            "default_pinned": True,
+                            "validation": {},
+                        }
+                    ],
+                    "outputs": [],
+                    "sections": [],
+                }
+            ),
+            "capsule.lock.json": json.dumps({"models": [], "custom_nodes": []}),
+            "export-report.json": json.dumps({}),
+        }
+    )
+
+    with pytest.raises(NoofyImportError, match="missing from the archive"):
+        NoofyArchiveImporter(payload).normalize()
+
+
+def test_noofy_importer_rejects_mismatched_packaged_default_asset_hash() -> None:
+    payload = _source_archive_bytes(
+        {
+            "package.json": json.dumps(
+                {
+                    "publisher_id": "creator",
+                    "package_id": "asset-default",
+                    "version": "0.1.0",
+                    "display_name": "Asset default",
+                    "trust_level": "public_unverified",
+                }
+            ),
+            "comfyui_graph.json": json.dumps(
+                {
+                    "1": {
+                        "class_type": "LoadImage",
+                        "inputs": {"image": "__noofy_runtime_image_input_required__"},
+                    }
+                }
+            ),
+            "dashboard.json": json.dumps(
+                {
+                    "version": "0.1.0",
+                    "status": "not_configured",
+                    "inputs": [
+                        {
+                            "id": "input-1-image",
+                            "label": "Image",
+                            "control": "load_image",
+                            "binding": {"node_id": "1", "input_name": "image"},
+                            "default": {
+                                "source": "package_asset",
+                                "asset_id": "input-defaults/default.png",
+                                "kind": "image",
+                                "content_type": "image/png",
+                                "size_bytes": 7,
+                                "sha256": "sha256:" + "0" * 64,
+                            },
+                            "default_pinned": True,
+                            "validation": {},
+                        }
+                    ],
+                    "outputs": [],
+                    "sections": [],
+                }
+            ),
+            "assets/input-defaults/default.png": "changed",
+            "capsule.lock.json": json.dumps({"models": [], "custom_nodes": []}),
+            "export-report.json": json.dumps({}),
+        }
+    )
+
+    with pytest.raises(NoofyImportError, match="mismatched content"):
+        NoofyArchiveImporter(payload).normalize()
+
+
 def test_import_store_logs_failed_import_without_persisting_package(
     tmp_path: Path,
 ) -> None:

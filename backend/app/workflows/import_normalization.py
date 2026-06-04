@@ -15,6 +15,7 @@ from app.workflows.package import (
     WorkflowInput,
     WorkflowPackageSignature,
 )
+from app.workflows.package_assets import is_package_asset_value
 
 NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
 LOCAL_IMAGE_NODE_TYPES = {"LoadImage", "LoadImageMask"}
@@ -506,6 +507,8 @@ def value_contains_local_reference(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip()) and not is_graph_link(value)
     if isinstance(value, dict):
+        if is_package_asset_value(value):
+            return False
         return any(value_contains_local_reference(item) for item in value.values())
     if isinstance(value, list):
         return any(value_contains_local_reference(item) for item in value)

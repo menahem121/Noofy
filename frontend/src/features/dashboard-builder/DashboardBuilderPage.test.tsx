@@ -846,7 +846,9 @@ describe("DashboardBuilderPage", () => {
     );
 
     expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    fireEvent.click(screen.getByRole("button", { name: /save as default/i }));
     fireEvent.click(screen.getAllByRole("button", { name: /remove widget/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /keep hidden default/i }));
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
 
     const continuedSchema = onContinue.mock.calls[0][0] as DashboardSchema;
@@ -866,6 +868,7 @@ describe("DashboardBuilderPage", () => {
         id: "ctrl-node-10-image",
         binding: { node_id: "10", input_name: "image" },
         control: "load_image",
+        default_pinned: true,
       }),
     ]);
     expect(payload.dashboard.sections[0].controls).not.toEqual(

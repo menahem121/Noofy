@@ -537,6 +537,7 @@ def create_default_engine_service() -> EngineService:
             validator=validator,
             log_store=log_store,
             dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
+            dashboard_assets_dir=paths.dashboard_assets_dir,
         ),
         workflow_exporter=WorkflowExporter(
             workflow_store_dir=paths.workflow_packages_store_dir,
@@ -544,6 +545,7 @@ def create_default_engine_service() -> EngineService:
             user_state_service=user_state_service,
             workflow_library_store=workflow_library_store,
             dashboard_assets_dir=paths.dashboard_assets_dir,
+            dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
         ),
         model_roots_ref=model_roots,
         model_availability_service=model_availability_service,

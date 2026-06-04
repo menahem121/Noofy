@@ -60,7 +60,7 @@ Routing rules:
 
 Import and setup inspect workflow files as data. Community custom-node imports, compatibility checks, and smoke tests happen only inside isolated runner processes.
 
-Exported packages may declare unresolved runtime inputs for creator-local image, audio, video, 3D, text, and generic file loader values. Import normalizes those records as setup prompts, retaining only safe metadata such as node ID, node type, input name, expected kind, required flag, and extension/MIME hints. Private filenames, absolute paths, temp/output paths, file bytes, base64 media, generated output filenames, and ComfyUI runtime bucket identities must not be persisted.
+Exported packages may declare unresolved runtime inputs for creator-local image, audio, video, 3D, text, and generic file loader values. Import normalizes those records as setup prompts, retaining only safe metadata such as node ID, node type, input name, expected kind, required flag, and extension/MIME hints. If the creator explicitly includes an input asset, the archive stores it as `assets/input-defaults/...` and the dashboard input default references it with `source: "package_asset"`. Private paths, absolute paths, temp/output paths, unchecked file bytes, base64 media, generated output filenames, and ComfyUI runtime bucket identities must not be persisted.
 
 Duplicate package identity is an explicit user decision. If an imported
 archive has the same publisher/package/version identity as an existing local

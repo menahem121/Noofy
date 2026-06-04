@@ -81,6 +81,7 @@ class WorkflowInput(BaseModel):
     control: str
     binding: InputBinding
     default: Any = None
+    default_pinned: bool = False
     validation: dict[str, Any] = Field(default_factory=dict)
 
 

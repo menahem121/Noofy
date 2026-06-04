@@ -128,6 +128,7 @@ export interface DashboardWidget {
   acceptedExtensions?: string[];
   acceptedMimeTypes?: string[];
   drawMask?: boolean;
+  defaultPinned?: boolean;
   hasExecutableBinding?: boolean;
   layout?: DashboardWidgetLayout;
 }
@@ -699,6 +700,7 @@ export interface BackendWorkflowInput {
   control: string;
   binding: { node_id: string; input_name: string };
   default: unknown;
+  default_pinned?: boolean;
   validation: Record<string, unknown>;
 }
 
@@ -843,6 +845,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       control: w.widgetType,
       binding: { node_id: w.binding.nodeId, input_name: w.binding.inputName },
       default: w.defaultValue,
+      default_pinned: w.defaultPinned === true,
       validation: {
         ...(w.min !== undefined && { min: w.min }),
         ...(w.max !== undefined && { max: w.max }),
@@ -957,8 +960,19 @@ function isGalleryMediaReference(value: unknown): boolean {
   );
 }
 
+function isPackageAssetReference(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { source?: unknown }).source === "package_asset" &&
+    typeof (value as { asset_id?: unknown }).asset_id === "string" &&
+    ((value as { asset_id: string }).asset_id).trim() !== "" &&
+    ["image", "audio", "video", "3d", "file"].includes(String((value as { kind?: unknown }).kind))
+  );
+}
+
 function isPersistedMediaValue(value: unknown): boolean {
-  return isUploadedAssetId(value) || isGalleryMediaReference(value);
+  return isUploadedAssetId(value) || isGalleryMediaReference(value) || isPackageAssetReference(value);
 }
 
 function isMediaInputWidgetType(widgetType: WidgetType): boolean {
@@ -973,7 +987,7 @@ export function canPreserveWidgetAsHiddenInput(widget: DashboardWidget): boolean
   if (isOutputWidgetType(widget.widgetType) || !hasExecutableWorkflowBinding(widget)) return false;
   if (!widget.binding.nodeId || !widget.binding.inputName) return false;
   if (isMediaInputWidgetType(widget.widgetType)) return isPersistedMediaValue(widget.defaultValue);
-  return true;
+  return widget.defaultPinned === true;
 }
 
 export function buildInitialDashboard(workflow: MockWorkflow): DashboardSchema {
