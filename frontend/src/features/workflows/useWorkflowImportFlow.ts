@@ -251,6 +251,8 @@ export function useWorkflowImportFlow({
     }
     setState((current) => ({
       ...current,
+      importing: false,
+      downloadingModels: false,
       pendingImport: null,
       downloadJob: null,
       verificationJob: null,

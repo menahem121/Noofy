@@ -111,6 +111,7 @@ describe("RequiredModelsModal", () => {
         onCopy={vi.fn()}
         onReadyAction={vi.fn()}
         onCancel={vi.fn()}
+        onViewModels={vi.fn()}
       />,
     );
 
@@ -121,6 +122,68 @@ describe("RequiredModelsModal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry Download" }));
     expect(onDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces retry with View Models for disk-space download failures", () => {
+    const onDownload = vi.fn();
+    const onViewModels = vi.fn();
+    render(
+      <RequiredModelsModal
+        importResult={importResult}
+        busy={false}
+        importing={false}
+        downloadJob={{
+          job_id: "download-1",
+          import_session_id: "import-session-1",
+          workflow_id: "flux-workflow",
+          status: "completed_with_errors",
+          user_facing_message: "Some downloads failed.",
+          current_model_filename: "flux2-vae.safetensors",
+          current_model_index: 1,
+          total_models: 1,
+          bytes_downloaded: 0,
+          total_bytes: 336213556,
+          percent: null,
+          speed_bytes_per_second: null,
+          models: [
+            {
+              requirement_id: "vae/flux2-vae.safetensors",
+              filename: "flux2-vae.safetensors",
+              status: "not_enough_disk_space",
+              status_label: "Not enough disk space",
+              bytes_downloaded: 0,
+              total_bytes: 336213556,
+              message: "Not enough free disk space in the configured Noofy Models folder location.",
+            },
+          ],
+          model_summary: {
+            ...importResult.model_summary,
+            models: [
+              {
+                ...missingModel,
+                status: "not_enough_disk_space",
+                status_label: "Not enough disk space",
+                message: "Not enough free disk space in the configured Noofy Models folder location.",
+              },
+            ],
+          },
+        }}
+        verificationJob={null}
+        onDownload={onDownload}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={vi.fn()}
+        onViewModels={onViewModels}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Retry Download" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Models" }));
+    expect(onViewModels).toHaveBeenCalledTimes(1);
+    expect(onDownload).not.toHaveBeenCalled();
   });
 
   it("shows one card with a node-usage summary when a file is loaded by several nodes", () => {
@@ -156,6 +219,7 @@ describe("RequiredModelsModal", () => {
         onCopy={vi.fn()}
         onReadyAction={vi.fn()}
         onCancel={vi.fn()}
+        onViewModels={vi.fn()}
       />,
     );
 

@@ -963,7 +963,7 @@ describe("WorkflowRunPage", () => {
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByText("0%")).toBeInTheDocument();
     expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
 

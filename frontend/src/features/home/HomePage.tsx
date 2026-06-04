@@ -469,6 +469,11 @@ export function HomePage({
     await startWorkflowImport(file);
   }
 
+  async function handleViewModelsAfterImportDiskSpaceFailure() {
+    await cancelImport();
+    onNavigate("models");
+  }
+
   async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
     const workflowId = activeWorkflowId(workflow);
     const workflowTitle = activeWorkflowTitle(workflow);
@@ -601,6 +606,7 @@ export function HomePage({
               onCopy={() => void duplicateImport("copy")}
               onReadyAction={() => void readyImportAction()}
               onCancel={() => void cancelImport()}
+              onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
             />
           ) : null}
 

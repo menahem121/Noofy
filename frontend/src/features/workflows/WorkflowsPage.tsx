@@ -208,6 +208,11 @@ export function WorkflowsPage({
   const needSetupCount = workflows.filter((workflow) => workflowStatus(workflow) === "need_setup").length;
   const missingModelsCount = workflows.reduce((total, workflow) => total + (workflow.missing_model_count ?? 0), 0);
 
+  async function handleViewModelsAfterImportDiskSpaceFailure() {
+    await cancelImport();
+    onNavigate("models");
+  }
+
   async function openDetails(workflow: WorkflowSummary) {
     if (detailsPanelCloseTimerRef.current !== null) {
       window.clearTimeout(detailsPanelCloseTimerRef.current);
@@ -595,6 +600,7 @@ export function WorkflowsPage({
           onCopy={() => void duplicateImport("copy")}
           onReadyAction={() => void readyImportAction()}
           onCancel={() => void cancelImport()}
+          onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
         />
       ) : null}
     </AppLayout>

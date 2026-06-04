@@ -1205,6 +1205,7 @@ export function WorkflowRunPage({
       && !backendKnownUnreachable
       && !engineKnownUnavailable
       && !isBlockedByMemory
+      && !isRunning
       && !memoryRefusesRun,
   );
   const hasDownloadableRequiredModels = requiredModelDownloadSelections(activeModelSummary, workflowId).length > 0;
@@ -1218,8 +1219,8 @@ export function WorkflowRunPage({
         engineKnownUnavailable,
         installStatus,
         isBlockedByMemory,
-        isRunning: false,
-        isWaitingForMemory: false,
+        isRunning,
+        isWaitingForMemory,
         loading: state.loading,
         memoryStatus,
         missingModels,

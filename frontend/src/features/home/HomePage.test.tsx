@@ -1215,6 +1215,147 @@ describe("HomePage", () => {
     expect(progressbar.querySelector(".model-download-progress__bar-fill")).toHaveStyle("width: 37.5%");
   });
 
+  it("cancels import and opens Models when model downloads fail from low disk space", async () => {
+    const missingModel = {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename: "sd15.safetensors",
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: ["https://example.com/sd15.safetensors"],
+      source_availability: "known",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy can try to resolve and download this model before the workflow runs.",
+    };
+    const diskSpaceModel = {
+      ...missingModel,
+      status: "not_enough_disk_space",
+      status_label: "Not enough disk space",
+      message: "Not enough free disk space in the configured Noofy Models folder location.",
+    };
+    const pendingImport = {
+      import_session_id: "import-session-disk-space",
+      workflow_id: "disk_space_workflow",
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: "disk_space_workflow",
+        name: "Disk Space Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: "disk_space_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [missingModel],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=disk-space.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-disk-space/download-models") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-disk-space",
+            import_session_id: "import-session-disk-space",
+            workflow_id: "disk_space_workflow",
+            status: "queued",
+            user_facing_message: "Model download is queued.",
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-disk-space/download-models/model-download-disk-space")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-disk-space",
+            import_session_id: "import-session-disk-space",
+            workflow_id: "disk_space_workflow",
+            status: "completed_with_errors",
+            user_facing_message: "Some downloads failed.",
+            current_model_filename: "sd15.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            bytes_downloaded: 0,
+            total_bytes: 1024,
+            percent: null,
+            speed_bytes_per_second: null,
+            models: [
+              {
+                requirement_id: "checkpoint",
+                filename: "sd15.safetensors",
+                status: "not_enough_disk_space",
+                status_label: "Not enough disk space",
+                bytes_downloaded: 0,
+                total_bytes: 1024,
+                message: "Not enough free disk space in the configured Noofy Models folder location.",
+              },
+            ],
+            model_summary: {
+              ...pendingImport.model_summary,
+              models: [diskSpaceModel],
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-disk-space") && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ import_session_id: "import-session-disk-space", status: "canceled" }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "disk-space.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Disk Space Workflow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+
+    const viewModelsButton = await screen.findByRole("button", { name: "View Models" });
+    expect(screen.queryByRole("button", { name: "Retry Download" })).not.toBeInTheDocument();
+    fireEvent.click(viewModelsButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-disk-space", {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+    });
+    expect(onNavigate).toHaveBeenCalledWith("models");
+  });
+
   it("opens the model popup while verification runs before allowing a ready import", async () => {
     const checkingModel = {
       requirement_id: "checkpoint",

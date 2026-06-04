@@ -104,6 +104,7 @@ export function RequiredModelsModal({
   onCopy,
   onReadyAction,
   onCancel,
+  onViewModels,
 }: {
   importResult: WorkflowImportResponse;
   busy: boolean;
@@ -117,6 +118,7 @@ export function RequiredModelsModal({
   onCopy: () => void;
   onReadyAction: () => void;
   onCancel: () => void;
+  onViewModels: () => void;
 }) {
   const summary = verificationJob?.model_summary ?? downloadJob?.model_summary ?? importResult.model_summary;
   if (!summary) return null;
@@ -175,7 +177,9 @@ export function RequiredModelsModal({
           ))}
         </div>
 
-        {downloadJob && shouldShowDownloadProgress(downloadJob) ? <ModelDownloadProgressPanel job={downloadJob} onRetry={onDownload} /> : null}
+        {downloadJob && shouldShowDownloadProgress(downloadJob) ? (
+          <ModelDownloadProgressPanel job={downloadJob} onRetry={onDownload} onViewModels={onViewModels} />
+        ) : null}
         {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
 
         {importing ? (
@@ -277,7 +281,15 @@ function RequiredModelRow({
   );
 }
 
-function ModelDownloadProgressPanel({ job, onRetry }: { job: ImportModelDownloadJobStatus; onRetry: () => void }) {
+function ModelDownloadProgressPanel({
+  job,
+  onRetry,
+  onViewModels,
+}: {
+  job: ImportModelDownloadJobStatus;
+  onRetry: () => void;
+  onViewModels: () => void;
+}) {
   const label = job.current_model_filename
     ? `Model ${job.current_model_index ?? 1} of ${job.total_models}: ${job.current_model_filename}`
     : job.user_facing_message;
@@ -292,6 +304,7 @@ function ModelDownloadProgressPanel({ job, onRetry }: { job: ImportModelDownload
   const percentLabel = modelDownloadPercentLabel(job, percent);
   const tone = modelDownloadPanelTone(job);
   const failureMessage = failedModelMessage(job);
+  const notEnoughDiskSpace = hasNotEnoughDiskSpaceFailure(job);
 
   return (
     <div className={`model-download-progress model-download-progress--${tone}`} role="status">
@@ -322,12 +335,24 @@ function ModelDownloadProgressPanel({ job, onRetry }: { job: ImportModelDownload
       </p>
       <span>{job.user_facing_message}</span>
       {failureMessage ? <span className="model-download-progress__failure">{failureMessage}</span> : null}
-      {isModelDownloadFailure(job.status) ? (
+      {notEnoughDiskSpace ? (
+        <button className="secondary-button secondary-button--small" type="button" onClick={onViewModels}>
+          View Models
+        </button>
+      ) : isModelDownloadFailure(job.status) ? (
         <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
           Retry Download
         </button>
       ) : null}
     </div>
+  );
+}
+
+function hasNotEnoughDiskSpaceFailure(job: ImportModelDownloadJobStatus) {
+  return (
+    job.status === "not_enough_disk_space" ||
+    job.models.some((model) => model.status === "not_enough_disk_space") ||
+    Boolean(job.model_summary?.models.some((model) => model.status === "not_enough_disk_space"))
   );
 }
 
