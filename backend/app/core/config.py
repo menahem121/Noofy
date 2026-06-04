@@ -45,6 +45,7 @@ class Settings:
         "https://download.pytorch.org/whl/cpu",
     )
     noofy_bundled_resource_dir: str | None = os.environ.get("NOOFY_BUNDLED_RESOURCE_DIR")
+    noofy_runtime_update_repo: str | None = os.environ.get("NOOFY_RUNTIME_UPDATE_REPO")
     comfyui_max_restart_attempts: int = int(os.environ.get("COMFYUI_MAX_RESTART_ATTEMPTS", "3"))
     # Max models hashed in parallel during verification. Set to 1 to force fully serial
     # verification (e.g. on slow/network/removable model storage).
@@ -64,10 +65,27 @@ class Settings:
     noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
     comfyui_repo_dir_override_active: bool = bool(os.environ.get("COMFYUI_REPO_DIR"))
     comfyui_python_executable_override_active: bool = bool(os.environ.get("COMFYUI_PYTHON_EXECUTABLE"))
+    noofy_packaged_runtime_dir_override_active: bool = bool(os.environ.get("NOOFY_PACKAGED_RUNTIME_DIR"))
+    noofy_backend_override_active: bool = bool(
+        os.environ.get("NOOFY_BACKEND_DIR")
+        or os.environ.get("NOOFY_BACKEND_PYTHON")
+        or os.environ.get("NOOFY_BACKEND_SIDECAR")
+        or os.environ.get("NOOFY_ENABLE_DEVELOPER_BACKEND_OVERRIDES")
+        or os.environ.get("NOOFY_FORCE_PACKAGED_BACKEND")
+    )
 
     @property
     def packaged_runtime_active(self) -> bool:
         return bool(self.noofy_bundled_resource_dir)
+
+    @property
+    def developer_runtime_override_active(self) -> bool:
+        return (
+            self.comfyui_repo_dir_override_active
+            or self.comfyui_python_executable_override_active
+            or self.noofy_packaged_runtime_dir_override_active
+            or self.noofy_backend_override_active
+        )
 
     # Resolved app-owned directory contract.
     paths: NoofyPaths = field(default_factory=resolve_paths)

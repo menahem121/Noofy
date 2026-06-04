@@ -1,4 +1,4 @@
-import { deleteJson, getJson, putJson } from "./client";
+import { deleteJson, getJson, postJson, putJson } from "./client";
 
 export type ApiKeyProviderId = "hugging_face" | "civitai" | "comfy_org";
 
@@ -54,6 +54,73 @@ export interface OnboardingUpdateResult {
   onboarding: OnboardingState;
 }
 
+export interface NoofyRuntimeReleaseInfo {
+  tag: string;
+  name: string | null;
+  published_at: string | null;
+  html_url: string | null;
+  asset_name: string;
+  asset_url: string;
+  asset_sha256: string;
+  asset_size: number | null;
+  checked_at: string;
+}
+
+export interface NoofyRuntimeRecord {
+  runtime_id: string;
+  tag: string;
+  target: string;
+  runtime_path: string;
+  manifest_sha256: string;
+  backend_sha256: string | null;
+  python_version: string | null;
+  uv_version: string | null;
+  asset_name: string | null;
+  asset_url: string | null;
+  asset_sha256: string | null;
+  staged_at: string | null;
+  activated_at: string | null;
+}
+
+export interface NoofyRuntimeSettingsResponse {
+  available: boolean;
+  disabled_reason: string | null;
+  packaged_runtime: boolean;
+  developer_override: boolean;
+  update_repo: string | null;
+  target: string | null;
+  current_version: string | null;
+  current_runtime_id: string | null;
+  current_runtime_path: string | null;
+  current_source: string;
+  latest: NoofyRuntimeReleaseInfo | null;
+  pending: NoofyRuntimeRecord | null;
+  active: NoofyRuntimeRecord | null;
+}
+
+export interface NoofyRuntimeCheckResult {
+  status: string;
+  latest: NoofyRuntimeReleaseInfo | null;
+  disabled_reason: string | null;
+}
+
+export interface NoofyRuntimeUpdateStatus {
+  job_id: string | null;
+  phase: string;
+  status: string;
+  progress_label: string | null;
+  latest_version: string | null;
+  staged_runtime_id: string | null;
+  error: string | null;
+}
+
+export interface NoofyRuntimeActivateResult {
+  status: string;
+  active: NoofyRuntimeRecord | null;
+  disabled_reason: string | null;
+  error: string | null;
+}
+
 export function fetchApiKeySettings() {
   return getJson<ApiKeySettingsResponse>("/settings/apis");
 }
@@ -70,8 +137,37 @@ export function fetchModelFolderSettings() {
   return getJson<ModelFolderSettings>("/settings/model-folders");
 }
 
-export function updateExternalApiKey(provider: ApiKeyProviderId, apiKey: string) {
-  return putJson<ApiKeyUpdateResult>(`/settings/apis/${provider}/key`, { api_key: apiKey });
+export function fetchNoofyRuntimeSettings() {
+  return getJson<NoofyRuntimeSettingsResponse>("/settings/noofy-runtime");
+}
+
+export function checkNoofyRuntimeUpdate() {
+  return postJson<NoofyRuntimeCheckResult>("/settings/noofy-runtime/check");
+}
+
+export function stageNoofyRuntimeUpdate() {
+  return postJson<NoofyRuntimeUpdateStatus>("/settings/noofy-runtime/stage");
+}
+
+export function fetchNoofyRuntimeUpdateStatus() {
+  return getJson<NoofyRuntimeUpdateStatus>(
+    "/settings/noofy-runtime/update/status",
+  );
+}
+
+export function activateNoofyRuntimeUpdate() {
+  return postJson<NoofyRuntimeActivateResult>(
+    "/settings/noofy-runtime/activate",
+  );
+}
+
+export function updateExternalApiKey(
+  provider: ApiKeyProviderId,
+  apiKey: string,
+) {
+  return putJson<ApiKeyUpdateResult>(`/settings/apis/${provider}/key`, {
+    api_key: apiKey,
+  });
 }
 
 export function clearExternalApiKey(provider: ApiKeyProviderId) {

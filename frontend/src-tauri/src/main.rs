@@ -44,6 +44,7 @@ struct BackendLaunchContext {
     manifest_dir: PathBuf,
     current_exe: PathBuf,
     resource_dir: Option<PathBuf>,
+    app_data_dir: Option<PathBuf>,
     packaged_mode: bool,
 }
 
@@ -471,6 +472,7 @@ impl BackendLaunchContext {
             manifest_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
             current_exe: std::env::current_exe()?,
             resource_dir: app.path().resource_dir().ok(),
+            app_data_dir: app.path().app_data_dir().ok(),
             packaged_mode,
         })
     }
@@ -623,6 +625,13 @@ fn backend_python(context: &BackendLaunchContext, backend_dir: &Path) -> OsStrin
 
 fn packaged_runtime_layout(context: &BackendLaunchContext) -> PackagedRuntimeLayout {
     let root_dir = packaged_runtime_root(context);
+    packaged_runtime_layout_for_root(context, root_dir)
+}
+
+fn packaged_runtime_layout_for_root(
+    context: &BackendLaunchContext,
+    root_dir: PathBuf,
+) -> PackagedRuntimeLayout {
     let backend_dir = root_dir.join("backend");
     let comfyui_dir = root_dir.join("comfyui");
     let workflows_dir = backend_dir.join("app").join("workflows").join("packages");
@@ -638,6 +647,11 @@ fn packaged_runtime_layout(context: &BackendLaunchContext) -> PackagedRuntimeLay
 }
 
 fn packaged_runtime_root(context: &BackendLaunchContext) -> PathBuf {
+    if context.packaged_mode && !developer_backend_overrides_enabled(context) {
+        if let Some(active_runtime) = active_noofy_runtime_root(context) {
+            return active_runtime;
+        }
+    }
     if (!context.packaged_mode || developer_backend_overrides_enabled(context))
         && env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR").is_some()
     {
@@ -651,6 +665,31 @@ fn packaged_runtime_root(context: &BackendLaunchContext) -> PathBuf {
         return exe_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
     }
     PathBuf::from(NOOFY_RUNTIME_RESOURCE_DIR)
+}
+
+fn active_noofy_runtime_root(context: &BackendLaunchContext) -> Option<PathBuf> {
+    let data_dir = env_path(context, "NOOFY_DATA_DIR").or_else(|| context.app_data_dir.clone())?;
+    let active_file = data_dir
+        .join("runtime-store")
+        .join("noofy-runtime")
+        .join("active-runtime.json");
+    let payload = fs::read_to_string(active_file).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&payload).ok()?;
+    let runtime_path = json
+        .get("runtime")
+        .and_then(|value| value.get("runtime_path"))
+        .and_then(|value| value.as_str())?;
+    let runtime_root = PathBuf::from(runtime_path);
+    let allowed_root = data_dir
+        .join("runtime-store")
+        .join("noofy-runtime")
+        .join("runtimes");
+    if !path_inside(&runtime_root, &allowed_root) {
+        return None;
+    }
+    let layout = packaged_runtime_layout_for_root(context, runtime_root.clone());
+    validate_packaged_runtime_layout(&layout, supported_packaged_runtime_target().ok()?).ok()?;
+    Some(runtime_root)
 }
 
 fn packaged_python_candidates(root_dir: &Path) -> Vec<PathBuf> {
@@ -884,6 +923,12 @@ fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
     Ok(left.canonicalize()? == right.canonicalize()?)
 }
 
+#[cfg(all(test, target_os = "macos", target_arch = "x86_64"))]
+fn supported_packaged_runtime_target() -> io::Result<&'static str> {
+    Ok("macos-arm64")
+}
+
+#[cfg(not(all(test, target_os = "macos", target_arch = "x86_64")))]
 fn supported_packaged_runtime_target() -> io::Result<&'static str> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         return Ok("macos-arm64");
@@ -920,6 +965,9 @@ fn apply_backend_environment(
     let use_packaged_runtime =
         require_packaged_python || env_path(context, "NOOFY_PACKAGED_RUNTIME_DIR").is_some();
     if use_packaged_runtime {
+        if let Some(repo) = option_env!("NOOFY_RUNTIME_UPDATE_REPO") {
+            set_env(spec, "NOOFY_RUNTIME_UPDATE_REPO", OsString::from(repo));
+        }
         if let Some(resource_dir) = packaged_resource_dir(context, &layout.root_dir) {
             set_env(
                 spec,
@@ -969,16 +1017,20 @@ fn apply_backend_environment(
 
 fn packaged_resource_dir(context: &BackendLaunchContext, root_dir: &Path) -> Option<PathBuf> {
     if let Some(resource_dir) = &context.resource_dir {
+        if root_dir.starts_with(resource_dir) {
+            return Some(resource_dir.clone());
+        }
+    }
+    if root_dir
+        .file_name()
+        .is_some_and(|name| name == NOOFY_RUNTIME_RESOURCE_DIR)
+    {
+        return root_dir.parent().map(Path::to_path_buf);
+    }
+    if let Some(resource_dir) = &context.resource_dir {
         return Some(resource_dir.clone());
     }
-    root_dir
-        .parent()
-        .filter(|_| {
-            root_dir
-                .file_name()
-                .is_some_and(|name| name == NOOFY_RUNTIME_RESOURCE_DIR)
-        })
-        .map(Path::to_path_buf)
+    None
 }
 
 fn packaged_env_removals() -> Vec<String> {
@@ -1026,6 +1078,14 @@ fn env_path(context: &BackendLaunchContext, key: &str) -> Option<PathBuf> {
         .env
         .get(key)
         .map(|value| PathBuf::from(value.clone()))
+}
+
+fn path_inside(child: &Path, parent: &Path) -> bool {
+    let child = child.canonicalize().unwrap_or_else(|_| child.to_path_buf());
+    let parent = parent
+        .canonicalize()
+        .unwrap_or_else(|_| parent.to_path_buf());
+    child.starts_with(parent)
 }
 
 fn env_flag(env: &HashMap<String, OsString>, key: &str) -> bool {
@@ -1135,11 +1195,13 @@ mod tests {
     }
 
     fn context(resource_dir: PathBuf, packaged_mode: bool) -> BackendLaunchContext {
+        let app_data_dir = temp_dir("app-data");
         BackendLaunchContext {
             env: HashMap::new(),
             manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
             current_exe: resource_dir.join("Noofy"),
             resource_dir: Some(resource_dir),
+            app_data_dir: Some(app_data_dir),
             packaged_mode,
         }
     }
@@ -1154,8 +1216,65 @@ mod tests {
             manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
             current_exe: resource_dir.join("Noofy"),
             resource_dir: Some(resource_dir),
+            app_data_dir: Some(temp_dir("app-data")),
             packaged_mode,
         }
+    }
+
+    fn create_packaged_runtime(root: &Path) -> (PathBuf, PathBuf) {
+        let python = if cfg!(windows) {
+            root.join("python").join("python.exe")
+        } else {
+            root.join("python").join("bin").join("python3")
+        };
+        let uv = if cfg!(windows) {
+            root.join("python").join("Scripts").join("uv.exe")
+        } else {
+            root.join("python").join("bin").join("uv")
+        };
+        touch(&python);
+        touch(&uv);
+        touch(&root.join("backend").join("app").join("__main__.py"));
+        touch(&root.join("backend").join("pyproject.toml"));
+        touch(
+            &root
+                .join("backend")
+                .join("app")
+                .join("workflows")
+                .join("packages")
+                .join(".keep"),
+        );
+        touch(&root.join("comfyui").join("main.py"));
+        write_runtime_manifest(root);
+        (python, uv)
+    }
+
+    fn write_active_runtime(app_data_dir: &Path, runtime_root: &Path) {
+        let active_file = app_data_dir
+            .join("runtime-store")
+            .join("noofy-runtime")
+            .join("active-runtime.json");
+        fs::create_dir_all(active_file.parent().expect("active parent"))
+            .expect("create active parent");
+        fs::write(
+            active_file,
+            format!(
+                r#"{{
+  "schema_version": "0.1.0",
+  "runtime": {{
+    "runtime_id": "test-runtime",
+    "tag": "v1.0.0",
+    "target": "{}",
+    "runtime_path": "{}",
+    "manifest_sha256": "test"
+  }}
+}}
+"#,
+                supported_packaged_runtime_target().expect("supported test host"),
+                runtime_root.display()
+            ),
+        )
+        .expect("write active runtime");
     }
 
     fn env_value<'a>(spec: &'a BackendLaunchSpec, key: &str) -> Option<&'a OsString> {
@@ -1179,30 +1298,7 @@ mod tests {
     fn packaged_backend_uses_bundled_python_and_resource_paths() {
         let resource_dir = temp_dir("python-runtime");
         let runtime = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
-        let python = if cfg!(windows) {
-            runtime.join("python").join("python.exe")
-        } else {
-            runtime.join("python").join("bin").join("python3")
-        };
-        let uv = if cfg!(windows) {
-            runtime.join("python").join("Scripts").join("uv.exe")
-        } else {
-            runtime.join("python").join("bin").join("uv")
-        };
-        touch(&python);
-        touch(&uv);
-        touch(&runtime.join("backend").join("app").join("__main__.py"));
-        touch(&runtime.join("backend").join("pyproject.toml"));
-        touch(
-            &runtime
-                .join("backend")
-                .join("app")
-                .join("workflows")
-                .join("packages")
-                .join(".keep"),
-        );
-        touch(&runtime.join("comfyui").join("main.py"));
-        write_runtime_manifest(&runtime);
+        let (python, uv) = create_packaged_runtime(&runtime);
 
         let spec = backend_launch_spec(&context(resource_dir.clone(), true))
             .expect("packaged launch spec");
@@ -1232,6 +1328,68 @@ mod tests {
         );
         assert!(spec.remove_env.contains(&"COMFYUI_REPO_DIR".to_string()));
         assert!(spec.remove_env.contains(&"PYTHONPATH".to_string()));
+    }
+
+    #[test]
+    fn packaged_backend_prefers_valid_active_app_data_runtime() {
+        let resource_dir = temp_dir("active-runtime-resource");
+        let bundled = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
+        create_packaged_runtime(&bundled);
+        let app_data_dir = temp_dir("active-runtime-data");
+        let active = app_data_dir
+            .join("runtime-store")
+            .join("noofy-runtime")
+            .join("runtimes")
+            .join("test-runtime")
+            .join(NOOFY_RUNTIME_RESOURCE_DIR);
+        let (active_python, _) = create_packaged_runtime(&active);
+        write_active_runtime(&app_data_dir, &active);
+        let ctx = BackendLaunchContext {
+            env: HashMap::new(),
+            manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
+            current_exe: resource_dir.join("Noofy"),
+            resource_dir: Some(resource_dir),
+            app_data_dir: Some(app_data_dir.clone()),
+            packaged_mode: true,
+        };
+
+        let spec = backend_launch_spec(&ctx).expect("packaged launch spec");
+
+        let expected_resource_dir = active
+            .parent()
+            .expect("active parent")
+            .to_path_buf()
+            .into_os_string();
+        assert_eq!(PathBuf::from(spec.program.clone()), active_python);
+        assert_eq!(spec.current_dir, active.join("backend"));
+        assert_eq!(
+            env_value(&spec, "NOOFY_BUNDLED_RESOURCE_DIR"),
+            Some(&expected_resource_dir)
+        );
+    }
+
+    #[test]
+    fn packaged_backend_falls_back_when_active_runtime_is_outside_app_data() {
+        let resource_dir = temp_dir("invalid-active-resource");
+        let bundled = resource_dir.join(NOOFY_RUNTIME_RESOURCE_DIR);
+        let (bundled_python, _) = create_packaged_runtime(&bundled);
+        let app_data_dir = temp_dir("invalid-active-data");
+        let outside = temp_dir("outside-active").join(NOOFY_RUNTIME_RESOURCE_DIR);
+        create_packaged_runtime(&outside);
+        write_active_runtime(&app_data_dir, &outside);
+        let ctx = BackendLaunchContext {
+            env: HashMap::new(),
+            manifest_dir: temp_dir("manifest").join("frontend").join("src-tauri"),
+            current_exe: resource_dir.join("Noofy"),
+            resource_dir: Some(resource_dir),
+            app_data_dir: Some(app_data_dir),
+            packaged_mode: true,
+        };
+
+        let spec = backend_launch_spec(&ctx).expect("packaged launch spec");
+
+        assert_eq!(PathBuf::from(spec.program.clone()), bundled_python);
+        assert_eq!(spec.current_dir, bundled.join("backend"));
     }
 
     #[test]
@@ -1468,6 +1626,7 @@ mod tests {
                 .join("debug")
                 .join("noofy"),
             resource_dir: None,
+            app_data_dir: Some(temp_dir("source-app-data")),
             packaged_mode: false,
         };
 
@@ -1512,6 +1671,7 @@ mod tests {
                 .join("debug")
                 .join("noofy"),
             resource_dir: Some(resource_dir),
+            app_data_dir: Some(temp_dir("source-app-data")),
             packaged_mode: false,
         };
 

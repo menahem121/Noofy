@@ -1,6 +1,12 @@
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import ApiKeyServiceDep, EngineServiceDep, ModelFolderServiceDep, OnboardingServiceDep
+from app.api.deps import (
+    ApiKeyServiceDep,
+    EngineServiceDep,
+    ModelFolderServiceDep,
+    NoofyRuntimeUpdateServiceDep,
+    OnboardingServiceDep,
+)
 from app.api.schemas import ApiKeyUpdateRequest, ModelFolderUpdateRequest
 from app.settings.api_keys import CredentialStoreUnavailable, provider_from_slug
 
@@ -25,6 +31,44 @@ async def onboarding_settings(onboarding_service: OnboardingServiceDep):
 @router.put("/settings/onboarding")
 async def complete_onboarding(onboarding_service: OnboardingServiceDep):
     return onboarding_service.mark_complete()
+
+
+@router.get("/settings/noofy-runtime")
+async def noofy_runtime_update_settings(
+    noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
+):
+    return noofy_runtime_update_service.status()
+
+
+@router.post("/settings/noofy-runtime/check")
+async def check_noofy_runtime_update(
+    noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
+):
+    try:
+        return await noofy_runtime_update_service.check_latest()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/settings/noofy-runtime/stage")
+async def stage_noofy_runtime_update(
+    noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
+):
+    return await noofy_runtime_update_service.start_stage_latest()
+
+
+@router.get("/settings/noofy-runtime/update/status")
+async def noofy_runtime_update_status(
+    noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
+):
+    return noofy_runtime_update_service.update_status()
+
+
+@router.post("/settings/noofy-runtime/activate")
+async def activate_noofy_runtime_update(
+    noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
+):
+    return await noofy_runtime_update_service.activate_pending()
 
 
 @router.put("/settings/model-folders")

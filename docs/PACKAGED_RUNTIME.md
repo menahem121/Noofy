@@ -119,6 +119,58 @@ npm run tauri:build
 `tauri:prepare-runtime` refuses obvious developer runtimes such as
 `backend/.venv`, the active `VIRTUAL_ENV`, or `CONDA_PREFIX`.
 
+## In-App Runtime Updates
+
+Packaged Noofy builds may update the packaged Noofy runtime from GitHub without
+mutating the bundled fallback runtime. This updater is separate from the managed
+ComfyUI updater and must not write to `third_party/comfyui/`, source checkout
+files, or app bundle resources.
+
+Runtime updates are available only when all of the following are true:
+
+- Noofy is running from packaged resources.
+- `NOOFY_RUNTIME_UPDATE_REPO=owner/repo` is configured for the release build.
+- Developer/runtime overrides such as `NOOFY_BACKEND_DIR`,
+  `NOOFY_BACKEND_PYTHON`, `NOOFY_BACKEND_SIDECAR`,
+  `NOOFY_PACKAGED_RUNTIME_DIR`, `COMFYUI_REPO_DIR`, or
+  `COMFYUI_PYTHON_EXECUTABLE` are not active.
+
+Settings does not query GitHub on open. The `Noofy Runtime` panel performs a
+GitHub request only after the user presses `Check for Updates`.
+
+Each GitHub release used for runtime updates must publish one target-specific
+runtime archive:
+
+```text
+noofy-runtime-macos-arm64.zip
+noofy-runtime-windows-x64.zip
+noofy-runtime-linux-x64.zip
+```
+
+The archive must contain a top-level `noofy-runtime/` directory with the same
+layout and `runtime-manifest.json` contract used by bundled release resources.
+The updater requires the GitHub asset `sha256:` digest, verifies the archive,
+rejects unsafe archive members, extracts into transaction staging, validates the
+runtime manifest and backend artifact hash, launches a staged backend smoke test,
+and only then records the update as pending.
+
+Validated runtimes live under app data:
+
+```text
+{data_dir}/runtime-store/noofy-runtime/runtimes/{runtime_id}/noofy-runtime/
+{data_dir}/runtime-store/noofy-runtime/pending-runtime.json
+{data_dir}/runtime-store/noofy-runtime/active-runtime.json
+```
+
+Activation is manual. Pressing `Activate on Next Launch` atomically writes the
+active pointer after revalidating the pending runtime. The running backend is not
+hot-swapped; the Tauri launcher reads the active pointer on the next app launch.
+If the active pointer is missing, invalid, wrong-target, or outside app-managed
+runtime storage, the launcher falls back to the bundled `noofy-runtime` resource.
+Failed update transactions remain quarantined under
+`{data_dir}/runtime-store/transactions/`, and the current working runtime remains
+unchanged.
+
 ## CI Gate
 
 Release CI should run in this order for each target:

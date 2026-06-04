@@ -115,6 +115,7 @@ def _services(engine_service=None, *, run_job_service=None) -> ApiServices:
         model_ownership_store=placeholder,
         model_inventory_service=placeholder,
         model_download_service=placeholder,
+        noofy_runtime_update_service=placeholder,
         workflow_library_service=None,
         dashboard_authoring_service=None,
         workflow_exporter=None,

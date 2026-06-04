@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from app.core.config import settings
+from app.diagnostics import LogStore
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.gallery import GalleryCaptureService, GalleryStore
@@ -15,6 +17,7 @@ from app.models.ownership import ModelOwnershipStore
 from app.models.source_auth import provider_auth_headers_for_url
 from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
+from app.runtime.noofy_runtime import NoofyRuntimeUpdateService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
 from app.settings.onboarding import OnboardingSettingsService, OnboardingSettingsStore
 from app.models.folders import (
@@ -50,6 +53,7 @@ class ApiServices:
     model_ownership_store: ModelOwnershipStore
     model_inventory_service: ModelInventoryService
     model_download_service: ModelDownloadJobService
+    noofy_runtime_update_service: NoofyRuntimeUpdateService
     workflow_library_service: WorkflowLibraryService | None
     dashboard_authoring_service: DashboardAuthoringService | None
     workflow_exporter: WorkflowExporter | None
@@ -80,6 +84,7 @@ def create_api_services(
     model_ownership_store: ModelOwnershipStore | None = None,
     model_inventory_service: ModelInventoryService | None = None,
     model_download_service: ModelDownloadJobService | None = None,
+    noofy_runtime_update_service: NoofyRuntimeUpdateService | None = None,
     history_service: HistoryService | None = None,
 ) -> ApiServices:
     extra_model_paths_config = settings.paths.runtime_store_dir / "settings" / "extra-model-paths.yaml"
@@ -220,6 +225,20 @@ def create_api_services(
         ownership_store=ownership,
         log_store=getattr(engine_service, "log_store", None),
     )
+    developer_runtime_override = settings.developer_runtime_override_active
+    noofy_runtime_log_store = getattr(engine_service, "log_store", None) or LogStore()
+    noofy_runtime_updates = noofy_runtime_update_service or NoofyRuntimeUpdateService(
+        paths=settings.paths,
+        packaged_runtime=settings.packaged_runtime_active,
+        developer_override=developer_runtime_override,
+        update_repo=settings.noofy_runtime_update_repo,
+        bundled_resource_dir=(
+            Path(settings.noofy_bundled_resource_dir)
+            if settings.noofy_bundled_resource_dir
+            else None
+        ),
+        log_store=noofy_runtime_log_store,
+    )
     civitai_lora_service = CivitaiLoraBrowserService(
         engine_service=engine_service,
         api_key_service=api_keys,
@@ -245,6 +264,7 @@ def create_api_services(
         model_ownership_store=ownership,
         model_inventory_service=inventory,
         model_download_service=downloads,
+        noofy_runtime_update_service=noofy_runtime_updates,
         workflow_library_service=workflow_library_service,
         dashboard_authoring_service=getattr(engine_service, "dashboard_authoring", None),
         workflow_exporter=getattr(engine_service, "workflow_exporter", None),

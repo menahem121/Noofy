@@ -13,6 +13,7 @@ from app.models.downloads import ModelDownloadJobService
 from app.models.inventory import ModelInventoryService
 from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
+from app.runtime.noofy_runtime import NoofyRuntimeUpdateService
 from app.settings.api_keys import ApiKeySettingsService
 from app.settings.onboarding import OnboardingSettingsService
 from app.models.folders import ModelFolderSettingsService
@@ -99,6 +100,12 @@ def get_model_download_service(
     return services.model_download_service
 
 
+def get_noofy_runtime_update_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> NoofyRuntimeUpdateService:
+    return services.noofy_runtime_update_service
+
+
 def get_model_inventory_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> ModelInventoryService:
@@ -125,6 +132,10 @@ ModelTagStoreDep = Annotated[ModelTagStore, Depends(get_model_tag_store)]
 ModelDownloadServiceDep = Annotated[ModelDownloadJobService, Depends(get_model_download_service)]
 ModelInventoryServiceDep = Annotated[ModelInventoryService, Depends(get_model_inventory_service)]
 CivitaiLoraServiceDep = Annotated[CivitaiLoraBrowserService, Depends(get_civitai_lora_service)]
+NoofyRuntimeUpdateServiceDep = Annotated[
+    NoofyRuntimeUpdateService,
+    Depends(get_noofy_runtime_update_service),
+]
 
 
 def get_gallery_capture_service(

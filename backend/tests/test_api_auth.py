@@ -72,6 +72,7 @@ def _services(
         model_ownership_store=placeholder,
         model_inventory_service=placeholder,
         model_download_service=placeholder,
+        noofy_runtime_update_service=placeholder,
         workflow_library_service=None,
         dashboard_authoring_service=None,
         workflow_exporter=workflow_exporter,

@@ -170,6 +170,7 @@ def test_history_api_splits_summary_and_detail_payloads(tmp_path: Path) -> None:
         model_ownership_store=None,
         model_inventory_service=None,
         model_download_service=None,
+        noofy_runtime_update_service=None,
         workflow_library_service=None,
         dashboard_authoring_service=None,
         workflow_exporter=None,
