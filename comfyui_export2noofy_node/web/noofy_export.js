@@ -8,6 +8,7 @@ const BUTTON_CLASS = "noofy-export-button";
 const BUTTON_TEXT = "Export2Noofy";
 const MOUNT_RETRY_MS = 500;
 const MOUNT_RETRY_LIMIT = 60;
+const WORKFLOW_DETAILS_STORAGE_KEY = "noofy.export2noofy.workflowDetails.v1";
 const CATEGORY_OPTIONS = [
   "Txt2img",
   "Img2img",
@@ -259,6 +260,35 @@ function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function readSavedWorkflowDetails() {
+  try {
+    const raw = window.localStorage?.getItem(WORKFLOW_DETAILS_STORAGE_KEY);
+    if (!raw) return { author: "", website: "" };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { author: "", website: "" };
+    return {
+      author: cleanText(parsed.author),
+      website: cleanText(parsed.website),
+    };
+  } catch {
+    return { author: "", website: "" };
+  }
+}
+
+function rememberWorkflowDetails(metadata) {
+  try {
+    window.localStorage?.setItem(
+      WORKFLOW_DETAILS_STORAGE_KEY,
+      JSON.stringify({
+        author: cleanText(metadata?.author),
+        website: cleanText(metadata?.website),
+      }),
+    );
+  } catch {
+    // Export should continue even when browser storage is unavailable.
+  }
+}
+
 function tagsFromInput(value) {
   const tags = [];
   const seen = new Set();
@@ -328,6 +358,7 @@ function appendTextField(panel, labelText, value, options = {}) {
 function chooseWorkflowDetails(payload, suggestedCategory) {
   return new Promise((resolve, reject) => {
     const { overlay, panel } = createDialogOverlay();
+    const savedDetails = readSavedWorkflowDetails();
 
     const title = document.createElement("h2");
     title.textContent = "Workflow details";
@@ -379,8 +410,8 @@ function chooseWorkflowDetails(payload, suggestedCategory) {
     panel.appendChild(categoryLabel);
 
     const tags = appendTextField(panel, "Tags", "", { placeholder: "portrait, cleanup, starter" });
-    const author = appendTextField(panel, "Author", "");
-    const website = appendTextField(panel, "Website", "");
+    const author = appendTextField(panel, "Author", savedDetails.author);
+    const website = appendTextField(panel, "Website", savedDetails.website);
 
     const actions = document.createElement("div");
     actions.style.display = "flex";
@@ -409,15 +440,17 @@ function chooseWorkflowDetails(payload, suggestedCategory) {
         name.focus();
         return;
       }
-      overlay.remove();
-      resolve({
+      const metadata = {
         name: workflowName,
         description: cleanText(description.value),
         category: category.value,
         tags: tagsFromInput(tags.value),
         author: cleanText(author.value),
         website: cleanText(website.value),
-      });
+      };
+      rememberWorkflowDetails(metadata);
+      overlay.remove();
+      resolve(metadata);
     });
     actions.appendChild(confirm);
     panel.appendChild(actions);
