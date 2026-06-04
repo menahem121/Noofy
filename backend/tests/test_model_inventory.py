@@ -159,6 +159,8 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert data["summary"]["noofy_count"] == 1
     assert data["summary"]["external_comfyui_count"] == 2
     assert data["summary"]["missing_count"] == 1
+    assert isinstance(data["summary"]["disk_free_bytes"], int)
+    assert data["summary"]["disk_free_bytes"] > 0
     assert by_key["checkpoints/base.safetensors"]["source_label"] == "Noofy Models"
     assert by_key["checkpoints/base.safetensors"]["ownership"] == "noofy_local"
     assert by_key["checkpoints/base.safetensors"]["can_delete"] is False

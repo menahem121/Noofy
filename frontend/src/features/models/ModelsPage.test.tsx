@@ -18,6 +18,7 @@ const inventory = {
     external_comfyui_count: 1,
     missing_count: 1,
     total_known_size_bytes: 4096,
+    disk_free_bytes: 5368709120,
   },
   folders: {
     noofy_models_dir: "/tmp/Noofy Models",
@@ -233,6 +234,9 @@ describe("ModelsPage", () => {
     expect(screen.getByText("base.safetensors")).toBeInTheDocument();
     expect(screen.getAllByText("ComfyUI models folder").length).toBeGreaterThan(0);
     expect(screen.getByText("Required by Text workflow")).toBeInTheDocument();
+    expect(screen.getByText("Free disk space")).toBeInTheDocument();
+    expect(screen.getByText("5.0 GB")).toBeInTheDocument();
+    expect(screen.queryByText("Missing from workflows")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "style" } });
 

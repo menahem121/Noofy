@@ -422,11 +422,11 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
         </div>
         <div className="models-stat-card">
           <div className="models-stat-card__value">{formatBytes(inventory?.summary.total_known_size_bytes)}</div>
-          <div className="models-stat-card__label">Known size</div>
+          <div className="models-stat-card__label">Storage used by models</div>
         </div>
-        <div className={`models-stat-card${(inventory?.summary.missing_count ?? 0) > 0 ? " models-stat-card--warning" : ""}`}>
-          <div className="models-stat-card__value">{inventory?.summary.missing_count ?? "..."}</div>
-          <div className="models-stat-card__label">Missing from workflows</div>
+        <div className="models-stat-card">
+          <div className="models-stat-card__value">{formatBytes(inventory?.summary.disk_free_bytes)}</div>
+          <div className="models-stat-card__label">Free disk space</div>
         </div>
         <div className="models-stat-card">
           <div className="models-stat-card__value">{inventory?.summary.external_comfyui_count ?? "..."}</div>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
@@ -119,6 +120,7 @@ class ModelInventoryService:
                 external_comfyui_count=sum(model.source == "external_comfyui" for model in models),
                 missing_count=sum(model.status == "missing" for model in models),
                 total_known_size_bytes=sum(model.size_bytes or 0 for model in models),
+                disk_free_bytes=self._disk_free_bytes(noofy_root),
             ),
             folders=ModelInventoryFolders(
                 noofy_models_dir=str(noofy_root),
@@ -173,6 +175,30 @@ class ModelInventoryService:
             )
         label = "Noofy Models" if target_source == "noofy" else "ComfyUI models folder"
         return ModelDeleteResponse(model_key=model_key_value, deleted=True, message=f"Model file deleted from {label}.")
+
+    def _disk_free_bytes(self, root: Path) -> int | None:
+        """Free space on the disk that holds the Noofy models folder.
+
+        Walks up to the nearest existing ancestor so a not-yet-created folder
+        still reports the underlying volume's free space. Returns ``None`` when
+        the disk cannot be inspected.
+        """
+        probe = root
+        while not probe.exists():
+            if probe.parent == probe:
+                return None
+            probe = probe.parent
+        try:
+            return shutil.disk_usage(probe).free
+        except OSError:
+            if self.log_store is not None:
+                self.log_store.add(
+                    "warning",
+                    "Unable to read free disk space for Noofy models folder",
+                    "models.inventory",
+                    details={"path": str(root)},
+                )
+            return None
 
     def _add_filesystem_root(
         self,

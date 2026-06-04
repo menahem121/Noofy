@@ -85,6 +85,7 @@ class ModelInventorySummary(BaseModel):
     external_comfyui_count: int
     missing_count: int
     total_known_size_bytes: int
+    disk_free_bytes: int | None = None
 
 
 class ModelInventoryFolders(BaseModel):

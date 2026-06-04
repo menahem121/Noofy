@@ -64,6 +64,7 @@ export interface ModelInventoryResponse {
     external_comfyui_count: number;
     missing_count: number;
     total_known_size_bytes: number;
+    disk_free_bytes?: number | null;
   };
   folders: {
     noofy_models_dir: string;
