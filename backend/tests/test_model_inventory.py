@@ -345,6 +345,40 @@ def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_p
     assert invalid.json()["detail"]["message"] == "Unsupported model folder: ../bad"
 
 
+def test_model_inventory_cleanable_size_counts_only_unused_noofy_owned_models(tmp_path: Path) -> None:
+    # Downloaded by Noofy, not required by any workflow -> cleanable.
+    unused_owned = tmp_path / "Noofy Models" / "loras" / "unused.safetensors"
+    unused_owned.parent.mkdir(parents=True)
+    unused_owned.write_bytes(b"unused-owned")
+    # Imported by Noofy but required by a workflow -> not cleanable.
+    used_owned = tmp_path / "Noofy Models" / "checkpoints" / "base.safetensors"
+    used_owned.parent.mkdir(parents=True)
+    used_owned.write_bytes(b"used-owned")
+    # User-owned local Noofy file (not downloaded/imported) -> not cleanable.
+    local_only = tmp_path / "Noofy Models" / "loras" / "local.safetensors"
+    local_only.write_bytes(b"local-only")
+    # External ComfyUI file -> never cleanable even though deletable.
+    external = tmp_path / "ComfyUI" / "models" / "loras" / "external.safetensors"
+    external.parent.mkdir(parents=True)
+    external.write_bytes(b"external")
+
+    ownership_store = ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json")
+    ownership_store.mark_downloaded("loras/unused.safetensors")
+    ownership_store.mark_imported("checkpoints/base.safetensors")
+
+    package = _package(
+        [RequiredModel(folder="checkpoints", filename="base.safetensors", size_bytes=10, verification_level="filename_size")]
+    )
+
+    with _client(tmp_path, [package]) as client:
+        data = client.get("/api/models").json()
+
+    assert data["summary"]["cleanable_size_bytes"] == unused_owned.stat().st_size
+    by_key = {model["model_key"]: model for model in data["models"]}
+    assert by_key["loras/unused.safetensors"]["workflow_usage"] == []
+    assert by_key["checkpoints/base.safetensors"]["workflow_usage"] != []
+
+
 def test_model_inventory_ignores_partial_import_transactions(tmp_path: Path) -> None:
     partial = tmp_path / "Noofy Models" / ".imports" / "tx" / "partial.safetensors"
     partial.parent.mkdir(parents=True)

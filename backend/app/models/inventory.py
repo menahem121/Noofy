@@ -120,6 +120,7 @@ class ModelInventoryService:
                 external_comfyui_count=sum(model.source == "external_comfyui" for model in models),
                 missing_count=sum(model.status == "missing" for model in models),
                 total_known_size_bytes=sum(model.size_bytes or 0 for model in models),
+                cleanable_size_bytes=sum(model.size_bytes or 0 for model in models if _is_cleanable(model)),
                 disk_free_bytes=self._disk_free_bytes(noofy_root),
             ),
             folders=ModelInventoryFolders(
@@ -422,6 +423,22 @@ class ModelInventoryService:
         if not _is_model_asset_filename(file_path.name):
             return True
         return ".tmp-" in file_path.name
+
+
+def _is_cleanable(model: ModelInventoryEntry) -> bool:
+    """A model whose storage Noofy can safely reclaim.
+
+    Only counts Noofy-owned files that Noofy downloaded or imported (so they are
+    safe to delete) and that no installed workflow currently uses. External
+    ComfyUI folder models and user-owned local files are never counted because
+    Noofy must not delete them.
+    """
+    return (
+        model.source == "noofy"
+        and model.can_delete
+        and model.ownership in {"noofy_downloaded", "noofy_imported"}
+        and not model.workflow_usage
+    )
 
 
 def _is_model_asset_filename(filename: str) -> bool:

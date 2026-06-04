@@ -18,6 +18,7 @@ const inventory = {
     external_comfyui_count: 1,
     missing_count: 1,
     total_known_size_bytes: 4096,
+    cleanable_size_bytes: 1024,
     disk_free_bytes: 5368709120,
   },
   folders: {

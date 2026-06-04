@@ -17,6 +17,7 @@ const inventory = {
     external_comfyui_count: 0,
     missing_count: 0,
     total_known_size_bytes: 1,
+    cleanable_size_bytes: 0,
   },
   folders: {
     noofy_models_dir: "/tmp/Noofy Models",

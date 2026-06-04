@@ -429,8 +429,8 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
           <div className="models-stat-card__label">Free disk space</div>
         </div>
         <div className="models-stat-card">
-          <div className="models-stat-card__value">{inventory?.summary.external_comfyui_count ?? "..."}</div>
-          <div className="models-stat-card__label">From ComfyUI folder</div>
+          <div className="models-stat-card__value">{formatBytes(inventory?.summary.cleanable_size_bytes)}</div>
+          <div className="models-stat-card__label">Storage used by unused models</div>
         </div>
       </div>
 
