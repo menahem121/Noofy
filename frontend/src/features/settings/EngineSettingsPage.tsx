@@ -285,6 +285,13 @@ function noofyRuntimeSourceLabel(source: string | null | undefined) {
   return "Unknown";
 }
 
+function comfyUiSourceLabel(source: string | null | undefined) {
+  if (source === "bundled") return "Included with Noofy";
+  if (source === "managed") return "Managed by Noofy";
+  if (source === "external") return "Connected local engine";
+  return "Unknown";
+}
+
 export function EngineSettingsPage({
   onNavigate,
 }: {
@@ -903,11 +910,11 @@ export function EngineSettingsPage({
         aria-labelledby="engine-settings-title"
       >
         <div>
-          <p className="eyebrow">ComfyUI engine</p>
+          <p className="eyebrow">Local engine</p>
           <h1 id="engine-settings-title">Engine Settings</h1>
           <p>
-            Set up and manage the ComfyUI engine that runs workflows on this
-            machine.
+            Set up the private engine Noofy uses to run AI workflows on this
+            computer.
           </p>
         </div>
         <button
@@ -950,17 +957,20 @@ export function EngineSettingsPage({
       ) : null}
 
       <section className="settings-grid">
-        <article className="settings-panel engine-status-card">
+        <article className="settings-panel engine-status-card engine-status-card--compact">
           <div className="engine-status-card__header">
             <div className="engine-status-card__title-row">
               <div className="engine-status-card__icon" aria-hidden="true">
                 <Zap size={18} />
               </div>
               <div>
-                <h2 className="engine-status-card__title">ComfyUI Engine</h2>
+                <h2 className="engine-status-card__title">
+                  ComfyUI Workflow Engine
+                </h2>
                 <p className="engine-status-card__subtitle">
-                  Noofy runs AI workflows privately on your computer — nothing
-                  is sent to the cloud.
+                  Noofy runs ComfyUI workflows privately on this computer, so
+                  compatible community workflows can work without sending your
+                  data to the cloud.
                 </p>
               </div>
             </div>
@@ -976,102 +986,307 @@ export function EngineSettingsPage({
             </span>
           </div>
 
-          <ul className="engine-status-card__steps">
-            <li className="engine-status-card__step">
-              <div
-                className={`engine-status-card__step-icon ${environmentPrepared ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`}
-                aria-hidden="true"
-              >
-                {environmentPrepared ? (
-                  <CheckCircle2 size={16} />
-                ) : (
-                  <Circle size={16} />
-                )}
+          <div className="engine-status-card__body">
+            <section
+              className="engine-status-card__readiness"
+              aria-labelledby="comfyui-status-title"
+            >
+              <div className="engine-status-card__section-heading">
+                <h3 id="comfyui-status-title">ComfyUI Status</h3>
+                <p>Set up or restart the local ComfyUI runner.</p>
               </div>
-              <div className="engine-status-card__step-body">
-                <span className="engine-status-card__step-label">
-                  {environmentPrepared
-                    ? "ComfyUI is installed"
-                    : "ComfyUI is not installed yet"}
-                </span>
-                <span className="engine-status-card__step-hint">
-                  {environmentPrepared ? (
-                    "ComfyUI is installed and ready on this computer."
-                  ) : (
-                    <>
-                      Use the &ldquo;Set Up&rdquo; button below to install it.
-                    </>
-                  )}
-                </span>
-              </div>
-            </li>
-            <li className="engine-status-card__step">
-              <div
-                className={`engine-status-card__step-icon ${state.runtime?.reachable ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`}
-                aria-hidden="true"
-              >
-                {state.runtime?.reachable ? (
-                  <CheckCircle2 size={16} />
-                ) : (
-                  <Circle size={16} />
-                )}
-              </div>
-              <div className="engine-status-card__step-body">
-                <span className="engine-status-card__step-label">
-                  {state.runtime?.reachable
-                    ? "ComfyUI is active and ready"
-                    : "ComfyUI is not running"}
-                </span>
-                <span className="engine-status-card__step-hint">
-                  {state.runtime?.reachable
-                    ? "Your workflows can run on this computer right now."
-                    : "Press Restart to activate it before running a workflow."}
-                </span>
-              </div>
-              {state.runtime?.managed_process_running && state.runtime.pid ? (
-                <span className="engine-status-card__pid">
-                  PID {state.runtime.pid}
-                </span>
-              ) : null}
-            </li>
-          </ul>
 
-          <div className="button-row">
-            <button
-              className="primary-button primary-button--compact"
-              type="button"
-              disabled={state.action !== null}
-              onClick={() => void runAction("restart", restartEngine)}
+              <ul className="engine-status-card__steps">
+                <li className="engine-status-card__step">
+                  <div
+                    className={`engine-status-card__step-icon ${environmentPrepared ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`}
+                    aria-hidden="true"
+                  >
+                    {environmentPrepared ? (
+                      <CheckCircle2 size={16} />
+                    ) : (
+                      <Circle size={16} />
+                    )}
+                  </div>
+                  <div className="engine-status-card__step-body">
+                    <span className="engine-status-card__step-label">
+                      {environmentPrepared
+                        ? "ComfyUI is installed"
+                        : "ComfyUI setup is needed"}
+                    </span>
+                    <span className="engine-status-card__step-hint">
+                      {environmentPrepared
+                        ? "Noofy has a local ComfyUI runner ready."
+                        : "Set it up once to run workflows locally."}
+                    </span>
+                  </div>
+                </li>
+                <li className="engine-status-card__step">
+                  <div
+                    className={`engine-status-card__step-icon ${state.runtime?.reachable ? "engine-status-card__step-icon--done" : "engine-status-card__step-icon--pending"}`}
+                    aria-hidden="true"
+                  >
+                    {state.runtime?.reachable ? (
+                      <CheckCircle2 size={16} />
+                    ) : (
+                      <Circle size={16} />
+                    )}
+                  </div>
+                  <div className="engine-status-card__step-body">
+                    <span className="engine-status-card__step-label">
+                      {state.runtime?.reachable
+                        ? "ComfyUI is ready"
+                        : "ComfyUI is offline"}
+                    </span>
+                    <span className="engine-status-card__step-hint">
+                      {state.runtime?.reachable
+                        ? "Workflows can run on this computer now."
+                        : "Restart ComfyUI before running a workflow."}
+                    </span>
+                  </div>
+                  {state.runtime?.managed_process_running &&
+                  state.runtime.pid ? (
+                    <span className="engine-status-card__pid">
+                      PID {state.runtime.pid}
+                    </span>
+                  ) : null}
+                </li>
+              </ul>
+
+              <div className="button-row engine-status-card__actions">
+                <button
+                  className="primary-button primary-button--compact"
+                  type="button"
+                  disabled={state.action !== null}
+                  onClick={() => void runAction("restart", restartEngine)}
+                >
+                  {state.action === "restart" ? (
+                    <Loader2 className="spin" size={16} aria-hidden="true" />
+                  ) : (
+                    <RotateCcw size={16} aria-hidden="true" />
+                  )}
+                  Restart ComfyUI
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={state.action !== null}
+                  onClick={() => void runAction("stop", stopEngine)}
+                >
+                  <Square size={16} aria-hidden="true" />
+                  Stop
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={state.action !== null}
+                  onClick={() => void runAction("bootstrap", bootstrapEngine)}
+                >
+                  {state.action === "bootstrap" ? (
+                    <Loader2 className="spin" size={16} aria-hidden="true" />
+                  ) : (
+                    <Wrench size={16} aria-hidden="true" />
+                  )}
+                  {environmentPrepared ? "Repair Setup" : "Set Up ComfyUI"}
+                </button>
+              </div>
+            </section>
+
+            <section
+              className="engine-status-card__maintenance"
+              aria-labelledby="engine-updates-title"
             >
-              {state.action === "restart" ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <RotateCcw size={16} aria-hidden="true" />
-              )}
-              Restart
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={state.action !== null}
-              onClick={() => void runAction("stop", stopEngine)}
-            >
-              <Square size={16} aria-hidden="true" />
-              Stop
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={state.action !== null}
-              onClick={() => void runAction("bootstrap", bootstrapEngine)}
-            >
-              {state.action === "bootstrap" ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <Wrench size={16} aria-hidden="true" />
-              )}
-              {environmentPrepared ? "Repair Installation" : "Set Up"}
-            </button>
+              <div className="engine-status-card__maintenance-header">
+                <div>
+                  <h3 id="engine-updates-title">ComfyUI Updates</h3>
+                  <p>
+                    Keep ComfyUI current so more community workflows stay
+                    compatible. Noofy validates updates before using them.
+                  </p>
+                </div>
+              </div>
+
+              <dl className="engine-status-card__meta">
+                <div>
+                  <dt>Installed ComfyUI</dt>
+                  <dd>{currentVersion}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{comfyUiSourceLabel(sourceStatus)}</dd>
+                </div>
+              </dl>
+
+            {versions?.release_fetch_error ? (
+              <div className="notice notice--error" role="status">
+                <AlertCircle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Could not load engine updates</strong>
+                  <span>{versions.release_fetch_error}</span>
+                </div>
+              </div>
+            ) : null}
+
+            {versions && !versions.updates_allowed ? (
+              <div className="notice notice--warning" role="status">
+                <AlertCircle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Updates unavailable</strong>
+                  <span>
+                    {versions.disabled_reason ??
+                      "Engine updates are not available right now."}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+              <div className="engine-status-card__update-strip">
+                <label className="engine-status-card__version-select">
+                  <div>
+                    <strong>ComfyUI version</strong>
+                    <span>
+                      {versions?.upstream_checked
+                        ? "Choose a checked release to install."
+                        : "Check for updates to load available ComfyUI releases."}
+                    </span>
+                  </div>
+                  <select
+                    value={state.selectedVersion}
+                    disabled={!versions?.updates_allowed || engineJobBusy}
+                    onChange={(event) =>
+                      setState((current) => ({
+                        ...current,
+                        selectedVersion: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="latest">
+                      Latest version
+                      {versions?.latest_tag ? ` (${versions.latest_tag})` : ""}
+                    </option>
+                    {versions?.options.map((option) => (
+                      <option value={option.tag} key={option.tag}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="button-row engine-status-card__update-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={state.action !== null}
+                    onClick={() => void checkComfyUIUpdates()}
+                  >
+                    {checkUpdatesBusy ? (
+                      <Loader2 className="spin" size={16} aria-hidden="true" />
+                    ) : (
+                      <Search size={16} aria-hidden="true" />
+                    )}
+                    Check Updates
+                  </button>
+                  <button
+                    className="primary-button primary-button--compact"
+                    type="button"
+                    disabled={
+                      !versions?.updates_allowed || state.action !== null
+                    }
+                    onClick={() => void runComfyUIUpdate()}
+                  >
+                    {updateBusy ? (
+                      <Loader2 className="spin" size={16} aria-hidden="true" />
+                    ) : (
+                      <Download size={16} aria-hidden="true" />
+                    )}
+                    Update ComfyUI
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={
+                      !versions?.updates_allowed ||
+                      state.action !== null ||
+                      !versions.current
+                    }
+                    onClick={() => void runComfyUIRebuild()}
+                  >
+                    {rebuildBusy ? (
+                      <Loader2 className="spin" size={16} aria-hidden="true" />
+                    ) : (
+                      <Wrench size={16} aria-hidden="true" />
+                    )}
+                    Repair Files
+                  </button>
+                </div>
+              </div>
+
+            {state.updateStatus?.progress_label ? (
+              <div
+                className={`notice ${state.updateStatus.status === "failed" ? "notice--error" : "notice--success"}`}
+                role="status"
+              >
+                {state.updateStatus.status === "running" ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : state.updateStatus.status === "failed" ? (
+                  <AlertCircle size={18} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                )}
+                <div>
+                  <strong>
+                    {state.updateStatus.operation === "repair"
+                      ? `Repair: ${state.updateStatus.phase}`
+                      : state.updateStatus.phase}
+                  </strong>
+                  <span>
+                    {state.updateStatus.error ??
+                      state.updateStatus.progress_label}
+                  </span>
+                  {state.updateStatus.fallback_version ? (
+                    <span>
+                      Fallback active: {state.updateStatus.fallback_version}
+                    </span>
+                  ) : null}
+                  {state.updateStatus.incompatible_version ? (
+                    <span>
+                      {state.updateStatus.incompatible_version} failed Noofy
+                      validation.
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {currentRepairStatus === "repair_blocked" ? (
+              <div className="notice notice--warning" role="status">
+                <AlertCircle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Automatic repair paused</strong>
+                  <span>
+                    Noofy reached the retry limit for this engine version.
+                    {versions?.current?.repair_blocked_until
+                      ? ` Retry after ${versions.current.repair_blocked_until}.`
+                      : ""}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {versions?.current?.incompatible ? (
+              <div className="notice notice--error" role="status">
+                <AlertCircle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Engine version failed validation</strong>
+                  <span>
+                    {currentIncompatibleReason ??
+                      "This engine version changed behavior Noofy depends on."}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            </section>
           </div>
         </article>
 
@@ -1648,195 +1863,6 @@ export function EngineSettingsPage({
             </div>
           </article>
         ) : null}
-
-        <article className="settings-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>ComfyUI Version</h2>
-              <p>
-                Install upstream ComfyUI releases into Noofy's managed sidecar.
-              </p>
-            </div>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={state.action !== null}
-              onClick={() => void checkComfyUIUpdates()}
-            >
-              {checkUpdatesBusy ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <Search size={16} aria-hidden="true" />
-              )}
-              Check for Updates
-            </button>
-          </div>
-
-          <dl className="detail-list">
-            <div>
-              <dt>Current</dt>
-              <dd>{currentVersion}</dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>{sourceStatus}</dd>
-            </div>
-          </dl>
-
-          {versions?.release_fetch_error ? (
-            <div className="notice notice--error" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Could not load upstream releases</strong>
-                <span>{versions.release_fetch_error}</span>
-              </div>
-            </div>
-          ) : null}
-
-          {versions && !versions.updates_allowed ? (
-            <div className="notice notice--warning" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Updates unavailable</strong>
-                <span>
-                  {versions.disabled_reason ??
-                    "ComfyUI updates are not available right now."}
-                </span>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="settings-option-group">
-            <label className="settings-option settings-option--select">
-              <div>
-                <strong>Version</strong>
-                <span>
-                  {versions?.upstream_checked
-                    ? "Upstream releases are validated locally before activation."
-                    : "Press Check for Updates to load upstream ComfyUI releases."}
-                </span>
-              </div>
-              <select
-                value={state.selectedVersion}
-                disabled={!versions?.updates_allowed || engineJobBusy}
-                onChange={(event) =>
-                  setState((current) => ({
-                    ...current,
-                    selectedVersion: event.target.value,
-                  }))
-                }
-              >
-                <option value="latest">
-                  Latest version
-                  {versions?.latest_tag ? ` (${versions.latest_tag})` : ""}
-                </option>
-                {versions?.options.map((option) => (
-                  <option value={option.tag} key={option.tag}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          {state.updateStatus?.progress_label ? (
-            <div
-              className={`notice ${state.updateStatus.status === "failed" ? "notice--error" : "notice--success"}`}
-              role="status"
-            >
-              {state.updateStatus.status === "running" ? (
-                <Loader2 className="spin" size={18} aria-hidden="true" />
-              ) : state.updateStatus.status === "failed" ? (
-                <AlertCircle size={18} aria-hidden="true" />
-              ) : (
-                <CheckCircle2 size={18} aria-hidden="true" />
-              )}
-              <div>
-                <strong>
-                  {state.updateStatus.operation === "repair"
-                    ? `repair: ${state.updateStatus.phase}`
-                    : state.updateStatus.phase}
-                </strong>
-                <span>
-                  {state.updateStatus.error ??
-                    state.updateStatus.progress_label}
-                </span>
-                {state.updateStatus.fallback_version ? (
-                  <span>
-                    Fallback active: {state.updateStatus.fallback_version}
-                  </span>
-                ) : null}
-                {state.updateStatus.incompatible_version ? (
-                  <span>
-                    {state.updateStatus.incompatible_version} failed Noofy
-                    validation.
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          {currentRepairStatus === "repair_blocked" ? (
-            <div className="notice notice--warning" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Automatic repair paused</strong>
-                <span>
-                  Noofy reached the retry limit for this ComfyUI version.
-                  {versions?.current?.repair_blocked_until
-                    ? ` Retry after ${versions.current.repair_blocked_until}.`
-                    : ""}
-                </span>
-              </div>
-            </div>
-          ) : null}
-
-          {versions?.current?.incompatible ? (
-            <div className="notice notice--error" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>ComfyUI version failed validation</strong>
-                <span>
-                  {currentIncompatibleReason ??
-                    "This version changed behavior Noofy depends on."}
-                </span>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="button-row">
-            <button
-              className="primary-button primary-button--compact"
-              type="button"
-              disabled={!versions?.updates_allowed || state.action !== null}
-              onClick={() => void runComfyUIUpdate()}
-            >
-              {updateBusy ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <Download size={16} aria-hidden="true" />
-              )}
-              Update ComfyUI
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={
-                !versions?.updates_allowed ||
-                state.action !== null ||
-                !versions.current
-              }
-              onClick={() => void runComfyUIRebuild()}
-            >
-              {rebuildBusy ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <Wrench size={16} aria-hidden="true" />
-              )}
-              Rebuild Environment
-            </button>
-          </div>
-        </article>
 
         <article className="settings-panel">
           <div className="panel-heading">

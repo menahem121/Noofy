@@ -941,12 +941,29 @@
 }
 
 /* Engine status card — merged status + readiness steps */
+.engine-status-card--compact {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 18px;
+}
+
 .engine-status-card__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
+}
+
+.engine-status-card--compact .engine-status-card__header {
+  margin-bottom: 0;
+}
+
+.engine-status-card__body {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.86fr) minmax(420px, 1.14fr);
+  gap: 18px;
+  align-items: start;
 }
 
 .engine-status-card__title-row {
@@ -990,14 +1007,18 @@
   list-style: none;
 }
 
+.engine-status-card--compact .engine-status-card__steps {
+  margin-bottom: 0;
+}
+
 .engine-status-card__step {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(66, 64, 71, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
 }
 
 .engine-status-card__step-icon {
@@ -1048,6 +1069,125 @@
   white-space: nowrap;
   align-self: center;
   flex-shrink: 0;
+}
+
+.engine-status-card__readiness,
+.engine-status-card__maintenance {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(66, 64, 71, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.engine-status-card__actions {
+  margin-top: 2px;
+}
+
+.engine-status-card__maintenance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.engine-status-card__section-heading h3,
+.engine-status-card__maintenance-header h3 {
+  margin: 0;
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.engine-status-card__section-heading p,
+.engine-status-card__maintenance-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.engine-status-card__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.engine-status-card__meta div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.engine-status-card__meta dt,
+.engine-status-card__meta dd {
+  margin: 0;
+  font-size: 13px;
+}
+
+.engine-status-card__meta dt {
+  color: var(--text-muted);
+}
+
+.engine-status-card__meta dd {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.engine-status-card__version-select {
+  display: grid;
+  gap: 6px;
+  min-width: 250px;
+}
+
+.engine-status-card__version-select div {
+  display: grid;
+  gap: 2px;
+}
+
+.engine-status-card__version-select strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.engine-status-card__version-select span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.engine-status-card__version-select select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+.engine-status-card__version-select select:focus {
+  border-color: var(--accent);
+}
+
+.engine-status-card__update-strip {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.engine-status-card__update-actions {
+  justify-content: flex-end;
 }
 
 .settings-option-group {
@@ -3111,6 +3251,11 @@ button.dashboard-image-input__surface {
   .run-workspace {
     grid-template-columns: 1fr;
   }
+
+  .engine-status-card__body,
+  .engine-status-card__meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 960px) {
@@ -3153,6 +3298,18 @@ button.dashboard-image-input__surface {
 
   .input-grid {
     grid-template-columns: 1fr;
+  }
+
+  .engine-status-card__maintenance-header {
+    flex-direction: column;
+  }
+
+  .engine-status-card__update-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .engine-status-card__update-actions {
+    justify-content: flex-start;
   }
 }
 

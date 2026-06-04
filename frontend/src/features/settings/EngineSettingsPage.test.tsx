@@ -268,23 +268,42 @@ describe("EngineSettingsPage", () => {
     });
   });
 
-  it("shows Restart, Stop, and Repair actions in the ComfyUI engine card", async () => {
+  it("shows engine controls and update controls in one workflow engine card", async () => {
     renderSettingsPage();
 
     const panel = (
-      await screen.findByRole("heading", { name: "ComfyUI Engine" })
+      await screen.findByRole("heading", { name: "ComfyUI Workflow Engine" })
     ).closest("article");
     expect(panel).not.toBeNull();
 
-    const actions = within(panel as HTMLElement).getAllByRole("button");
-    expect(actions.map((button) => button.textContent?.trim())).toEqual([
-      "Restart",
-      "Stop",
-      "Repair Installation",
-    ]);
-    expect(actions[0]).toHaveClass("primary-button");
-    expect(actions[1]).toHaveClass("secondary-button");
-    expect(actions[2]).toHaveClass("secondary-button");
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
+        name: "Restart ComfyUI",
+      }),
+    ).toHaveClass("primary-button");
+    expect(
+      within(panel as HTMLElement).getByRole("button", { name: "Stop" }),
+    ).toHaveClass("secondary-button");
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
+        name: "Repair Setup",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
+        name: /check updates/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
+        name: /update comfyui/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
+        name: /repair files/i,
+      }),
+    ).toBeInTheDocument();
   });
 
   it("restarts a running managed engine by stopping and then starting it", async () => {
@@ -324,7 +343,9 @@ describe("EngineSettingsPage", () => {
 
     renderSettingsPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart ComfyUI" }),
+    );
 
     expect(await screen.findByText("Engine started.")).toBeInTheDocument();
     expect(actionUrls).toEqual(["stop", "start"]);
@@ -367,7 +388,9 @@ describe("EngineSettingsPage", () => {
 
     renderSettingsPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart ComfyUI" }),
+    );
 
     expect(await screen.findByText("Engine started.")).toBeInTheDocument();
     expect(actionUrls).toEqual(["start"]);
@@ -389,11 +412,11 @@ describe("EngineSettingsPage", () => {
     );
 
     const comfyVersionPanel = screen
-      .getByRole("heading", { name: "ComfyUI Version" })
+      .getByRole("heading", { name: "ComfyUI Workflow Engine" })
       .closest("article");
     fireEvent.click(
       within(comfyVersionPanel as HTMLElement).getByRole("button", {
-        name: /check for updates/i,
+        name: /check updates/i,
       }),
     );
 
@@ -802,7 +825,9 @@ describe("EngineSettingsPage", () => {
 
     renderSettingsPage();
 
-    const restart = await screen.findByRole("button", { name: "Restart" });
+    const restart = await screen.findByRole("button", {
+      name: "Restart ComfyUI",
+    });
     fireEvent.click(restart);
 
     expect(
@@ -859,11 +884,13 @@ describe("EngineSettingsPage", () => {
 
     renderSettingsPage();
 
-    const restart = await screen.findByRole("button", { name: "Restart" });
+    const restart = await screen.findByRole("button", {
+      name: "Restart ComfyUI",
+    });
     fireEvent.click(restart);
 
     expect(
-      await screen.findByText("repair: repairing_environment"),
+      await screen.findByText("Repair: repairing_environment"),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(/repaired and started/i),
@@ -927,7 +954,7 @@ describe("EngineSettingsPage", () => {
     renderSettingsPage();
 
     const rebuild = await screen.findByRole("button", {
-      name: /rebuild environment/i,
+      name: /repair files/i,
     });
     fireEvent.click(rebuild);
 
@@ -1173,7 +1200,7 @@ describe("EngineSettingsPage", () => {
     renderSettingsPage();
 
     expect(
-      await screen.findByRole("heading", { name: "ComfyUI Engine" }),
+      await screen.findByRole("heading", { name: "ComfyUI Workflow Engine" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Noofy Runtime" }),
