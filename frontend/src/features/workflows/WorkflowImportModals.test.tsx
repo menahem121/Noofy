@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RequiredModelAvailability, WorkflowImportResponse } from "../../lib/api/noofyApi";
 import { RequiredModelsModal } from "./WorkflowImportModals";
+
+const modelsCss = readFileSync(resolve(process.cwd(), "src/styles/models.css"), "utf8");
 
 const missingModel = {
   requirement_id: "vae/flux2-vae.safetensors",
@@ -60,6 +64,40 @@ const importResult = {
 } satisfies WorkflowImportResponse;
 
 describe("RequiredModelsModal", () => {
+  it("keeps variable import content inside one scrollable modal body and wires the X button to cancel", () => {
+    const onCancel = vi.fn();
+    render(
+      <RequiredModelsModal
+        importResult={importResult}
+        busy={false}
+        importing={false}
+        downloadJob={null}
+        verificationJob={null}
+        onDownload={vi.fn()}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={onCancel}
+        onViewModels={vi.fn()}
+      />,
+    );
+
+    const modal = screen.getByRole("dialog").querySelector(".required-models-modal");
+    expect(Array.from(modal?.children ?? []).map((child) => child.className)).toEqual([
+      "required-models-modal__header",
+      "required-models-modal__body",
+      "required-models-modal__footer",
+    ]);
+    expect(modal?.querySelector(".required-models-modal__body .required-models-list")).toBeInTheDocument();
+    expect(modelsCss).toMatch(/\.required-models-modal__body\s*{[^}]*min-height:\s*0;/);
+    expect(modelsCss).toMatch(/\.required-models-modal__body\s*{[^}]*overflow:\s*auto;/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("renders verification failures as failed instead of successful 100 percent downloads", () => {
     const onDownload = vi.fn();
     render(

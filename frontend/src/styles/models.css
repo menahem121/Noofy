@@ -4,6 +4,14 @@
   align-items: center;
 }
 
+/* Keep the leading status icon accent, but let icons inside the row's action
+   buttons follow the button's own color instead of the notice accent. */
+.notice--row .primary-button svg,
+.notice--row .icon-button svg {
+  color: inherit;
+  margin-top: 0;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -48,6 +56,19 @@
   max-width: 680px;
   margin: 0;
   color: var(--text-secondary);
+}
+
+.required-models-modal__body {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow: auto;
+  padding: 16px 22px;
+}
+
+.required-models-modal__body > .notice {
+  margin: 0;
 }
 
 .workflow-failure-modal {
@@ -481,8 +502,6 @@
 .required-models-list {
   display: grid;
   gap: 10px;
-  overflow: auto;
-  padding: 16px 22px;
 }
 
 .required-model-row {

@@ -3116,63 +3116,65 @@ function WorkflowRequiredModelsModal({
           </button>
         </header>
 
-        <div className="required-models-list">
-          {effectiveSummary.models.map((model) => (
-            <WorkflowRequiredModelRow
-              key={model.requirement_id}
-              model={model}
-              progress={progressByRequirement.get(model.requirement_id)}
-            />
-          ))}
-        </div>
+        <div className="required-models-modal__body">
+          <div className="required-models-list">
+            {effectiveSummary.models.map((model) => (
+              <WorkflowRequiredModelRow
+                key={model.requirement_id}
+                model={model}
+                progress={progressByRequirement.get(model.requirement_id)}
+              />
+            ))}
+          </div>
 
-        {activeVerification ? (
-          <ModelVerificationProgressPanel
-            job={verificationJob}
-            idleLabel="Verifying local model..."
-            idleMessage="Verifying local model..."
-          />
-        ) : null}
-        {verificationJob?.status === "completed" && readyToRun ? (
-          <div className="notice notice--success notice--compact" role="status">
-            <CheckCircle2 size={16} aria-hidden="true" />
-            <div>
-              <strong>Local model verified</strong>
-              <span>Noofy can use the matching local file for this workflow.</span>
+          {activeVerification ? (
+            <ModelVerificationProgressPanel
+              job={verificationJob}
+              idleLabel="Verifying local model..."
+              idleMessage="Verifying local model..."
+            />
+          ) : null}
+          {verificationJob?.status === "completed" && readyToRun ? (
+            <div className="notice notice--success notice--compact" role="status">
+              <CheckCircle2 size={16} aria-hidden="true" />
+              <div>
+                <strong>Local model verified</strong>
+                <span>Noofy can use the matching local file for this workflow.</span>
+              </div>
             </div>
-          </div>
-        ) : null}
-        {verificationJob?.status === "completed" && !readyToRun && hasVerifiableLocalModels(effectiveSummary) ? (
-          <div className="notice notice--warning notice--compact" role="status">
-            <AlertCircle size={16} aria-hidden="true" />
-            <div>
-              <strong>Local model could not be accepted</strong>
-              <span>Noofy checked the matching local file, but it did not pass the required verification.</span>
+          ) : null}
+          {verificationJob?.status === "completed" && !readyToRun && hasVerifiableLocalModels(effectiveSummary) ? (
+            <div className="notice notice--warning notice--compact" role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>Local model could not be accepted</strong>
+                <span>Noofy checked the matching local file, but it did not pass the required verification.</span>
+              </div>
             </div>
-          </div>
-        ) : null}
-        {(verificationError || verificationJob?.status === "failed") ? (
-          <div className="notice notice--error notice--compact" role="status">
-            <AlertCircle size={16} aria-hidden="true" />
-            <div>
-              <strong>Model verification failed</strong>
-              <span>{verificationError ?? verificationJob?.user_facing_message ?? "Noofy could not verify the local model file."}</span>
+          ) : null}
+          {(verificationError || verificationJob?.status === "failed") ? (
+            <div className="notice notice--error notice--compact" role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>Model verification failed</strong>
+                <span>{verificationError ?? verificationJob?.user_facing_message ?? "Noofy could not verify the local model file."}</span>
+              </div>
+              <button className="secondary-button secondary-button--small" type="button" onClick={onRetryVerification}>
+                Verify Again
+              </button>
             </div>
-            <button className="secondary-button secondary-button--small" type="button" onClick={onRetryVerification}>
-              Verify Again
-            </button>
-          </div>
-        ) : null}
-        {downloadJob && shouldShowModelDownloadProgress(downloadJob) ? <WorkflowModelDownloadProgress job={downloadJob} onRetry={onDownload} /> : null}
-        {downloadError ? (
-          <div className="notice notice--error notice--compact" role="status">
-            <AlertCircle size={16} aria-hidden="true" />
-            <div>
-              <strong>Model download failed</strong>
-              <span>{downloadError}</span>
+          ) : null}
+          {downloadJob && shouldShowModelDownloadProgress(downloadJob) ? <WorkflowModelDownloadProgress job={downloadJob} onRetry={onDownload} /> : null}
+          {downloadError ? (
+            <div className="notice notice--error notice--compact" role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>Model download failed</strong>
+                <span>{downloadError}</span>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         <footer className="required-models-modal__footer">
           <button className="secondary-button" type="button" disabled={downloadBusy || activeDownload || activeVerification || !downloadable} onClick={onDownload}>

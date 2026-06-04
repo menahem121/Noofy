@@ -108,6 +108,35 @@ describe("DashboardBuilderLayoutPage", () => {
     window.localStorage.clear();
   });
 
+  it("autosaves layout changes without requiring the draft button", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("textbox");
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
+      expect(stored).toMatchObject({
+        workflowId: "wf-1",
+        status: "draft",
+        widgets: [expect.objectContaining({ id: "ctrl-prompt" })],
+      });
+    });
+  });
+
   it("keeps a local draft and does not navigate when dashboard save fails", async () => {
     const onSaveComplete = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

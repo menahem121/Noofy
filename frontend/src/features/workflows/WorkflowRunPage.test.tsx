@@ -2564,7 +2564,17 @@ describe("WorkflowRunPage", () => {
       "Add required model before running: v1-5-pruned-emaonly-fp16.safetensors.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    expect(screen.getByRole("dialog", { name: "Missing Models" })).toBeInTheDocument();
+    const missingModelsDialog = screen.getByRole("dialog", { name: "Missing Models" });
+    expect(missingModelsDialog).toBeInTheDocument();
+    expect(
+      Array.from(missingModelsDialog.querySelector(".required-models-modal")?.children ?? []).map(
+        (child) => child.className,
+      ),
+    ).toEqual([
+      "required-models-modal__header",
+      "required-models-modal__body",
+      "required-models-modal__footer",
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/models/downloads", {

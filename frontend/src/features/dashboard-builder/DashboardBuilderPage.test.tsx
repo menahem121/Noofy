@@ -676,7 +676,15 @@ describe("DashboardBuilderPage", () => {
     expect(screen.queryByText(/^Group$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Orientation$/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^continue$/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /save as draft/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save as draft/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /save as draft/i }));
+    expect(screen.getByText("Saved as draft")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId)) ?? "{}")).toMatchObject({
+      workflowId: invalidSliderSchema.workflowId,
+      widgets: [expect.objectContaining({ defaultValue: 0.3 })],
+      status: "draft",
+    });
 
     fireEvent.change(screen.getByLabelText(/default value/i), { target: { value: "0.5" } });
 
@@ -813,6 +821,60 @@ describe("DashboardBuilderPage", () => {
       }),
     );
     expect(onContinue.mock.calls[0][0].widgets).toHaveLength(2);
+  });
+
+  it("restores and autosaves a draft without re-adding removed automatic widgets", async () => {
+    const draft: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "note-1",
+          valueId: "note:note-1",
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: "Keep this draft",
+          description: "The automatic media widgets were removed.",
+          defaultValue: null,
+        },
+      ],
+    };
+    window.localStorage.setItem(dashboardDraftKey("wf-image"), JSON.stringify({ ...draft, status: "draft" }));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const noteTitle = await screen.findByLabelText(/note title/i);
+    expect(noteTitle).toHaveValue("Keep this draft");
+    expect(screen.queryByText("Input image")).not.toBeInTheDocument();
+    expect(screen.queryByText("Output image")).not.toBeInTheDocument();
+
+    fireEvent.change(noteTitle, { target: { value: "Updated draft title" } });
+
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-image")) ?? "{}") as DashboardSchema;
+      expect(stored.widgets).toEqual([
+        expect.objectContaining({ id: "note-1", title: "Updated draft title" }),
+      ]);
+    });
   });
 
   it("preserves a removed input image widget as a hidden workflow input", async () => {

@@ -12,15 +12,23 @@ export interface WorkflowSearchFilters {
   tagFilter?: string;
 }
 
+export function workflowNeedsConfiguration(summary: WorkflowSummary) {
+  if (summary.dashboard_ready === false) return true;
+  if (summary.dashboard_status && summary.dashboard_status !== "configured") return true;
+  if ((summary.unresolved_input_count ?? 0) > 0) return true;
+  if (summary.needs_setup) return true;
+  return summary.status === "needs_input_setup" || summary.status === "prepared_needs_input_setup";
+}
+
 export function workflowStatus(summary: WorkflowSummary): WorkflowSearchStatus {
+  if (workflowNeedsConfiguration(summary)) return "need_setup";
   if ((summary.missing_model_count ?? 0) > 0) return "missing_models";
-  if (summary.needs_setup) return "need_setup";
   return "ready";
 }
 
 export function workflowStatusLabel(summary: WorkflowSummary) {
   const status = workflowStatus(summary);
-  if (status === "need_setup") return "Need setup";
+  if (status === "need_setup") return "Configure";
   if (status === "missing_models") return "Missing models";
   return "Ready";
 }

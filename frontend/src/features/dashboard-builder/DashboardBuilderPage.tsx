@@ -216,14 +216,12 @@ export function DashboardBuilderPage({
   useEffect(() => {
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
+    const savedDraft = loadDashboardDraft(activeWorkflowId);
+    const sourceSchema = savedDraft ?? scopedInitialSchema ?? buildInitialDashboard(workflow);
     const nextSchema = normalizeDashboardSchema(
-      addAutomaticDashboardWidgets(
-        reconcileDashboardSchemaForWorkflow(
-          scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow),
-          workflow,
-        ),
-        workflow,
-      ),
+      savedDraft
+        ? reconcileDashboardSchemaForWorkflow(sourceSchema, workflow)
+        : addAutomaticDashboardWidgets(reconcileDashboardSchemaForWorkflow(sourceSchema, workflow), workflow),
     );
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
@@ -246,6 +244,11 @@ export function DashboardBuilderPage({
     workflow.id === activeWorkflowId &&
     schema.workflowId === activeWorkflowId;
   const displayWorkflowName = builderReady ? workflow.name : activeWorkflowName;
+
+  useEffect(() => {
+    if (!builderReady) return;
+    saveDashboardDraft(schema);
+  }, [builderReady, schema]);
 
   const valueIndex = useMemo(() => {
     const map = new Map<string, { node: WorkflowNode; value: WorkflowNodeValue }>();
@@ -496,7 +499,7 @@ export function DashboardBuilderPage({
   }
 
   function handleSaveDraft() {
-    if (!builderReady || hasValidationErrors) return;
+    if (!builderReady) return;
     saveDashboardDraft(schema);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
@@ -528,7 +531,7 @@ export function DashboardBuilderPage({
               <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft dashboard"}</span>
             </div>
             <div className="button-row">
-              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady || hasValidationErrors}>
+              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady}>
                 <Save size={15} aria-hidden="true" />
                 Save as draft
               </button>

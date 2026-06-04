@@ -6,6 +6,7 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
+import { dashboardDraftKey } from "../dashboard-builder/dashboardBuilderContent";
 import { HomePage } from "./HomePage";
 import { WorkflowLibraryProvider } from "./WorkflowLibraryProvider";
 
@@ -161,6 +162,7 @@ describe("HomePage", () => {
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
+    window.localStorage.clear();
   });
 
   afterEach(() => {
@@ -169,6 +171,7 @@ describe("HomePage", () => {
     onOpenWorkflow.mockReset();
     onNavigate.mockReset();
     onConfigureDashboard.mockReset();
+    window.localStorage.clear();
   });
 
   function mockSearchableHome() {
@@ -296,6 +299,137 @@ describe("HomePage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
     expect(onNavigate).toHaveBeenCalledWith("workflows");
+  });
+
+  it("shows a Configure badge on the main menu until dashboard setup is complete", async () => {
+    const setupWorkflow = {
+      id: "setup_workflow",
+      name: "Setup Workflow",
+      version: "1.0.0",
+      description: "Needs a dashboard.",
+      trust_level: "noofy_verified",
+      source_label: "Native Noofy",
+      category: "Txt2img",
+      status: "prepared_needs_input_setup",
+      status_label: "Prepared",
+      dashboard_status: "not_configured",
+      dashboard_ready: false,
+      unresolved_input_count: 1,
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([setupWorkflow]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      onConfigureDashboard,
+    });
+
+    expect(await screen.findByText("Configure")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure dashboard for Text to Image" }));
+    expect(onConfigureDashboard).toHaveBeenCalledWith("setup_workflow", "Setup Workflow");
+    expect(onOpenWorkflow).not.toHaveBeenCalled();
+  });
+
+  function draftFor(workflowId: string, workflowName: string) {
+    return JSON.stringify({
+      version: 1,
+      workflowId,
+      workflowName,
+      widgets: [],
+      groups: [],
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      status: "draft",
+    });
+  }
+
+  function setupSummary(overrides: Record<string, unknown>) {
+    return {
+      version: "1.0.0",
+      description: "Needs a dashboard.",
+      trust_level: "noofy_verified",
+      source_label: "Native Noofy",
+      category: "Txt2img",
+      status: "prepared_needs_input_setup",
+      status_label: "Prepared",
+      dashboard_status: "not_configured",
+      dashboard_ready: false,
+      unresolved_input_count: 1,
+      ...overrides,
+    };
+  }
+
+  it("shows a saved-draft setup banner that survives leaving the builder and resumes setup", async () => {
+    const draftWorkflow = setupSummary({ id: "draft_workflow", name: "Draft Workflow" });
+    window.localStorage.setItem(dashboardDraftKey("draft_workflow"), draftFor("draft_workflow", "Draft Workflow"));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([draftWorkflow]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    expect(await screen.findByText("Resume setting up Draft Workflow to finish its dashboard.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure dashboard" }));
+    expect(onConfigureDashboard).toHaveBeenCalledWith("draft_workflow", "Draft Workflow");
+  });
+
+  it("stacks a setup banner for each workflow with a saved draft", async () => {
+    const first = setupSummary({ id: "draft_one", name: "Draft One" });
+    const second = setupSummary({ id: "draft_two", name: "Draft Two" });
+    const configured = setupSummary({
+      id: "configured",
+      name: "Configured",
+      status: "installed",
+      dashboard_status: "configured",
+      dashboard_ready: true,
+      unresolved_input_count: 0,
+    });
+    window.localStorage.setItem(dashboardDraftKey("draft_one"), draftFor("draft_one", "Draft One"));
+    window.localStorage.setItem(dashboardDraftKey("draft_two"), draftFor("draft_two", "Draft Two"));
+    // A leftover draft for an already-configured workflow must not surface a banner.
+    window.localStorage.setItem(dashboardDraftKey("configured"), draftFor("configured", "Configured"));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([first, second, configured]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    expect(await screen.findByText("Resume setting up Draft One to finish its dashboard.")).toBeInTheDocument();
+    expect(screen.getByText("Resume setting up Draft Two to finish its dashboard.")).toBeInTheDocument();
+    expect(screen.queryByText("Resume setting up Configured to finish its dashboard.")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Configure dashboard" })).toHaveLength(2);
+  });
+
+  it("discards the draft and removes its banner when the X is clicked", async () => {
+    const draftWorkflow = setupSummary({ id: "draft_workflow", name: "Draft Workflow" });
+    window.localStorage.setItem(dashboardDraftKey("draft_workflow"), draftFor("draft_workflow", "Draft Workflow"));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([draftWorkflow]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    await screen.findByText("Resume setting up Draft Workflow to finish its dashboard.");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup for Draft Workflow" }));
+
+    expect(
+      screen.queryByText("Resume setting up Draft Workflow to finish its dashboard."),
+    ).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(dashboardDraftKey("draft_workflow"))).toBeNull();
+    expect(onConfigureDashboard).not.toHaveBeenCalled();
   });
 
   it("shows the last three opened workflows from backend workflow state", async () => {
@@ -992,6 +1126,78 @@ describe("HomePage", () => {
         body: JSON.stringify({ duplicate_action: "copy" }),
       });
     });
+  });
+
+  it("cancels a staged import when the popup X button is clicked", async () => {
+    const duplicateImport = {
+      import_session_id: "cancel-session",
+      workflow_id: "unknown__cancel-me__0.1.0",
+      status: "duplicate_identity",
+      user_facing_message: "This workflow is already in Noofy.",
+      workflow: {
+        id: "unknown__cancel-me__0.1.0",
+        name: "Cancel Me",
+        version: "0.1.0",
+        description: "",
+        trust_level: "quarantined_community",
+      },
+      required_model_count: 0,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: null,
+      duplicate_identity: {
+        status: "conflict",
+        user_facing_message: "A workflow with this identity already exists in Noofy.",
+        existing_workflow: {
+          id: "unknown__cancel-me__0.1.0",
+          name: "Cancel Me",
+          version: "0.1.0",
+        },
+        incoming_workflow: {
+          id: "unknown__cancel-me__0.1.0",
+          name: "Cancel Me",
+          version: "0.1.0",
+        },
+        actions: ["replace", "copy", "cancel"],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=cancel.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(duplicateImport));
+      }
+      if (url.endsWith("/api/workflows/import/cancel-session") && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ import_session_id: "cancel-session", status: "canceled" }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage();
+
+    await screen.findByText("Choose File");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["archive"], "cancel.noofy")] } });
+
+    expect(await screen.findByRole("dialog", { name: "Cancel Me" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel import" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/cancel-session", {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+    });
+    expect(screen.queryByRole("dialog", { name: "Cancel Me" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/commit"))).toBe(false);
   });
 
   it("shows immediate feedback while continuing an import without downloading", async () => {

@@ -10,6 +10,7 @@ import {
   Plus,
   Search,
   Users,
+  X,
 } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { resolveBackendUrl } from "../../lib/api/client";
@@ -29,7 +30,11 @@ import {
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import { clearDashboardDraft, type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import {
+  clearDashboardDraft,
+  loadDashboardDraft,
+  type DashboardSchema,
+} from "../dashboard-builder/dashboardBuilderContent";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/WorkflowImportModals";
@@ -38,7 +43,12 @@ import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
 import { hardwareWarningPillView } from "../workflows/hardwareWarning";
 import { WORKFLOW_ICONS } from "../workflows/workflowMetadataOptions";
-import { searchWorkflows, workflowStatusLabel as workflowSearchStatusLabel } from "../workflows/workflowSearch";
+import {
+  searchWorkflows,
+  workflowNeedsConfiguration,
+  workflowStatus as workflowSearchStatus,
+  workflowStatusLabel as workflowSearchStatusLabel,
+} from "../workflows/workflowSearch";
 import {
   fallbackWorkflow,
   starterWorkflows,
@@ -90,7 +100,9 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
       status,
       statusLabel:
-        workflow.status === "imported"
+        status === "needs_input_setup"
+          ? workflowStatusLabel(status)
+          : workflow.status === "imported"
           ? workflowStatusLabel(status)
           : workflow.status_label ?? workflowStatusLabel(status),
       trustLabel: workflow.trust?.label ?? trustLevelLabel(workflow.trust_level),
@@ -256,12 +268,12 @@ function workflowCardVariant(workflow: WorkflowSummary, group: NativeHomeWorkflo
 }
 
 function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
-  if (workflow.status === "needs_input_setup") {
-    return "needs_input_setup";
-  }
-
   if (workflow.status === "cannot_prepare_automatically") {
     return "cannot_prepare_automatically";
+  }
+
+  if (workflowSearchStatus(workflow) === "need_setup") {
+    return "needs_input_setup";
   }
 
   return "installed";
@@ -269,7 +281,7 @@ function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
 
 function workflowStatusLabel(status: WorkflowStatus) {
   if (status === "needs_input_setup") {
-    return "Needs input setup";
+    return "Configure";
   }
 
   if (status === "cannot_prepare_automatically") {
@@ -309,6 +321,14 @@ function trustLevelTone(level?: string) {
   return "verified";
 }
 
+interface PendingSetupBanner {
+  kind: "import" | "draft";
+  workflowId: string;
+  workflowName: string;
+  title: string;
+  message: string;
+}
+
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   nativeImportRequest?: NativeWorkflowImportRequest | null;
@@ -336,9 +356,11 @@ export function HomePage({
     duplicateImport,
     readyImportAction,
     cancelImport,
+    dismissImportResult,
   } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
+  const [draftDismissTick, setDraftDismissTick] = useState(0);
   const [exportDialog, setExportDialog] = useState<{
     workflowName: string;
     exportUrl: string;
@@ -378,6 +400,46 @@ export function HomePage({
     () => recentlyOpenedWorkflows(workflowLibrary.workflows),
     [workflowLibrary.workflows],
   );
+
+  // Workflows that still need input setup get a dismissible reminder banner: the
+  // one just imported (transient), plus any with a saved builder draft so the
+  // reminder survives leaving the builder and a refresh. Stacked when several
+  // drafts are waiting. The dismiss tick re-reads the localStorage drafts.
+  const pendingSetupBanners = useMemo<PendingSetupBanner[]>(() => {
+    const draftWorkflows = workflowLibrary.workflows.filter(
+      (workflow) => workflowNeedsConfiguration(workflow) && loadDashboardDraft(workflow.id) !== null,
+    );
+    const banners: PendingSetupBanner[] = draftWorkflows.map((workflow) => {
+      const name = workflowDisplayName(workflow);
+      return {
+        kind: "draft",
+        workflowId: workflow.id,
+        workflowName: name,
+        title: "Needs input setup",
+        message: `Resume setting up ${name} to finish its dashboard.`,
+      };
+    });
+
+    const result = homeData.importResult;
+    if (
+      result &&
+      result.status === "needs_input_setup" &&
+      !draftWorkflows.some((workflow) => workflow.id === result.workflow.id)
+    ) {
+      const name = workflowDisplayName(result.workflow);
+      banners.unshift({
+        kind: "import",
+        workflowId: result.workflow.id,
+        workflowName: name,
+        title: result.user_facing_message,
+        message: `${name} was added to your local workflows.`,
+      });
+    }
+
+    return banners;
+    // draftDismissTick forces a re-read after a draft is discarded locally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowLibrary.workflows, homeData.importResult, draftDismissTick]);
 
   const homeSearchResults = useMemo(
     () =>
@@ -493,6 +555,16 @@ export function HomePage({
     }
   }
 
+  function dismissPendingSetup(banner: PendingSetupBanner) {
+    // Discard the in-progress draft and close the reminder. The workflow stays
+    // imported; its card still offers "Configure" if it is reopened later.
+    clearDashboardDraft(banner.workflowId);
+    if (banner.kind === "import") {
+      dismissImportResult();
+    }
+    setDraftDismissTick((tick) => tick + 1);
+  }
+
   async function handleEditWorkflowCard(workflow: WorkflowCard, open?: (schema: DashboardSchema) => void) {
     const workflowId = activeWorkflowId(workflow);
     const workflowTitle = activeWorkflowTitle(workflow);
@@ -536,31 +608,46 @@ export function HomePage({
             </div>
           ) : null}
 
-          {homeData.importResult ? (
+          {homeData.importResult && homeData.importResult.status !== "needs_input_setup" ? (
             <div className="notice notice--row" role="status">
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
                 <strong>{homeData.importResult.user_facing_message}</strong>
                 <span>{workflowDisplayName(homeData.importResult.workflow)} was added to your local workflows.</span>
               </div>
-              {homeData.importResult.status === "needs_input_setup" && onConfigureDashboard ? (
+            </div>
+          ) : null}
+
+          {pendingSetupBanners.map((banner) => (
+            <div className="notice notice--row" role="status" key={`${banner.kind}:${banner.workflowId}`}>
+              <CheckCircle2 size={18} aria-hidden="true" />
+              <div>
+                <strong>{banner.title}</strong>
+                <span>{banner.message}</span>
+              </div>
+              {onConfigureDashboard ? (
                 <button
                   className="primary-button primary-button--compact"
                   style={{ marginLeft: "auto" }}
                   type="button"
-                  onClick={() =>
-                    onConfigureDashboard(
-                      homeData.importResult!.workflow.id,
-                      workflowDisplayName(homeData.importResult!.workflow),
-                    )
-                  }
+                  onClick={() => onConfigureDashboard(banner.workflowId, banner.workflowName)}
                 >
                   <PackagePlus size={14} aria-hidden="true" />
                   Configure dashboard
                 </button>
               ) : null}
+              <button
+                className="icon-button"
+                style={onConfigureDashboard ? undefined : { marginLeft: "auto" }}
+                type="button"
+                aria-label={`Dismiss setup for ${banner.workflowName}`}
+                title="Discard draft and dismiss"
+                onClick={() => dismissPendingSetup(banner)}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
-          ) : null}
+          ))}
 
           {homeData.importError ? (
             <div className="notice notice--error" role="status">
@@ -708,7 +795,7 @@ export function HomePage({
                               <span>{workflowDisplayName(workflow)}</span>
                               <small>{workflow.description || workflow.status_label || workflowSearchStatusLabel(workflow)}</small>
                             </span>
-                            <span className="mini-status">{workflow.status_label ?? workflowSearchStatusLabel(workflow)}</span>
+                            <span className="mini-status">{workflowSearchStatusLabel(workflow)}</span>
                           </button>
                         ))
                       ) : (
@@ -769,7 +856,7 @@ export function HomePage({
                           {formatOpenedAt(recent.last_opened)}
                         </p>
                       </div>
-                      <span className="mini-status">{recent.status_label ?? workflowSearchStatusLabel(recent)}</span>
+                      <span className="mini-status">{workflowSearchStatusLabel(recent)}</span>
                       <button
                         className="secondary-button secondary-button--small"
                         type="button"

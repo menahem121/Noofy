@@ -260,6 +260,10 @@ export function useWorkflowImportFlow({
     }));
   }, [state.pendingImport?.import_session_id]);
 
+  const dismissImportResult = useCallback(() => {
+    setState((current) => (current.importResult ? { ...current, importResult: null } : current));
+  }, []);
+
   useEffect(() => {
     const sessionId = state.pendingImport?.import_session_id;
     const verifying =
@@ -407,5 +411,6 @@ export function useWorkflowImportFlow({
     duplicateImport,
     readyImportAction,
     cancelImport,
+    dismissImportResult,
   };
 }

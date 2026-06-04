@@ -59,20 +59,22 @@ export function DuplicateWorkflowModal({
           </button>
         </header>
 
-        <div className="notice notice--warning" role="status">
-          <AlertCircle size={18} aria-hidden="true" />
-          <div>
-            <strong>No silent replacement</strong>
-            <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
+        <div className="required-models-modal__body">
+          <div className="notice notice--warning" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>No silent replacement</strong>
+              <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
+            </div>
           </div>
-        </div>
 
-        {busy ? (
-          <div className="required-models-modal__processing" role="status" aria-live="polite">
-            <Loader2 className="spin" size={16} aria-hidden="true" />
-            <span>Preparing workflow import...</span>
-          </div>
-        ) : null}
+          {busy ? (
+            <div className="required-models-modal__processing" role="status" aria-live="polite">
+              <Loader2 className="spin" size={16} aria-hidden="true" />
+              <span>Preparing workflow import...</span>
+            </div>
+          ) : null}
+        </div>
 
         <footer className="required-models-modal__footer required-models-modal__footer--ready">
           <button className="primary-button" type="button" disabled={busy} onClick={onReplace}>
@@ -161,33 +163,35 @@ export function RequiredModelsModal({
           </button>
         </header>
 
-        {duplicate ? (
-          <div className="notice notice--warning" role="status">
-            <AlertCircle size={18} aria-hidden="true" />
-            <div>
-              <strong>Workflow already exists</strong>
-              <span>{duplicate.user_facing_message}</span>
+        <div className="required-models-modal__body">
+          {duplicate ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Workflow already exists</strong>
+                <span>{duplicate.user_facing_message}</span>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        <div className="required-models-list">
-          {summary.models.map((model) => (
-            <RequiredModelRow key={model.requirement_id} model={model} progress={jobModels.get(model.requirement_id)} />
-          ))}
+          <div className="required-models-list">
+            {summary.models.map((model) => (
+              <RequiredModelRow key={model.requirement_id} model={model} progress={jobModels.get(model.requirement_id)} />
+            ))}
+          </div>
+
+          {downloadJob && shouldShowDownloadProgress(downloadJob) ? (
+            <ModelDownloadProgressPanel job={downloadJob} onRetry={onDownload} onViewModels={onViewModels} />
+          ) : null}
+          {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
+
+          {importing ? (
+            <div className="required-models-modal__processing" role="status" aria-live="polite">
+              <Loader2 className="spin" size={16} aria-hidden="true" />
+              <span>Preparing workflow import...</span>
+            </div>
+          ) : null}
         </div>
-
-        {downloadJob && shouldShowDownloadProgress(downloadJob) ? (
-          <ModelDownloadProgressPanel job={downloadJob} onRetry={onDownload} onViewModels={onViewModels} />
-        ) : null}
-        {activeVerification ? <ModelVerificationProgressPanel job={verificationJob} /> : null}
-
-        {importing ? (
-          <div className="required-models-modal__processing" role="status" aria-live="polite">
-            <Loader2 className="spin" size={16} aria-hidden="true" />
-            <span>Preparing workflow import...</span>
-          </div>
-        ) : null}
 
         <footer className={`required-models-modal__footer${readyToRun ? " required-models-modal__footer--ready" : ""}`}>
           {duplicate ? (

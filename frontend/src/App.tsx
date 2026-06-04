@@ -16,6 +16,7 @@ import { ModelsPage } from "./features/models/ModelsPage";
 import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
+import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
 import {
   cancelJob,
   cancelQueuedRunnerStart,
@@ -404,11 +405,7 @@ function AppContent() {
 }
 
 function workflowNeedsDashboardSetup(workflow: WorkflowSummary | null | undefined) {
-  if (!workflow) return false;
-  if (workflow.dashboard_ready === false) return true;
-  if (workflow.dashboard_status && workflow.dashboard_status !== "configured") return true;
-  if ((workflow.unresolved_input_count ?? 0) > 0) return true;
-  return workflow.status === "needs_input_setup" || workflow.status === "prepared_needs_input_setup";
+  return workflow ? workflowNeedsConfiguration(workflow) : false;
 }
 
 interface WorkflowCloseDialogState {

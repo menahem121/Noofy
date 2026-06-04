@@ -162,18 +162,16 @@ export type DashboardTopLevelItem =
   | { kind: "widget"; id: string; widget: DashboardWidget; layout?: DashboardWidgetLayout }
   | { kind: "group"; id: string; group: DashboardWidgetGroup; widgets: DashboardWidget[]; layout?: DashboardWidgetLayout };
 
-export type DashboardDraftStatus = "draft" | "configured";
-
 export const DEFAULT_FILE_ACCEPTED_EXTENSIONS = [".txt", ".json", ".csv", ".srt", ".pdf", ".zip", ".npy", ".pt"];
 
 export function dashboardDraftKey(workflowId: string) {
   return `noofy.builderDraft.${workflowId}`;
 }
 
-export function saveDashboardDraft(schema: DashboardSchema, status: DashboardDraftStatus = "draft") {
+export function saveDashboardDraft(schema: DashboardSchema) {
   window.localStorage.setItem(
     dashboardDraftKey(schema.workflowId),
-    JSON.stringify({ ...normalizeDashboardSchema(schema), status }),
+    JSON.stringify({ ...normalizeDashboardSchema(schema), status: "draft" }),
   );
 }
 

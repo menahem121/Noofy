@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   Box,
   ArrowLeft,
@@ -182,6 +182,12 @@ export function DashboardBuilderLayoutPage({
   }, [schema]);
 
   const schemaReady = schema.workflowId === activeWorkflowId;
+
+  useEffect(() => {
+    if (!schemaReady) return;
+    saveDashboardDraft(schema);
+  }, [schema, schemaReady]);
+
   const topLevelItems = schemaReady ? topLevelDashboardItems(schema) : [];
   const unplacedItems = topLevelItems.filter((item) => !dashboardItemLayout(item));
   const placedItems = topLevelItems.filter((item) => dashboardItemLayout(item));
@@ -445,7 +451,11 @@ export function DashboardBuilderLayoutPage({
           }),
           current.layout.gridColumns,
         );
-        const topLevelCollides = topLevelDashboardItems(current).some((item) => {
+        const items = topLevelDashboardItems(current);
+        const target = items.find((item) => item.id === resizeState.itemId);
+        const currentLayout = target ? dashboardItemLayout(target) : undefined;
+        if (currentLayout && sameGridLayout(candidate, currentLayout)) return current;
+        const topLevelCollides = items.some((item) => {
           const layout = dashboardItemLayout(item);
           if (item.id === resizeState.itemId || !layout) return false;
           return layoutsOverlap(candidate, layout);
