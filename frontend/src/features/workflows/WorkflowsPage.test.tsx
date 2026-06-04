@@ -425,13 +425,13 @@ describe("WorkflowsPage", () => {
     renderPage();
 
     expect(await screen.findByText("Native Text")).toBeInTheDocument();
-    expect(workflowRowNames()).toEqual(["Native Text", "Cleanup Flow"]);
-
-    fireEvent.click(screen.getByRole("button", { name: "Sort by Name ascending" }));
     expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Sort by Name descending" }));
     expect(workflowRowNames()).toEqual(["Native Text", "Cleanup Flow"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Name ascending" }));
+    expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Sort by Category ascending" }));
     expect(workflowRowNames()).toEqual(["Cleanup Flow", "Native Text"]);

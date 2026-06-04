@@ -120,7 +120,7 @@ export function WorkflowsPage({
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState("all");
-  const [sort, setSort] = useState<WorkflowSortState | null>(null);
+  const [sort, setSort] = useState<WorkflowSortState | null>({ key: "name", direction: "asc" });
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [details, setDetails] = useState<Record<string, WorkflowDetails>>({});
