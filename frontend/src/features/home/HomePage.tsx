@@ -641,7 +641,7 @@ export function HomePage({
               </div>
               <div>
                 <h2>Join the Reddit Community</h2>
-                <p>Share workflows, ask questions, and follow Noofy's progress with other local AI builders.</p>
+                <p>Share workflows, ask questions, and follow Noofy's progress with other AI creators.</p>
               </div>
               <button
                 className="primary-button primary-button--compact primary-button--reddit"

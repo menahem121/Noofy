@@ -80,7 +80,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [sort, setSort] = useState<ModelSortState | null>(null);
+  const [sort, setSort] = useState<ModelSortState | null>({ key: "name", direction: "asc" });
 
   const [showTagCreate, setShowTagCreate] = useState(false);
   const [newTagName, setNewTagName] = useState("");
