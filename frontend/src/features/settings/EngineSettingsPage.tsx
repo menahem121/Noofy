@@ -292,6 +292,19 @@ function comfyUiSourceLabel(source: string | null | undefined) {
   return "Unknown";
 }
 
+function comfyUiVersionOptionLabel(
+  option: ComfyUIVersionsResponse["options"][number],
+) {
+  if (option.active) return `${option.tag} (Current)`;
+  if (option.incompatible) return `${option.tag} (Not compatible)`;
+  if (option.repair_status === "repair_blocked")
+    return `${option.tag} (Repair paused)`;
+  if (option.failed_validation) return `${option.tag} (Validation failed)`;
+  if (option.locally_verified) return `${option.tag} (Validated)`;
+  if (option.installed) return `${option.tag} (Installed)`;
+  return option.tag;
+}
+
 export function EngineSettingsPage({
   onNavigate,
 }: {
@@ -1161,12 +1174,12 @@ export function EngineSettingsPage({
                     }
                   >
                     <option value="latest">
-                      Latest version
+                      Latest ComfyUI
                       {versions?.latest_tag ? ` (${versions.latest_tag})` : ""}
                     </option>
                     {versions?.options.map((option) => (
                       <option value={option.tag} key={option.tag}>
-                        {option.label}
+                        {comfyUiVersionOptionLabel(option)}
                       </option>
                     ))}
                   </select>

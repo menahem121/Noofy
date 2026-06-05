@@ -1130,6 +1130,24 @@ def test_resolve_active_runtime_selection_uses_installed_metadata(
     assert selection.version_metadata.active_tag == "v0.20.1"
 
 
+def test_resolve_active_runtime_selection_reports_bundled_comfyui_version(
+    tmp_path: Path,
+) -> None:
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+
+    selection = resolve_active_runtime_selection(
+        paths,
+        fallback_repo_dir=tmp_path / "fallback",
+        fallback_python_executable=None,
+        mode="managed",
+        developer_override=False,
+    )
+
+    assert selection.version_metadata.source_kind == "bundled"
+    assert selection.version_metadata.active_tag == "v0.20.1"
+
+
 def test_resolve_active_runtime_selection_keeps_broken_installed_runtime_for_repair(
     tmp_path: Path,
 ) -> None:

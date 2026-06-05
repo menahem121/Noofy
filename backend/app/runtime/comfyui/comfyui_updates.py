@@ -10,6 +10,7 @@ import zipfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -56,6 +57,10 @@ from app.runtime.profiles import (
     RuntimeSourceOriginKind,
     RuntimeSourceStatus,
     build_comfyui_source_manifest,
+)
+from app.runtime.profiles.profiles import (
+    DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
+    load_runtime_profile_catalog,
 )
 
 AUTOMATIC_REPAIR_MAX_ATTEMPTS = 2
@@ -185,8 +190,22 @@ def resolve_active_runtime_selection(
         repo_dir=fallback_repo_dir,
         python_executable=fallback_python_executable,
         venv_dir=None,
-        version_metadata=ComfyUIVersionMetadata(source_kind="bundled"),
+        version_metadata=ComfyUIVersionMetadata(
+            active_tag=_bundled_comfyui_version(),
+            source_kind="bundled",
+        ),
     )
+
+
+@lru_cache(maxsize=1)
+def _bundled_comfyui_version() -> str | None:
+    try:
+        catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
+    except Exception:
+        return None
+    if not catalog.profiles:
+        return None
+    return catalog.profiles[0].comfyui_core_version
 
 
 class ComfyUIUpdateService:

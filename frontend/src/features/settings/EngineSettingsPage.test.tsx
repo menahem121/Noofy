@@ -404,7 +404,7 @@ describe("EngineSettingsPage", () => {
 
     expect(select).toHaveValue("latest");
     expect(
-      screen.queryByRole("option", { name: /latest version.*v0.21.0/i }),
+      screen.queryByRole("option", { name: /latest comfyui.*v0.21.0/i }),
     ).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/engine/comfyui/versions?check_upstream=true",
@@ -421,8 +421,12 @@ describe("EngineSettingsPage", () => {
     );
 
     expect(
-      await screen.findByRole("option", { name: /latest version.*v0.21.0/i }),
+      await screen.findByRole("option", { name: /latest comfyui.*v0.21.0/i }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "v0.21.0" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /available upstream/i }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: /v0.20.1.*current/i }),
     ).toBeInTheDocument();
@@ -432,6 +436,54 @@ describe("EngineSettingsPage", () => {
         headers: { Accept: "application/json" },
       },
     );
+  });
+
+  it("shows the bundled ComfyUI version when Noofy is using the included runtime", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime"))
+        return Promise.resolve(
+          jsonResponse({
+            ...readyRuntime,
+            version: {
+              active_tag: "v0.20.1",
+              source_hash: null,
+              source_kind: "bundled",
+              local_validation_status: null,
+            },
+          }),
+        );
+      if (url.endsWith("/api/engine/comfyui/versions"))
+        return Promise.resolve(
+          jsonResponse({
+            ...localVersions,
+            current: null,
+            options: [],
+          }),
+        );
+      if (url.endsWith("/api/engine/comfyui/launch-settings"))
+        return Promise.resolve(jsonResponse(launchSettings));
+      if (url.endsWith("/api/settings/apis"))
+        return Promise.resolve(jsonResponse(apiSettings));
+      if (url.endsWith("/api/settings/model-folders"))
+        return Promise.resolve(jsonResponse(modelFolderSettings));
+      if (url.endsWith("/api/settings/noofy-runtime"))
+        return Promise.resolve(jsonResponse(noofyRuntimeSettings));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSettingsPage();
+
+    const panel = (
+      await screen.findByRole("heading", { name: "ComfyUI Workflow Engine" })
+    ).closest("article");
+
+    expect(
+      within(panel as HTMLElement).getByText("v0.20.1"),
+    ).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByText("Included with Noofy"),
+    ).toBeInTheDocument();
   });
 
   it("shows repair-blocked and incompatible ComfyUI version states", async () => {
@@ -492,7 +544,7 @@ describe("EngineSettingsPage", () => {
       await screen.findByText("Automatic repair paused"),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("option", { name: /v0.19.0.*incompatible/i }),
+      screen.getByRole("option", { name: /v0.19.0.*not compatible/i }),
     ).toBeInTheDocument();
   });
 
