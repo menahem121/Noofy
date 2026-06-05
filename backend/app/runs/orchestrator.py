@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.diagnostics import DiagnosticsSink
 from app.engine.adapter import EngineAdapter
+from app.engine.errors import EngineUserFixableValidationError
 from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import EngineJob, WorkflowValidationResult
 from app.gallery import OutputPreference, RunSubmissionSnapshot, build_run_submission_snapshot
@@ -34,6 +35,10 @@ from app.runs.credentials import (
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import WorkflowPackage
 from app.workflows.bindings import package_for_input_bindings
+from app.workflows.run_input_validation import (
+    validate_run_inputs,
+    validation_result_for_user_errors,
+)
 from app.runs.media_staging import (
     MediaInputStagingError,
     MediaInputStagingResolver,
@@ -221,6 +226,18 @@ class RunOrchestrator:
                 valid=False,
                 errors=[dashboard_unavailable],
             )
+        user_errors = validate_run_inputs(package, inputs)
+        if user_errors:
+            primary_error = user_errors[0]
+            self._record_run_blocked(package, primary_error.user_message)
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by dashboard input validation",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"user_errors": [error.model_dump(mode="json") for error in user_errors]},
+            )
+            return validation_result_for_user_errors(package, user_errors)
         try:
             credential_plan = build_credential_injection_plan(
                 package=package,
@@ -671,6 +688,18 @@ class RunOrchestrator:
                 cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
                 return self._canceled_queue_job(workflow_id, queue_id)
             job = await adapter.run_workflow(package, graph, resolved_inputs, adapter_options)
+        except EngineUserFixableValidationError as exc:
+            self.runner_supervisor.rollback_runner_reservation(reservation_token)
+            cleanup_staged_media_files(media_staging.staged_files if media_staging else [])
+            self._record_run_blocked(package, exc.user_error.user_message)
+            self.log_store.add(
+                "warning",
+                "Workflow run blocked by engine input validation",
+                "runs.orchestrator",
+                workflow_id=workflow_id,
+                details={"user_error": exc.user_error.model_dump(mode="json")},
+            )
+            return validation_result_for_user_errors(package, [exc.user_error])
         except Exception:
             self.runner_supervisor.rollback_runner_reservation(reservation_token)
             cleanup_staged_media_files(media_staging.staged_files if media_staging else [])

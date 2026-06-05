@@ -877,6 +877,7 @@ function CanvasWidgetCell({
       layout={layout}
       style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
       onPointerDown={isEditingLayout ? onMoveStart : undefined}
+      data-dashboard-control-id={control ? control.id : undefined}
     >
       <header className="layout-canvas-widget__header">
         <div className="layout-canvas-widget__title">
@@ -1042,7 +1043,7 @@ function GroupedCanvasControls({
           control.type === "textarea" ? "canvas-widget-group__control--textarea" : "",
         ].filter(Boolean).join(" ");
         return (
-          <div className={controlClasses} key={control.id}>
+          <div className={controlClasses} key={control.id} data-dashboard-control-id={control.id}>
             {control.type !== "note" && control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
             {control.type === "note" ? (
               <DashboardNoteBody title={control.label} body={control.description} />

@@ -14,6 +14,7 @@ from uuid import uuid4
 import httpx
 import websockets
 
+from app.engine.errors import EngineUserFixableValidationError
 from app.engine.job_store import JobStore
 from app.diagnostics import DiagnosticsSink, sanitize_text
 from app.media_types import MEDIA_KINDS as _MEDIA_KINDS
@@ -29,6 +30,7 @@ from app.engine.models import (
 from app.engine.adapter import EngineMemoryCleanupCapabilities, EngineMemoryCleanupMode
 from app.runs.credentials import plan_from_options
 from app.workflows.package import WorkflowPackage
+from app.workflows.run_input_validation import map_comfyui_submission_validation_error
 
 _ASSET_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9_-]+)+$",
@@ -176,7 +178,40 @@ class ComfyUIEngineAdapter:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(f"{self.base_url}/prompt", json=payload)
+                if response.is_error:
+                    response_text = response.text
+                    try:
+                        response_json: Any = response.json()
+                    except ValueError:
+                        response_json = None
+                    user_error = map_comfyui_submission_validation_error(
+                        package=workflow_package,
+                        submitted_inputs=_inputs,
+                        status_code=response.status_code,
+                        response_json=response_json,
+                        response_text=response_text,
+                    )
+                    if user_error is not None:
+                        self._stop_event_listener(job_id)
+                        self._cleanup_staged_files(job_id)
+                        self.job_store.set_progress(
+                            JobProgress(job_id=job_id, status="failed", message=user_error.user_message)
+                        )
+                        self.job_store.set_result(
+                            JobResult(job_id=job_id, status="failed", error=user_error.message)
+                        )
+                        self.log_store.add(
+                            "warning",
+                            "ComfyUI validation failure mapped to user-fixable input error",
+                            "comfyui.adapter",
+                            job_id=job_id,
+                            workflow_id=workflow_package.metadata.id,
+                            details={"user_error": user_error.model_dump(mode="json")},
+                        )
+                        raise EngineUserFixableValidationError(user_error)
                 response.raise_for_status()
+        except EngineUserFixableValidationError:
+            raise
         except httpx.HTTPError as exc:
             self._stop_event_listener(job_id)
             self._cleanup_staged_files(job_id)

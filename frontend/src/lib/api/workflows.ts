@@ -253,6 +253,19 @@ export interface WorkflowValidationResult {
   valid: boolean;
   missing_models: MissingModel[];
   errors: string[];
+  user_errors?: RunUserFixableError[];
+}
+
+export interface RunUserFixableError {
+  code: "missing_required_input" | "invalid_input_value" | string;
+  title: string;
+  message: string;
+  user_message: string;
+  severity: "user_fixable" | string;
+  control_id: string | null;
+  input_id: string | null;
+  input_type: string | null;
+  developer_details: Record<string, unknown>;
 }
 
 export interface OutputPreference {

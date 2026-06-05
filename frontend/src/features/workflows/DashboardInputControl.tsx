@@ -79,7 +79,7 @@ export function DashboardInputControl({
   if (variant === "classic") {
     if (hideLabel) {
       return (
-        <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`}>
+        <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`} data-dashboard-control-id={control.id}>
           {description ? <small>{description}</small> : null}
           {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
         </label>
@@ -87,7 +87,7 @@ export function DashboardInputControl({
     }
 
     return (
-      <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`}>
+      <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`} data-dashboard-control-id={control.id}>
         {control.type === "toggle" ? (
           <>
             {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}

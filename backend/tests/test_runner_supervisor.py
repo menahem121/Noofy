@@ -9,7 +9,7 @@ import pytest
 
 from app.diagnostics import LogStore
 from app.engine.memory_observation import memory_input_profile_fingerprint
-from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo
+from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo, WorkflowValidationResult
 from app.engine.service import EngineService
 from app.runtime.memory import service as memory_service_module
 from app.runtime.memory.memory_governor import (
@@ -46,7 +46,16 @@ from app.runtime.runners.supervisor import (
     RunnerSupervisor,
 )
 from app.workflows.loader import WorkflowPackageLoader
-from app.workflows.package import WorkflowCustomNodeRecord, WorkflowInput
+from app.workflows.package import (
+    DashboardControl,
+    DashboardSchema,
+    DashboardSection,
+    InputBinding,
+    WorkflowCustomNodeRecord,
+    WorkflowInput,
+    WorkflowMetadata,
+    WorkflowPackage,
+)
 from app.workflows.validator import WorkflowPackageValidator
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1] / "app/workflows/packages"
@@ -977,6 +986,51 @@ def _build_service(
         runner_memory_telemetry_reader=runner_memory_telemetry_reader,
     )
     return service, supervisor
+
+
+def _dashboard_input_package(
+    *,
+    workflow_id: str,
+    input_id: str,
+    control_type: str,
+    input_name: str,
+    required: bool,
+    validation: dict[str, Any] | None = None,
+) -> WorkflowPackage:
+    return WorkflowPackage(
+        metadata=WorkflowMetadata(id=workflow_id, name=workflow_id, version="1.0.0"),
+        engine="comfyui",
+        comfyui_graph={"1": {"class_type": "TestNode", "inputs": {input_name: None}}},
+        inputs=[
+            WorkflowInput(
+                id=input_id,
+                label=input_id.replace("_", " ").title(),
+                control=control_type,
+                binding=InputBinding(node_id="1", input_name=input_name),
+                default=None,
+                validation=validation or {},
+            )
+        ],
+        dashboard=DashboardSchema(
+            version="0.1.0",
+            status="configured",
+            sections=[
+                DashboardSection(
+                    id="main",
+                    title="Main",
+                    controls=[
+                        DashboardControl(
+                            id=f"ctrl-{input_id}",
+                            type=control_type,
+                            label=input_id.replace("_", " ").title(),
+                            input_id=input_id,
+                            required=required,
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
 
 
 def test_existing_workflow_queue_wait_does_not_request_immediate_redispatch() -> None:
@@ -2612,6 +2666,112 @@ async def test_run_workflow_blocked_by_validation_does_not_register_job() -> Non
 
     # Validation blocked submission, so no job exists and nothing was routed.
     assert hasattr(result, "valid") and not result.valid
+    assert adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_missing_required_image_returns_user_error_without_adapter_call() -> None:
+    adapter = RecordingAdapter(models=[])
+    service, supervisor = _build_service(adapter)
+    package = _dashboard_input_package(
+        workflow_id="image_required_wf",
+        input_id="source_image",
+        control_type="load_image",
+        input_name="image",
+        required=True,
+    )
+    service.workflow_loader = SimpleNamespace(get_package=lambda workflow_id: package)
+    service.run_orchestrator.workflow_loader = service.workflow_loader
+
+    result = await service.run_workflow("image_required_wf", inputs={}, options={})
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.user_errors[0].code == "missing_required_input"
+    assert result.user_errors[0].title == "Missing image"
+    assert result.user_errors[0].control_id == "ctrl-source_image"
+    assert result.user_errors[0].input_id == "source_image"
+    assert adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_missing_required_text_returns_user_error_without_adapter_call() -> None:
+    adapter = RecordingAdapter(models=[])
+    service, supervisor = _build_service(adapter)
+    package = _dashboard_input_package(
+        workflow_id="prompt_required_wf",
+        input_id="prompt",
+        control_type="textarea",
+        input_name="text",
+        required=True,
+    )
+    service.workflow_loader = SimpleNamespace(get_package=lambda workflow_id: package)
+    service.run_orchestrator.workflow_loader = service.workflow_loader
+
+    result = await service.run_workflow("prompt_required_wf", inputs={"prompt": "   "}, options={})
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.user_errors[0].code == "missing_required_input"
+    assert result.user_errors[0].title == "Missing prompt"
+    assert result.user_errors[0].control_id == "ctrl-prompt"
+    assert adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_invalid_required_gallery_media_returns_user_error() -> None:
+    adapter = RecordingAdapter(models=[])
+    service, supervisor = _build_service(adapter)
+    package = _dashboard_input_package(
+        workflow_id="image_required_wf",
+        input_id="source_image",
+        control_type="load_image",
+        input_name="image",
+        required=True,
+    )
+    service.workflow_loader = SimpleNamespace(get_package=lambda workflow_id: package)
+    service.run_orchestrator.workflow_loader = service.workflow_loader
+
+    result = await service.run_workflow(
+        "image_required_wf",
+        inputs={"source_image": {"source": "gallery", "gallery_item_id": "", "kind": "image"}},
+        options={},
+    )
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.user_errors[0].code == "invalid_input_value"
+    assert result.user_errors[0].title == "Check image"
+    assert result.user_errors[0].developer_details["invalid_reason"] == "invalid_media_reference"
+    assert adapter.run_calls == []
+    assert supervisor.job_registry.snapshot() == {}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_required_select_outside_options_returns_user_error() -> None:
+    adapter = RecordingAdapter(models=[])
+    service, supervisor = _build_service(adapter)
+    package = _dashboard_input_package(
+        workflow_id="select_required_wf",
+        input_id="style",
+        control_type="select",
+        input_name="style",
+        required=True,
+        validation={"required": True, "options": ["photo", "illustration"]},
+    )
+    service.workflow_loader = SimpleNamespace(get_package=lambda workflow_id: package)
+    service.run_orchestrator.workflow_loader = service.workflow_loader
+
+    result = await service.run_workflow("select_required_wf", inputs={"style": "bad-option"}, options={})
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.user_errors[0].code == "invalid_input_value"
+    assert result.user_errors[0].title == "Choose a valid option"
+    assert result.user_errors[0].developer_details["invalid_reason"] == "outside_options"
     assert adapter.run_calls == []
     assert supervisor.job_registry.snapshot() == {}
 

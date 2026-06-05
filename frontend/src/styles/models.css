@@ -83,6 +83,15 @@
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 }
 
+.workflow-input-error-modal {
+  width: min(720px, 100%);
+}
+
+.workflow-input-error-modal .workflow-failure-modal__footer {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .workflow-preparation-modal {
   width: min(560px, 100%);
   overflow: hidden;
@@ -211,6 +220,39 @@
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.workflow-input-error-details {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.workflow-input-error-details__toggle {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 12px 14px;
+}
+
+.workflow-input-error-details__content {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 8, 10, 0.34);
+}
+
+.workflow-input-error-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dashboard-control-target--highlight {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(99, 102, 241, 0.24);
+  transition: outline-color 160ms ease, box-shadow 160ms ease;
 }
 
 .workflow-failure-modal__footer {

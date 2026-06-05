@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ComponentProps } from "react";
@@ -244,6 +244,40 @@ const unconfiguredPackageData = {
     version: "0.1.0",
     status: "not_configured",
     sections: [],
+  },
+};
+
+const imageInputPackageData = {
+  ...configuredPackageData,
+  inputs: [
+    {
+      id: "source_image",
+      label: "Source image",
+      control: "load_image",
+      binding: { node_id: "267:276", input_name: "image" },
+      default: null,
+      validation: { required: true },
+    },
+  ],
+  dashboard: {
+    version: "0.1.0",
+    status: "configured",
+    sections: [
+      {
+        id: "main",
+        title: "Main",
+        controls: [
+          {
+            id: "ctrl-source-image",
+            type: "load_image",
+            label: "Source image",
+            input_id: "source_image",
+            required: true,
+            layout: { x: 0, y: 0, w: 12, h: 6 },
+          },
+        ],
+      },
+    ],
   },
 };
 
@@ -1171,6 +1205,124 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
     expect(screen.getAllByText(rootCause).length).toBeGreaterThan(0);
     expect(screen.getByText(/runtime\.workspace/)).toBeInTheDocument();
+  });
+
+  it("shows a friendly missing image dialog without raw engine text as the primary message", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      imageInputPackageData,
+      {
+        workflow_id: "text_to_image_v0",
+        valid: false,
+        missing_models: [],
+        errors: ["A required workflow input is missing."],
+        user_errors: [
+          {
+            code: "missing_required_input",
+            title: "Missing image",
+            message: "A required workflow input is missing.",
+            user_message: "Please add an image before running this workflow.",
+            severity: "user_fixable",
+            control_id: "ctrl-source-image",
+            input_id: "source_image",
+            input_type: "image",
+            developer_details: {
+              node_id: "267:276",
+              input_name: "image",
+              engine_error: "prompt_outputs_failed_validation",
+              raw_validation_markers: "LoadImage NoneType endswith",
+            },
+          },
+        ],
+      },
+      (url) => {
+        if (url.endsWith("/api/logs?limit=200")) {
+          return jsonResponse({
+            events: [
+              diagnosticEvent("comfyui.adapter", "prompt_outputs_failed_validation"),
+              diagnosticEvent("engine.service", "Workflow run blocked by dashboard input validation"),
+            ],
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Missing image" });
+    expect(within(dialog).getByText("Please add an image before running this workflow.")).toBeInTheDocument();
+    expect(screen.queryByText("The workflow is not ready")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/400 Bad Request/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/NoneType/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/267:276/i)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /developer details/i }));
+    expect(within(dialog).getByText(/NoneType/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /view logs/i }));
+    expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /copy details/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).toContain("prompt_outputs_failed_validation");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /fix input/i }));
+    const target = document.querySelector('[data-dashboard-control-id="ctrl-source-image"]') as HTMLElement;
+    expect(target).toBeTruthy();
+    expect(target.classList.contains("dashboard-control-target--highlight")).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+  });
+
+  it("shows a friendly missing prompt dialog", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, {
+      workflow_id: "text_to_image_v0",
+      valid: false,
+      missing_models: [],
+      errors: ["A required workflow input is missing."],
+      user_errors: [
+        {
+          code: "missing_required_input",
+          title: "Missing prompt",
+          message: "A required workflow input is missing.",
+          user_message: "Please enter text before running this workflow.",
+          severity: "user_fixable",
+          control_id: "prompt",
+          input_id: "prompt",
+          input_type: "textarea",
+          developer_details: {
+            node_id: "6",
+            input_name: "text",
+          },
+        },
+      ],
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.change(screen.getByRole("textbox", { name: /prompt/i }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Missing prompt" });
+    expect(within(dialog).getByText("Please enter text before running this workflow.")).toBeInTheDocument();
+    expect(within(dialog).queryByText(/400 Bad Request/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/NoneType/i)).not.toBeInTheDocument();
   });
 
   it("blocks the run and explains missing model requirements", async () => {

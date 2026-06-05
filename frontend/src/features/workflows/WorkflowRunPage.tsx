@@ -70,6 +70,7 @@ import {
   type ModelDownloadSelection,
   type RequiredModelAvailability,
   type RequiredModelSummary,
+  type RunUserFixableError,
   type WorkflowInputDef,
   type WorkflowModelVerificationJobStatus,
   type WorkflowOutputDef,
@@ -146,6 +147,17 @@ interface RunFailureDialogState {
   logError: string | null;
   comfyuiLogs: DiagnosticEvent[];
   noofyLogs: DiagnosticEvent[];
+  copied: boolean;
+}
+
+interface RunInputErrorDialogState {
+  error: RunUserFixableError;
+  logsLoading: boolean;
+  logsLoaded: boolean;
+  logError: string | null;
+  comfyuiLogs: DiagnosticEvent[];
+  noofyLogs: DiagnosticEvent[];
+  detailsOpen: boolean;
   copied: boolean;
 }
 
@@ -235,6 +247,7 @@ export function WorkflowRunPage({
   const [state, setState] = useState<RunPageState>(initialState);
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
+  const [inputErrorDialog, setInputErrorDialog] = useState<RunInputErrorDialogState | null>(null);
   const [failedTrackedRuns, setFailedTrackedRuns] = useState<FailedTrackedRun[]>([]);
   const [failedRunSummaryOpen, setFailedRunSummaryOpen] = useState(false);
   const [workflowCancelConfirmation, setWorkflowCancelConfirmation] = useState<WorkflowCancelConfirmationState | null>(null);
@@ -669,6 +682,7 @@ export function WorkflowRunPage({
     beginRunSubmission();
     setRunComparisonInputAssetId(submittedComparisonInputAssetId);
     setFailureDialog(null);
+    setInputErrorDialog(null);
     if (shouldTrackPreparation) {
       setRunPreparationDialog(runPreparationDialogFromStatus(state.workflowStatus));
       stopPreparationPolling = startRunPreparationStatusPolling();
@@ -695,14 +709,17 @@ export function WorkflowRunPage({
           finishRunSubmission();
           setRunPreparationDialog(null);
           setRunComparisonInputAssetId(null);
+          const userError = firstRunUserFixableError(response);
           const message = workflowValidationErrorMessage(response);
           setState((current) => ({
             ...current,
-            validation: response,
+            validation: userError ? current.validation : response,
             progress: null,
-            error: response.valid ? null : message,
+            error: response.valid || userError ? null : message,
           }));
-          if (!response.valid) {
+          if (!response.valid && userError) {
+            openInputErrorDialog(userError);
+          } else if (!response.valid) {
             void openFailureDialog(message, null);
           }
           return;
@@ -935,6 +952,61 @@ export function WorkflowRunPage({
     if (!failureDialog) return;
     await navigator.clipboard.writeText(formatFailureReport(workflowId, failureDialog));
     setFailureDialog((current) => (current ? { ...current, copied: true } : current));
+  }
+
+  function openInputErrorDialog(error: RunUserFixableError) {
+    setInputErrorDialog({
+      error,
+      logsLoading: false,
+      logsLoaded: false,
+      logError: null,
+      comfyuiLogs: [],
+      noofyLogs: [],
+      detailsOpen: false,
+      copied: false,
+    });
+  }
+
+  async function loadInputErrorLogs() {
+    if (!inputErrorDialog || inputErrorDialog.logsLoading) return;
+    setInputErrorDialog((current) => current ? { ...current, logsLoading: true, logError: null, detailsOpen: true } : current);
+    try {
+      const response = await fetchLogs({ limit: logLimit });
+      const splitLogs = splitDiagnosticLogs(response.events);
+      setInputErrorDialog((current) =>
+        current
+          ? {
+              ...current,
+              logsLoading: false,
+              logsLoaded: true,
+              comfyuiLogs: splitLogs.comfyuiLogs,
+              noofyLogs: splitLogs.noofyLogs,
+            }
+          : current,
+      );
+    } catch (error) {
+      setInputErrorDialog((current) =>
+        current
+          ? {
+              ...current,
+              logsLoading: false,
+              logError: error instanceof Error ? error.message : String(error),
+            }
+          : current,
+      );
+    }
+  }
+
+  async function handleCopyInputErrorDetails() {
+    if (!inputErrorDialog) return;
+    await navigator.clipboard.writeText(formatInputErrorReport(workflowId, inputErrorDialog));
+    setInputErrorDialog((current) => (current ? { ...current, copied: true } : current));
+  }
+
+  function handleFixInput(error: RunUserFixableError) {
+    if (!error.control_id) return;
+    focusDashboardControl(error.control_id);
+    setInputErrorDialog(null);
   }
 
   function replaceTrackedRuns(nextRuns: TrackedRun[]) {
@@ -1481,6 +1553,17 @@ export function WorkflowRunPage({
       onCopy={() => void handleCopyFailureLogs()}
     />
   ) : null;
+  const inputErrorDialogElement = inputErrorDialog ? (
+    <WorkflowInputErrorDialog
+      dialog={inputErrorDialog}
+      workflowId={workflowId}
+      onClose={() => setInputErrorDialog(null)}
+      onFixInput={() => handleFixInput(inputErrorDialog.error)}
+      onToggleDetails={() => setInputErrorDialog((current) => current ? { ...current, detailsOpen: !current.detailsOpen } : current)}
+      onViewLogs={() => void loadInputErrorLogs()}
+      onCopy={() => void handleCopyInputErrorDetails()}
+    />
+  ) : null;
   const failedRunSummaryElement = failedTrackedRuns.length > 1 ? (
     <BatchFailureSummary
       failedRuns={failedTrackedRuns}
@@ -1650,6 +1733,7 @@ export function WorkflowRunPage({
           </div>
         ) : null}
         {workflowCancelConfirmationElement}
+        {inputErrorDialogElement}
         {failureDialogElement}
         {preparationDialogElement}
         {loraBrowserElement}
@@ -1806,6 +1890,7 @@ export function WorkflowRunPage({
         </aside>
       </section>
       {failureDialogElement}
+      {inputErrorDialogElement}
       {workflowCancelConfirmationElement}
       {preparationDialogElement}
       {loraBrowserElement}
@@ -1998,6 +2083,115 @@ function WorkflowFailureDialog({
             <Clipboard size={16} aria-hidden="true" />
             {dialog.copied ? "Copied" : "Copy logs"}
           </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function WorkflowInputErrorDialog({
+  dialog,
+  workflowId,
+  onClose,
+  onFixInput,
+  onToggleDetails,
+  onViewLogs,
+  onCopy,
+}: {
+  dialog: RunInputErrorDialogState;
+  workflowId: string;
+  onClose: () => void;
+  onFixInput: () => void;
+  onToggleDetails: () => void;
+  onViewLogs: () => void;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-input-error-title">
+      <section className="workflow-failure-modal workflow-input-error-modal">
+        <header className="workflow-failure-modal__header">
+          <div>
+            <p className="eyebrow">Workflow run</p>
+            <h2 id="workflow-input-error-title">{dialog.error.title}</h2>
+            <p>{dialog.error.user_message}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="workflow-failure-modal__body">
+          <div className="workflow-failure-modal__meta">
+            <span>Workflow: {workflowId}</span>
+            {dialog.error.control_id ? <span>Input: {dialog.error.input_type ?? "required"}</span> : <span>Input: hidden or unavailable</span>}
+          </div>
+          <section className="workflow-input-error-details" aria-label="Developer details">
+            <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
+              {dialog.detailsOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+              Developer details
+            </button>
+            {dialog.detailsOpen ? (
+              <pre className="workflow-log-section__content workflow-input-error-details__content">
+                {JSON.stringify(
+                  {
+                    code: dialog.error.code,
+                    message: dialog.error.message,
+                    control_id: dialog.error.control_id,
+                    input_id: dialog.error.input_id,
+                    input_type: dialog.error.input_type,
+                    developer_details: dialog.error.developer_details,
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+            ) : null}
+          </section>
+          {dialog.logError ? (
+            <div className="notice notice--warning notice--compact" role="status">
+              <AlertCircle size={16} aria-hidden="true" />
+              <div>
+                <strong>Logs could not be loaded</strong>
+                <span>{dialog.logError}</span>
+              </div>
+            </div>
+          ) : null}
+          {dialog.logsLoaded || dialog.logsLoading ? (
+            <>
+              <DiagnosticLogSection
+                title="ComfyUI engine logs"
+                events={dialog.comfyuiLogs}
+                loading={dialog.logsLoading}
+                emptyMessage="No ComfyUI engine logs were returned for this run."
+              />
+              <DiagnosticLogSection
+                title="Noofy logs"
+                events={dialog.noofyLogs}
+                loading={dialog.logsLoading}
+                emptyMessage="No Noofy logs were returned for this run."
+              />
+            </>
+          ) : null}
+        </div>
+
+        <footer className="workflow-failure-modal__footer">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Close
+          </button>
+          <div className="workflow-input-error-modal__actions">
+            <button className="secondary-button" type="button" onClick={onViewLogs}>
+              {dialog.logsLoaded ? "Refresh logs" : "View logs"}
+            </button>
+            <button className="secondary-button" type="button" onClick={onCopy}>
+              <Clipboard size={16} aria-hidden="true" />
+              {dialog.copied ? "Copied" : "Copy details"}
+            </button>
+            {dialog.error.control_id ? (
+              <button className="primary-button" type="button" onClick={onFixInput}>
+                Fix input
+              </button>
+            ) : null}
+          </div>
         </footer>
       </section>
     </div>
@@ -2515,6 +2709,30 @@ function workflowValidationErrorMessage(validation: WorkflowValidationResult) {
   return "Noofy could not start this workflow.";
 }
 
+function firstRunUserFixableError(validation: WorkflowValidationResult) {
+  return validation.user_errors?.find((error) => error.severity === "user_fixable") ?? null;
+}
+
+function focusDashboardControl(controlId: string) {
+  const selector = `[data-dashboard-control-id="${escapeCssIdentifier(controlId)}"]`;
+  const target = document.querySelector<HTMLElement>(selector);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  target.classList.add("dashboard-control-target--highlight");
+  const focusTarget = target.matches("input, textarea, select, button")
+    ? target
+    : target.querySelector<HTMLElement>("input, textarea, select, button, [tabindex]:not([tabindex='-1'])");
+  window.setTimeout(() => focusTarget?.focus({ preventScroll: true }), 250);
+  window.setTimeout(() => target.classList.remove("dashboard-control-target--highlight"), 1800);
+}
+
+function escapeCssIdentifier(value: string) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
 function workflowInstallStatus(workflowStatus: WorkflowStatusResponse | null) {
   return installString(workflowStatus?.install ?? {}, "status");
 }
@@ -2744,6 +2962,35 @@ function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) 
     "",
     "Noofy logs",
     formatDiagnosticEvents(dialog.noofyLogs) || "No Noofy logs were returned for this failure.",
+  ].join("\n");
+}
+
+function formatInputErrorReport(workflowId: string, dialog: RunInputErrorDialogState) {
+  return [
+    "Workflow input error report",
+    `Workflow: ${workflowId}`,
+    `Title: ${dialog.error.title}`,
+    `Message: ${dialog.error.user_message}`,
+    "",
+    "Developer details",
+    JSON.stringify(
+      {
+        code: dialog.error.code,
+        message: dialog.error.message,
+        control_id: dialog.error.control_id,
+        input_id: dialog.error.input_id,
+        input_type: dialog.error.input_type,
+        developer_details: dialog.error.developer_details,
+      },
+      null,
+      2,
+    ),
+    "",
+    "ComfyUI engine logs",
+    formatDiagnosticEvents(dialog.comfyuiLogs) || "Logs were not loaded.",
+    "",
+    "Noofy logs",
+    formatDiagnosticEvents(dialog.noofyLogs) || "Logs were not loaded.",
   ].join("\n");
 }
 

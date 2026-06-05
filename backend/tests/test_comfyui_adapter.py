@@ -8,6 +8,7 @@ import app.engine.comfyui_adapter as comfyui_adapter_module
 from app.diagnostics import LogStore
 from app.engine.adapter import EngineMemoryCleanupMode
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
+from app.engine.errors import EngineUserFixableValidationError
 from app.engine.models import JobProgress, JobResult
 from app.engine.service import EngineService
 from app.runs.credentials import (
@@ -36,6 +37,25 @@ def _media_package(control: str, node_id: str = "10", input_name: str = "image")
                     "default": None,
                 }
             ],
+            "dashboard": {
+                "version": "0.1.0",
+                "status": "configured",
+                "sections": [
+                    {
+                        "id": "main",
+                        "title": "Controls",
+                        "controls": [
+                            {
+                                "id": "media-control",
+                                "type": control,
+                                "label": "Media",
+                                "input_id": "media",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ],
+            },
         }
     )
 
@@ -541,6 +561,86 @@ async def test_adapter_redacts_resolved_api_key_from_http_errors(
     assert secret not in str(log_store.list_events().model_dump(mode="json"))
     assert secret not in str(adapter.job_store._progress)
     assert secret not in str(adapter.job_store._results)
+
+
+@pytest.mark.anyio
+async def test_adapter_maps_known_comfyui_missing_image_validation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {"type": "prompt_outputs_failed_validation"},
+                "node_errors": {
+                    "10": {
+                        "class_type": "LoadImage",
+                        "errors": [
+                            {
+                                "input_name": "image",
+                                "message": "'NoneType' object has no attribute 'endswith'",
+                            }
+                        ],
+                    }
+                },
+            },
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+    package = _media_package("load_image", node_id="10", input_name="image")
+
+    with pytest.raises(EngineUserFixableValidationError) as exc:
+        await adapter.run_workflow(
+            package,
+            package.comfyui_graph,
+            {},
+            {"listen_for_events": False},
+        )
+
+    user_error = exc.value.user_error
+    assert user_error.code == "missing_required_input"
+    assert user_error.title == "Missing image"
+    assert user_error.control_id == "media-control"
+    assert user_error.input_id == "media"
+    assert user_error.developer_details["engine_error"] == "prompt_outputs_failed_validation"
+
+
+@pytest.mark.anyio
+async def test_adapter_keeps_unknown_comfyui_400_as_technical_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="unrelated comfyui error", request=request)
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+    package = _media_package("load_image", node_id="10", input_name="image")
+
+    with pytest.raises(ValueError, match="Failed to submit workflow to ComfyUI"):
+        await adapter.run_workflow(
+            package,
+            package.comfyui_graph,
+            {},
+            {"listen_for_events": False},
+        )
 
 
 def json_payload(request: httpx.Request) -> dict:

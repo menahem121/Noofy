@@ -53,6 +53,18 @@ class MissingModel(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
 
 
+class RunUserFixableError(BaseModel):
+    code: Literal["missing_required_input", "invalid_input_value"]
+    title: str
+    message: str
+    user_message: str
+    severity: Literal["user_fixable"] = "user_fixable"
+    control_id: str | None = None
+    input_id: str | None = None
+    input_type: str | None = None
+    developer_details: dict[str, Any] = Field(default_factory=dict)
+
+
 class RequiredModelReference(BaseModel):
     """A single ComfyUI graph node reference to a required model file.
 
@@ -243,6 +255,7 @@ class WorkflowValidationResult(BaseModel):
     missing_models: list[MissingModel] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    user_errors: list[RunUserFixableError] = Field(default_factory=list)
 
 
 class EngineJob(BaseModel):
