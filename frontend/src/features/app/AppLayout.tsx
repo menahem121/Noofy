@@ -54,8 +54,8 @@ interface AppLayoutProps {
 const navItems = [
   { id: "home", label: "Home", Icon: Library },
   { id: "workflows", label: "Workflows", Icon: PackageOpen },
-  { id: "history", label: "History", Icon: FolderClock },
   { id: "models", label: "Models", Icon: Layers },
+  { id: "history", label: "History", Icon: FolderClock },
   { id: "gallery", label: "Gallery", Icon: Images },
 ] satisfies Array<{ id: AppRouteId; label: string; Icon: typeof Library }>;
 
