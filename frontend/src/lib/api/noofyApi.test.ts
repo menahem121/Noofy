@@ -332,6 +332,7 @@ describe("noofyApi", () => {
     await deleteModelFile("checkpoints/model.safetensors");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/models", {
+      cache: "no-store",
       headers: { Accept: "application/json" },
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/models/import", {

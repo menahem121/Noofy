@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from app.api.deps import ModelDownloadServiceDep, ModelInventoryServiceDep, ModelTagStoreDep
 from app.models.schemas import (
@@ -12,7 +12,10 @@ router = APIRouter()
 
 
 @router.get("/models")
-async def list_models(inventory: ModelInventoryServiceDep):
+async def list_models(inventory: ModelInventoryServiceDep, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return await inventory.inventory()
 
 

@@ -4,8 +4,10 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+from fastapi import Response
 from fastapi.testclient import TestClient
 
+from app.api.routes.models import list_models
 from app.diagnostics import LogStore
 from app.engine.models import ModelInfo
 from app.main import create_app
@@ -176,6 +178,44 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert "configs/v1-inference.yaml" not in by_key
     assert "configs/anything_v3.yaml" not in by_key
     assert "configs/engine-config.yaml" not in by_key
+
+
+def test_models_inventory_disk_free_is_live_and_not_http_cacheable(tmp_path: Path, monkeypatch) -> None:
+    disk_free_values = iter([111, 222])
+
+    def fake_disk_usage(_path: Path) -> SimpleNamespace:
+        return SimpleNamespace(free=next(disk_free_values))
+
+    monkeypatch.setattr("app.models.inventory.shutil.disk_usage", fake_disk_usage)
+    noofy_root = tmp_path / "Noofy Models"
+    settings_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[])
+    service = ModelInventoryService(
+        engine_service=engine,
+        model_folder_service=settings_service,
+        tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+        ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+        log_store=engine.log_store,
+    )
+
+    async def run() -> tuple[Response, int | None, int | None]:
+        first_response = Response()
+        first_inventory = await list_models(inventory=service, response=first_response)
+        second_response = Response()
+        second_inventory = await list_models(inventory=service, response=second_response)
+        return first_response, first_inventory.summary.disk_free_bytes, second_inventory.summary.disk_free_bytes
+
+    response, first_disk_free, second_disk_free = asyncio.run(run())
+
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
+    assert first_disk_free == 111
+    assert second_disk_free == 222
 
 
 def test_models_inventory_does_not_wait_on_slow_engine_visible_models(tmp_path: Path) -> None:

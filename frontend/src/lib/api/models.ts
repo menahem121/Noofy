@@ -204,7 +204,7 @@ export interface CivitaiLoraDownloadStart {
 }
 
 export function fetchModelInventory() {
-  return getJson<ModelInventoryResponse>("/models");
+  return getJson<ModelInventoryResponse>("/models", { cache: "no-store" });
 }
 
 export function importModelFiles(payload: { source_paths: string[]; folder: string; overwrite?: boolean }) {

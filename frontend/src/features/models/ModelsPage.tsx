@@ -122,6 +122,20 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    function refreshWhenActive() {
+      if (document.visibilityState === "hidden") return;
+      void refreshInventory({ silent: true });
+    }
+
+    window.addEventListener("focus", refreshWhenActive);
+    document.addEventListener("visibilitychange", refreshWhenActive);
+    return () => {
+      window.removeEventListener("focus", refreshWhenActive);
+      document.removeEventListener("visibilitychange", refreshWhenActive);
+    };
+  }, [refreshInventory]);
+
   const inventory = inventoryState.inventory;
   const models = inventory?.models ?? [];
   const tags = inventory?.tags ?? [];

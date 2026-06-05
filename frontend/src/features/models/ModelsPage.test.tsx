@@ -141,12 +141,24 @@ const inventory = {
   ],
 };
 
+function inventoryWithDiskFree(diskFreeBytes: number) {
+  return {
+    ...inventory,
+    summary: {
+      ...inventory.summary,
+      disk_free_bytes: diskFreeBytes,
+    },
+  };
+}
+
 describe("ModelsPage", () => {
   const fetchMock = vi.fn();
   const onNavigate = vi.fn();
+  let currentInventory: typeof inventory;
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
+    currentInventory = inventory;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) {
@@ -173,7 +185,7 @@ describe("ModelsPage", () => {
         return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
       }
       if (url.endsWith("/api/models")) {
-        return Promise.resolve(jsonResponse(inventory));
+        return Promise.resolve(jsonResponse(currentInventory));
       }
       if (url.endsWith("/api/models/downloads/active")) {
         return Promise.resolve(jsonResponse({ job: null }));
@@ -243,6 +255,19 @@ describe("ModelsPage", () => {
 
     expect(screen.queryByText("base.safetensors")).not.toBeInTheDocument();
     expect(screen.getByText("style.safetensors")).toBeInTheDocument();
+  });
+
+  it("refreshes free disk space when the page becomes active again", async () => {
+    renderPage();
+
+    expect(await screen.findByText("5.0 GB")).toBeInTheDocument();
+    currentInventory = inventoryWithDiskFree(7575404544);
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(screen.getByText("7.1 GB")).toBeInTheDocument());
+    const modelInventoryRequests = fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/api/models"));
+    expect(modelInventoryRequests.length).toBeGreaterThanOrEqual(2);
   });
 
   it("sorts models by sortable headers without clearing the current search", async () => {
