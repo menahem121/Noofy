@@ -20,7 +20,12 @@ from app.engine.models import (
     RuntimeMode,
 )
 from app.runtime.environment import RuntimeEnvironment
-from app.runtime.comfyui.launch_settings import comfyui_vram_args
+from app.runtime.comfyui.launch_settings import (
+    DEFAULT_COMFYUI_PREVIEW_METHOD,
+    DEFAULT_COMFYUI_PREVIEW_SIZE,
+    comfyui_preview_args,
+    comfyui_vram_args,
+)
 
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
 ProcessFactory = Callable[..., Awaitable[Any]]
@@ -66,6 +71,8 @@ class RuntimeManager:
         managed_model_roots: list[Path] | None = None,
         version_metadata: ComfyUIVersionMetadata | None = None,
         managed_vram_mode: str = "normal",
+        managed_preview_method: str = DEFAULT_COMFYUI_PREVIEW_METHOD,
+        managed_preview_size: int = DEFAULT_COMFYUI_PREVIEW_SIZE,
     ) -> None:
         if mode not in {"external", "managed"}:
             raise ValueError(f"Unsupported ComfyUI runtime mode: {mode}")
@@ -97,9 +104,12 @@ class RuntimeManager:
         self._managed_model_roots = managed_model_roots or []
         self._version_metadata = version_metadata
         self.managed_vram_mode = managed_vram_mode
+        self.managed_preview_method = managed_preview_method
+        self.managed_preview_size = managed_preview_size
         self.api_nodes_disabled = False
         self.managed_extra_args: list[str] = []
         comfyui_vram_args(self.managed_vram_mode)
+        comfyui_preview_args(self.managed_preview_method, self.managed_preview_size)
         self._process: Any | None = None
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -390,6 +400,7 @@ class RuntimeManager:
             "--dont-print-server",
         ]
         command.extend(self._managed_vram_args())
+        command.extend(self._managed_preview_args())
         command.extend(self._managed_path_args())
         command.extend(self.managed_extra_args)
         process_env = self._managed_process_env()
@@ -739,6 +750,12 @@ class RuntimeManager:
 
     def _managed_vram_args(self) -> list[str]:
         return comfyui_vram_args(self.managed_vram_mode)
+
+    def _managed_preview_args(self) -> list[str]:
+        return comfyui_preview_args(
+            self.managed_preview_method,
+            self.managed_preview_size,
+        )
 
     def _managed_process_env(self) -> dict[str, str]:
         env = dict(os.environ)

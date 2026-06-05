@@ -2801,6 +2801,20 @@ button.dashboard-image-input__surface {
   object-fit: contain;
 }
 
+.preview-live-output {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.preview-live-output img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .preview-audio-output {
   display: grid;
   width: min(520px, calc(100% - 32px));

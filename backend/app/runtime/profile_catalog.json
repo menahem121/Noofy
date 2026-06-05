@@ -4,7 +4,7 @@
   "profiles": [
     {
       "runtime_profile_id": "noofy-comfyui-v1-default",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "profile_family_id": "noofy-comfyui-v1",
       "comfyui_core_version": "v0.20.1",
       "comfyui_core_source_hash": "sha256:cac6d4de1b9111dcc36183321aa4599f49718c63e1918a4ef275dc2cd3656f29",
@@ -30,6 +30,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",
@@ -55,6 +56,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",
@@ -80,6 +82,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",
@@ -106,6 +109,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",
@@ -131,6 +135,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",
@@ -157,6 +162,7 @@
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
+            "preview_size": 512,
             "vram_mode": "auto",
             "attention_backend": "auto",
             "precision_policy": "auto",

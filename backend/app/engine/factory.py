@@ -257,6 +257,16 @@ def create_default_engine_service() -> EngineService:
         managed_model_roots=model_roots,
         version_metadata=active_runtime.version_metadata,
         managed_vram_mode=launch_settings.vram_mode,
+        managed_preview_method=(
+            selected_runtime_profile_variant.launch_defaults.preview_method
+            if selected_runtime_profile_variant is not None
+            else "auto"
+        ),
+        managed_preview_size=(
+            selected_runtime_profile_variant.launch_defaults.preview_size
+            if selected_runtime_profile_variant is not None
+            else 512
+        ),
     )
     runtime_manager._cleanup_stale_pid()
     adapter = ComfyUIEngineAdapter(
@@ -267,6 +277,9 @@ def create_default_engine_service() -> EngineService:
         dashboard_assets_dir=paths.dashboard_assets_dir,
         comfyui_input_dir=paths.input_dir,
         model_roots=model_roots,
+        default_prompt_preview_method=(
+            "auto" if runtime_manager.mode == "external" else None
+        ),
     )
     trust_verifier = load_trust_verifier(settings.trust_keys_file, log_store=log_store)
     imported_package_store = ImportedWorkflowPackageStore(

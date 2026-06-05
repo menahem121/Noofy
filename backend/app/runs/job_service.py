@@ -33,7 +33,11 @@ class RunJobService:
         self.workflow_run_queue_service = workflow_run_queue_service
         self.terminal_job_progress: Callable[[str], JobProgress | None] | None = None
 
-    async def get_progress(self, job_id: str) -> JobProgress:
+    async def get_progress(
+        self,
+        job_id: str,
+        since_preview_sequence: int | None = None,
+    ) -> JobProgress:
         resolved = self._resolve(job_id)
         if self.terminal_job_progress is not None:
             terminal = self.terminal_job_progress(resolved.job_id)
@@ -44,7 +48,10 @@ class RunJobService:
             if progress is not None:
                 return progress
         adapter = self._adapter_for_job(resolved.job_id)
-        progress = await adapter.get_progress(resolved.job_id)
+        progress = await adapter.get_progress(
+            resolved.job_id,
+            since_preview_sequence=since_preview_sequence,
+        )
         return progress.model_copy(update={"queue_id": resolved.queue_id})
 
     async def cancel_job(self, job_id: str) -> JobProgress:

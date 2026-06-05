@@ -18,6 +18,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.runtime.fingerprints import FINGERPRINT_SCHEMA_VERSION, sha256_fingerprint
+from app.runtime.comfyui.launch_settings import (
+    DEFAULT_COMFYUI_PREVIEW_METHOD,
+    DEFAULT_COMFYUI_PREVIEW_SIZE,
+)
 
 RUNTIME_PROFILE_CATALOG_SCHEMA_VERSION = "0.1.0"
 COMFYUI_SOURCE_MANIFEST_FILENAME = "noofy-source-manifest.json"
@@ -68,7 +72,8 @@ class RuntimeSourceStatus(StrEnum):
 class RuntimeLaunchDefaults(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    preview_method: str = "auto"
+    preview_method: str = DEFAULT_COMFYUI_PREVIEW_METHOD
+    preview_size: int = DEFAULT_COMFYUI_PREVIEW_SIZE
     vram_mode: str = "auto"
     attention_backend: str = "auto"
     precision_policy: str = "auto"

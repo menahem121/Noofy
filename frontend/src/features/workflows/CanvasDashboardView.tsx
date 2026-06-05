@@ -47,6 +47,7 @@ import {
   type WorkflowInputDef,
   type WorkflowOutputDef,
   type GallerySaveRequest,
+  type JobLivePreview,
 } from "../../lib/api/noofyApi";
 import {
   findNearestAvailablePosition,
@@ -117,6 +118,7 @@ interface CanvasDashboardViewProps {
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
+  livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -165,6 +167,7 @@ export function CanvasDashboardView({
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
+  livePreview,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -244,6 +247,14 @@ export function CanvasDashboardView({
     () => topLevelItems.map((item) => ({ id: item.id, layout: effectiveLayout(item) })),
     [topLevelItems, layoutOverrides],
   );
+  const livePreviewTargetNodeId = livePreview?.data_url && livePreview.target_node_ids.length === 1
+    ? livePreview.target_node_ids[0]
+    : null;
+  const livePreviewHasWidgetTarget = useMemo(
+    () => Boolean(livePreviewTargetNodeId && visualOutputWidgetNodeIds(topLevelItems, outputIndex).has(livePreviewTargetNodeId)),
+    [livePreviewTargetNodeId, outputIndex, topLevelItems],
+  );
+  const showGeneralLivePreview = Boolean(livePreview?.data_url && !livePreviewHasWidgetTarget);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -723,6 +734,7 @@ export function CanvasDashboardView({
                 outputVideosByNodeId={outputVideosByNodeId}
                 outputFilesByNodeId={outputFilesByNodeId}
                 outputThreeDsByNodeId={outputThreeDsByNodeId}
+                livePreview={livePreview}
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
@@ -744,6 +756,11 @@ export function CanvasDashboardView({
               />
             );
           })}
+          {showGeneralLivePreview && livePreview?.data_url ? (
+            <div className="canvas-live-preview" aria-label="Live generation preview" role="status">
+              <img src={livePreview.data_url} alt="Live generation preview" />
+            </div>
+          ) : null}
         </DashboardCanvasSurface>
       </DashboardCanvasFrame>
       {exportDialog ? (
@@ -808,6 +825,7 @@ function CanvasWidgetCell({
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
+  livePreview,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -838,6 +856,7 @@ function CanvasWidgetCell({
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
+  livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -919,6 +938,7 @@ function CanvasWidgetCell({
             outputVideosByNodeId={outputVideosByNodeId}
             outputFilesByNodeId={outputFilesByNodeId}
             outputThreeDsByNodeId={outputThreeDsByNodeId}
+            livePreview={livePreview}
             comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             inputValues={inputValues}
             outputPreferences={outputPreferences}
@@ -949,6 +969,7 @@ function CanvasWidgetCell({
               outputVideosByNodeId={outputVideosByNodeId}
               outputFilesByNodeId={outputFilesByNodeId}
               outputThreeDsByNodeId={outputThreeDsByNodeId}
+              livePreview={livePreview}
               comparisonBeforeImageUrl={comparisonBeforeImageUrl}
               imagePreviewEnabled={!isEditingLayout}
             />
@@ -990,6 +1011,7 @@ function GroupedCanvasControls({
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
+  livePreview,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -1016,6 +1038,7 @@ function GroupedCanvasControls({
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
+  livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -1057,6 +1080,7 @@ function GroupedCanvasControls({
                   outputVideosByNodeId={outputVideosByNodeId}
                   outputFilesByNodeId={outputFilesByNodeId}
                   outputThreeDsByNodeId={outputThreeDsByNodeId}
+                  livePreview={livePreview}
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
@@ -1132,6 +1156,37 @@ function isOutputControlType(type: string): boolean {
   return type === "display_image" || type === "display_audio" || type === "display_video" || type === "display_file" || type === "display_3d" || type === "result_image";
 }
 
+function isLivePreviewVisualOutput(outputKind: string | null | undefined, controlType: string): boolean {
+  const kind = outputKind ?? (controlType === "display_video" ? "video" : null);
+  return kind === "image" || kind === "video" || controlType === "display_image" || controlType === "result_image";
+}
+
+function visualOutputWidgetNodeIds(
+  items: DashboardTopLevelControlItem[],
+  outputIndex: Map<string, WorkflowOutputDef>,
+): Set<string> {
+  const nodeIds = new Set<string>();
+  for (const control of outputControlsFromTopLevelItems(items)) {
+    if (!control.output_id) continue;
+    const output = outputIndex.get(control.output_id);
+    if (!output || !isLivePreviewVisualOutput(output.kind ?? output.type, control.type)) continue;
+    nodeIds.add(output.node_id);
+  }
+  return nodeIds;
+}
+
+function outputControlsFromTopLevelItems(items: DashboardTopLevelControlItem[]): DashboardControlDef[] {
+  const controls: DashboardControlDef[] = [];
+  for (const item of items) {
+    if (item.kind === "group") {
+      controls.push(...item.controls.filter((control) => isOutputControlType(control.type)));
+    } else if (isOutputControlType(item.control.type)) {
+      controls.push(item.control);
+    }
+  }
+  return controls;
+}
+
 function DashboardNoteBody({ title, body }: { title?: string; body?: string }) {
   return (
     <div className="dashboard-note-card dashboard-note-card--canvas">
@@ -1168,6 +1223,7 @@ function OutputWidgetContent({
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
+  livePreview,
   comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
 }: {
@@ -1178,6 +1234,7 @@ function OutputWidgetContent({
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
+  livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
 }) {
@@ -1192,6 +1249,13 @@ function OutputWidgetContent({
   const videoOutputs = output && wantsVideo ? outputVideosByNodeId.get(output.node_id) ?? [] : [];
   const fileOutputs = output && wantsFile ? outputFilesByNodeId.get(output.node_id) ?? [] : [];
   const threeDOutputs = output && wantsThreeD ? outputThreeDsByNodeId.get(output.node_id) ?? [] : [];
+  const livePreviewTargetsOutput = Boolean(
+    livePreview?.data_url
+      && output
+      && isLivePreviewVisualOutput(outputKind, control.type)
+      && livePreview.target_node_ids.length === 1
+      && livePreview.target_node_ids[0] === output.node_id,
+  );
   const firstImageUrl = imageUrls[0];
   const [previewImage, setPreviewImage] = useState<{ url: string; alt: string; beforeImageUrl?: string } | null>(null);
 
@@ -1368,6 +1432,14 @@ function OutputWidgetContent({
             </div>
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (livePreviewTargetsOutput && livePreview?.data_url) {
+    return (
+      <div className="widget-output-live-preview">
+        <img src={livePreview.data_url} alt="Live generation preview" />
       </div>
     );
   }

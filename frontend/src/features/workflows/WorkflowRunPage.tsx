@@ -62,6 +62,7 @@ import {
   type DiagnosticEvent,
   type EngineJob,
   type ApiKeySettingsResponse,
+  type JobLivePreview,
   type JobProgress,
   type JobResult,
   type GallerySaveRequest,
@@ -167,6 +168,8 @@ interface FailedTrackedRun {
   message: string;
 }
 
+type StoredLivePreview = JobLivePreview & { handle: string };
+
 interface WorkflowCancelConfirmationState {
   count: number;
 }
@@ -269,7 +272,9 @@ export function WorkflowRunPage({
   const [runComparisonInputAssetId, setRunComparisonInputAssetId] = useState<string | null>(null);
   const [gallerySaveByControlId, setGallerySaveByControlId] = useState<Record<string, GallerySaveRequest>>({});
   const [comparisonInputImageUrl, setComparisonInputImageUrl] = useState<string | null>(null);
+  const [livePreview, setLivePreview] = useState<StoredLivePreview | null>(null);
   const trackedRunsRef = useRef<TrackedRun[]>([]);
+  const livePreviewRef = useRef<StoredLivePreview | null>(null);
   const trackedRunPollInFlightRef = useRef<Set<string>>(new Set());
   const runSubmissionInFlightCountRef = useRef(0);
   const modelVerificationStartInFlightRef = useRef(false);
@@ -279,6 +284,10 @@ export function WorkflowRunPage({
   useEffect(() => {
     trackedRunsRef.current = trackedRuns;
   }, [trackedRuns]);
+
+  useEffect(() => {
+    livePreviewRef.current = livePreview;
+  }, [livePreview]);
 
   const { viewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
@@ -463,6 +472,7 @@ export function WorkflowRunPage({
     () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputThreeDsByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputThreeDs, outputFiles),
     [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputThreeDs, outputThreeDsByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
   );
+  const activeLivePreview = livePreview?.data_url && !classicPreviewMedia ? livePreview : null;
   const hasActiveGallerySave = Object.values(gallerySaveByControlId).some(
     (item) => item.status === "queued" || item.status === "saving",
   );
@@ -559,6 +569,7 @@ export function WorkflowRunPage({
     setModelVerificationJob(null);
     setModelVerificationError(null);
     setRunComparisonInputAssetId(null);
+    clearLivePreview();
     trackedRunsRef.current = [];
     setTrackedRuns([]);
     setFailedTrackedRuns([]);
@@ -664,6 +675,11 @@ export function WorkflowRunPage({
     setIsSubmittingRun(false);
   }
 
+  function clearLivePreview() {
+    livePreviewRef.current = null;
+    setLivePreview(null);
+  }
+
   async function handleRun() {
     if (!canRun) {
       return;
@@ -680,6 +696,7 @@ export function WorkflowRunPage({
       submittedValuesSnapshot,
     );
     beginRunSubmission();
+    clearLivePreview();
     setRunComparisonInputAssetId(submittedComparisonInputAssetId);
     setFailureDialog(null);
     setInputErrorDialog(null);
@@ -1049,7 +1066,13 @@ export function WorkflowRunPage({
   async function pollTrackedRun(run: TrackedRun) {
     const handle = trackedRunHandle(run);
     try {
-      const progress = await fetchJobProgress(handle);
+      const previousPreview = livePreviewRef.current;
+      const progress = await fetchJobProgress(handle, {
+        sincePreviewSequence: previousPreview?.handle === handle ? previousPreview.sequence : null,
+      });
+      if (shouldDisplayLivePreviewForHandle(handle)) {
+        handleProgressLivePreview(handle, progress);
+      }
       const nextRun = trackedRunFromProgress(run, progress, Date.now());
       upsertTrackedRun(nextRun, progress);
       setState((current) => ({ ...current, progress, error: null }));
@@ -1075,6 +1098,23 @@ export function WorkflowRunPage({
         error: error instanceof Error ? error.message : "Could not check workflow progress.",
       }));
     }
+  }
+
+  function handleProgressLivePreview(handle: string, progress: JobProgress) {
+    const preview = progress.live_preview;
+    if (!preview?.data_url) return;
+    const stored: StoredLivePreview = {
+      ...preview,
+      target_node_ids: preview.target_node_ids ?? [],
+      handle,
+    };
+    livePreviewRef.current = stored;
+    setLivePreview(stored);
+  }
+
+  function shouldDisplayLivePreviewForHandle(handle: string) {
+    const current = selectCurrentTrackedRun(trackedRunsRef.current);
+    return current ? trackedRunHandle(current) === handle : true;
   }
 
   function markTrackedRunPolled(clientId: string, polledAt: number) {
@@ -1109,6 +1149,8 @@ export function WorkflowRunPage({
     }
     if (!selectCurrentTrackedRun(trackedRunsRef.current)) {
       recordWorkflowTerminalResult(result);
+    } else if (livePreviewRef.current?.handle === trackedRunHandle(nextRun)) {
+      clearLivePreview();
     }
     pollNextTrackedRunAfterTerminal();
   }
@@ -1668,6 +1710,7 @@ export function WorkflowRunPage({
           outputVideosByNodeId={outputVideosByNodeId}
           outputFilesByNodeId={outputFilesByNodeId}
           outputThreeDsByNodeId={outputThreeDsByNodeId}
+          livePreview={activeLivePreview}
           comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
           outputPreferences={outputPreferences}
@@ -1859,6 +1902,10 @@ export function WorkflowRunPage({
                     Open
                   </button>
                 </div>
+              </div>
+            ) : activeLivePreview ? (
+              <div className="preview-live-output">
+                <img src={activeLivePreview.data_url!} alt="Live generation preview" />
               </div>
             ) : (
               <div className="preview-empty">

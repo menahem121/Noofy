@@ -29,6 +29,28 @@ def test_launch_config_hash_includes_custom_node_set() -> None:
     assert first != second
 
 
+def test_launch_config_hash_includes_preview_size() -> None:
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    variant = catalog.profiles[0].variants[0]
+    smaller_preview_variant = variant.model_copy(
+        deep=True,
+        update={
+            "launch_defaults": variant.launch_defaults.model_copy(
+                update={"preview_size": 256}
+            )
+        },
+    )
+
+    first = launch_config_hash("comfyui", variant, "sha256:" + "a" * 64)
+    second = launch_config_hash(
+        "comfyui",
+        smaller_preview_variant,
+        "sha256:" + "a" * 64,
+    )
+
+    assert first != second
+
+
 def test_model_locks_from_package_collapses_shared_model_references() -> None:
     def _node(node_id: str) -> RequiredModel:
         return RequiredModel(

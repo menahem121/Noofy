@@ -55,10 +55,14 @@ Managed sidecar startup runs normal ComfyUI hidden/no-browser and points writabl
 - `--temp-directory <data_dir>` (ComfyUI appends its `temp` child internally)
 - `--user-directory <user_state_dir>/comfyui`
 - `--database-url sqlite:///<user_state_dir>/comfyui/comfyui.db`
+- `--preview-method auto`
+- `--preview-size 512`
 
 The settings screen also lets users choose a managed ComfyUI VRAM launch mode. `Normal VRAM` is the default and passes no VRAM flag, preserving ComfyUI's default behavior. Other options map to ComfyUI's existing launch flags: `--gpu-only`, `--highvram`, `--lowvram`, `--novram`, or `--cpu`. The setting is stored in Noofy runtime storage and applies only to managed mode; when changed while the managed sidecar is running, Noofy stops and restarts that sidecar through the backend.
 
 This keeps models, input staging, outputs, temp files, custom nodes, ComfyUI user/database state, logs, cache, dashboard assets, and workflow state out of `third_party/comfyui/`.
+
+Preview launch defaults come from the selected runtime profile / runner launch configuration and participate in runner fingerprints. If a future profile declares a safer lower preview size, the profile value should be used. External ComfyUI mode is development-only: Noofy may submit per-run `extra_data.preview_method`, but it does not control or claim to control the external server's launch defaults or preview size.
 
 The managed sidecar also sees Noofy's user-visible model storage through a generated `extra-model-paths.yaml` under the runtime store. The configured Noofy Models folder (default `~/Documents/Noofy Models`) is registered as the default category root, and an optional user-connected ComfyUI `models/` folder is registered as a secondary read/reuse-only root. Downloads always land in the Noofy Models folder; Noofy must never write models into the external ComfyUI folder or `third_party/comfyui/`. See [MODEL_RESOLUTION_AND_DOWNLOADS.md](MODEL_RESOLUTION_AND_DOWNLOADS.md).
 

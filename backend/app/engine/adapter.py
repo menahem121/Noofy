@@ -47,7 +47,11 @@ class EngineAdapter(Protocol):
     ) -> EngineJob:
         """Submit a workflow graph and return the app-owned job record."""
 
-    async def get_progress(self, job_id: str) -> JobProgress:
+    async def get_progress(
+        self,
+        job_id: str,
+        since_preview_sequence: int | None = None,
+    ) -> JobProgress:
         """Return the latest known progress for a job."""
 
     async def cancel_job(self, job_id: str) -> JobProgress:

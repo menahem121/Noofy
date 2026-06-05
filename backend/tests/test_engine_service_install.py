@@ -581,6 +581,14 @@ async def test_start_workflow_runner_binds_ready_isolated_runner(tmp_path: Path)
         "--base-directory",
         str(coordinator.started_specs[0].working_dir),
     ]
+    assert "--preview-method" in coordinator.started_specs[0].extra_args
+    assert "--preview-size" in coordinator.started_specs[0].extra_args
+    assert coordinator.started_specs[0].extra_args[
+        coordinator.started_specs[0].extra_args.index("--preview-method") + 1
+    ] == "auto"
+    assert coordinator.started_specs[0].extra_args[
+        coordinator.started_specs[0].extra_args.index("--preview-size") + 1
+    ] == "512"
     assert "--disable-all-custom-nodes" in coordinator.started_specs[0].extra_args
     assert coordinator.started_specs[0].env["NOOFY_WORKFLOW_ID"] == "runner_workflow"
     assert result["runner"]["runner_process_compatibility_key"] == "sha256:" + ("2" * 64)
@@ -1241,6 +1249,8 @@ async def test_start_custom_node_workflow_runner_allows_materialized_custom_node
     assert result["status"] == RunnerStatus.READY.value
     assert coordinator is not None
     assert "--disable-auto-launch" in coordinator.started_specs[0].extra_args
+    assert "--preview-method" in coordinator.started_specs[0].extra_args
+    assert "--preview-size" in coordinator.started_specs[0].extra_args
     assert "--disable-all-custom-nodes" not in coordinator.started_specs[0].extra_args
 
 

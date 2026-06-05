@@ -6,6 +6,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
+from app.runtime.comfyui.launch_settings import (
+    DEFAULT_COMFYUI_PREVIEW_METHOD,
+    DEFAULT_COMFYUI_PREVIEW_SIZE,
+)
 from app.source_policy import SourcePolicy
 
 SHA256_PATTERN = r"^(sha256:)?[0-9a-fA-F]{64}$"
@@ -105,6 +109,8 @@ class RuntimeIdentity(BaseModel):
     runner_fingerprint: str = Field(min_length=1)
     runner_process_compatibility_key: str | None = None
     capsule_fingerprint: str = Field(min_length=1)
+    preview_method: str = DEFAULT_COMFYUI_PREVIEW_METHOD
+    preview_size: int = DEFAULT_COMFYUI_PREVIEW_SIZE
     os: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
     python_version: str = Field(min_length=1)

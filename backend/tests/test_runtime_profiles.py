@@ -34,6 +34,11 @@ def test_runtime_profile_catalog_loads_and_validates_manifest_hash() -> None:
     assert profile.comfyui_core_version == "v0.20.1"
     assert profile.comfyui_source_origin_kind is RuntimeSourceOriginKind.UPSTREAM_SOURCE_ARCHIVE
     assert profile.signed_manifest_reference is not None
+    assert all(
+        variant.launch_defaults.preview_method == "auto"
+        and variant.launch_defaults.preview_size == 512
+        for variant in profile.variants
+    )
 
 
 def test_resolve_runtime_profile_selects_supported_variant() -> None:

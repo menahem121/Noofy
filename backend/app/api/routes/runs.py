@@ -35,8 +35,15 @@ async def cancel_job_output_gallery_save(
 
 
 @router.get("/jobs/{job_id}/progress")
-async def get_progress(job_id: str, job_service: RunJobServiceDep):
-    return await job_service.get_progress(job_id)
+async def get_progress(
+    job_id: str,
+    job_service: RunJobServiceDep,
+    since_preview_sequence: int | None = Query(None, ge=0),
+):
+    return await job_service.get_progress(
+        job_id,
+        since_preview_sequence=since_preview_sequence,
+    )
 
 
 @router.get("/jobs/{job_id}/logs")

@@ -39,6 +39,18 @@ export interface JobProgress {
   max: number | null;
   current_node: string | null;
   message: string | null;
+  live_preview_sequence?: number | null;
+  live_preview?: JobLivePreview | null;
+}
+
+export interface JobLivePreview {
+  sequence: number;
+  kind: "image";
+  mime_type: string;
+  data_url?: string | null;
+  node_id?: string | null;
+  prompt_id?: string | null;
+  target_node_ids: string[];
 }
 
 export interface JobResult {
@@ -86,8 +98,16 @@ export function isEngineJob(response: unknown): response is EngineJob {
   return Boolean(response && typeof response === "object" && "job_id" in response && "engine" in response);
 }
 
-export function fetchJobProgress(jobId: string) {
-  return getJson<JobProgress>(`/jobs/${jobId}/progress`);
+export function fetchJobProgress(
+  jobId: string,
+  options: { sincePreviewSequence?: number | null } = {},
+) {
+  const params = new URLSearchParams();
+  if (options.sincePreviewSequence !== undefined && options.sincePreviewSequence !== null) {
+    params.set("since_preview_sequence", String(options.sincePreviewSequence));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return getJson<JobProgress>(`/jobs/${encodeURIComponent(jobId)}/progress${suffix}`);
 }
 
 export function fetchJobResult(jobId: string) {

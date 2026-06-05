@@ -958,6 +958,125 @@ describe("WorkflowRunPage", () => {
     );
   });
 
+  it("keeps live preview bytes locally until final media replaces them", async () => {
+    const resultRequest = deferred<Response>();
+    const livePreviewDataUrl = "data:image/png;base64,bGl2ZS1wcmV2aWV3";
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        expect(init?.method).toBe("POST");
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-live",
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-live/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-live",
+            status: "running",
+            value: 1,
+            max: 2,
+            current_node: "7",
+            message: "Sampling",
+            live_preview_sequence: 1,
+            live_preview: {
+              sequence: 1,
+              kind: "image",
+              mime_type: "image/png",
+              data_url: livePreviewDataUrl,
+              node_id: "7",
+              prompt_id: "job-live",
+              target_node_ids: ["9"],
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-live/progress?since_preview_sequence=1")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-live",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+            live_preview_sequence: 1,
+            live_preview: {
+              sequence: 1,
+              kind: "image",
+              mime_type: "image/png",
+              data_url: null,
+              node_id: "7",
+              prompt_id: "job-live",
+              target_node_ids: ["9"],
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-live/result")) {
+        return resultRequest.promise;
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    expect(await screen.findByAltText("Live generation preview")).toHaveAttribute("src", livePreviewDataUrl);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("/api/jobs/job-live/progress?since_preview_sequence=1"),
+        ),
+      ).toBe(true);
+    }, { timeout: 2500 });
+    expect(screen.getByAltText("Live generation preview")).toHaveAttribute("src", livePreviewDataUrl);
+
+    resultRequest.resolve(
+      jsonResponse({
+        job_id: "job-live",
+        status: "completed",
+        outputs: [
+          {
+            node_id: "9",
+            output: {
+              images: [
+                {
+                  view_url:
+                    "/api/jobs/job-live/outputs/view?filename=result.png&subfolder=&type=output",
+                },
+              ],
+            },
+          },
+        ],
+        error: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+        "src",
+        "/api/jobs/job-live/outputs/view?filename=result.png&subfolder=&type=output",
+      );
+    });
+    expect(screen.queryByAltText("Live generation preview")).not.toBeInTheDocument();
+  });
+
   it("shows optimistic run feedback immediately while submission is pending", async () => {
     const runRequest = deferred<Response>();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

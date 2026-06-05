@@ -257,6 +257,8 @@ async def test_managed_start_command_uses_hidden_runtime_data_paths(
     assert _arg_value(captured_command, "--extra-model-paths-config") == str(
         extra_model_paths
     )
+    assert _arg_value(captured_command, "--preview-method") == "auto"
+    assert _arg_value(captured_command, "--preview-size") == "512"
     assert captured_env["PYTHONPYCACHEPREFIX"] == str(data_dir / "cache" / "python")
     assert all(
         str(repo_dir) not in value
@@ -420,6 +422,8 @@ parser.add_argument("--listen", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
 parser.add_argument("--disable-auto-launch", action="store_true")
 parser.add_argument("--dont-print-server", action="store_true")
+parser.add_argument("--preview-method", default="none")
+parser.add_argument("--preview-size", type=int, default=512)
 args = parser.parse_args()
 HTTPServer((args.listen, args.port), Handler).serve_forever()
         """,

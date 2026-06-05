@@ -1,4 +1,5 @@
 import json
+import struct
 from pathlib import Path
 
 import httpx
@@ -9,7 +10,7 @@ from app.diagnostics import LogStore
 from app.engine.adapter import EngineMemoryCleanupMode
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.engine.errors import EngineUserFixableValidationError
-from app.engine.models import JobProgress, JobResult
+from app.engine.models import EngineJob, JobProgress, JobResult
 from app.engine.service import EngineService
 from app.runs.credentials import (
     CredentialRequirementError,
@@ -249,7 +250,11 @@ async def test_probe_output_metadata_uses_range_response_size(
         return original_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", mock_client)
-    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test",
+        tmp_path,
+        log_store=LogStore(),
+    )
 
     assert await adapter._probe_output_metadata(
         {"filename": "mesh.glb", "subfolder": "", "type": "output"}
@@ -501,7 +506,12 @@ async def test_run_workflow_posts_comfyui_extra_data_api_key(
         },
         credential_resolver=lambda provider: "resolved-comfy-secret-1234",
     )
-    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test",
+        tmp_path,
+        log_store=LogStore(),
+        default_prompt_preview_method="auto",
+    )
 
     await adapter.run_workflow(
         package,
@@ -515,7 +525,41 @@ async def test_run_workflow_posts_comfyui_extra_data_api_key(
 
     payload = json_payload(requests[0])
     assert payload["extra_data"]["api_key_comfy_org"] == "resolved-comfy-secret-1234"
+    assert payload["extra_data"]["preview_method"] == "auto"
     assert payload["prompt"]["1"]["inputs"] == {"prompt": "hello"}
+
+
+@pytest.mark.anyio
+async def test_run_workflow_does_not_hardcode_prompt_preview_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/prompt"
+        return httpx.Response(200, json={"prompt_id": "job"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    package = _media_package("load_image", node_id="10", input_name="image")
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=LogStore())
+
+    await adapter.run_workflow(
+        package,
+        package.comfyui_graph,
+        {},
+        {"listen_for_events": False},
+    )
+
+    payload = json_payload(requests[0])
+    assert "preview_method" not in payload["extra_data"]
 
 
 @pytest.mark.anyio
@@ -646,6 +690,32 @@ async def test_adapter_keeps_unknown_comfyui_400_as_technical_failure(
 def json_payload(request: httpx.Request) -> dict:
     request.read()
     return json.loads(request.content.decode("utf-8"))
+
+
+def _preview_metadata_frame(
+    *,
+    metadata: dict[str, object],
+    image_bytes: bytes = b"preview-image",
+) -> bytes:
+    metadata_bytes = json.dumps(metadata).encode("utf-8")
+    return b"".join(
+        [
+            struct.pack(">I", 4),
+            struct.pack(">I", len(metadata_bytes)),
+            metadata_bytes,
+            image_bytes,
+        ]
+    )
+
+
+def _legacy_preview_frame(*, image_type: int = 1, image_bytes: bytes = b"legacy") -> bytes:
+    return b"".join(
+        [
+            struct.pack(">I", 1),
+            struct.pack(">I", image_type),
+            image_bytes,
+        ]
+    )
 
 
 def test_comfyui_cleanup_capabilities_are_runner_level_only(tmp_path: Path) -> None:
@@ -883,6 +953,168 @@ def test_progress_from_comfyui_progress_ws_message(tmp_path: Path) -> None:
     assert progress.current_node == "3"
     assert progress.value == 7
     assert progress.max == 20
+
+
+def test_live_preview_parses_metadata_frame_and_suppresses_repeated_bytes(
+    tmp_path: Path,
+) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+    adapter.job_store.add_job(
+        EngineJob(
+            job_id="job-1",
+            workflow_id="wf",
+            engine="comfyui",
+            status="running",
+        )
+    )
+    adapter._preview_targets_by_job["job-1"] = {"7": ["9"]}
+
+    preview = adapter._live_preview_from_binary_message(
+        "job-1",
+        _preview_metadata_frame(
+            metadata={
+                "prompt_id": "job-1",
+                "node_id": "7",
+                "image_type": "image/png",
+            },
+            image_bytes=b"\x89PNG\r\n\x1a\npng-preview",
+        ),
+    )
+
+    assert preview is not None
+    assert preview.sequence == 1
+    assert preview.kind == "image"
+    assert preview.mime_type == "image/png"
+    assert preview.data_url == "data:image/png;base64,iVBORw0KGgpwbmctcHJldmlldw=="
+    assert preview.node_id == "7"
+    assert preview.prompt_id == "job-1"
+    assert preview.target_node_ids == ["9"]
+
+    adapter.job_store.set_live_preview("job-1", preview)
+    progress = adapter._progress_with_live_preview(
+        "job-1",
+        JobProgress(job_id="job-1", status="running"),
+        since_preview_sequence=1,
+    )
+
+    assert progress.live_preview_sequence == 1
+    assert progress.live_preview is not None
+    assert progress.live_preview.sequence == 1
+    assert progress.live_preview.data_url is None
+
+
+def test_live_preview_uses_current_node_for_legacy_frame(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+    adapter.job_store.add_job(
+        EngineJob(
+            job_id="job-legacy",
+            workflow_id="wf",
+            engine="comfyui",
+            status="running",
+        )
+    )
+    adapter.job_store.set_progress(
+        JobProgress(job_id="job-legacy", status="running", current_node="3")
+    )
+
+    preview = adapter._live_preview_from_binary_message(
+        "job-legacy",
+        _legacy_preview_frame(image_type=1, image_bytes=b"\xff\xd8jpeg-preview"),
+    )
+
+    assert preview is not None
+    assert preview.sequence == 1
+    assert preview.mime_type == "image/jpeg"
+    assert preview.node_id == "3"
+    assert preview.data_url == "data:image/jpeg;base64,/9hqcGVnLXByZXZpZXc="
+
+
+def test_live_preview_rejects_wrong_prompt_and_oversized_frames(tmp_path: Path) -> None:
+    log_store = LogStore()
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=log_store
+    )
+
+    wrong_prompt = adapter._live_preview_from_binary_message(
+        "job-1",
+        _preview_metadata_frame(
+            metadata={
+                "prompt_id": "other-job",
+                "node_id": "7",
+                "image_type": "image/png",
+            },
+        ),
+    )
+    oversized = adapter._live_preview_from_binary_message(
+        "job-1",
+        _preview_metadata_frame(
+            metadata={
+                "prompt_id": "job-1",
+                "node_id": "7",
+                "image_type": "image/png",
+            },
+            image_bytes=b"x" * (5 * 1024 * 1024 + 1),
+        ),
+    )
+    malformed = adapter._live_preview_from_binary_message(
+        "job-1",
+        _preview_metadata_frame(
+            metadata={
+                "prompt_id": "job-1",
+                "node_id": "7",
+                "image_type": "image/png",
+            },
+            image_bytes=b"not-a-png",
+        ),
+    )
+
+    assert wrong_prompt is None
+    assert oversized is None
+    assert malformed is None
+    reasons = [event.details["reason"] for event in log_store.list_events().events]
+    assert "wrong_prompt_id" in reasons
+    assert "preview_image_too_large" in reasons
+    assert "preview_image_mime_mismatch" in reasons
+
+
+def test_preview_target_mapping_is_unambiguous_only_for_one_visual_output(
+    tmp_path: Path,
+) -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "preview_map", "name": "Preview Map", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [],
+            "custom_nodes": [],
+            "comfyui_graph": {},
+            "outputs": [
+                {"id": "first", "label": "First", "node_id": "9", "type": "image"},
+                {"id": "second", "label": "Second", "node_id": "10", "type": "image"},
+                {"id": "audio", "label": "Audio", "node_id": "11", "type": "audio"},
+            ],
+        }
+    )
+    graph = {
+        "7": {"class_type": "KSampler", "inputs": {}},
+        "8": {"class_type": "PreviewBridge", "inputs": {"latent": ["7", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}},
+        "10": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
+        "11": {"class_type": "SaveAudio", "inputs": {"audio": ["7", 1]}},
+    }
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    adapter._preview_targets_by_job["job-map"] = (
+        comfyui_adapter_module._preview_target_nodes_by_graph(package, graph)
+    )
+
+    assert adapter._live_preview_target_node_ids("job-map", "8") == ["9"]
+    assert adapter._live_preview_target_node_ids("job-map", "7") == []
 
 
 def test_progress_from_comfyui_error_ws_message(tmp_path: Path) -> None:

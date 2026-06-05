@@ -1,12 +1,14 @@
 import asyncio
+import base64
 import contextlib
 import json
 import mimetypes
 import os
 import re
 import shutil
+import struct
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
 from uuid import uuid4
@@ -23,8 +25,10 @@ from app.media_types import classify_media_kind
 from app.engine.models import (
     EngineJob,
     EngineOutputStream,
+    JobLivePreview,
     JobProgress,
     JobResult,
+    LogLevel,
     ModelInfo,
 )
 from app.engine.adapter import EngineMemoryCleanupCapabilities, EngineMemoryCleanupMode
@@ -37,6 +41,14 @@ _ASSET_ID_RE = re.compile(
     re.IGNORECASE,
 )
 _DASHBOARD_MEDIA_CONTROLS = frozenset({"load_image", "load_image_mask", "load_audio", "load_video", "load_file", "load_3d"})
+_MAX_LIVE_PREVIEW_BYTES = 5 * 1024 * 1024
+_BINARY_EVENT_PREVIEW_IMAGE = 1
+_BINARY_EVENT_PREVIEW_IMAGE_WITH_METADATA = 4
+_PREVIEW_MIME_BY_TYPE = {
+    1: "image/jpeg",
+    2: "image/png",
+}
+_SUPPORTED_PREVIEW_MIME_TYPES = frozenset(_PREVIEW_MIME_BY_TYPE.values())
 
 
 class ComfyUIEngineAdapter:
@@ -51,6 +63,7 @@ class ComfyUIEngineAdapter:
         dashboard_assets_dir: Path | None = None,
         comfyui_input_dir: Path | None = None,
         model_roots: list[Path] | None = None,
+        default_prompt_preview_method: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url or self._default_ws_url(self.base_url)
@@ -60,10 +73,13 @@ class ComfyUIEngineAdapter:
         self.log_store = log_store
         self.dashboard_assets_dir = dashboard_assets_dir
         self.comfyui_input_dir = comfyui_input_dir or self.models_dir.parent / "input"
+        self.default_prompt_preview_method = default_prompt_preview_method
         self._listener_tasks: dict[str, asyncio.Task[None]] = {}
         self._terminal_log_job_ids: set[str] = set()
         self._staged_files: dict[str, list[Path]] = {}
         self._output_kinds_by_job: dict[str, dict[str, str]] = {}
+        self._preview_targets_by_job: dict[str, dict[str, list[str]]] = {}
+        self._live_preview_sequences: dict[str, int] = {}
         self._terminal_notifier: Callable[[str], None] | None = None
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
@@ -130,6 +146,8 @@ class ComfyUIEngineAdapter:
         )
         self.job_store.add_job(job)
         self._output_kinds_by_job[job_id] = _unambiguous_output_kinds_by_node(workflow_package)
+        self._preview_targets_by_job[job_id] = _preview_target_nodes_by_graph(workflow_package, graph)
+        self._live_preview_sequences[job_id] = 0
         self.log_store.add(
             "info",
             "Created ComfyUI job",
@@ -168,6 +186,9 @@ class ComfyUIEngineAdapter:
             "workflow_version": workflow_package.metadata.version,
             **credential_plan.extra_data,
         }
+        preview_method = options.get("preview_method", self.default_prompt_preview_method)
+        if isinstance(preview_method, str) and preview_method:
+            extra_data["preview_method"] = preview_method
         payload = {
             "prompt": graph,
             "prompt_id": job_id,
@@ -242,14 +263,22 @@ class ComfyUIEngineAdapter:
         )
         return job
 
-    async def get_progress(self, job_id: str) -> JobProgress:
+    async def get_progress(
+        self,
+        job_id: str,
+        since_preview_sequence: int | None = None,
+    ) -> JobProgress:
         history_entry = await self._get_history_entry(job_id)
         if history_entry is not None:
             progress = self._progress_from_history(job_id, history_entry)
             self.job_store.set_progress(progress)
             self.job_store.set_result(self._result_from_history(job_id, history_entry))
             self._log_terminal_progress_once(progress)
-            return progress
+            return self._progress_with_live_preview(
+                job_id,
+                progress,
+                since_preview_sequence,
+            )
 
         queue_status = await self._get_queue_status(job_id)
         if queue_status is not None:
@@ -258,11 +287,23 @@ class ComfyUIEngineAdapter:
                 stored_progress.status == queue_status.status
                 and self._has_progress_detail(stored_progress)
             ):
-                return stored_progress
+                return self._progress_with_live_preview(
+                    job_id,
+                    stored_progress,
+                    since_preview_sequence,
+                )
             self.job_store.set_progress(queue_status)
-            return queue_status
+            return self._progress_with_live_preview(
+                job_id,
+                queue_status,
+                since_preview_sequence,
+            )
 
-        return self.job_store.get_progress(job_id)
+        return self._progress_with_live_preview(
+            job_id,
+            self.job_store.get_progress(job_id),
+            since_preview_sequence,
+        )
 
     async def cancel_job(self, job_id: str) -> JobProgress:
         queue_status = await self._get_queue_status(job_id)
@@ -313,12 +354,16 @@ class ComfyUIEngineAdapter:
             result = self.job_store.get_result(job_id)
             if result.status == "completed":
                 await self._hydrate_missing_output_metadata(job_id, result)
+                if _result_has_media(result):
+                    self.job_store.clear_live_preview(job_id)
                 self.job_store.set_result(result)
             return result
 
         result = self._result_from_history(job_id, history_entry)
         if result.status == "completed":
             await self._hydrate_missing_output_metadata(job_id, result)
+            if _result_has_media(result):
+                self.job_store.clear_live_preview(job_id)
         self.job_store.set_result(result)
         progress = self._progress_from_history(job_id, history_entry)
         self.job_store.set_progress(progress)
@@ -659,6 +704,14 @@ class ComfyUIEngineAdapter:
         try:
             async with websockets.connect(ws_url) as websocket:
                 ready_event.set()
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "feature_flags",
+                            "data": {"supports_preview_metadata": True},
+                        }
+                    )
+                )
                 self.log_store.add(
                     "debug",
                     "Connected to ComfyUI WebSocket",
@@ -666,6 +719,9 @@ class ComfyUIEngineAdapter:
                     job_id=job_id,
                 )
                 async for raw_message in websocket:
+                    if isinstance(raw_message, bytes):
+                        self._handle_ws_binary_message(job_id, raw_message)
+                        continue
                     if not isinstance(raw_message, str):
                         continue
                     should_stop = self._handle_ws_message(job_id, raw_message)
@@ -721,6 +777,142 @@ class ComfyUIEngineAdapter:
                 )
                 return result.status in {"completed", "failed", "canceled"}
         return False
+
+    def _handle_ws_binary_message(self, job_id: str, raw_message: bytes) -> None:
+        preview = self._live_preview_from_binary_message(job_id, raw_message)
+        if preview is None:
+            return
+        self.job_store.set_live_preview(job_id, preview)
+
+    def _live_preview_from_binary_message(
+        self,
+        job_id: str,
+        raw_message: bytes,
+    ) -> JobLivePreview | None:
+        if len(raw_message) < 8:
+            self._log_ignored_live_preview(job_id, "frame_too_short")
+            return None
+
+        event_type = struct.unpack(">I", raw_message[:4])[0]
+        payload = raw_message[4:]
+        node_id: str | None = None
+        prompt_id = job_id
+
+        if event_type == _BINARY_EVENT_PREVIEW_IMAGE:
+            image_type = struct.unpack(">I", payload[:4])[0]
+            mime_type = _PREVIEW_MIME_BY_TYPE.get(image_type)
+            if mime_type is None:
+                self._log_ignored_live_preview(
+                    job_id,
+                    "unsupported_preview_image_type",
+                    details={"image_type": image_type},
+                )
+                return None
+            image_bytes = payload[4:]
+            current = self.job_store.get_progress(job_id)
+            node_id = current.current_node
+
+        elif event_type == _BINARY_EVENT_PREVIEW_IMAGE_WITH_METADATA:
+            metadata_length = struct.unpack(">I", payload[:4])[0]
+            if metadata_length > len(payload) - 4:
+                self._log_ignored_live_preview(
+                    job_id,
+                    "metadata_length_exceeds_frame",
+                    details={"metadata_length": metadata_length},
+                )
+                return None
+            metadata_bytes = payload[4 : 4 + metadata_length]
+            try:
+                metadata = json.loads(metadata_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._log_ignored_live_preview(job_id, "invalid_metadata_json")
+                return None
+            if not isinstance(metadata, dict):
+                self._log_ignored_live_preview(job_id, "invalid_metadata_shape")
+                return None
+            raw_prompt_id = metadata.get("prompt_id")
+            if raw_prompt_id is not None and str(raw_prompt_id) != job_id:
+                self._log_ignored_live_preview(
+                    job_id,
+                    "wrong_prompt_id",
+                    level="debug",
+                    details={"prompt_id": str(raw_prompt_id)},
+                )
+                return None
+            prompt_id = str(raw_prompt_id) if raw_prompt_id is not None else job_id
+            raw_node_id = metadata.get("node_id") or metadata.get("real_node_id") or metadata.get("display_node_id")
+            node_id = str(raw_node_id) if raw_node_id is not None else None
+            raw_mime_type = metadata.get("image_type")
+            mime_type = str(raw_mime_type) if raw_mime_type is not None else "image/jpeg"
+            image_bytes = payload[4 + metadata_length :]
+
+        else:
+            return None
+
+        if mime_type not in _SUPPORTED_PREVIEW_MIME_TYPES:
+            self._log_ignored_live_preview(
+                job_id,
+                "unsupported_preview_mime_type",
+                details={"mime_type": mime_type},
+            )
+            return None
+        if not image_bytes:
+            self._log_ignored_live_preview(job_id, "empty_preview_image")
+            return None
+        if len(image_bytes) > _MAX_LIVE_PREVIEW_BYTES:
+            self._log_ignored_live_preview(
+                job_id,
+                "preview_image_too_large",
+                details={
+                    "size_bytes": len(image_bytes),
+                    "max_size_bytes": _MAX_LIVE_PREVIEW_BYTES,
+                },
+            )
+            return None
+        if not _preview_image_bytes_match_mime(image_bytes, mime_type):
+            self._log_ignored_live_preview(
+                job_id,
+                "preview_image_mime_mismatch",
+                details={"mime_type": mime_type},
+            )
+            return None
+
+        sequence = self._live_preview_sequences.get(job_id, 0) + 1
+        self._live_preview_sequences[job_id] = sequence
+        data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        return JobLivePreview(
+            sequence=sequence,
+            mime_type=mime_type,
+            data_url=data_url,
+            node_id=node_id,
+            prompt_id=prompt_id,
+            target_node_ids=self._live_preview_target_node_ids(job_id, node_id),
+        )
+
+    def _live_preview_target_node_ids(
+        self,
+        job_id: str,
+        node_id: str | None,
+    ) -> list[str]:
+        if node_id is None:
+            return []
+        return self._preview_targets_by_job.get(job_id, {}).get(node_id, [])
+
+    def _log_ignored_live_preview(
+        self,
+        job_id: str,
+        reason: str,
+        *,
+        level: LogLevel = "warning",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.log_store.add(
+            level,
+            "Ignored ComfyUI live preview frame",
+            "comfyui.adapter",
+            job_id=job_id,
+            details={"reason": reason, **(details or {})},
+        )
 
     def _progress_from_ws_message(
         self, job_id: str, message: dict[str, Any]
@@ -870,6 +1062,26 @@ class ComfyUIEngineAdapter:
             or progress.max is not None
             or progress.current_node is not None
             or progress.message is not None
+        )
+
+    def _progress_with_live_preview(
+        self,
+        job_id: str,
+        progress: JobProgress,
+        since_preview_sequence: int | None,
+    ) -> JobProgress:
+        latest_preview = self.job_store.get_live_preview(job_id)
+        if latest_preview is None:
+            return progress
+        preview = self.job_store.get_live_preview(
+            job_id,
+            since_preview_sequence=since_preview_sequence,
+        )
+        return progress.model_copy(
+            update={
+                "live_preview_sequence": latest_preview.sequence,
+                "live_preview": preview,
+            }
         )
 
     def _log_terminal_progress_once(self, progress: JobProgress) -> None:
@@ -1168,6 +1380,98 @@ def _unambiguous_output_kinds_by_node(workflow_package: WorkflowPackage) -> dict
         for node_id, kinds in kinds_by_node.items()
         if len(kinds) == 1
     }
+
+
+def _preview_target_nodes_by_graph(
+    workflow_package: WorkflowPackage,
+    graph: dict[str, Any],
+) -> dict[str, list[str]]:
+    visual_output_nodes = {
+        output.node_id
+        for output in workflow_package.outputs
+        if (output.kind or output.type) in {"image", "video"}
+    }
+    if not visual_output_nodes:
+        return {}
+
+    downstream: dict[str, set[str]] = {str(node_id): set() for node_id in graph}
+    for node_id, node_def in graph.items():
+        if not isinstance(node_def, dict):
+            continue
+        inputs = node_def.get("inputs", {})
+        if not isinstance(inputs, dict):
+            continue
+        for upstream_node_id in _linked_node_ids(inputs):
+            downstream.setdefault(upstream_node_id, set()).add(str(node_id))
+
+    targets_by_node: dict[str, list[str]] = {}
+    for node_id in graph:
+        reachable = _reachable_visual_output_nodes(
+            str(node_id),
+            downstream,
+            visual_output_nodes,
+        )
+        if len(reachable) == 1:
+            targets_by_node[str(node_id)] = sorted(reachable)
+    return targets_by_node
+
+
+def _linked_node_ids(value: Any) -> Iterator[str]:
+    if (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], str)
+        and isinstance(value[1], int)
+    ):
+        yield value[0]
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _linked_node_ids(item)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _linked_node_ids(item)
+
+
+def _reachable_visual_output_nodes(
+    start_node_id: str,
+    downstream: dict[str, set[str]],
+    visual_output_nodes: set[str],
+) -> set[str]:
+    reachable: set[str] = set()
+    seen = {start_node_id}
+    queue = [start_node_id]
+    while queue:
+        node_id = queue.pop(0)
+        if node_id in visual_output_nodes:
+            reachable.add(node_id)
+        for child_node_id in downstream.get(node_id, set()):
+            if child_node_id in seen:
+                continue
+            seen.add(child_node_id)
+            queue.append(child_node_id)
+    return reachable
+
+
+def _preview_image_bytes_match_mime(image_bytes: bytes, mime_type: str) -> bool:
+    if mime_type == "image/png":
+        return image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return image_bytes.startswith(b"\xff\xd8")
+    return False
+
+
+def _result_has_media(result: JobResult) -> bool:
+    for output_record in result.outputs:
+        node_output = output_record.get("output")
+        if not isinstance(node_output, dict):
+            continue
+        for bucket_name in _MEDIA_OUTPUT_BUCKETS:
+            items = node_output.get(bucket_name)
+            if isinstance(items, list) and items:
+                return True
+    return False
 
 
 def _engine_output_type_from_item(item: dict[str, Any]) -> str:

@@ -1313,6 +1313,11 @@ def _launch_config_hash(
                 if launch_defaults is not None
                 else "auto"
             ),
+            "preview_size": (
+                launch_defaults.preview_size
+                if launch_defaults is not None
+                else 512
+            ),
             "vram_mode": (
                 launch_defaults.vram_mode if launch_defaults is not None else "auto"
             ),

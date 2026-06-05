@@ -269,6 +269,16 @@ class EngineJob(BaseModel):
     memory_status: dict[str, Any] | None = None
 
 
+class JobLivePreview(BaseModel):
+    sequence: int
+    kind: Literal["image"] = "image"
+    mime_type: str
+    data_url: str | None = None
+    node_id: str | None = None
+    prompt_id: str | None = None
+    target_node_ids: list[str] = Field(default_factory=list)
+
+
 class JobProgress(BaseModel):
     job_id: str
     queue_id: str | None = None
@@ -277,6 +287,8 @@ class JobProgress(BaseModel):
     max: int | None = None
     current_node: str | None = None
     message: str | None = None
+    live_preview_sequence: int | None = None
+    live_preview: JobLivePreview | None = None
 
 
 class JobResult(BaseModel):

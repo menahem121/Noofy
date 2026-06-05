@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 ComfyUIVramMode = Literal["normal", "highvram", "lowvram", "novram", "cpu"]
 DEFAULT_COMFYUI_VRAM_MODE: ComfyUIVramMode = "normal"
+DEFAULT_COMFYUI_PREVIEW_METHOD = "auto"
+DEFAULT_COMFYUI_PREVIEW_SIZE = 512
+COMFYUI_PREVIEW_METHODS = frozenset({"auto", "latent2rgb", "taesd", "none"})
 
 COMFYUI_VRAM_FLAG_BY_MODE: dict[str, list[str]] = {
     "normal": [],
@@ -94,6 +97,17 @@ def comfyui_vram_args(mode: str) -> list[str]:
     if mode not in COMFYUI_VRAM_FLAG_BY_MODE:
         raise ValueError(f"Unsupported ComfyUI VRAM mode: {mode}")
     return list(COMFYUI_VRAM_FLAG_BY_MODE[mode])
+
+
+def comfyui_preview_args(
+    method: str = DEFAULT_COMFYUI_PREVIEW_METHOD,
+    size: int = DEFAULT_COMFYUI_PREVIEW_SIZE,
+) -> list[str]:
+    if method not in COMFYUI_PREVIEW_METHODS:
+        raise ValueError(f"Unsupported ComfyUI preview method: {method}")
+    if size <= 0:
+        raise ValueError(f"Unsupported ComfyUI preview size: {size}")
+    return ["--preview-method", method, "--preview-size", str(size)]
 
 
 def comfyui_launch_response(

@@ -4,7 +4,11 @@ import pytest
 
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
-from app.runtime.comfyui.launch_settings import ComfyUILaunchSettings, ComfyUILaunchSettingsStore
+from app.runtime.comfyui.launch_settings import (
+    ComfyUILaunchSettings,
+    ComfyUILaunchSettingsStore,
+    comfyui_preview_args,
+)
 
 
 class FakeRuntimeManager:
@@ -67,6 +71,21 @@ def test_comfyui_launch_settings_default_to_normal_vram(tmp_path: Path) -> None:
 
     assert settings.vram_mode == "normal"
     assert settings.applies_to_managed_runtime is True
+
+
+def test_comfyui_preview_args_default_to_auto_512() -> None:
+    assert comfyui_preview_args() == [
+        "--preview-method",
+        "auto",
+        "--preview-size",
+        "512",
+    ]
+
+    with pytest.raises(ValueError, match="Unsupported ComfyUI preview method"):
+        comfyui_preview_args("invalid", 512)
+
+    with pytest.raises(ValueError, match="Unsupported ComfyUI preview size"):
+        comfyui_preview_args("auto", 0)
 
 
 @pytest.mark.anyio

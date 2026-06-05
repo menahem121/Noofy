@@ -26,6 +26,7 @@ from app.runtime.dependencies.isolation import (
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager
+from app.runtime.comfyui.launch_settings import comfyui_preview_args
 from app.runtime.memory.memory_governor import (
     MemoryDecisionAction,
     MemoryReleaseStatus,
@@ -957,6 +958,12 @@ def _workflow_runner_launch_spec(
         str(runner_workspace_path),
         "--disable-auto-launch",
     ]
+    extra_args.extend(
+        comfyui_preview_args(
+            capsule_lock.runtime.preview_method,
+            capsule_lock.runtime.preview_size,
+        )
+    )
     if not capsule_lock.custom_nodes:
         extra_args.append("--disable-all-custom-nodes")
     return RunnerLaunchSpec(

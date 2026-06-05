@@ -5,7 +5,7 @@ The app owns the engine contract. UI code should depend on this contract, not on
 ## Core Operations
 
 - `runWorkflow(workflowId, inputs, options)`: validate and start a workflow job.
-- `getProgress(jobId)`: return current job progress and status.
+- `getProgress(jobId, sincePreviewSequence?)`: return current job progress and status, plus transient live preview metadata when available.
 - `streamProgress(jobId)`: stream frontend-ready progress/result events.
 - `cancelJob(jobId)`: stop a running or queued job.
 - `getResult(jobId)`: return final outputs, errors, and generated files.
@@ -67,6 +67,8 @@ For the first adapter:
 - Submit workflow graph through ComfyUI `/prompt`.
 - Track progress through ComfyUI `/ws`.
 - Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
+- Parse ComfyUI sampler preview WebSocket binary frames inside `ComfyUIEngineAdapter` and expose them only as transient `live_preview` hints on `GET /api/jobs/{job_id}/progress?since_preview_sequence=<number>`. These previews are image/latent previews, not final outputs being progressively created. They may help image workflows and may sometimes show a representative frame during video latent sampling; they are not progressive audio, 3D, generic file, text, or final video previews.
+- Return `live_preview_sequence` on progress responses when a live preview exists. Return preview image data only when the latest preview sequence is newer than `since_preview_sequence`; otherwise return lightweight metadata with `data_url: null`. Live preview bytes stay memory-only and are never gallery/output media.
 - Read queue and job state through `/queue` and `/history`.
 - Retrieve generated files through ComfyUI `/view` inside the adapter, while returning backend-owned media URLs such as `/api/jobs/{job_id}/outputs/view?...` to the frontend. Player-facing reads stream through the backend and forward byte ranges so large audio and video files do not need to be buffered in memory before playback.
 - Normalize media outputs with app-owned `kind` and compatibility `type` fields so image, audio, video, 3D, and generic file outputs can share the result contract. Keep the engine retrieval bucket separate as `output_type`. Probe missing output sizes through the validated adapter boundary with a ranged read and retain a nullable size when the engine cannot report one.
