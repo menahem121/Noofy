@@ -380,6 +380,7 @@
 .workflow-row {
   display: grid;
   grid-template-columns:
+    32px
     minmax(0, 1.15fr)
     minmax(0, 0.78fr)
     minmax(0, 1.18fr)
@@ -439,6 +440,10 @@
   border-color: rgba(139, 92, 246, 0.38);
 }
 
+.workflow-row--checked {
+  border-color: rgba(139, 92, 246, 0.38);
+}
+
 .workflow-col {
   min-width: 0;
   overflow: hidden;
@@ -451,6 +456,11 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.workflow-col-check {
+  display: flex;
+  align-items: center;
 }
 
 .workflow-col-opened {
@@ -944,6 +954,7 @@
   .workflows-table-head,
   .workflow-row {
     grid-template-columns:
+      32px
       minmax(0, 1.3fr)
       minmax(0, 0.9fr)
       minmax(0, 1.18fr)
@@ -965,6 +976,7 @@
   .workflows-table-head,
   .workflow-row {
     grid-template-columns:
+      32px
       minmax(0, 1.3fr)
       minmax(0, 0.9fr)
       minmax(0, 1.18fr)
@@ -986,6 +998,7 @@
   .workflows-table-head,
   .workflow-row {
     grid-template-columns:
+      32px
       minmax(0, 1.12fr)
       minmax(0, 0.86fr)
       minmax(0, 1.22fr)
@@ -1024,13 +1037,13 @@
 
   .workflow-row {
     grid-template-areas:
-      "main actions"
-      "model model"
-      "status source"
-      "description description"
-      "category category"
-      "tags tags";
-    grid-template-columns: minmax(0, 1fr) max-content;
+      "check main actions"
+      ". model model"
+      ". status source"
+      ". description description"
+      ". category category"
+      ". tags tags";
+    grid-template-columns: 24px minmax(0, 1fr) max-content;
     align-items: start;
     gap: 8px 10px;
     padding: 12px;
@@ -1038,6 +1051,10 @@
 
   .workflow-col-main {
     grid-area: main;
+  }
+
+  .workflow-col-check {
+    grid-area: check;
   }
 
   .workflow-col-model {
@@ -1147,18 +1164,22 @@
 
   .workflow-row {
     grid-template-areas:
-      "main actions"
-      "model model"
-      "status source"
-      "description description"
-      "category category"
-      "tags tags";
-    grid-template-columns: minmax(0, 1fr) max-content;
+      "check main actions"
+      ". model model"
+      ". status source"
+      ". description description"
+      ". category category"
+      ". tags tags";
+    grid-template-columns: 24px minmax(0, 1fr) max-content;
     gap: 8px;
   }
 
   .workflow-col-main {
     grid-area: main;
+  }
+
+  .workflow-col-check {
+    grid-area: check;
   }
 
   .workflow-col-model {

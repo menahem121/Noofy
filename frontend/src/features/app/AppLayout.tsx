@@ -172,21 +172,6 @@ export function AppLayout({
 
       <aside className="sidebar" aria-hidden={!effectiveOpen}>
         <div className="sidebar__inner">
-          <button
-            className="workspace-card workspace-card--github"
-            type="button"
-            onClick={() => void openExternalUrl(NOOFY_GITHUB_REPO_URL)}
-            aria-label="Open Noofy on GitHub"
-          >
-            <div className="workspace-card__avatar" aria-hidden="true">
-              <Github size={21} />
-            </div>
-            <div>
-              <p>Noofy on GitHub</p>
-              <span>View source & updates</span>
-            </div>
-          </button>
-
           <nav className="sidebar-nav" aria-label="Main navigation">
             {navItems.map(({ id, label, Icon }) => (
               <button
@@ -217,6 +202,21 @@ export function AppLayout({
               Support Noofy
             </button>
           </div>
+
+          <button
+            className="workspace-card workspace-card--github"
+            type="button"
+            onClick={() => void openExternalUrl(NOOFY_GITHUB_REPO_URL)}
+            aria-label="Open Noofy on GitHub"
+          >
+            <div className="workspace-card__avatar" aria-hidden="true">
+              <Github size={21} />
+            </div>
+            <div>
+              <p>Noofy on GitHub</p>
+              <span>View source & updates</span>
+            </div>
+          </button>
 
           <p className="sidebar__version">Noofy v{__APP_VERSION__}</p>
         </div>

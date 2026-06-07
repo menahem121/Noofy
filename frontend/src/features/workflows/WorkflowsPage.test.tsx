@@ -511,6 +511,29 @@ describe("WorkflowsPage", () => {
     expect(screen.getAllByText("cleanup.safetensors").length).toBeGreaterThan(0);
   });
 
+  it("selects workflows without opening their details", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select Cleanup Flow" }));
+
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/workflows/imported_cleanup/details", expect.anything());
+  });
+
+  it("selects all filtered workflows and clears the selection", async () => {
+    renderPage();
+
+    await screen.findByText("Cleanup Flow");
+    fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "cleanup" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all workflows" }));
+
+    expect(screen.getByRole("checkbox", { name: "Select Cleanup Flow" })).toBeChecked();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
+  });
+
   it("shows workflow details in a closeable side panel", async () => {
     renderPage();
 
@@ -802,6 +825,32 @@ describe("WorkflowsPage", () => {
         expect.objectContaining({ method: "DELETE" }),
       );
     });
+    expect(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY)).toBeNull();
+  });
+
+  it("removes selected imported workflows and skips native workflows", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    window.localStorage.setItem(
+      PENDING_IMPORTED_SETUP_STORAGE_KEY,
+      JSON.stringify([{ workflowId: "imported_cleanup", workflowName: "Cleanup Flow", dismissed: false }]),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select all workflows" }));
+    expect(screen.getByText("2 selected, 1 can be removed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflows/native_text",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(screen.getByText("Removed 1 workflow from Noofy.")).toBeInTheDocument();
     expect(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY)).toBeNull();
   });
 

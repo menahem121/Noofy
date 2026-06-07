@@ -123,6 +123,8 @@ export function WorkflowsPage({
   const [tagFilter, setTagFilter] = useState("all");
   const [sort, setSort] = useState<WorkflowSortState | null>({ key: "name", direction: "asc" });
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [removeBusy, setRemoveBusy] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [details, setDetails] = useState<Record<string, WorkflowDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -140,6 +142,7 @@ export function WorkflowsPage({
     cancelImport,
   } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [exportDialog, setExportDialog] = useState<{
     workflowName: string;
     exportUrl: string;
@@ -204,10 +207,29 @@ export function WorkflowsPage({
     ? workflows.find((workflow) => workflow.id === selectedWorkflowId) ?? null
     : null;
   const selectedDetails = selectedWorkflowId ? details[selectedWorkflowId] ?? null : null;
+  const selectedWorkflows = useMemo(
+    () => workflows.filter((workflow) => checkedIds.has(workflow.id)),
+    [checkedIds, workflows],
+  );
+  const selectedRemovableWorkflows = useMemo(
+    () => selectedWorkflows.filter((workflow) => workflow.can_remove),
+    [selectedWorkflows],
+  );
+  const selectedBlockedCount = selectedWorkflows.length - selectedRemovableWorkflows.length;
+  const allFilteredWorkflowsSelected =
+    filteredWorkflows.length > 0 && filteredWorkflows.every((workflow) => checkedIds.has(workflow.id));
 
   const readyCount = workflows.filter((workflow) => workflowStatus(workflow) === "ready").length;
   const needSetupCount = workflows.filter((workflow) => workflowStatus(workflow) === "need_setup").length;
   const missingModelsCount = workflows.reduce((total, workflow) => total + (workflow.missing_model_count ?? 0), 0);
+
+  useEffect(() => {
+    const workflowIds = new Set(workflows.map((workflow) => workflow.id));
+    setCheckedIds((current) => {
+      const next = new Set([...current].filter((id) => workflowIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [workflows]);
 
   async function handleViewModelsAfterImportDiskSpaceFailure() {
     await cancelImport();
@@ -275,6 +297,88 @@ export function WorkflowsPage({
       return next;
     });
     await workflowLibrary.refreshWorkflows();
+  }
+
+  function handleToggleCheck(id: string, checked: boolean) {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function handleSelectAll() {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (allFilteredWorkflowsSelected) {
+        filteredWorkflows.forEach((workflow) => next.delete(workflow.id));
+      } else {
+        filteredWorkflows.forEach((workflow) => next.add(workflow.id));
+      }
+      return next;
+    });
+  }
+
+  async function handleRemoveSelectedWorkflows() {
+    if (selectedRemovableWorkflows.length === 0) {
+      setActionError("None of the selected workflows can be removed from Noofy.");
+      return;
+    }
+
+    const removeLabel =
+      selectedRemovableWorkflows.length === 1
+        ? `"${workflowDisplayName(selectedRemovableWorkflows[0])}"`
+        : `${selectedRemovableWorkflows.length} workflows`;
+    const skippedLabel =
+      selectedBlockedCount > 0
+        ? ` ${selectedBlockedCount} selected workflow${selectedBlockedCount === 1 ? "" : "s"} will be skipped because ${
+            selectedBlockedCount === 1 ? "it cannot" : "they cannot"
+          } be removed.`
+        : "";
+    if (!window.confirm(`Remove ${removeLabel} from Noofy?${skippedLabel}`)) return;
+
+    setRemoveBusy(true);
+    setActionError(null);
+    setActionMessage(null);
+    const failedIds = new Set<string>();
+    const removedIds = new Set<string>();
+    try {
+      for (const workflow of selectedRemovableWorkflows) {
+        try {
+          await removeWorkflow(workflow.id);
+          clearDashboardDraft(workflow.id);
+          removePendingImportedSetupReminder(workflow.id);
+          removedIds.add(workflow.id);
+        } catch {
+          failedIds.add(workflow.id);
+        }
+      }
+
+      if (removedIds.has(selectedWorkflowId ?? "")) {
+        setDetailsPanelOpen(false);
+        setSelectedWorkflowId(null);
+      }
+      setDetails((current) => {
+        const next = { ...current };
+        removedIds.forEach((id) => delete next[id]);
+        return next;
+      });
+      setCheckedIds(new Set(failedIds));
+      await workflowLibrary.refreshWorkflows();
+
+      if (failedIds.size > 0) {
+        setActionError(
+          `Removed ${removedIds.size} workflow${removedIds.size === 1 ? "" : "s"}. ${
+            failedIds.size
+          } selected workflow${failedIds.size === 1 ? "" : "s"} could not be removed.`,
+        );
+      } else {
+        setActionMessage(`Removed ${removedIds.size} workflow${removedIds.size === 1 ? "" : "s"} from Noofy.`);
+      }
+    } finally {
+      setRemoveBusy(false);
+    }
   }
 
   function closeDetailsPanel() {
@@ -402,6 +506,7 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
           ) : null}
           {importFlow.importError ? <div className="notice notice--warning">{importFlow.importError}</div> : null}
           {actionError ? <div className="notice notice--warning">{actionError}</div> : null}
+          {actionMessage ? <div className="notice">{actionMessage}</div> : null}
 
           <div className="models-toolbar models-toolbar--workflows">
             <label className="search-field search-field--models">
@@ -455,7 +560,44 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
             ))}
           </div>
 
+          {checkedIds.size > 0 && (
+            <div className="models-bulk-bar" role="region" aria-label="Bulk actions">
+              <span className="models-bulk-bar__count">
+                {checkedIds.size} selected
+                {selectedBlockedCount > 0 ? `, ${selectedRemovableWorkflows.length} can be removed` : ""}
+              </span>
+              <div className="button-row">
+                <button
+                  className="secondary-button secondary-button--small secondary-button--danger"
+                  type="button"
+                  onClick={() => void handleRemoveSelectedWorkflows()}
+                  disabled={removeBusy || selectedRemovableWorkflows.length === 0}
+                  title={
+                    selectedRemovableWorkflows.length === 0
+                      ? "Selected workflows cannot be removed from Noofy"
+                      : "Remove selected workflows"
+                  }
+                >
+                  <Trash2 size={12} aria-hidden="true" />
+                  Remove selected
+                </button>
+              </div>
+              <button className="ghost-button" type="button" onClick={() => setCheckedIds(new Set())}>
+                <X size={14} aria-hidden="true" />
+                Clear
+              </button>
+            </div>
+          )}
+
           <div className="workflows-table-head">
+            <div className="workflow-col workflow-col-check">
+              <input
+                type="checkbox"
+                checked={allFilteredWorkflowsSelected}
+                onChange={handleSelectAll}
+                aria-label="Select all workflows"
+              />
+            </div>
             <SortableHeader
               className="workflow-col workflow-col-main"
               label="Name"
@@ -517,7 +659,9 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
                   key={workflow.id}
                   workflow={workflow}
                   selected={selectedWorkflowId === workflow.id}
+                  checked={checkedIds.has(workflow.id)}
                   menuOpen={menuOpenFor === workflow.id}
+                  onCheck={(checked) => handleToggleCheck(workflow.id, checked)}
                   onOpen={() => onOpenWorkflow(workflow.id)}
                   onDetails={() => void openDetails(workflow)}
                   onToggleMenu={() => setMenuOpenFor((current) => (current === workflow.id ? null : workflow.id))}
@@ -829,7 +973,9 @@ function workflowDetailsExportReview(
 function WorkflowRow({
   workflow,
   selected,
+  checked,
   menuOpen,
+  onCheck,
   onOpen,
   onDetails,
   onToggleMenu,
@@ -842,7 +988,9 @@ function WorkflowRow({
 }: {
   workflow: WorkflowSummary;
   selected: boolean;
+  checked: boolean;
   menuOpen: boolean;
+  onCheck: (checked: boolean) => void;
   onOpen: () => void;
   onDetails: () => void;
   onToggleMenu: () => void;
@@ -859,10 +1007,18 @@ function WorkflowRow({
   const displayName = workflowDisplayName(workflow);
   return (
     <article
-      className={`workflow-row${selected ? " workflow-row--selected" : ""}`}
+      className={`workflow-row${selected ? " workflow-row--selected" : ""}${checked ? " workflow-row--checked" : ""}`}
       role="listitem"
       onClick={onDetails}
     >
+      <div className="workflow-col workflow-col-check" onClick={(event) => event.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onCheck(event.target.checked)}
+          aria-label={`Select ${displayName}`}
+        />
+      </div>
       <div className="workflow-col workflow-col-main">
         <div className="model-type-icon" aria-hidden="true">
           <WorkflowIconVisual icon={workflow.icon} size={16} Icon={Icon} />

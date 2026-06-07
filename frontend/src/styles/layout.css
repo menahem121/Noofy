@@ -559,6 +559,10 @@
     transform 160ms ease;
 }
 
+.engine-card + .workspace-card--github {
+  margin-top: 12px;
+}
+
 .workspace-card--github:hover {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.11), rgba(139, 92, 246, 0.13)),

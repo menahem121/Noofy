@@ -29,6 +29,16 @@ describe("AppLayout sidebar", () => {
     expect(screen.getByText("View source & updates")).toBeInTheDocument();
     expect(layoutCss).toContain(".workspace-card--github .workspace-card__avatar");
     expect(layoutCss).toContain("background: #0d1117;");
+    expect(layoutCss).toContain(".engine-card + .workspace-card--github");
+    expect(layoutCss).toContain("margin-top: 12px;");
+
+    const coffeeCard = screen.getByText("Buy Me a Coffee").closest(".engine-card");
+    const githubCard = screen.getByRole("button", { name: "Open Noofy on GitHub" });
+    const version = document.querySelector(".sidebar__version");
+    expect(coffeeCard).not.toBeNull();
+    expect(version).not.toBeNull();
+    expect(coffeeCard!.compareDocumentPosition(githubCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(githubCard.compareDocumentPosition(version!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Noofy on GitHub" }));
 
