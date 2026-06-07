@@ -69,6 +69,7 @@ const modelStatusSortOrder: Record<string, number> = {
   failed: 3,
   needs_attention: 3,
 };
+const MODEL_INVENTORY_VISIBLE_REFRESH_MS = 30_000;
 
 export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const { inventoryState, refreshInventory: loadInventory } = useModelInventory();
@@ -102,9 +103,14 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const refreshInventory = useCallback(async (options: { silent?: boolean } = {}) => {
     const inventory = await loadInventory(options);
     if (inventory) {
+      const currentModelIds = new Set(inventory.models.map((model) => model.model_key));
       if (!inventory.models.some((model) => model.model_key === selectedModelId)) {
         setSelectedModelId(null);
       }
+      setCheckedIds((current) => {
+        const next = new Set([...current].filter((id) => currentModelIds.has(id)));
+        return next.size === current.size ? current : next;
+      });
       if (!inventory.folders.categories.includes(importFolder)) {
         setImportFolder(inventory.folders.categories[0] ?? "checkpoints");
       }
@@ -130,7 +136,9 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
 
     window.addEventListener("focus", refreshWhenActive);
     document.addEventListener("visibilitychange", refreshWhenActive);
+    const intervalId = window.setInterval(refreshWhenActive, MODEL_INVENTORY_VISIBLE_REFRESH_MS);
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener("focus", refreshWhenActive);
       document.removeEventListener("visibilitychange", refreshWhenActive);
     };

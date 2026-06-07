@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import stat
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
@@ -296,18 +297,12 @@ class ModelInventoryService:
             key = model_key(model.folder, model.filename)
             if key in entries:
                 continue
-            size_bytes = None
-            if model.path:
-                path = Path(model.path)
-                if self._is_excluded_engine_model_path(path):
-                    continue
-                if path.is_file():
-                    try:
-                        size_bytes = path.stat().st_size
-                    except OSError:
-                        size_bytes = None
             if not _is_model_asset_filename(model.filename):
                 continue
+            engine_visible_file = self._engine_visible_model_file(model)
+            if engine_visible_file is None:
+                continue
+            path, size_bytes = engine_visible_file
             entries[key] = ModelInventoryEntry(
                 model_key=key,
                 filename=model.filename,
@@ -322,8 +317,24 @@ class ModelInventoryService:
                 ownership_label="Engine-visible reference",
                 can_delete=False,
                 delete_unavailable_reason="Only files inside Noofy Models can be deleted.",
-                path=model.path,
+                path=str(path),
             )
+
+    def _engine_visible_model_file(self, model: ModelInfo) -> tuple[Path, int] | None:
+        if not model.path:
+            return None
+        path = Path(model.path).expanduser()
+        if not path.is_absolute():
+            return None
+        if self._is_excluded_engine_model_path(path):
+            return None
+        try:
+            path_stat = path.stat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(path_stat.st_mode):
+            return None
+        return path, path_stat.st_size
 
     def _is_excluded_engine_model_path(self, path: Path) -> bool:
         try:

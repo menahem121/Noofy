@@ -60,8 +60,10 @@ The Models page is backed by Noofy API endpoints, not by direct ComfyUI calls.
 - `GET /api/models` — returns a UI-ready inventory with summary counts, active
   model folders, persisted model tags, local files from the Noofy Models folder,
   read-only files from the optional external ComfyUI models folder,
-  best-effort engine-visible fallback rows, and missing model requirements from
-  installed workflows. Engine-visible enrichment is skipped when the active
+  best-effort engine-visible fallback rows with real file paths, and missing
+  model requirements from installed workflows. Pathless engine model names and
+  runtime materialized model-view files are not canonical inventory and cannot
+  produce Ready rows. Engine-visible enrichment is skipped when the active
   engine is slow or unavailable so the page can still load from backend-owned
   sources. Each row includes stable `model_key`, source, ownership (`noofy_downloaded`,
   `noofy_imported`, `noofy_local`, `external_reference`, `engine_reference`, or

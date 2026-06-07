@@ -28,6 +28,14 @@ const inventory = {
   tags: [],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("useModelInventory", () => {
   const fetchMock = vi.fn();
 
@@ -56,5 +64,31 @@ describe("useModelInventory", () => {
 
     await waitFor(() => expect(result.current.inventoryState.error).toBe("temporary inventory failure"));
     expect(result.current.inventoryState.inventory).toEqual(inventory);
+  });
+
+  it("does not let an older refresh replace newer inventory", async () => {
+    const olderResponse = deferred<Response>();
+    const newerInventory = {
+      ...inventory,
+      summary: { ...inventory.summary, total_count: 0 },
+    };
+    fetchMock
+      .mockReturnValueOnce(olderResponse.promise)
+      .mockResolvedValueOnce(jsonResponse(newerInventory));
+    const { result } = renderHook(() => useModelInventory());
+
+    let olderRefresh!: Promise<unknown>;
+    await act(async () => {
+      olderRefresh = result.current.refreshInventory();
+      await result.current.refreshInventory({ silent: true });
+    });
+    expect(result.current.inventoryState.inventory).toEqual(newerInventory);
+
+    olderResponse.resolve(jsonResponse(inventory));
+    await act(async () => {
+      await olderRefresh;
+    });
+
+    expect(result.current.inventoryState.inventory).toEqual(newerInventory);
   });
 });

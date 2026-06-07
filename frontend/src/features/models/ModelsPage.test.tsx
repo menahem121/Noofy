@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SidebarProvider } from "../app/AppLayout";
@@ -226,6 +226,7 @@ describe("ModelsPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   function renderPage() {
@@ -268,6 +269,60 @@ describe("ModelsPage", () => {
     await waitFor(() => expect(screen.getByText("7.1 GB")).toBeInTheDocument());
     const modelInventoryRequests = fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/api/models"));
     expect(modelInventoryRequests.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("silently refreshes while visible and removes externally deleted model rows", async () => {
+    vi.useFakeTimers();
+    currentInventory = {
+      ...inventory,
+      summary: {
+        ...inventory.summary,
+        total_count: inventory.summary.total_count + 1,
+      },
+      models: [
+        ...inventory.models,
+        {
+          model_key: "upscale_models/ghost.safetensors",
+          filename: "ghost.safetensors",
+          folder: "upscale_models",
+          model_type: "upscaler",
+          size_bytes: 1024,
+          status: "ready",
+          status_label: "Ready",
+          source: "noofy",
+          source_label: "Noofy Models",
+          ownership: "noofy_downloaded",
+          ownership_label: "Downloaded by Noofy",
+          can_delete: true,
+          delete_unavailable_reason: null,
+          path: "/tmp/Noofy Models/upscale_models/ghost.safetensors",
+          matched_root: "/tmp/Noofy Models",
+          verification_level: "filename_size",
+          matched_sha256: null,
+          source_availability: null,
+          message: null,
+          workflow_usage: [],
+          downloadable_references: [],
+          tag_ids: [],
+        },
+      ],
+    };
+    renderPage();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("ghost.safetensors")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Select ghost.safetensors"));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    currentInventory = inventory;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(screen.queryByText("ghost.safetensors")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
   });
 
   it("sorts models by sortable headers without clearing the current search", async () => {
