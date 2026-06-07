@@ -37,6 +37,7 @@ import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { clearDashboardDraft, type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
+import { removePendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
@@ -263,6 +264,7 @@ export function WorkflowsPage({
     // deterministic workflow id) starts from the freshly imported dashboard
     // instead of resurrecting stale, possibly-duplicated widgets.
     clearDashboardDraft(workflow.id);
+    removePendingImportedSetupReminder(workflow.id);
     if (selectedWorkflowId === workflow.id) {
       setDetailsPanelOpen(false);
       setSelectedWorkflowId(null);

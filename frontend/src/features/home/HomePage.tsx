@@ -1,4 +1,4 @@
-import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -39,6 +39,7 @@ import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/WorkflowImportModals";
 import { useWorkflowImportFlow } from "../workflows/useWorkflowImportFlow";
+import { importNeedsConfiguration } from "../workflows/workflowImportUtils";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
 import { hardwareWarningPillView } from "../workflows/hardwareWarning";
@@ -56,6 +57,11 @@ import {
   type WorkflowCardVariant,
   type WorkflowStatus,
 } from "./homeContent";
+import {
+  loadPendingImportedSetups,
+  savePendingImportedSetups,
+  type PendingImportedSetup,
+} from "./pendingSetupBanners";
 import { useWorkflowLibrary } from "./WorkflowLibraryProvider";
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
@@ -365,6 +371,13 @@ export function HomePage({
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
   const [draftDismissTick, setDraftDismissTick] = useState(0);
+  const [pendingImportedSetups, setPendingImportedSetups] = useState<PendingImportedSetup[]>(
+    loadPendingImportedSetups,
+  );
+  const startupPendingImportedWorkflowIds = useRef<Set<string> | null>(null);
+  if (startupPendingImportedWorkflowIds.current === null) {
+    startupPendingImportedWorkflowIds.current = new Set(pendingImportedSetups.map((item) => item.workflowId));
+  }
   const [exportDialog, setExportDialog] = useState<{
     workflowName: string;
     exportUrl: string;
@@ -384,8 +397,41 @@ export function HomePage({
 
   useEffect(() => {
     void refreshRuntime({ silent: true });
-    void refreshWorkflows();
+    const initialWorkflowIds = startupPendingImportedWorkflowIds.current ?? new Set<string>();
+    void refreshWorkflows().then((workflows) => {
+      if (!workflows) return;
+      setPendingImportedSetups((current) => (
+        reconcilePendingImportedSetups(current, workflows, initialWorkflowIds)
+      ));
+    });
   }, [refreshRuntime, refreshWorkflows]);
+
+  useEffect(() => {
+    savePendingImportedSetups(pendingImportedSetups);
+  }, [pendingImportedSetups]);
+
+  useEffect(() => {
+    const result = homeData.importResult;
+    if (!result || !importNeedsConfiguration(result)) return;
+
+    const pendingSetup = {
+      workflowId: result.workflow.id,
+      workflowName: workflowDisplayName(result.workflow),
+      dismissed: false,
+    };
+    startupPendingImportedWorkflowIds.current?.delete(pendingSetup.workflowId);
+    setPendingImportedSetups((current) => {
+      return [pendingSetup, ...current.filter((item) => item.workflowId !== pendingSetup.workflowId)];
+    });
+  }, [homeData.importResult]);
+
+  useEffect(() => {
+    if (!workflowLibrary.hasLoaded) return;
+
+    setPendingImportedSetups((current) => {
+      return reconcilePendingImportedSetups(current, workflowLibrary.workflows);
+    });
+  }, [workflowLibrary.hasLoaded, workflowLibrary.workflows]);
 
   const workflowCards = useMemo(() => {
     const backendCards = homeWorkflowCardsFromBackend(workflowLibrary.workflows, selectedNativeVariants);
@@ -405,15 +451,30 @@ export function HomePage({
     [workflowLibrary.workflows],
   );
 
-  // Workflows that still need input setup get a dismissible reminder banner: the
-  // one just imported (transient), plus any with a saved builder draft so the
-  // reminder survives leaving the builder and a refresh. Stacked when several
-  // drafts are waiting. The dismiss tick re-reads the localStorage drafts.
+  // Imported setup reminders persist independently, while saved builder drafts
+  // also surface reminders. Import reminders win when both exist for one workflow.
   const pendingSetupBanners = useMemo<PendingSetupBanner[]>(() => {
+    const workflowsById = new Map(workflowLibrary.workflows.map((workflow) => [workflow.id, workflow]));
+    const importedWorkflowIds = new Set(pendingImportedSetups.map((item) => item.workflowId));
+    const importedBanners: PendingSetupBanner[] = pendingImportedSetups.flatMap((item) => {
+      const workflow = workflowsById.get(item.workflowId);
+      if (item.dismissed || (workflow && !workflowNeedsConfiguration(workflow))) return [];
+      const workflowName = workflow ? workflowDisplayName(workflow) : item.workflowName;
+      return [{
+        kind: "import",
+        workflowId: item.workflowId,
+        workflowName,
+        title: "The workflow needs setup",
+        message: `${workflowName} was added to your local workflows.`,
+      }];
+    });
     const draftWorkflows = workflowLibrary.workflows.filter(
-      (workflow) => workflowNeedsConfiguration(workflow) && loadDashboardDraft(workflow.id) !== null,
+      (workflow) =>
+        !importedWorkflowIds.has(workflow.id) &&
+        workflowNeedsConfiguration(workflow) &&
+        loadDashboardDraft(workflow.id) !== null,
     );
-    const banners: PendingSetupBanner[] = draftWorkflows.map((workflow) => {
+    const draftBanners: PendingSetupBanner[] = draftWorkflows.map((workflow) => {
       const name = workflowDisplayName(workflow);
       return {
         kind: "draft",
@@ -424,26 +485,10 @@ export function HomePage({
       };
     });
 
-    const result = homeData.importResult;
-    if (
-      result &&
-      result.status === "needs_input_setup" &&
-      !draftWorkflows.some((workflow) => workflow.id === result.workflow.id)
-    ) {
-      const name = workflowDisplayName(result.workflow);
-      banners.unshift({
-        kind: "import",
-        workflowId: result.workflow.id,
-        workflowName: name,
-        title: "The workflow needs setup",
-        message: `${name} was added to your local workflows.`,
-      });
-    }
-
-    return banners;
+    return [...importedBanners, ...draftBanners];
     // draftDismissTick forces a re-read after a draft is discarded locally.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowLibrary.workflows, homeData.importResult, draftDismissTick]);
+  }, [workflowLibrary.workflows, pendingImportedSetups, draftDismissTick]);
 
   const homeSearchResults = useMemo(
     () =>
@@ -553,6 +598,9 @@ export function HomePage({
       // Drop the local builder draft so a future reimport (same deterministic
       // workflow id) does not resurrect stale, possibly-duplicated widgets.
       clearDashboardDraft(workflowId);
+      setPendingImportedSetups((current) => {
+        return current.filter((item) => item.workflowId !== workflowId);
+      });
       await refreshWorkflows();
     } catch (error) {
       setCardActionError(error instanceof Error ? error.message : String(error));
@@ -560,11 +608,17 @@ export function HomePage({
   }
 
   function dismissPendingSetup(banner: PendingSetupBanner) {
-    // Discard the in-progress draft and close the reminder. The workflow stays
-    // imported; its card still offers "Configure" if it is reopened later.
-    clearDashboardDraft(banner.workflowId);
     if (banner.kind === "import") {
+      setPendingImportedSetups((current) => {
+        return current.map((item) =>
+          item.workflowId === banner.workflowId ? { ...item, dismissed: true } : item,
+        );
+      });
       dismissImportResult();
+    } else {
+      // Draft-only reminders predate imported setup banners and intentionally
+      // discard the local draft when dismissed.
+      clearDashboardDraft(banner.workflowId);
     }
     setDraftDismissTick((tick) => tick + 1);
   }
@@ -612,7 +666,7 @@ export function HomePage({
             </div>
           ) : null}
 
-          {homeData.importResult && homeData.importResult.status !== "needs_input_setup" ? (
+          {homeData.importResult && !importNeedsConfiguration(homeData.importResult) ? (
             <div className="notice notice--row" role="status">
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
@@ -645,7 +699,7 @@ export function HomePage({
                 style={onConfigureDashboard ? undefined : { marginLeft: "auto" }}
                 type="button"
                 aria-label={`Dismiss setup for ${banner.workflowName}`}
-                title="Discard draft and dismiss"
+                title={banner.kind === "draft" ? "Discard draft and dismiss" : "Dismiss"}
                 onClick={() => dismissPendingSetup(banner)}
               >
                 <X size={16} aria-hidden="true" />
@@ -942,6 +996,34 @@ export function HomePage({
             />
           ) : null}
     </AppLayout>
+  );
+}
+
+function reconcilePendingImportedSetups(
+  current: PendingImportedSetup[],
+  workflows: WorkflowSummary[],
+  removeMissingWorkflowIds = new Set<string>(),
+) {
+  const workflowsById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+  const next = current.flatMap((item) => {
+    const workflow = workflowsById.get(item.workflowId);
+    if (!workflow) return removeMissingWorkflowIds.has(item.workflowId) ? [] : [item];
+    if (!workflowNeedsConfiguration(workflow)) return [];
+    return [{ ...item, workflowName: workflowDisplayName(workflow) }];
+  });
+
+  return importedSetupsEqual(current, next) ? current : next;
+}
+
+function importedSetupsEqual(left: PendingImportedSetup[], right: PendingImportedSetup[]) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (item, index) =>
+        item.workflowId === right[index]?.workflowId &&
+        item.workflowName === right[index]?.workflowName &&
+        item.dismissed === right[index]?.dismissed,
+    )
   );
 }
 

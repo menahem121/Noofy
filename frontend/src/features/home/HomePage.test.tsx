@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { dashboardDraftKey } from "../dashboard-builder/dashboardBuilderContent";
 import { HomePage } from "./HomePage";
+import { PENDING_IMPORTED_SETUP_STORAGE_KEY } from "./pendingSetupBanners";
 import { WorkflowLibraryProvider } from "./WorkflowLibraryProvider";
 
 const componentsCss = readFileSync(resolve(process.cwd(), "src/styles/components.css"), "utf8");
@@ -347,7 +348,7 @@ describe("HomePage", () => {
     });
   }
 
-  function setupSummary(overrides: Record<string, unknown>) {
+  function setupSummary<T extends Record<string, unknown>>(overrides: T) {
     return {
       version: "1.0.0",
       description: "Needs a dashboard.",
@@ -430,6 +431,130 @@ describe("HomePage", () => {
     ).not.toBeInTheDocument();
     expect(window.localStorage.getItem(dashboardDraftKey("draft_workflow"))).toBeNull();
     expect(onConfigureDashboard).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier imported setup banners when another workflow is imported", async () => {
+    const firstWorkflow = setupSummary({ id: "imported_first", name: "Imported First" });
+    const secondWorkflow = setupSummary({ id: "imported_second", name: "Imported Second" });
+    let workflows: Array<ReturnType<typeof setupSummary>> = [];
+
+    function importResponse(
+      workflow: ReturnType<typeof setupSummary>,
+      status = "needs_input_setup",
+    ) {
+      return {
+        import_session_id: null,
+        workflow_id: workflow.id,
+        status,
+        user_facing_message: "Needs input setup",
+        workflow,
+        required_model_count: 0,
+        custom_node_count: 0,
+        unresolved_input_count: 1,
+        model_summary: null,
+      };
+    }
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse(workflows));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=first.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        workflows = [firstWorkflow];
+        return Promise.resolve(jsonResponse(importResponse(firstWorkflow)));
+      }
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=second.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        workflows = [firstWorkflow, secondWorkflow];
+        return Promise.resolve(jsonResponse(importResponse(secondWorkflow, "imported")));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["first"], "first.noofy")] } });
+    expect(await screen.findByText("Imported First was added to your local workflows.")).toBeInTheDocument();
+    window.localStorage.setItem(dashboardDraftKey("imported_first"), draftFor("imported_first", "Imported First"));
+
+    fireEvent.change(fileInput, { target: { files: [new File(["second"], "second.noofy")] } });
+    expect(await screen.findByText("Imported Second was added to your local workflows.")).toBeInTheDocument();
+    expect(screen.getByText("Imported First was added to your local workflows.")).toBeInTheDocument();
+    expect(screen.getAllByText("The workflow needs setup")).toHaveLength(2);
+    expect(screen.queryByText("Needs input setup")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup for Imported First" }));
+    expect(screen.queryByText("Imported First was added to your local workflows.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Resume setting up Imported First to finish its dashboard.")).not.toBeInTheDocument();
+    expect(screen.getByText("Imported Second was added to your local workflows.")).toBeInTheDocument();
+    expect(window.localStorage.getItem(dashboardDraftKey("imported_first"))).not.toBeNull();
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY) ?? "[]")).toEqual([
+        { workflowId: "imported_second", workflowName: "Imported Second", dismissed: false },
+        { workflowId: "imported_first", workflowName: "Imported First", dismissed: true },
+      ]);
+    });
+  });
+
+  it("restores an imported setup banner after Home remounts", async () => {
+    const pendingWorkflow = setupSummary({ id: "persisted_workflow", name: "Persisted Workflow" });
+    window.localStorage.setItem(
+      PENDING_IMPORTED_SETUP_STORAGE_KEY,
+      JSON.stringify([{ workflowId: "persisted_workflow", workflowName: "Persisted Workflow", dismissed: false }]),
+    );
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([pendingWorkflow]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    expect(await screen.findByText("Persisted Workflow was added to your local workflows.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss setup for Persisted Workflow" })).toBeInTheDocument();
+  });
+
+  it("removes persisted import banners when setup finishes or the workflow is removed", async () => {
+    window.localStorage.setItem(
+      PENDING_IMPORTED_SETUP_STORAGE_KEY,
+      JSON.stringify([
+        { workflowId: "configured_workflow", workflowName: "Configured Workflow", dismissed: false },
+        { workflowId: "removed_workflow", workflowName: "Removed Workflow", dismissed: false },
+      ]),
+    );
+    const configuredWorkflow = setupSummary({
+      id: "configured_workflow",
+      name: "Configured Workflow",
+      status: "installed",
+      dashboard_status: "configured",
+      dashboard_ready: true,
+      unresolved_input_count: 0,
+    });
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([configuredWorkflow]));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY)).toBeNull();
+    });
+    expect(screen.queryByText("Configured Workflow was added to your local workflows.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Removed Workflow was added to your local workflows.")).not.toBeInTheDocument();
   });
 
   it("shows the last three opened workflows from backend workflow state", async () => {

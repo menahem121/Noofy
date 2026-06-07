@@ -11,6 +11,7 @@ import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
 import { GalleryPage } from "./features/gallery/GalleryPage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { HomePage } from "./features/home/HomePage";
+import { removePendingImportedSetupReminder } from "./features/home/pendingSetupBanners";
 import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
 import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
@@ -290,6 +291,7 @@ function AppContent() {
             })
           }
           onSaveComplete={(workflowId) => {
+            removePendingImportedSetupReminder(workflowId);
             openWorkflow(workflowId, undefined, { skipDashboardSetupGuard: true });
             void workflowLibrary.refreshWorkflows();
           }}

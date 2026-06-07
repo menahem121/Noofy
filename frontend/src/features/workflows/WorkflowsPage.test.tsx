@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SidebarProvider } from "../app/AppLayout";
 import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
+import { PENDING_IMPORTED_SETUP_STORAGE_KEY } from "../home/pendingSetupBanners";
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
 import { WorkflowsPage } from "./WorkflowsPage";
 import { WORKFLOW_CATEGORY_OPTIONS } from "./workflowMetadataOptions";
@@ -294,8 +295,9 @@ describe("WorkflowsPage", () => {
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const method = init?.method ?? "GET";
       if (url.endsWith("/api/runtime")) {
         return Promise.resolve(jsonResponse({
           mode: "managed",
@@ -342,6 +344,9 @@ describe("WorkflowsPage", () => {
       }
       if (url.endsWith("/api/workflows/imported_cleanup/package")) {
         return Promise.resolve(jsonResponse(workflowPackage));
+      }
+      if (url.endsWith("/api/workflows/imported_cleanup") && method === "DELETE") {
+        return Promise.resolve(jsonResponse({ workflow_id: "imported_cleanup", removed: true }));
       }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
@@ -777,6 +782,27 @@ describe("WorkflowsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
     fireEvent.click(screen.getAllByRole("menuitem", { name: "Open" })[0]);
     expect(onOpenWorkflow).toHaveBeenCalledWith("native_text");
+  });
+
+  it("clears the imported setup reminder when an imported workflow is removed", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    window.localStorage.setItem(
+      PENDING_IMPORTED_SETUP_STORAGE_KEY,
+      JSON.stringify([{ workflowId: "imported_cleanup", workflowName: "Cleanup Flow", dismissed: false }]),
+    );
+    renderPage();
+
+    await screen.findByText("Cleanup Flow");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/imported_cleanup",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    expect(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY)).toBeNull();
   });
 
   it("renders the workflow action menu outside row layout flow", async () => {
