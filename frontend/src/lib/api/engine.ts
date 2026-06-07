@@ -173,11 +173,11 @@ export interface BackendHealthReport {
 }
 
 export function fetchRuntimeStatus(options: { signal?: AbortSignal } = {}) {
-  return getJson<RuntimeStatus>("/runtime", { signal: options.signal });
+  return getJson<RuntimeStatus>("/runtime", { cache: "no-store", signal: options.signal });
 }
 
 export function fetchResourceSnapshot() {
-  return getJson<MachineResourceSnapshot>("/resources");
+  return getJson<MachineResourceSnapshot>("/resources", { cache: "no-store" });
 }
 
 export function fetchHealth() {

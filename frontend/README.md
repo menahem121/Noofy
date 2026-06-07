@@ -15,9 +15,9 @@ npm install
 npm run dev
 ```
 
-The dev server runs at `http://127.0.0.1:5173/` and proxies `/api` to the local backend at `http://127.0.0.1:8765`.
+The dev server runs at `http://127.0.0.1:5173/` and proxies same-origin `/api` requests to the backend at `http://127.0.0.1:8765` from the dev-server process.
 
-Override the API base URL with `VITE_NOOFY_API_BASE_URL` when the desktop shell uses a different backend URL.
+Keep browser development on the same-origin `/api` proxy by default. This is important when Noofy runs on a remote GPU server and the UI is opened through a browser or forwarded port: a frontend URL like `http://127.0.0.1:<backend-port>/api` points at the browser machine, not necessarily the Noofy server. Override the API base URL with `VITE_NOOFY_API_BASE_URL` only when the desktop shell or an explicit remote setup provides a correct reachable backend URL.
 
 ## Desktop Shell
 

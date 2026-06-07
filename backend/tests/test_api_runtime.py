@@ -202,6 +202,9 @@ def test_comfyui_status_endpoint_uses_sidecar_service(monkeypatch) -> None:
         comfyui_response = client.get("/api/engine/comfyui/status")
 
     assert runtime_response.status_code == 200
+    assert runtime_response.headers["cache-control"] == "no-store"
+    assert runtime_response.headers["pragma"] == "no-cache"
+    assert runtime_response.headers["expires"] == "0"
     assert runtime_response.json()["base_url"] == "http://127.0.0.1:9000"
     assert comfyui_response.status_code == 200
     assert comfyui_response.json()["base_url"] == "http://127.0.0.1:9100"
@@ -297,6 +300,9 @@ def test_resource_snapshot_endpoint_uses_backend_observer(monkeypatch) -> None:
         response = client.get("/api/resources")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
     payload = response.json()
     assert payload["cpu"]["percent"] == 23.0
     assert payload["ram"]["used_mb"] == 11264

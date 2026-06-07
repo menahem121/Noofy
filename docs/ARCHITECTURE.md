@@ -30,6 +30,8 @@ External ComfyUI URLs such as `http://127.0.0.1:8188` are development mode only.
 
 Generated media URLs returned to the frontend are Noofy backend API URLs. ComfyUI upload and `/view` endpoints are adapter implementation details and must not become frontend contracts.
 
+Browser and source-checkout development must keep frontend API calls same-origin through `/api` unless an explicit remote API base is configured by the runtime shell. This matters for GPU-server workflows: if a user opens the Noofy UI through a browser or forwarded Vite port, `http://127.0.0.1:<backend-port>` points at the browser machine, not necessarily the Noofy server. Backend-provided media, export, event, log, model, settings, and workflow URLs should therefore be relative Noofy API paths, or be rewritten through the active app runtime API config before rendering.
+
 Community workflows from the internet are a first-class product direction. Noofy should automatically prepare custom nodes and normal Python dependencies when they can be resolved into isolated workflow capsules. These installs must never mutate the trusted core runtime or another installed workflow. Unverified community workflows are not guaranteed to be safe, trustworthy, or compatible.
 
 ## Frontend Runtime State
@@ -63,6 +65,8 @@ window.__NOOFY_RUNTIME_CONFIG__ = {
 The token is not user authentication. It is local API hardening so unrelated webpages cannot freely control the local workflow backend. It must not be persisted to disk or written to logs.
 
 For browser development, token enforcement is optional. The backend only requires a token when `NOOFY_API_TOKEN` is set.
+
+For browser development, the frontend should normally use the same-origin Vite `/api` proxy. `VITE_NOOFY_API_BASE_URL` is reserved for explicit runtime/desktop handoff or intentional remote API configuration; `make run` must not inject an absolute localhost API URL into browser code.
 
 ## Desktop Runtime Config
 

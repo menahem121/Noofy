@@ -54,27 +54,48 @@ export function createJobEventsUrl(jobId: string) {
 
 export function resolveBackendUrl(pathOrUrl: string, options: { includeToken?: boolean } = {}) {
   const apiBaseUrl = getApiBaseUrl();
-  const isAbsoluteUrl = /^[a-z][a-z0-9+.-]*:/i.test(pathOrUrl) || pathOrUrl.startsWith("//");
-  let resolved = pathOrUrl;
+  const backendApiPath = localhostApiPath(pathOrUrl);
+  const source = backendApiPath ?? pathOrUrl;
+  const isAbsoluteUrl = /^[a-z][a-z0-9+.-]*:/i.test(source) || source.startsWith("//");
+  let resolved = source;
   let tokenEligible = !isAbsoluteUrl;
 
-  if (!isAbsoluteUrl && pathOrUrl.startsWith(DEFAULT_API_BASE_URL)) {
+  if (!isAbsoluteUrl && source.startsWith(DEFAULT_API_BASE_URL)) {
     resolved =
       apiBaseUrl === DEFAULT_API_BASE_URL
-        ? pathOrUrl
-        : `${apiBaseUrl}${pathOrUrl.slice(DEFAULT_API_BASE_URL.length)}`;
-  } else if (!isAbsoluteUrl && pathOrUrl.startsWith("/")) {
-    resolved = `${apiBaseUrl}${pathOrUrl}`;
+        ? source
+        : `${apiBaseUrl}${source.slice(DEFAULT_API_BASE_URL.length)}`;
+  } else if (!isAbsoluteUrl && source.startsWith("/")) {
+    resolved = `${apiBaseUrl}${source}`;
   } else if (!isAbsoluteUrl) {
-    resolved = `${apiBaseUrl}/${pathOrUrl}`;
+    resolved = `${apiBaseUrl}/${source}`;
   } else if (apiBaseUrl !== DEFAULT_API_BASE_URL) {
-    tokenEligible = pathOrUrl === apiBaseUrl || pathOrUrl.startsWith(`${apiBaseUrl}/`);
+    tokenEligible = source === apiBaseUrl || source.startsWith(`${apiBaseUrl}/`);
   }
 
   const token = options.includeToken ? getApiToken() : null;
   if (!token || !tokenEligible) return resolved;
   const separator = resolved.includes("?") ? "&" : "?";
   return `${resolved}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function localhostApiPath(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.startsWith("//") ? `http:${value}` : value);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return null;
+  }
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname.toLowerCase())) {
+    return null;
+  }
+  if (parsed.pathname !== DEFAULT_API_BASE_URL && !parsed.pathname.startsWith(`${DEFAULT_API_BASE_URL}/`)) {
+    return null;
+  }
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 export async function apiErrorMessage(response: Response): Promise<string> {

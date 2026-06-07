@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import (
     DashboardAssetServiceDep,
     DashboardAuthoringServiceDep,
+    EngineServiceDep,
     GalleryStoreDep,
     RunOrchestratorDep,
     RunJobServiceDep,
@@ -99,9 +100,9 @@ async def update_workflow_metadata(
 
 
 @router.delete("/workflows/{workflow_id}")
-async def remove_workflow(workflow_id: str, library: WorkflowLibraryServiceDep):
+async def remove_workflow(workflow_id: str, engine_service: EngineServiceDep):
     try:
-        return library.remove_workflow(workflow_id)
+        return engine_service.remove_workflow(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

@@ -85,6 +85,7 @@ describe("noofyApi", () => {
     await fetchRuntimeStatus();
 
     expect(fetchMock).toHaveBeenCalledWith("/api/runtime", {
+      cache: "no-store",
       headers: {
         Accept: "application/json",
         Authorization: "Bearer runtime-secret",
@@ -101,6 +102,7 @@ describe("noofyApi", () => {
     await fetchRuntimeStatus();
 
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:9123/api/runtime", {
+      cache: "no-store",
       headers: {
         Accept: "application/json",
       },
@@ -131,6 +133,7 @@ describe("noofyApi", () => {
 
     expect(snapshot.cpu.percent).toBe(23);
     expect(fetchMock).toHaveBeenCalledWith("/api/resources", {
+      cache: "no-store",
       headers: { Accept: "application/json" },
     });
   });
@@ -162,6 +165,44 @@ describe("noofyApi", () => {
     expect(resolveBackendUrl("https://example.test/image.png", { includeToken: true })).toBe(
       "https://example.test/image.png",
     );
+  });
+
+  it("rewrites localhost backend API URLs through the active API base URL", () => {
+    window.__NOOFY_RUNTIME_CONFIG__ = {
+      apiBaseUrl: "http://gpu-server.example.test/api/",
+      apiToken: "runtime secret",
+    };
+
+    expect(
+      resolveBackendUrl("http://127.0.0.1:8765/api/gallery/item-1/content?download=true", {
+        includeToken: true,
+      }),
+    ).toBe("http://gpu-server.example.test/api/gallery/item-1/content?download=true&token=runtime%20secret");
+    expect(
+      resolveBackendUrl("http://localhost:8765/api/jobs/job-1/outputs/view?filename=result.png", {
+        includeToken: true,
+      }),
+    ).toBe("http://gpu-server.example.test/api/jobs/job-1/outputs/view?filename=result.png&token=runtime%20secret");
+    expect(resolveBackendUrl("http://[::1]:8765/api/runtime", { includeToken: true })).toBe(
+      "http://gpu-server.example.test/api/runtime?token=runtime%20secret",
+    );
+    expect(resolveBackendUrl("//localhost:8765/api/history/event-1", { includeToken: true })).toBe(
+      "http://gpu-server.example.test/api/history/event-1?token=runtime%20secret",
+    );
+    expect(resolveBackendUrl("ftp://localhost/api/runtime", { includeToken: true })).toBe(
+      "ftp://localhost/api/runtime",
+    );
+    expect(resolveBackendUrl("http://127.0.0.1:8188/view?filename=result.png", { includeToken: true })).toBe(
+      "http://127.0.0.1:8188/view?filename=result.png",
+    );
+  });
+
+  it("rewrites localhost backend API URLs to same-origin API paths in browser dev mode", () => {
+    expect(
+      resolveBackendUrl("http://127.0.0.1:8765/api/assets/workflow-icon.png", {
+        includeToken: true,
+      }),
+    ).toBe("/api/assets/workflow-icon.png");
   });
 
   it("adds the runtime token to browser download workflow export URLs", () => {

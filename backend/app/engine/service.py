@@ -377,7 +377,104 @@ class EngineService:
         return self.workflow_library_service.update_workflow_metadata(workflow_id, update)
 
     def remove_workflow(self, workflow_id: str) -> dict[str, object]:
-        return self.workflow_library_service.remove_workflow(workflow_id)
+        capsule_fingerprint = self._capsule_fingerprint_for_workflow(workflow_id)
+        result = self.workflow_library_service.remove_workflow(workflow_id)
+        install_state_removed = self._remove_install_state_for_capsule(
+            workflow_id,
+            capsule_fingerprint,
+        )
+        self._collect_runtime_storage_garbage_best_effort(
+            workflow_id=workflow_id,
+            install_state_removed=install_state_removed,
+        )
+        return result
+
+    def _capsule_fingerprint_for_workflow(self, workflow_id: str) -> str | None:
+        if self.capsule_loader is None:
+            return None
+        try:
+            return self.capsule_loader.get_capsule_lock(workflow_id).runtime.capsule_fingerprint
+        except KeyError:
+            return None
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Workflow removal could not read capsule lock for cleanup",
+                "runtime.storage_gc",
+                workflow_id=workflow_id,
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            )
+            return None
+
+    def _remove_install_state_for_capsule(
+        self,
+        workflow_id: str,
+        capsule_fingerprint: str | None,
+    ) -> bool:
+        if capsule_fingerprint is None or self.capsule_installer is None:
+            return False
+        try:
+            removed = self.capsule_installer.install_state_store.remove(capsule_fingerprint)
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Workflow install-state GC root could not be removed",
+                "runtime.install_state",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_fingerprint,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return False
+        if removed:
+            self.log_store.add(
+                "info",
+                "Removed workflow install-state GC root",
+                "runtime.install_state",
+                workflow_id=workflow_id,
+                details={"capsule_fingerprint": capsule_fingerprint},
+            )
+        return removed
+
+    def _collect_runtime_storage_garbage_best_effort(
+        self,
+        *,
+        workflow_id: str,
+        install_state_removed: bool,
+    ) -> None:
+        if self.capsule_installer is None:
+            return
+        try:
+            states = self.capsule_installer.install_state_store.list_states()
+            collector = RuntimeStorageGarbageCollector(
+                roots=RuntimeStorageRoots.from_paths(settings.paths),
+                install_states=states,
+                runner_descriptors=self.runner_supervisor.list_runners(),
+                log_store=self.log_store,
+            )
+            result = collector.collect_garbage()
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Runtime storage cleanup after workflow removal failed",
+                "runtime.storage_gc",
+                workflow_id=workflow_id,
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            )
+            return
+        self.log_store.add(
+            "info",
+            "Runtime storage cleanup checked after workflow removal",
+            "runtime.storage_gc",
+            workflow_id=workflow_id,
+            details={
+                "install_state_removed": install_state_removed,
+                "decision_count": len(result.decisions),
+                "bytes_deleted": result.bytes_deleted,
+            },
+        )
 
     def export_workflow_comfyui_graph(
         self,

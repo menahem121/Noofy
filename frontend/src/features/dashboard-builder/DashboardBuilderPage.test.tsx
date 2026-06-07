@@ -317,6 +317,8 @@ describe("DashboardBuilderPage", () => {
 
   beforeEach(() => {
     window.localStorage.clear();
+    delete window.__NOOFY_RUNTIME_CONFIG__;
+    delete window.__TAURI_INTERNALS__;
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -328,6 +330,8 @@ describe("DashboardBuilderPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    delete window.__NOOFY_RUNTIME_CONFIG__;
+    delete window.__TAURI_INTERNALS__;
     window.localStorage.clear();
   });
 
@@ -913,7 +917,7 @@ describe("DashboardBuilderPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /save as default/i }));
     expect(screen.getByRole("button", { name: /save as default/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /default saved/i })).not.toBeInTheDocument();
-    expect(screen.getByText("Default saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Default saved.")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: /remove widget/i })[0]);
     fireEvent.click(screen.getByRole("button", { name: /keep hidden default/i }));
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));

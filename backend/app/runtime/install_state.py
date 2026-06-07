@@ -165,6 +165,19 @@ class InstallStateStore:
             states.append(InstallState.model_validate(data))
         return states
 
+    def remove(self, capsule_fingerprint: str) -> bool:
+        """Remove mutable install state for a workflow capsule.
+
+        Capsule locks are immutable package facts; this store is only the
+        machine-local GC root for prepared runtime artifacts.
+        """
+        path = self._path_for(capsule_fingerprint)
+        with self._lock:
+            if not path.exists():
+                return False
+            path.unlink()
+            return True
+
     def remove_stale_temp_files(self) -> int:
         if not self.root_dir.exists():
             return 0

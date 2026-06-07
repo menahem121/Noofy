@@ -31,7 +31,7 @@ def test_frontend_install_command_uses_install_without_lockfile(tmp_path: Path) 
     assert cli.frontend_install_command(tmp_path) == ["npm", "install"]
 
 
-def test_source_checkout_env_sets_managed_runtime_and_frontend_api(tmp_path: Path) -> None:
+def test_source_checkout_env_sets_managed_runtime_and_frontend_proxy_port(tmp_path: Path) -> None:
     cli = load_noofy_cli()
     data_dir = tmp_path / "data"
     config_dir = tmp_path / "config"
@@ -40,14 +40,14 @@ def test_source_checkout_env_sets_managed_runtime_and_frontend_api(tmp_path: Pat
         data_dir=data_dir,
         backend_host="127.0.0.1",
         backend_port=9876,
-        include_frontend_api=True,
+        include_frontend_dev_proxy=True,
         base_env={"XDG_CONFIG_HOME": str(config_dir)},
     )
 
     assert env["NOOFY_DATA_DIR"] == str(data_dir)
     assert env["COMFYUI_RUNTIME_MODE"] == "managed"
     assert env["NOOFY_BACKEND_PORT"] == "9876"
-    assert env["VITE_NOOFY_API_BASE_URL"] == "http://127.0.0.1:9876/api"
+    assert "VITE_NOOFY_API_BASE_URL" not in env
     assert env["VITE_DEV_BACKEND_PORT"] == "9876"
     assert env["NOOFY_API_KEY_STORE"] == "encrypted-vault"
     assert "NOOFY_ALLOW_REPO_LOCAL_SECRET_STORAGE" not in env

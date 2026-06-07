@@ -108,11 +108,10 @@ def source_checkout_env(
     data_dir: Path = DEFAULT_DATA_DIR,
     backend_host: str = DEFAULT_BACKEND_HOST,
     backend_port: int = DEFAULT_BACKEND_PORT,
-    include_frontend_api: bool = False,
+    include_frontend_dev_proxy: bool = False,
     base_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     env = dict(os.environ if base_env is None else base_env)
-    api_base = f"http://{backend_host}:{backend_port}/api"
     env.update(
         {
             "NOOFY_DATA_DIR": str(data_dir),
@@ -122,8 +121,10 @@ def source_checkout_env(
         }
     )
     configure_source_checkout_api_key_store(env)
-    if include_frontend_api:
-        env["VITE_NOOFY_API_BASE_URL"] = api_base
+    if include_frontend_dev_proxy:
+        # Keep browser dev builds on the same-origin Vite /api proxy. An
+        # absolute 127.0.0.1 backend URL breaks remote/forwarded development
+        # because the browser resolves it on the client machine.
         env["VITE_DEV_BACKEND_PORT"] = str(backend_port)
     return env
 
@@ -575,9 +576,9 @@ class NoofyCheckout:
             data_dir=data_dir,
             backend_host=host,
             backend_port=backend_port,
-            include_frontend_api=True,
+            include_frontend_dev_proxy=True,
         )
-        backend_api = frontend_env["VITE_NOOFY_API_BASE_URL"]
+        backend_api = f"http://{host}:{backend_port}/api"
         frontend_url = "http://127.0.0.1:5173"
 
         backend_command = [str(self.backend_python), "-m", "app", "--host", host, "--port", str(backend_port)]
