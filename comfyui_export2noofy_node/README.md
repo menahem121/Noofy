@@ -2,7 +2,7 @@
 
 The Noofy ComfyUI Export Extension adds an **Export to Noofy** action to ComfyUI. It turns the current ComfyUI workflow into a `.noofy` package that Noofy can import as a tested workflow package instead of a raw ComfyUI JSON file.
 
-A `.noofy` file is a zip archive. It contains the execution-ready ComfyUI API graph, Noofy package metadata, runtime metadata, hardware observations from a real test run, model references, and bundled custom node folders when the extension can identify them.
+A `.noofy` file is a zip archive. It contains the execution-ready ComfyUI API graph, the editable ComfyUI workflow used for round-trip export, Noofy package metadata, runtime metadata, hardware observations from a real test run, model references, and bundled custom node folders when the extension can identify them.
 
 The package is designed for Noofy’s runtime isolation model: Noofy treats the ComfyUI graph as engine-specific execution data, reads the metadata and lock files, and prepares an isolated runtime capsule for the workflow.
 
@@ -63,6 +63,8 @@ A `.noofy` package has this structure:
 workflow.noofy
   package.json
   comfyui_graph.json
+  comfyui_workflow.json             # optional editable round-trip source
+  comfyui_workflow_bindings.json    # optional widget mapping
   dashboard.json
   capsule.lock.json
   export-report.json
@@ -97,7 +99,7 @@ Example shape:
   "created_at": "2026-04-30T00:00:00Z",
   "exporter": {
     "name": "Noofy ComfyUI Export Extension",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "engine": {
     "type": "comfyui",
@@ -116,6 +118,12 @@ All workflows exported by this extension use `public_unverified`. A successful e
 `comfyui_graph.json` contains the execution-ready ComfyUI API prompt graph, with creator-local image, audio, video, 3D, text, and generic file loader values replaced by runtime-input placeholders before packaging.
 
 Noofy treats this graph as engine-specific execution data. Noofy uses package metadata, model records, custom-node records, dashboard schema, and runtime locks as the app-owned contract around the graph.
+
+## comfyui_workflow.json
+
+`comfyui_workflow.json` preserves ComfyUI's editable workflow document, including node layout and `widgets_values`. `comfyui_workflow_bindings.json` records the widget index for named node inputs so Noofy can apply current dashboard values when exporting JSON back to ComfyUI. These files are an optional pair for compatibility with older packages and are never used as the execution graph.
+
+Creator-local media loader values are redacted from the editable workflow as well as `comfyui_graph.json`. If a redacted media widget cannot be mapped safely, the editable workflow files are omitted instead of bundling creator-local paths.
 
 ## dashboard.json
 

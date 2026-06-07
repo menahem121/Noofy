@@ -172,15 +172,33 @@ def _archive_with_json_updates(
     return dst.getvalue()
 
 
+def _archive_with_extra_files(
+    archive_bytes: bytes,
+    files: dict[str, Any],
+) -> bytes:
+    src = io.BytesIO(archive_bytes)
+    dst = io.BytesIO()
+    with zipfile.ZipFile(src, "r") as source, zipfile.ZipFile(dst, "w") as target:
+        for item in source.infolist():
+            target.writestr(item, source.read(item.filename))
+        for name, value in files.items():
+            target.writestr(name, json.dumps(value))
+    return dst.getvalue()
+
+
 def _setup_with_configured_dashboard(
     tmp_path: Path,
     *,
     user_state_service: UserStateService | None = None,
     dashboard_assets_dir: Path | None = None,
     dashboard: dict[str, Any] | None = None,
+    archive_bytes: bytes | None = None,
 ):
     configured_dashboard = dashboard if dashboard is not None else _CONFIGURED_DASHBOARD
-    archive_bytes = _make_archive(with_signature=True, dashboard=configured_dashboard)
+    archive_bytes = archive_bytes or _make_archive(
+        with_signature=True,
+        dashboard=configured_dashboard,
+    )
     log_store = LogStore()
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
     pkg = store.import_archive(archive_bytes, original_filename="export_test.noofy")
@@ -873,6 +891,392 @@ def test_comfyui_json_export_applies_explicit_dashboard_values(tmp_path: Path) -
 
     assert filename.endswith(".comfyui.json")
     assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "json export prompt"
+
+
+def test_comfyui_json_export_prefers_editable_workflow_and_applies_widget_values(
+    tmp_path: Path,
+) -> None:
+    editable_workflow = {
+        "last_node_id": 9,
+        "last_link_id": 0,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CLIPTextEncode",
+                "widgets_values": ["hello"],
+            }
+        ],
+        "links": [],
+        "groups": [],
+        "config": {},
+        "extra": {},
+        "version": 0.4,
+    }
+    widget_bindings = {
+        "schema_version": "0.1.0",
+        "nodes": {"1": {"text": 0}},
+    }
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": editable_workflow,
+            "comfyui_workflow_bindings.json": widget_bindings,
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive_bytes,
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": "current dashboard prompt"},
+    )
+
+    exported = json.loads(graph_bytes)
+    assert exported["nodes"][0]["widgets_values"] == ["current dashboard prompt"]
+    assert "1" not in exported
+
+
+def test_comfyui_json_export_falls_back_when_editable_workflow_bindings_are_missing(
+    tmp_path: Path,
+) -> None:
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": {
+                "last_node_id": 1,
+                "nodes": [
+                    {
+                        "id": 1,
+                        "type": "CLIPTextEncode",
+                        "widgets_values": ["original prompt"],
+                    }
+                ],
+                "links": [],
+                "version": 0.4,
+            },
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive_bytes,
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": "current prompt"},
+    )
+    reexported_archive, _ = exporter.export_archive(workflow_id)
+
+    assert json.loads(graph_bytes)["1"]["inputs"]["text"] == "current prompt"
+    with zipfile.ZipFile(io.BytesIO(reexported_archive)) as zf:
+        assert "comfyui_workflow.json" not in zf.namelist()
+        assert "comfyui_workflow_bindings.json" not in zf.namelist()
+
+
+def test_comfyui_json_export_applies_saved_noofy_defaults_to_editable_workflow(
+    tmp_path: Path,
+) -> None:
+    saved_dashboard = json.loads(json.dumps(_CONFIGURED_DASHBOARD))
+    saved_dashboard["inputs"] = [
+        {
+            "id": "prompt",
+            "label": "Prompt",
+            "control": "textarea",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": "saved Noofy prompt",
+            "default_pinned": True,
+            "validation": {},
+        },
+        {
+            "id": "sampler",
+            "label": "Sampler",
+            "control": "select",
+            "binding": {"node_id": "6", "input_name": "sampler_name"},
+            "default": "dpmpp_2m",
+            "default_pinned": True,
+            "validation": {"options": ["euler", "dpmpp_2m"]},
+        },
+        {
+            "id": "seed",
+            "label": "Seed",
+            "control": "seed_widget",
+            "binding": {"node_id": "7", "input_name": "seed"},
+            "default": 987654321,
+            "default_pinned": True,
+            "validation": {},
+        },
+        {
+            "id": "strength",
+            "label": "Strength",
+            "control": "slider",
+            "binding": {"node_id": "8", "input_name": "denoise"},
+            "default": 0.42,
+            "default_pinned": True,
+            "validation": {"min": 0, "max": 1, "step": 0.01},
+        },
+    ]
+    saved_dashboard["sections"][0]["controls"] = [
+        {
+            "id": item["id"],
+            "type": item["control"],
+            "label": item["label"],
+            "input_id": item["id"],
+        }
+        for item in saved_dashboard["inputs"]
+    ]
+    original_dashboard = json.loads(json.dumps(saved_dashboard))
+    for item, original_default in zip(
+        original_dashboard["inputs"],
+        ["original prompt", "euler", 1234, 0.8],
+        strict=True,
+    ):
+        item["default"] = original_default
+    editable_workflow = {
+        "last_node_id": 9,
+        "last_link_id": 4,
+        "nodes": [
+            {"id": 1, "type": "CLIPTextEncode", "widgets_values": ["original prompt"]},
+            {"id": 6, "type": "KSamplerSelect", "widgets_values": ["euler"]},
+            {"id": 7, "type": "RandomNoise", "widgets_values": [1234, "randomize"]},
+            {"id": 8, "type": "KSampler", "widgets_values": [0.8]},
+        ],
+        "links": [[4, 1, 0, 8, 0, "CONDITIONING"]],
+        "groups": [{"title": "Original structure"}],
+        "config": {},
+        "extra": {"keep": "structural metadata"},
+        "version": 0.4,
+    }
+    widget_bindings = {
+        "schema_version": "0.1.0",
+        "nodes": {
+            "1": {"text": 0},
+            "6": {"sampler_name": 0},
+            "7": {"seed": 0},
+            "8": {"denoise": 0},
+        },
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=original_dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {
+                    "6": {
+                        "class_type": "KSamplerSelect",
+                        "inputs": {"sampler_name": "euler"},
+                    },
+                    "7": {
+                        "class_type": "RandomNoise",
+                        "inputs": {"seed": 1234},
+                    },
+                    "8": {
+                        "class_type": "KSampler",
+                        "inputs": {"denoise": 0.8},
+                    },
+                }
+            ),
+        },
+    )
+    archive_bytes = _archive_with_extra_files(
+        archive_bytes,
+        {
+            "comfyui_workflow.json": editable_workflow,
+            "comfyui_workflow_bindings.json": widget_bindings,
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        dashboard=original_dashboard,
+        archive_bytes=archive_bytes,
+    )
+    package_dir = exporter._find_package_dir(workflow_id)
+    assert package_dir is not None
+    (package_dir / "dashboard.json").write_text(
+        json.dumps(saved_dashboard),
+        encoding="utf-8",
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(workflow_id)
+
+    exported = json.loads(graph_bytes)
+    widgets_by_id = {
+        str(node["id"]): node["widgets_values"]
+        for node in exported["nodes"]
+    }
+    assert widgets_by_id == {
+        "1": ["saved Noofy prompt"],
+        "6": ["dpmpp_2m"],
+        "7": [987654321, "randomize"],
+        "8": [0.42],
+    }
+    assert exported["links"] == editable_workflow["links"]
+    assert exported["groups"] == editable_workflow["groups"]
+    assert exported["extra"] == editable_workflow["extra"]
+
+
+def test_comfyui_json_export_current_value_overrides_saved_state_and_dashboard_default(
+    tmp_path: Path,
+) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": {
+                "last_node_id": 1,
+                "nodes": [{"id": 1, "type": "CLIPTextEncode", "widgets_values": ["original"]}],
+                "links": [],
+                "version": 0.4,
+            },
+            "comfyui_workflow_bindings.json": {
+                "schema_version": "0.1.0",
+                "nodes": {"1": {"text": 0}},
+            },
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+        archive_bytes=archive_bytes,
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            values={"prompt": "saved Run-page value"},
+        )
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": "currently visible Run-page value"},
+    )
+
+    exported = json.loads(graph_bytes)
+    assert exported["nodes"][0]["widgets_values"] == [
+        "currently visible Run-page value"
+    ]
+
+
+def test_comfyui_json_export_updates_only_top_level_bound_workflow_node(
+    tmp_path: Path,
+) -> None:
+    editable_workflow = {
+        "last_node_id": 1,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CLIPTextEncode",
+                "widgets_values": ["top-level original"],
+            }
+        ],
+        "definitions": {
+            "subgraphs": [
+                {
+                    "id": "nested",
+                    "nodes": [
+                        {
+                            "id": 1,
+                            "type": "CLIPTextEncode",
+                            "widgets_values": ["nested original"],
+                        }
+                    ],
+                }
+            ]
+        },
+        "links": [],
+        "version": 0.4,
+    }
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": editable_workflow,
+            "comfyui_workflow_bindings.json": {
+                "schema_version": "0.1.0",
+                "nodes": {"1": {"text": 0}},
+            },
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive_bytes,
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(
+        workflow_id,
+        input_values={"prompt": "current prompt"},
+    )
+
+    exported = json.loads(graph_bytes)
+    assert exported["nodes"][0]["widgets_values"] == ["current prompt"]
+    nested_node = exported["definitions"]["subgraphs"][0]["nodes"][0]
+    assert nested_node["widgets_values"] == ["nested original"]
+
+
+def test_comfyui_json_export_saved_run_page_value_overrides_dashboard_default(
+    tmp_path: Path,
+) -> None:
+    user_state_service = UserStateService(tmp_path / "user-state")
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": {
+                "last_node_id": 1,
+                "nodes": [{"id": 1, "type": "CLIPTextEncode", "widgets_values": ["original"]}],
+                "links": [],
+                "version": 0.4,
+            },
+            "comfyui_workflow_bindings.json": {
+                "schema_version": "0.1.0",
+                "nodes": {"1": {"text": 0}},
+            },
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        user_state_service=user_state_service,
+        archive_bytes=archive_bytes,
+    )
+    user_state_service.save(
+        WorkflowUserState(
+            workflow_id=workflow_id,
+            values={"prompt": "saved Run-page value"},
+        )
+    )
+
+    graph_bytes, _ = exporter.export_comfyui_graph(workflow_id)
+
+    exported = json.loads(graph_bytes)
+    assert exported["nodes"][0]["widgets_values"] == ["saved Run-page value"]
+
+
+def test_noofy_export_preserves_editable_comfyui_workflow_files(tmp_path: Path) -> None:
+    editable_workflow = {
+        "last_node_id": 1,
+        "nodes": [{"id": 1, "type": "CLIPTextEncode", "widgets_values": ["hello"]}],
+        "links": [],
+        "version": 0.4,
+    }
+    widget_bindings = {
+        "schema_version": "0.1.0",
+        "nodes": {"1": {"text": 0}},
+    }
+    archive_bytes = _archive_with_extra_files(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_workflow.json": editable_workflow,
+            "comfyui_workflow_bindings.json": widget_bindings,
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive_bytes,
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        assert json.loads(zf.read("comfyui_workflow.json")) == editable_workflow
+        assert json.loads(zf.read("comfyui_workflow_bindings.json")) == widget_bindings
 
 
 def test_comfyui_json_export_applies_saved_user_state_values(tmp_path: Path) -> None:

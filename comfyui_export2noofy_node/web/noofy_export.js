@@ -75,6 +75,29 @@ function filenameFromContentDisposition(header) {
   return asciiMatch ? asciiMatch[1] : null;
 }
 
+function collectWorkflowWidgetBindings() {
+  const nodes = Array.isArray(app?.graph?._nodes) ? app.graph._nodes : [];
+  const bindings = {};
+  for (const node of nodes) {
+    if (node?.id === undefined || !Array.isArray(node.widgets)) continue;
+    const widgetIndexes = {};
+    node.widgets.forEach((widget, index) => {
+      if (typeof widget?.name === "string" && widget.name) {
+        // ComfyUI serializes widgets_values at the raw widget array index.
+        // Widgets with serialize=false leave a gap instead of compacting indexes.
+        widgetIndexes[widget.name] = index;
+      }
+    });
+    if (Object.keys(widgetIndexes).length) {
+      bindings[String(node.id)] = widgetIndexes;
+    }
+  }
+  return {
+    schema_version: "0.1.0",
+    nodes: bindings,
+  };
+}
+
 async function collectPromptPayload() {
   if (!app?.graphToPrompt) {
     throw new Error("ComfyUI graph export API is not available in this frontend.");
@@ -88,6 +111,7 @@ async function collectPromptPayload() {
   return {
     prompt: graphExport.output,
     workflow: graphExport.workflow ?? null,
+    workflow_widget_bindings: collectWorkflowWidgetBindings(),
     workflow_name: getWorkflowName(),
     client_id: api.clientId ?? null,
     started_at: new Date().toISOString(),

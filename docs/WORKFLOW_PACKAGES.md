@@ -11,6 +11,7 @@ A package should contain:
 - metadata: id, name, version, description, author
 - engine target: first target is ComfyUI
 - ComfyUI API graph used for execution
+- optional editable ComfyUI workflow JSON plus widget bindings used only for round-trip export back to ComfyUI
 - required models with folder/type, filename, size, source URL, checksum when available, and identity verification level
 - exposed inputs mapped to ComfyUI node ids and input names
 - output mapping for generated images, audio, video, 3D assets, text, or files
@@ -124,7 +125,19 @@ paths, creator machine paths, runtime file bucket identity, raw local path
 values, or base64 media content. Creator-approved input defaults may be bundled
 only as package assets under `assets/input-defaults/...` and referenced from
 dashboard input defaults with `source: "package_asset"`; `comfyui_graph.json`
-must still use runtime placeholders instead of local machine paths.
+and optional `comfyui_workflow.json` must still use runtime placeholders instead
+of local machine paths.
+
+When exporting ComfyUI JSON, Noofy uses the optional editable
+`comfyui_workflow.json` and `comfyui_workflow_bindings.json` pair as the
+structural base and updates mapped `widgets_values`. Value precedence is:
+current values submitted by an open Run page, then saved per-user Run-page
+values, then saved dashboard defaults, then the original editable workflow
+value. This keeps node layout and other ComfyUI editor metadata while ensuring
+current Noofy values do not silently revert to creator export-time values.
+Older or incomplete packages without the editable workflow pair fall back to
+exporting the execution-ready API prompt graph.
+
 Exporter-generated dashboards should persist only stable output records: stable
 ID, generic or stable label, node ID, source node type when useful, `type`, and
 `kind`. Uploaded dashboard media and generic files are user-local app data and

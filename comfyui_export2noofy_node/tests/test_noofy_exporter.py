@@ -76,6 +76,161 @@ def test_redact_local_inputs_for_package_removes_creator_image_references() -> N
     assert graph["2"]["inputs"]["image"] == "private-mask.png"
 
 
+def test_prepare_workflow_for_package_preserves_widgets_and_redacts_local_media() -> None:
+    workflow = {
+        "last_node_id": 2,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "LoadAudio",
+                "widgets_values": ["/private/voice.flac"],
+            },
+            {
+                "id": 2,
+                "type": "KSampler",
+                "widgets_values": [987654321, "randomize"],
+            },
+        ],
+    }
+    original_graph = {
+        "1": {
+            "class_type": "LoadAudio",
+            "inputs": {"audio": "/private/voice.flac"},
+        },
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 987654321},
+        },
+    }
+    package_graph, _adjustments, _unresolved = exporter.redact_local_inputs_for_package(
+        original_graph
+    )
+
+    packaged = exporter.prepare_workflow_for_package(
+        workflow,
+        original_graph=original_graph,
+        package_graph=package_graph,
+        workflow_widget_bindings={
+            "schema_version": "0.1.0",
+            "nodes": {"1": {"audio": 0}, "2": {"seed": 0}},
+        },
+    )
+
+    assert packaged is not None
+    assert packaged["nodes"][0]["widgets_values"] == [
+        "__noofy_runtime_audio_input_required__"
+    ]
+    assert packaged["nodes"][1]["widgets_values"] == [987654321, "randomize"]
+    assert workflow["nodes"][0]["widgets_values"] == ["/private/voice.flac"]
+
+
+def test_prepare_workflow_for_package_redacts_only_bound_media_widget() -> None:
+    workflow = {
+        "last_node_id": 2,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "LoadImage",
+                "widgets_values": ["creator-portrait.png"],
+            },
+            {
+                "id": 2,
+                "type": "CLIPTextEncode",
+                "widgets_values": ["creator-portrait.png"],
+            },
+        ],
+    }
+    original_graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "creator-portrait.png"},
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "creator-portrait.png"},
+        },
+    }
+    package_graph, _adjustments, _unresolved = exporter.redact_local_inputs_for_package(
+        original_graph
+    )
+
+    packaged = exporter.prepare_workflow_for_package(
+        workflow,
+        original_graph=original_graph,
+        package_graph=package_graph,
+        workflow_widget_bindings={
+            "schema_version": "0.1.0",
+            "nodes": {"1": {"image": 0}, "2": {"text": 0}},
+        },
+    )
+
+    assert packaged is not None
+    assert packaged["nodes"][0]["widgets_values"] == [
+        "__noofy_runtime_image_input_required__"
+    ]
+    assert packaged["nodes"][1]["widgets_values"] == ["creator-portrait.png"]
+
+
+def test_prepare_workflow_for_package_omits_workflow_when_media_widget_cannot_be_mapped() -> None:
+    workflow = {
+        "last_node_id": 1,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "LoadImage",
+                "widgets_values": ["creator-portrait.png"],
+            }
+        ],
+    }
+    original_graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "creator-portrait.png"},
+        }
+    }
+    package_graph, _adjustments, _unresolved = exporter.redact_local_inputs_for_package(
+        original_graph
+    )
+
+    assert (
+        exporter.prepare_workflow_for_package(
+            workflow,
+            original_graph=original_graph,
+            package_graph=package_graph,
+            workflow_widget_bindings={"schema_version": "0.1.0", "nodes": {}},
+        )
+        is None
+    )
+
+
+def test_prepare_workflow_for_package_requires_widget_binding_metadata() -> None:
+    workflow = {
+        "last_node_id": 1,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CLIPTextEncode",
+                "widgets_values": ["prompt"],
+            }
+        ],
+    }
+    graph = {
+        "1": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "prompt"},
+        }
+    }
+
+    assert (
+        exporter.prepare_workflow_for_package(
+            workflow,
+            original_graph=graph,
+            package_graph=graph,
+        )
+        is None
+    )
+
+
 def test_selected_input_asset_becomes_pinned_dashboard_default(tmp_path: Path) -> None:
     image = tmp_path / "private-portrait.png"
     image.write_bytes(b"image-bytes")
@@ -741,6 +896,14 @@ def test_custom_node_manifest_and_zip_exclude_runtime_artifacts(tmp_path: Path) 
         documents=documents,
         custom_nodes=[record],
         thumbnail_bytes=b"thumbnail",
+        workflow={
+            "last_node_id": 1,
+            "nodes": [{"id": 1, "type": "CustomNode", "widgets_values": ["value"]}],
+        },
+        workflow_widget_bindings={
+            "schema_version": "0.1.0",
+            "nodes": {"1": {"value": 0}},
+        },
     )
 
     with zipfile.ZipFile(target) as package:
@@ -748,6 +911,8 @@ def test_custom_node_manifest_and_zip_exclude_runtime_artifacts(tmp_path: Path) 
 
     assert "package.json" in names
     assert "comfyui_graph.json" in names
+    assert "comfyui_workflow.json" in names
+    assert "comfyui_workflow_bindings.json" in names
     assert "dashboard.json" in names
     assert "capsule.lock.json" in names
     assert "export-report.json" in names
@@ -756,6 +921,37 @@ def test_custom_node_manifest_and_zip_exclude_runtime_artifacts(tmp_path: Path) 
     assert "custom_nodes/my_node_pack/requirements.txt" in names
     assert "custom_nodes/my_node_pack/install.py" in names
     assert "custom_nodes/my_node_pack/large.safetensors" not in names
+
+
+def test_noofy_package_writes_editable_workflow_only_with_bindings(tmp_path: Path) -> None:
+    documents = exporter.build_package_documents(
+        graph={},
+        workflow_name="Incomplete Round Trip",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-07T00:00:00Z",
+        finished_at="2026-06-07T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+    )
+    target = tmp_path / "incomplete.noofy"
+
+    exporter.write_noofy_package(
+        target_path=target,
+        graph={},
+        documents=documents,
+        custom_nodes=[],
+        thumbnail_bytes=b"thumbnail",
+        workflow={"nodes": []},
+    )
+
+    with zipfile.ZipFile(target) as package:
+        assert "comfyui_workflow.json" not in package.namelist()
+        assert "comfyui_workflow_bindings.json" not in package.namelist()
 
 
 def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None:
@@ -805,10 +1001,33 @@ def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None
         documents=documents,
         custom_nodes=[],
         thumbnail_bytes=b"placeholder-thumbnail",
+        workflow=exporter.prepare_workflow_for_package(
+            {
+                "last_node_id": 1,
+                "nodes": [
+                    {
+                        "id": 1,
+                        "type": "LoadImage",
+                        "widgets_values": ["creator-family-photo.png", "image"],
+                    }
+                ],
+            },
+            original_graph=test_graph,
+            package_graph=package_graph,
+            workflow_widget_bindings={
+                "schema_version": "0.1.0",
+                "nodes": {"1": {"image": 0, "upload": 1}},
+            },
+        ),
+        workflow_widget_bindings={
+            "schema_version": "0.1.0",
+            "nodes": {"1": {"image": 0, "upload": 1}},
+        },
     )
 
     with zipfile.ZipFile(target) as package:
         graph = package.read("comfyui_graph.json").decode("utf-8")
+        workflow = package.read("comfyui_workflow.json").decode("utf-8")
         report = package.read("export-report.json").decode("utf-8")
         package_blob = b"".join(
             name.encode("utf-8") + b"\n" + package.read(name)
@@ -816,7 +1035,9 @@ def test_noofy_package_writes_redacted_load_image_values(tmp_path: Path) -> None
         )
 
     assert "creator-family-photo.png" not in graph
+    assert "creator-family-photo.png" not in workflow
     assert exporter.REDACTED_IMAGE_INPUT_VALUE in graph
+    assert exporter.REDACTED_IMAGE_INPUT_VALUE in workflow
     assert "creator-family-photo.png" not in report
     assert b"creator-family-photo.png" not in package_blob
     assert '"image_inputs_redacted": 1' in report

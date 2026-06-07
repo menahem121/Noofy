@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 EXPORTER_NAME = "Noofy ComfyUI Export Extension"
-EXPORTER_VERSION = "0.1.0"
+EXPORTER_VERSION = "0.1.1"
 SCHEMA_VERSION = "0.1.0"
 TRUST_LEVEL = "public_unverified"
 TEST_INPUT_MODE = "workflow_current_load_image_inputs"
@@ -376,6 +376,101 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def pretty_json_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+def prepare_workflow_for_package(
+    workflow: dict[str, Any] | None,
+    *,
+    original_graph: dict[str, Any],
+    package_graph: dict[str, Any],
+    workflow_widget_bindings: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return an editable workflow with creator-local loader values redacted."""
+    if not isinstance(workflow, dict):
+        return None
+    if not isinstance(workflow_widget_bindings, dict):
+        return None
+    binding_nodes = workflow_widget_bindings.get("nodes")
+    if not isinstance(binding_nodes, dict):
+        return None
+
+    packaged = copy.deepcopy(workflow)
+    workflow_nodes = _top_level_workflow_nodes_by_id(packaged)
+    for node_id, package_node in package_graph.items():
+        if not isinstance(package_node, dict):
+            continue
+        original_node = original_graph.get(node_id)
+        if not isinstance(original_node, dict):
+            continue
+        package_inputs = package_node.get("inputs")
+        original_inputs = original_node.get("inputs")
+        if not isinstance(package_inputs, dict) or not isinstance(original_inputs, dict):
+            continue
+        for input_name, package_value in package_inputs.items():
+            original_value = original_inputs.get(input_name)
+            if (
+                _is_runtime_input_placeholder(package_value)
+                and original_value != package_value
+            ):
+                if not _replace_bound_workflow_widget_value(
+                    workflow_nodes,
+                    binding_nodes,
+                    node_id=node_id,
+                    input_name=input_name,
+                    original_value=original_value,
+                    package_value=package_value,
+                ):
+                    return None
+
+    return packaged
+
+
+def _top_level_workflow_nodes_by_id(workflow: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    return {
+        str(node["id"]): node
+        for node in nodes
+        if isinstance(node, dict) and "id" in node
+    }
+
+
+def _replace_bound_workflow_widget_value(
+    workflow_nodes: dict[str, dict[str, Any]],
+    binding_nodes: Any,
+    *,
+    node_id: str,
+    input_name: str,
+    original_value: Any,
+    package_value: Any,
+) -> bool:
+    if not isinstance(binding_nodes, dict):
+        return False
+    node = workflow_nodes.get(str(node_id))
+    widget_indexes = binding_nodes.get(str(node_id))
+    if not isinstance(node, dict) or not isinstance(widget_indexes, dict):
+        return False
+    widget_index = widget_indexes.get(input_name)
+    widgets_values = node.get("widgets_values")
+    if (
+        not isinstance(widget_index, int)
+        or widget_index < 0
+        or not isinstance(widgets_values, list)
+        or widget_index >= len(widgets_values)
+        or widgets_values[widget_index] != original_value
+    ):
+        return False
+    widgets_values[widget_index] = copy.deepcopy(package_value)
+    return True
+
+
+def _is_runtime_input_placeholder(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("__noofy_runtime_")
+        and value.endswith("_input_required__")
+    )
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -2101,11 +2196,19 @@ def write_noofy_package(
     custom_nodes: list[CustomNodeRecord],
     thumbnail_bytes: bytes,
     bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
+    workflow: dict[str, Any] | None = None,
+    workflow_widget_bindings: dict[str, Any] | None = None,
 ) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as package:
         package.writestr("package.json", pretty_json_bytes(documents["package_json"]))
         package.writestr("comfyui_graph.json", pretty_json_bytes(graph))
+        if workflow is not None and workflow_widget_bindings is not None:
+            package.writestr("comfyui_workflow.json", pretty_json_bytes(workflow))
+            package.writestr(
+                "comfyui_workflow_bindings.json",
+                pretty_json_bytes(workflow_widget_bindings),
+            )
         package.writestr("dashboard.json", pretty_json_bytes(documents["dashboard_json"]))
         package.writestr("capsule.lock.json", pretty_json_bytes(documents["capsule_lock"]))
         package.writestr("export-report.json", pretty_json_bytes(documents["export_report"]))

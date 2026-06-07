@@ -55,6 +55,7 @@ if PromptServer is not None:
         infer_suggested_category,
         output_export_path,
         prepare_graph_for_export,
+        prepare_workflow_for_package,
         redact_local_inputs_for_package,
         write_noofy_package,
     )
@@ -201,6 +202,12 @@ if PromptServer is not None:
             if workflow is not None and not isinstance(workflow, dict):
                 workflow = None
 
+            workflow_widget_bindings = body.get("workflow_widget_bindings")
+            if workflow_widget_bindings is not None and not isinstance(
+                workflow_widget_bindings, dict
+            ):
+                workflow_widget_bindings = None
+
             workflow_name = body.get("workflow_name")
             if workflow_name is not None and not isinstance(workflow_name, str):
                 workflow_name = None
@@ -259,7 +266,15 @@ if PromptServer is not None:
                 test_graph,
                 bundled_input_assets=bundled_input_assets,
             )
+            portable_workflow = prepare_workflow_for_package(
+                workflow,
+                original_graph=test_graph,
+                package_graph=package_graph,
+                workflow_widget_bindings=workflow_widget_bindings,
+            )
             adjustments.update(privacy_adjustments)
+            if workflow is not None and portable_workflow is None:
+                adjustments["editable_workflow_omitted"] = 1
             thumbnail_bytes = create_thumbnail_bytes(None)
 
             custom_nodes = detect_custom_nodes(test_graph, nodes)
@@ -304,6 +319,8 @@ if PromptServer is not None:
                 custom_nodes=custom_nodes,
                 thumbnail_bytes=thumbnail_bytes,
                 bundled_input_assets=bundled_input_assets,
+                workflow=portable_workflow,
+                workflow_widget_bindings=workflow_widget_bindings,
             )
 
             headers = {

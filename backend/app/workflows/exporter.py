@@ -45,6 +45,10 @@ from app.workflows.store_paths import mutable_package_dir, path_is_within, safe_
 from app.workflows.user_state import UserStateService
 
 MAX_EXPORTED_DEFAULT_ASSET_BYTES = 512 * 1024 * 1024
+MAX_COMFYUI_WORKFLOW_JSON_BYTES = 16 * 1024 * 1024
+COMFYUI_WORKFLOW_FILENAME = "comfyui_workflow.json"
+COMFYUI_WORKFLOW_BINDINGS_FILENAME = "comfyui_workflow_bindings.json"
+_SKIP_WORKFLOW_WIDGET_VALUE = object()
 
 
 class WorkflowExportError(Exception):
@@ -106,6 +110,17 @@ class WorkflowExporter:
                 "comfyui_graph.json",
                 json.dumps(bound_graph, indent=2, sort_keys=True),
             )
+            editable_workflow = self._stored_comfyui_workflow(package_dir)
+            workflow_bindings = self._stored_comfyui_workflow_bindings(package_dir)
+            if editable_workflow is not None and workflow_bindings is not None:
+                zf.writestr(
+                    COMFYUI_WORKFLOW_FILENAME,
+                    json.dumps(editable_workflow, indent=2, sort_keys=True),
+                )
+                zf.writestr(
+                    COMFYUI_WORKFLOW_BINDINGS_FILENAME,
+                    json.dumps(workflow_bindings, indent=2, sort_keys=True),
+                )
 
             # dashboard.json — the configured dashboard (inputs, outputs, sections, status).
             dashboard_data: dict[str, Any] = package.dashboard.model_dump(
@@ -148,7 +163,7 @@ class WorkflowExporter:
         workflow_id: str,
         input_values: dict[str, Any] | None = None,
     ) -> tuple[bytes, str]:
-        """Return a bound comfyui_graph.json snapshot for download."""
+        """Return an editable ComfyUI workflow when available, else the API prompt."""
         package = self._get_package(workflow_id)
         package_dir = self._find_package_dir(workflow_id)
         graph = self._bound_comfyui_graph(
@@ -156,7 +171,18 @@ class WorkflowExporter:
             package_dir=package_dir,
             input_values=input_values,
         )
-        payload = json.dumps(graph, indent=2, sort_keys=True).encode("utf-8")
+        editable_workflow = self._stored_comfyui_workflow(package_dir)
+        workflow_bindings = self._stored_comfyui_workflow_bindings(package_dir)
+        if editable_workflow is not None and workflow_bindings is not None:
+            exported = _workflow_with_bound_inputs(
+                editable_workflow,
+                workflow_bindings,
+                package=package,
+                bound_graph=graph,
+            )
+        else:
+            exported = graph
+        payload = json.dumps(exported, indent=2, sort_keys=True).encode("utf-8")
         return payload, f"{_safe_filename(workflow_id)}.comfyui.json"
 
     def _portable_dashboard(self, dashboard_data: dict[str, Any]) -> dict[str, Any]:
@@ -432,11 +458,30 @@ class WorkflowExporter:
             return None
         return json.loads(graph_file.read_text(encoding="utf-8"))
 
+    def _stored_comfyui_workflow(
+        self,
+        package_dir: Path | None,
+    ) -> dict[str, Any] | None:
+        return _read_optional_json_object(
+            stored_comfyui_workflow_file(package_dir) if package_dir is not None else None
+        )
+
+    def _stored_comfyui_workflow_bindings(
+        self,
+        package_dir: Path | None,
+    ) -> dict[str, Any] | None:
+        value = _read_optional_json_object(
+            stored_comfyui_workflow_bindings_file(package_dir) if package_dir is not None else None
+        )
+        return _valid_comfyui_workflow_bindings(value)
+
     def _export_input_values(
         self,
         package: WorkflowPackage,
         input_values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # Lowest to highest precedence: dashboard defaults, saved per-user
+        # Run-page state, then values submitted by the currently open Run page.
         values = {item.id: item.default for item in package.inputs if item.default is not None}
         package_defaults = {item.id: item.default for item in package.inputs}
         saved_value_ids: set[str] = set()
@@ -616,6 +661,129 @@ def stored_comfyui_graph_file(package_dir: Path) -> Path:
     if top_level.exists():
         return top_level
     return package_dir / "source-files" / "comfyui_graph.json"
+
+
+def stored_comfyui_workflow_file(package_dir: Path) -> Path:
+    top_level = package_dir / COMFYUI_WORKFLOW_FILENAME
+    if top_level.exists():
+        return top_level
+    return package_dir / "source-files" / COMFYUI_WORKFLOW_FILENAME
+
+
+def stored_comfyui_workflow_bindings_file(package_dir: Path) -> Path:
+    top_level = package_dir / COMFYUI_WORKFLOW_BINDINGS_FILENAME
+    if top_level.exists():
+        return top_level
+    return package_dir / "source-files" / COMFYUI_WORKFLOW_BINDINGS_FILENAME
+
+
+def _read_optional_json_object(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        if path.stat().st_size > MAX_COMFYUI_WORKFLOW_JSON_BYTES:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _valid_comfyui_workflow_bindings(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not isinstance(value.get("nodes"), dict):
+        return None
+    return value
+
+
+def _workflow_with_bound_inputs(
+    workflow: dict[str, Any],
+    bindings: dict[str, Any] | None,
+    *,
+    package: WorkflowPackage,
+    bound_graph: dict[str, Any],
+) -> dict[str, Any]:
+    exported = json.loads(json.dumps(workflow))
+    if not isinstance(bindings, dict):
+        return exported
+    binding_nodes = bindings.get("nodes")
+    if not isinstance(binding_nodes, dict):
+        return exported
+
+    workflow_nodes = _top_level_comfyui_workflow_nodes_by_id(exported)
+    for workflow_input in package.inputs:
+        node_id = workflow_input.binding.node_id
+        node = workflow_nodes.get(str(node_id))
+        widget_indexes = binding_nodes.get(str(node_id))
+        graph_node = bound_graph.get(node_id)
+        if (
+            not isinstance(node, dict)
+            or not isinstance(widget_indexes, dict)
+            or not isinstance(graph_node, dict)
+        ):
+            continue
+        widget_index = widget_indexes.get(workflow_input.binding.input_name)
+        widgets_values = node.get("widgets_values")
+        graph_inputs = graph_node.get("inputs")
+        if (
+            not isinstance(widget_index, int)
+            or widget_index < 0
+            or not isinstance(widgets_values, list)
+            or widget_index >= len(widgets_values)
+            or not isinstance(graph_inputs, dict)
+            or workflow_input.binding.input_name not in graph_inputs
+        ):
+            continue
+        value = _portable_workflow_widget_value(
+            graph_inputs[workflow_input.binding.input_name],
+            workflow_input,
+            graph=bound_graph,
+        )
+        if value is _SKIP_WORKFLOW_WIDGET_VALUE:
+            continue
+        widgets_values[widget_index] = value
+    return exported
+
+
+def _top_level_comfyui_workflow_nodes_by_id(
+    workflow: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    return {
+        str(node["id"]): node
+        for node in nodes
+        if isinstance(node, dict) and "id" in node
+    }
+
+
+def _portable_workflow_widget_value(
+    value: Any,
+    workflow_input: WorkflowInput,
+    *,
+    graph: dict[str, Any],
+) -> Any:
+    if workflow_input.control == "api_credential":
+        return _SKIP_WORKFLOW_WIDGET_VALUE
+    if _is_comfyui_graph_link(value, graph):
+        return _SKIP_WORKFLOW_WIDGET_VALUE
+    if workflow_input.control in MEDIA_LOAD_CONTROLS and not (
+        value is None or isinstance(value, str)
+    ):
+        return _SKIP_WORKFLOW_WIDGET_VALUE
+    try:
+        return json.loads(json.dumps(value))
+    except (TypeError, ValueError):
+        return _SKIP_WORKFLOW_WIDGET_VALUE
+
+
+def _is_comfyui_graph_link(value: Any, graph: dict[str, Any]) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and str(value[0]) in graph
+        and isinstance(value[1], int)
+    )
 
 
 def _apply_library_metadata(base: dict[str, Any], metadata: WorkflowLibraryMetadata) -> None:
