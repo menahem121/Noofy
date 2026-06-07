@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -13,6 +14,41 @@ from app.models.folders import (
     ensure_model_subfolders,
     write_extra_model_paths_config,
 )
+
+EXPECTED_MODEL_CATEGORIES = [
+    "LLM",
+    "RMBG",
+    "audio_encoders",
+    "background_removal",
+    "checkpoints",
+    "clip",
+    "clip_vision",
+    "configs",
+    "controlnet",
+    "detection",
+    "diffusers",
+    "diffusion_models",
+    "embeddings",
+    "frame_interpolation",
+    "geometry_estimation",
+    "gligen",
+    "hypernetworks",
+    "latent_upscale_models",
+    "loras",
+    "model_patches",
+    "onnx",
+    "optical_flow",
+    "photomaker",
+    "sams",
+    "style_models",
+    "text_encoders",
+    "ultralytics",
+    "unet",
+    "upscale_models",
+    "vae",
+    "vae_approx",
+    "yolo",
+]
 
 
 class FakeEngineService:
@@ -38,11 +74,20 @@ class FakeEngineService:
 
 def test_ensure_model_subfolders_creates_comfyui_categories(tmp_path: Path) -> None:
     root = tmp_path / "Noofy Models"
+    existing_model = root / "checkpoints" / "existing.safetensors"
+    existing_model.parent.mkdir(parents=True)
+    existing_model.write_bytes(b"existing")
+    custom_model = root / "custom_nodes_models" / "custom.bin"
+    custom_model.parent.mkdir(parents=True)
+    custom_model.write_bytes(b"custom")
 
     ensure_model_subfolders(root)
 
+    assert list(COMFYUI_MODEL_CATEGORIES) == EXPECTED_MODEL_CATEGORIES
     assert root.is_dir()
     assert all((root / category).is_dir() for category in COMFYUI_MODEL_CATEGORIES)
+    assert existing_model.read_bytes() == b"existing"
+    assert custom_model.read_bytes() == b"custom"
 
 
 def test_model_folder_service_updates_noofy_and_external_paths(tmp_path: Path) -> None:
@@ -109,8 +154,27 @@ def test_extra_model_paths_config_includes_noofy_and_external_roots(tmp_path: Pa
     assert str(noofy_models) in text
     assert str(external_models) in text
     assert "is_default: true" in text
-    assert "checkpoints" in text
-    assert "loras" in text
+    for category in EXPECTED_MODEL_CATEGORIES:
+        category_line = f"  {category}: {json.dumps(category)}"
+        assert text.count(category_line) == 2
+
+
+def test_model_folder_settings_api_returns_backend_owned_categories(tmp_path: Path) -> None:
+    service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=tmp_path / "Documents" / "Noofy Models",
+    )
+
+    with TestClient(
+        create_app(
+            engine_service=FakeEngineService(),
+            model_folder_service=service,
+        )
+    ) as client:
+        response = client.get("/api/settings/model-folders")
+
+    assert response.status_code == 200
+    assert response.json()["categories"] == EXPECTED_MODEL_CATEGORIES
 
 
 def test_model_folder_routes_do_not_modify_external_folder(tmp_path: Path) -> None:
@@ -141,6 +205,8 @@ def test_model_folder_routes_do_not_modify_external_folder(tmp_path: Path) -> No
 
     assert response.status_code == 200
     assert external_model.read_bytes() == b"existing"
+    assert not (external_dir / "LLM").exists()
+    assert not (external_dir / "sams").exists()
 
 
 def test_paths_endpoint_reports_active_model_folder(tmp_path: Path) -> None:

@@ -39,8 +39,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
 export const SOURCE_FILTERS: Array<{ id: "all" | ModelInventorySource; label: string }> = [
   { id: "all", label: "All sources" },
   { id: "noofy", label: "Noofy Models" },
-  { id: "external_comfyui", label: "External model folder" },
-  { id: "engine_visible", label: "Visible to engine" },
+  { id: "external_comfyui", label: "ComfyUI models folder" },
+  { id: "engine_visible", label: "Other engine folders" },
   { id: "required_by_workflow", label: "Required by workflow" },
 ];
 

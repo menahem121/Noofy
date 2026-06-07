@@ -111,7 +111,11 @@ class ModelInventoryService:
                 categories=categories,
             )
 
-        await self._add_engine_visible_models(entries)
+        await self._add_engine_visible_models(
+            entries,
+            noofy_root=noofy_root,
+            external_root=external_root,
+        )
         self._add_workflow_requirements(entries)
 
         tags = self.tag_store.list_tags()
@@ -259,7 +263,13 @@ class ModelInventoryService:
                     matched_root=str(root),
                 )
 
-    async def _add_engine_visible_models(self, entries: dict[str, ModelInventoryEntry]) -> None:
+    async def _add_engine_visible_models(
+        self,
+        entries: dict[str, ModelInventoryEntry],
+        *,
+        noofy_root: Path,
+        external_root: Path | None,
+    ) -> None:
         list_available = getattr(self.engine_service, "list_available_models", None)
         if not callable(list_available):
             return
@@ -303,6 +313,25 @@ class ModelInventoryService:
             if engine_visible_file is None:
                 continue
             path, size_bytes = engine_visible_file
+            source, source_label, ownership, ownership_label, matched_root = (
+                self._engine_visible_model_origin(
+                    key,
+                    model,
+                    path,
+                    noofy_root=noofy_root,
+                    external_root=external_root,
+                )
+            )
+            can_delete = (
+                model.folder in COMFYUI_MODEL_CATEGORIES
+                and (
+                    source == "external_comfyui"
+                    or (
+                        source == "noofy"
+                        and ownership in {"noofy_downloaded", "noofy_imported"}
+                    )
+                )
+            )
             entries[key] = ModelInventoryEntry(
                 model_key=key,
                 filename=model.filename,
@@ -311,14 +340,51 @@ class ModelInventoryService:
                 size_bytes=size_bytes,
                 status="ready",
                 status_label="Ready",
-                source="engine_visible",
-                source_label="Visible to engine",
-                ownership="engine_reference",
-                ownership_label="Engine-visible reference",
-                can_delete=False,
-                delete_unavailable_reason="Only files inside Noofy Models can be deleted.",
+                source=source,
+                source_label=source_label,
+                ownership=ownership,
+                ownership_label=ownership_label,
+                can_delete=can_delete,
+                delete_unavailable_reason=(
+                    None
+                    if can_delete
+                    else (
+                        "This engine model folder is visible to Noofy but is not managed from the Models page."
+                        if source == "engine_visible" or model.folder not in COMFYUI_MODEL_CATEGORIES
+                        else _delete_unavailable_reason(source, ownership)
+                    )
+                ),
                 path=str(path),
+                matched_root=str(matched_root),
             )
+
+    def _engine_visible_model_origin(
+        self,
+        key: str,
+        model: ModelInfo,
+        path: Path,
+        *,
+        noofy_root: Path,
+        external_root: Path | None,
+    ) -> tuple[ModelInventorySource, str, ModelOwnership, str, Path]:
+        if self._path_is_inside_root(path, noofy_root):
+            ownership, ownership_label = self._ownership_for_file(key, "noofy")
+            return "noofy", "Noofy Models", ownership, ownership_label, noofy_root
+        if external_root is not None and self._path_is_inside_root(path, external_root):
+            return (
+                "external_comfyui",
+                "ComfyUI models folder",
+                "external_reference",
+                "External reference",
+                external_root,
+            )
+        return (
+            "engine_visible",
+            "Other engine model folder",
+            "engine_reference",
+            "Outside configured model folders",
+            _engine_model_root(path, model.folder, model.filename),
+        )
 
     def _engine_visible_model_file(self, model: ModelInfo) -> tuple[Path, int] | None:
         if not model.path:
@@ -477,6 +543,19 @@ def _is_cleanable(model: ModelInventoryEntry) -> bool:
 
 def _is_model_asset_filename(filename: str) -> bool:
     return Path(filename).suffix.casefold() in MODEL_ASSET_SUFFIXES
+
+
+def _engine_model_root(path: Path, folder: str, filename: str) -> Path:
+    relative_parts = [folder, *Path(filename.replace("\\", "/")).parts]
+    candidate_root = path
+    for _part in relative_parts:
+        candidate_root = candidate_root.parent
+    try:
+        if candidate_root.joinpath(*relative_parts).resolve(strict=False) == path.resolve(strict=False):
+            return candidate_root
+    except OSError:
+        pass
+    return path.parent
 
 
 def _model_type_for(folder: str, model_type: str | None) -> str:

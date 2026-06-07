@@ -24,7 +24,40 @@ const inventory = {
   folders: {
     noofy_models_dir: "/tmp/Noofy Models",
     external_comfyui_models_dir: "/tmp/ComfyUI/models",
-    categories: ["checkpoints", "diffusion_models", "loras", "controlnet"],
+    categories: [
+      "LLM",
+      "RMBG",
+      "audio_encoders",
+      "background_removal",
+      "checkpoints",
+      "clip",
+      "clip_vision",
+      "configs",
+      "controlnet",
+      "detection",
+      "diffusers",
+      "diffusion_models",
+      "embeddings",
+      "frame_interpolation",
+      "geometry_estimation",
+      "gligen",
+      "hypernetworks",
+      "latent_upscale_models",
+      "loras",
+      "model_patches",
+      "onnx",
+      "optical_flow",
+      "photomaker",
+      "sams",
+      "style_models",
+      "text_encoders",
+      "ultralytics",
+      "unet",
+      "upscale_models",
+      "vae",
+      "vae_approx",
+      "yolo",
+    ],
   },
   tags: [{ id: "tag_sdxl", name: "SDXL", color: "#60a5fa" }],
   models: [
@@ -256,6 +289,11 @@ describe("ModelsPage", () => {
 
     expect(screen.queryByText("base.safetensors")).not.toBeInTheDocument();
     expect(screen.getByText("style.safetensors")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("style.safetensors"));
+
+    expect(screen.getByText("Model root")).toBeInTheDocument();
+    expect(screen.getByText("/tmp/ComfyUI/models")).toBeInTheDocument();
   });
 
   it("refreshes free disk space when the page becomes active again", async () => {
@@ -269,6 +307,55 @@ describe("ModelsPage", () => {
     await waitFor(() => expect(screen.getByText("7.1 GB")).toBeInTheDocument());
     const modelInventoryRequests = fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/api/models"));
     expect(modelInventoryRequests.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("uses backend model categories for imports and configured external models", async () => {
+    currentInventory = {
+      ...inventory,
+      summary: {
+        ...inventory.summary,
+        total_count: inventory.summary.total_count + 1,
+        external_comfyui_count: inventory.summary.external_comfyui_count + 1,
+      },
+      models: [
+        ...inventory.models,
+        {
+          model_key: "sams/sam_vit_b_01ec64.pth",
+          filename: "sam_vit_b_01ec64.pth",
+          folder: "sams",
+          model_type: "other",
+          size_bytes: 375042383,
+          status: "ready",
+          status_label: "Ready",
+          source: "external_comfyui",
+          source_label: "ComfyUI models folder",
+          ownership: "external_reference",
+          ownership_label: "External reference",
+          can_delete: true,
+          delete_unavailable_reason: null,
+          path: "/tmp/ComfyUI/models/sams/sam_vit_b_01ec64.pth",
+          matched_root: "/tmp/ComfyUI/models",
+          verification_level: null,
+          matched_sha256: null,
+          source_availability: null,
+          message: null,
+          workflow_usage: [],
+          downloadable_references: [],
+          tag_ids: [],
+        },
+      ],
+    };
+    renderPage();
+
+    expect(await screen.findByText("sam_vit_b_01ec64.pth")).toBeInTheDocument();
+    expect(screen.getAllByText("ComfyUI models folder").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Model" }));
+    const folderSelect = screen.getByRole("combobox", { name: "Model folder" });
+    expect(folderSelect).toContainHTML('<option value="LLM">LLM</option>');
+    expect(folderSelect).toContainHTML('<option value="onnx">onnx</option>');
+    expect(folderSelect).toContainHTML('<option value="sams">sams</option>');
+    expect(folderSelect).toContainHTML('<option value="ultralytics">ultralytics</option>');
   });
 
   it("silently refreshes while visible and removes externally deleted model rows", async () => {

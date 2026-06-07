@@ -13,32 +13,40 @@ from app.diagnostics import DiagnosticsSink
 MODEL_FOLDER_SETTINGS_SCHEMA_VERSION = "1"
 NOOFY_MODELS_FOLDER_NAME = "Noofy Models"
 
-COMFYUI_MODEL_CATEGORIES = [
-    "configs",
+COMFYUI_MODEL_CATEGORIES: tuple[str, ...] = (
+    "LLM",
+    "RMBG",
     "audio_encoders",
     "background_removal",
     "checkpoints",
     "clip",
     "clip_vision",
+    "configs",
     "controlnet",
+    "detection",
     "diffusers",
     "diffusion_models",
     "embeddings",
     "frame_interpolation",
+    "geometry_estimation",
     "gligen",
     "hypernetworks",
     "latent_upscale_models",
     "loras",
     "model_patches",
+    "onnx",
     "optical_flow",
     "photomaker",
+    "sams",
     "style_models",
     "text_encoders",
+    "ultralytics",
     "unet",
     "upscale_models",
     "vae",
     "vae_approx",
-]
+    "yolo",
+)
 
 ModelFolderChangeCallback = Callable[[Path, Path | None], None]
 

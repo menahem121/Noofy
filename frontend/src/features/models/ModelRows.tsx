@@ -251,6 +251,12 @@ export function DetailPanel({
             <dt>Source</dt>
             <dd>{sourceLabel}</dd>
           </div>
+          {model.matched_root && (
+            <div>
+              <dt>Model root</dt>
+              <dd className="detail-dev-value">{model.matched_root}</dd>
+            </div>
+          )}
           <div>
             <dt>Ownership</dt>
             <dd>{model.ownership_label}</dd>

@@ -120,6 +120,21 @@ class MaterializedEngineVisibleModelsService(FakeEngineService):
         ]
 
 
+class ConfiguredRootFallbackModelsService(FakeEngineService):
+    def __init__(self, *, external_model: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.external_model = external_model
+
+    async def list_available_models(self) -> list[ModelInfo]:
+        return [
+            ModelInfo(
+                folder="custom_extension_models",
+                filename=self.external_model.name,
+                path=str(self.external_model),
+            )
+        ]
+
+
 class PathlessEngineVisibleModelsService(FakeEngineService):
     async def list_available_models(self) -> list[ModelInfo]:
         return [ModelInfo(folder="upscale_models", filename="runtime-only.safetensors")]
@@ -175,6 +190,12 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
     external_model.parent.mkdir(parents=True)
     external_model.write_bytes(b"style")
+    external_sam = tmp_path / "ComfyUI" / "models" / "sams" / "sam_vit_b_01ec64.pth"
+    external_sam.parent.mkdir(parents=True)
+    external_sam.write_bytes(b"sam")
+    noofy_llm = tmp_path / "Noofy Models" / "LLM" / "local-model.gguf"
+    noofy_llm.parent.mkdir(parents=True)
+    noofy_llm.write_bytes(b"llm")
     diffusion_model = tmp_path / "ComfyUI" / "models" / "diffusion_models" / "flux.safetensors"
     diffusion_model.parent.mkdir(parents=True)
     diffusion_model.write_bytes(b"flux")
@@ -200,9 +221,9 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert response.status_code == 200
     data = response.json()
     by_key = {model["model_key"]: model for model in data["models"]}
-    assert data["summary"]["total_count"] == 5
-    assert data["summary"]["noofy_count"] == 1
-    assert data["summary"]["external_comfyui_count"] == 2
+    assert data["summary"]["total_count"] == 7
+    assert data["summary"]["noofy_count"] == 2
+    assert data["summary"]["external_comfyui_count"] == 3
     assert data["summary"]["missing_count"] == 1
     assert isinstance(data["summary"]["disk_free_bytes"], int)
     assert data["summary"]["disk_free_bytes"] > 0
@@ -214,8 +235,15 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert by_key["loras/style.safetensors"]["source_label"] == "ComfyUI models folder"
     assert by_key["loras/style.safetensors"]["can_delete"] is True
     assert by_key["loras/style.safetensors"]["delete_unavailable_reason"] is None
+    assert by_key["sams/sam_vit_b_01ec64.pth"]["source"] == "external_comfyui"
+    assert by_key["sams/sam_vit_b_01ec64.pth"]["source_label"] == "ComfyUI models folder"
+    assert by_key["sams/sam_vit_b_01ec64.pth"]["matched_root"] == str(tmp_path / "ComfyUI" / "models")
+    assert by_key["LLM/local-model.gguf"]["source"] == "noofy"
+    assert by_key["LLM/local-model.gguf"]["source_label"] == "Noofy Models"
     assert by_key["diffusion_models/flux.safetensors"]["model_type"] == "checkpoint"
-    assert by_key["vae/engine-only.safetensors"]["source_label"] == "Visible to engine"
+    assert by_key["vae/engine-only.safetensors"]["source_label"] == "Other engine model folder"
+    assert by_key["vae/engine-only.safetensors"]["ownership_label"] == "Outside configured model folders"
+    assert by_key["vae/engine-only.safetensors"]["matched_root"] == str(tmp_path / "Engine Visible")
     assert by_key["controlnet/missing.safetensors"]["source_label"] == "Required by workflow"
     assert by_key["controlnet/missing.safetensors"]["downloadable_references"][0]["workflow_id"] == "wf_text"
     assert "configs/v1-inference.yaml" not in by_key
@@ -343,6 +371,101 @@ def test_models_inventory_excludes_runtime_materialized_engine_models(tmp_path: 
         keys = {model.model_key for model in inventory.models}
         assert "upscale_models/runtime-only.safetensors" not in keys
         assert "vae/engine-only.safetensors" in keys
+
+    asyncio.run(run())
+
+
+def test_standard_sams_category_is_scanned_from_configured_external_root(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        external_root = tmp_path / "ComfyUI" / "models"
+        external_model = external_root / "sams" / "sam_vit_b_01ec64.pth"
+        external_model.parent.mkdir(parents=True)
+        external_model.write_bytes(b"sam")
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(
+            ModelFolderUpdateRequest(
+                noofy_models_dir=str(noofy_root),
+                external_comfyui_models_dir=str(external_root),
+            )
+        )
+        engine = FakeEngineService(
+            noofy_root=noofy_root,
+            external_root=external_root,
+            packages=[],
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+            log_store=engine.log_store,
+        )
+
+        inventory = await service.inventory()
+
+        model = next(item for item in inventory.models if item.model_key == "sams/sam_vit_b_01ec64.pth")
+        assert model.source == "external_comfyui"
+        assert model.source_label == "ComfyUI models folder"
+        assert model.ownership == "external_reference"
+        assert model.matched_root == str(external_root)
+        assert model.can_delete is True
+
+    asyncio.run(run())
+
+
+def test_engine_fallback_inside_configured_external_root_keeps_external_access_policy(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        external_root = tmp_path / "ComfyUI" / "models"
+        external_model = external_root / "custom_extension_models" / "extension-model.onnx"
+        external_model.parent.mkdir(parents=True)
+        external_model.write_bytes(b"onnx")
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(
+            ModelFolderUpdateRequest(
+                noofy_models_dir=str(noofy_root),
+                external_comfyui_models_dir=str(external_root),
+            )
+        )
+        engine = ConfiguredRootFallbackModelsService(
+            noofy_root=noofy_root,
+            external_root=external_root,
+            packages=[],
+            external_model=external_model,
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+            log_store=engine.log_store,
+        )
+
+        inventory = await service.inventory()
+
+        model = next(
+            item
+            for item in inventory.models
+            if item.model_key == "custom_extension_models/extension-model.onnx"
+        )
+        assert model.source == "external_comfyui"
+        assert model.source_label == "ComfyUI models folder"
+        assert model.matched_root == str(external_root)
+        assert model.can_delete is False
+        assert model.delete_unavailable_reason == (
+            "This engine model folder is visible to Noofy but is not managed from the Models page."
+        )
 
     asyncio.run(run())
 
@@ -539,11 +662,17 @@ def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_p
     source = tmp_path / "Downloads" / "demo.safetensors"
     source.parent.mkdir()
     source.write_bytes(b"demo")
+    llm_source = tmp_path / "Downloads" / "assistant.gguf"
+    llm_source.write_bytes(b"llm")
 
     with _client(tmp_path, []) as client:
         imported = client.post(
             "/api/models/import",
             json={"source_paths": [str(source)], "folder": "checkpoints"},
+        )
+        imported_llm = client.post(
+            "/api/models/import",
+            json={"source_paths": [str(llm_source)], "folder": "LLM"},
         )
         collision = client.post(
             "/api/models/import",
@@ -556,8 +685,11 @@ def test_model_import_copies_only_into_noofy_models_and_reports_collisions(tmp_p
 
     assert imported.status_code == 200
     assert imported.json()["imported_count"] == 1
+    assert imported_llm.status_code == 200
+    assert imported_llm.json()["imported_count"] == 1
     target = tmp_path / "Noofy Models" / "checkpoints" / "demo.safetensors"
     assert target.read_bytes() == b"demo"
+    assert (tmp_path / "Noofy Models" / "LLM" / "assistant.gguf").read_bytes() == b"llm"
     with _client(tmp_path, []) as client:
         inventory = client.get("/api/models").json()
     imported_model = {model["model_key"]: model for model in inventory["models"]}["checkpoints/demo.safetensors"]
@@ -630,12 +762,16 @@ def test_model_delete_removes_noofy_owned_and_external_comfyui_model_files(tmp_p
     external_model = tmp_path / "ComfyUI" / "models" / "loras" / "style.safetensors"
     external_model.parent.mkdir(parents=True)
     external_model.write_bytes(b"style")
+    external_sam = tmp_path / "ComfyUI" / "models" / "sams" / "sam_vit_b_01ec64.pth"
+    external_sam.parent.mkdir(parents=True)
+    external_sam.write_bytes(b"sam")
     ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json").mark_imported("checkpoints/owned.safetensors")
 
     with _client(tmp_path, []) as client:
         blocked_local = client.delete("/api/models/checkpoints/base.safetensors")
         deleted = client.delete("/api/models/checkpoints/owned.safetensors")
         deleted_external = client.delete("/api/models/loras/style.safetensors")
+        deleted_external_sam = client.delete("/api/models/sams/sam_vit_b_01ec64.pth")
 
     assert blocked_local.status_code == 400
     assert blocked_local.json()["detail"]["message"] == "Noofy can delete only models it imported or downloaded."
@@ -646,6 +782,9 @@ def test_model_delete_removes_noofy_owned_and_external_comfyui_model_files(tmp_p
     assert deleted_external.status_code == 200
     assert deleted_external.json()["message"] == "Model file deleted from ComfyUI models folder."
     assert not external_model.exists()
+    assert deleted_external_sam.status_code == 200
+    assert deleted_external_sam.json()["message"] == "Model file deleted from ComfyUI models folder."
+    assert not external_sam.exists()
 
 
 class FakeDownloadAvailabilityService:
