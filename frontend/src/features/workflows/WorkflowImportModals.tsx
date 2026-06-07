@@ -141,7 +141,9 @@ export function RequiredModelsModal({
     verificationJob?.status === "queued" ||
     verificationJob?.status === "running" ||
     (!terminalVerification && summary.models.some((model) => model.status === "checking"));
-  const jobModels = new Map(downloadJob?.models.map((model) => [model.requirement_id, model]) ?? []);
+  const jobModels = new Map(
+    activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : [],
+  );
   const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
   const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
   const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
@@ -366,6 +368,12 @@ function hasNotEnoughDiskSpaceFailure(job: ImportModelDownloadJobStatus) {
 }
 
 function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
+  if (job.status === "completed") {
+    return Boolean(
+      job.model_summary?.models.length &&
+      job.model_summary.models.every((model) => model.status === "available"),
+    );
+  }
   if (
     job.status === "pending" ||
     job.status === "queued" ||
@@ -373,7 +381,6 @@ function shouldShowDownloadProgress(job: ImportModelDownloadJobStatus) {
     job.status === "downloading" ||
     job.status === "verifying" ||
     job.status === "succeeded" ||
-    job.status === "completed" ||
     job.status === "failed" ||
     job.status === "completed_with_errors" ||
     job.status === "canceled"

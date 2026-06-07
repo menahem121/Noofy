@@ -220,6 +220,57 @@ describe("RequiredModelsModal", () => {
     expect(onDownload).toHaveBeenCalledTimes(1);
   });
 
+  it("uses known availability instead of a terminal downloaded progress label without a final summary", () => {
+    render(
+      <RequiredModelsModal
+        importResult={importResult}
+        busy={false}
+        importing={false}
+        downloadJob={{
+          job_id: "download-1",
+          import_session_id: "import-session-1",
+          workflow_id: "flux-workflow",
+          status: "completed",
+          user_facing_message: "Model download check finished.",
+          current_model_filename: null,
+          current_model_index: null,
+          total_models: 1,
+          bytes_downloaded: 336213556,
+          total_bytes: 336213556,
+          percent: 100,
+          speed_bytes_per_second: null,
+          models: [
+            {
+              requirement_id: "vae/flux2-vae.safetensors",
+              filename: "flux2-vae.safetensors",
+              status: "succeeded",
+              status_label: "Downloaded",
+              bytes_downloaded: 336213556,
+              total_bytes: 336213556,
+              message: null,
+            },
+          ],
+          model_summary: null,
+        }}
+        verificationJob={null}
+        onDownload={vi.fn()}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={vi.fn()}
+        onViewModels={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Missing").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Downloaded")).not.toBeInTheDocument();
+    expect(screen.queryByText("Model download check finished.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "Model download progress" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeEnabled();
+  });
+
   it("replaces retry with View Models for disk-space download failures", () => {
     const onDownload = vi.fn();
     const onViewModels = vi.fn();

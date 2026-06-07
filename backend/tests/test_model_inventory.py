@@ -93,6 +93,27 @@ class SlowEngineVisibleModelsService(FakeEngineService):
         return [ModelInfo(folder="vae", filename="slow-engine-only.safetensors")]
 
 
+class MaterializedEngineVisibleModelsService(FakeEngineService):
+    def __init__(self, *, materialized_model: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.materialized_model = materialized_model
+
+    async def list_available_models(self) -> list[ModelInfo]:
+        return [
+            ModelInfo(
+                folder="upscale_models",
+                filename=self.materialized_model.name,
+                path=str(self.materialized_model),
+            ),
+            ModelInfo(folder="vae", filename="engine-only.safetensors"),
+        ]
+
+
+class PathlessEngineVisibleModelsService(FakeEngineService):
+    async def list_available_models(self) -> list[ModelInfo]:
+        return [ModelInfo(folder="upscale_models", filename="runtime-only.safetensors")]
+
+
 def _client(
     tmp_path: Path,
     packages: list[WorkflowPackage],
@@ -258,6 +279,90 @@ def test_models_inventory_does_not_wait_on_slow_engine_visible_models(tmp_path: 
             event.message == "Skipped slow engine-visible model enrichment"
             for event in engine.log_store.list_events().events
         )
+
+    asyncio.run(run())
+
+
+def test_models_inventory_excludes_runtime_materialized_engine_models(tmp_path: Path) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        materialized_root = tmp_path / "model-store" / "materialized"
+        materialized_model = (
+            materialized_root
+            / "views"
+            / "model-view-test"
+            / "upscale_models"
+            / "runtime-only.safetensors"
+        )
+        materialized_model.parent.mkdir(parents=True)
+        materialized_model.write_bytes(b"runtime-only")
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+        engine = MaterializedEngineVisibleModelsService(
+            noofy_root=noofy_root,
+            external_root=None,
+            packages=[],
+            materialized_model=materialized_model,
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+            log_store=engine.log_store,
+            excluded_engine_model_roots=[materialized_root],
+        )
+
+        inventory = await service.inventory()
+
+        keys = {model.model_key for model in inventory.models}
+        assert "upscale_models/runtime-only.safetensors" not in keys
+        assert "vae/engine-only.safetensors" in keys
+
+    asyncio.run(run())
+
+
+def test_workflow_availability_overrides_pathless_engine_visible_model(tmp_path: Path) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+        engine = PathlessEngineVisibleModelsService(
+            noofy_root=noofy_root,
+            external_root=None,
+            packages=[
+                _package(
+                    [
+                        RequiredModel(
+                            folder="upscale_models",
+                            filename="runtime-only.safetensors",
+                            size_bytes=12,
+                            source_url="https://example.test/runtime-only.safetensors",
+                        )
+                    ]
+                )
+            ],
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+            log_store=engine.log_store,
+        )
+
+        inventory = await service.inventory()
+
+        model = next(item for item in inventory.models if item.model_key == "upscale_models/runtime-only.safetensors")
+        assert model.status == "missing"
+        assert model.source == "required_by_workflow"
+        assert model.path is None
 
     asyncio.run(run())
 

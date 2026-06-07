@@ -180,6 +180,7 @@ def create_api_services(
         tag_store=tags,
         ownership_store=ownership,
         log_store=getattr(engine_service, "log_store", None),
+        excluded_engine_model_roots=[settings.paths.model_materialized_dir],
     )
     api_keys = api_key_service or ApiKeySettingsService(
         metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),

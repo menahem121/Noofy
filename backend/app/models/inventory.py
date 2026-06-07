@@ -68,6 +68,7 @@ class ModelInventoryService:
         ownership_store: ModelOwnershipStore,
         log_store: DiagnosticsSink | None = None,
         engine_visible_models_timeout_seconds: float = ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS,
+        excluded_engine_model_roots: list[Path] | None = None,
     ) -> None:
         self.engine_service = engine_service
         self.model_folder_service = model_folder_service
@@ -77,6 +78,10 @@ class ModelInventoryService:
             0.0,
             engine_visible_models_timeout_seconds,
         )
+        self.excluded_engine_model_roots = [
+            root.expanduser().resolve(strict=False)
+            for root in excluded_engine_model_roots or []
+        ]
         self.import_service = ModelImportService(
             model_folder_service=model_folder_service,
             ownership_store=ownership_store,
@@ -294,6 +299,8 @@ class ModelInventoryService:
             size_bytes = None
             if model.path:
                 path = Path(model.path)
+                if self._is_excluded_engine_model_path(path):
+                    continue
                 if path.is_file():
                     try:
                         size_bytes = path.stat().st_size
@@ -317,6 +324,16 @@ class ModelInventoryService:
                 delete_unavailable_reason="Only files inside Noofy Models can be deleted.",
                 path=model.path,
             )
+
+    def _is_excluded_engine_model_path(self, path: Path) -> bool:
+        try:
+            resolved = path.expanduser().resolve(strict=False)
+        except OSError:
+            return False
+        return any(
+            resolved == root or resolved.is_relative_to(root)
+            for root in self.excluded_engine_model_roots
+        )
 
     def _add_workflow_requirements(self, entries: dict[str, ModelInventoryEntry]) -> None:
         workflow_loader = getattr(self.engine_service, "workflow_loader", None)
@@ -342,6 +359,12 @@ class ModelInventoryService:
                     status_label=item.status_label,
                 )
                 existing = entries.get(key)
+                if (
+                    existing is not None
+                    and existing.source == "engine_visible"
+                    and item.status != "available"
+                ):
+                    existing = None
                 if existing is None:
                     inventory_status = _inventory_status_for_required_status(item.status)
                     never_used = inventory_status == "never_used"

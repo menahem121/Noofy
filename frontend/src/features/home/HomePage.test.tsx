@@ -1999,7 +1999,138 @@ describe("HomePage", () => {
     expect(screen.queryByRole("heading", { name: "Core SD15 Text to Image" })).not.toBeInTheDocument();
   });
 
-  it("continues to workflow configuration after downloaded models leave input setup remaining", async () => {
+  it("keeps the import open when terminal download progress does not produce an available model", async () => {
+    const missingModel = {
+      requirement_id: "upscaler",
+      node_id: "1",
+      node_type: "UpscaleModelLoader",
+      input_name: "model_name",
+      filename: "runtime-only.safetensors",
+      model_type: "Upscale model",
+      folder: "upscale_models",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: ["https://example.test/runtime-only.safetensors"],
+      source_availability: "known",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy can try to resolve and download this model before the workflow runs.",
+    };
+    const pendingImport = {
+      import_session_id: "import-session-runtime-only",
+      workflow_id: "runtime_only_workflow",
+      status: "needs_input_setup",
+      user_facing_message: "Needs input setup",
+      workflow: {
+        id: "runtime_only_workflow",
+        name: "Runtime Only Workflow",
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 1,
+      model_summary: {
+        workflow_id: "runtime_only_workflow",
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 1,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [missingModel],
+      },
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([]));
+      if (
+        url.endsWith(
+          "/api/workflows/import/preview?filename=runtime-only.noofy&allow_unverified_community_preparation=true",
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(pendingImport));
+      }
+      if (url.endsWith("/api/workflows/import/import-session-runtime-only/download-models") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-runtime-only",
+            import_session_id: "import-session-runtime-only",
+            workflow_id: "runtime_only_workflow",
+            status: "queued",
+            user_facing_message: "Model download is queued.",
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/import/import-session-runtime-only/download-models/model-download-runtime-only")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-runtime-only",
+            import_session_id: "import-session-runtime-only",
+            workflow_id: "runtime_only_workflow",
+            status: "completed",
+            user_facing_message: "Model download check finished.",
+            current_model_filename: null,
+            current_model_index: null,
+            total_models: 1,
+            bytes_downloaded: 1024,
+            total_bytes: 1024,
+            percent: 100,
+            speed_bytes_per_second: null,
+            models: [
+              {
+                requirement_id: "upscaler",
+                filename: "runtime-only.safetensors",
+                status: "succeeded",
+                status_label: "Downloaded",
+                bytes_downloaded: 1024,
+                total_bytes: 1024,
+                message: null,
+              },
+            ],
+            model_summary: pendingImport.model_summary,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({ onConfigureDashboard });
+
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], "runtime-only.noofy");
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(await screen.findByRole("dialog", { name: "Runtime Only Workflow" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeEnabled();
+    });
+    expect(screen.getByRole("dialog", { name: "Runtime Only Workflow" })).toBeInTheDocument();
+    expect(screen.getAllByText("Missing").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Downloaded")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "Model download progress" })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflows/import/import-session-runtime-only/commit",
+      expect.anything(),
+    );
+    expect(onConfigureDashboard).not.toHaveBeenCalled();
+    expect(onOpenWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("closes the model popup and shows configuration on Home after downloads finish", async () => {
     const model = {
       requirement_id: "checkpoint",
       node_id: "1",
@@ -2092,7 +2223,7 @@ describe("HomePage", () => {
               ...pendingImport.model_summary,
               available_count: 1,
               missing_count: 0,
-              ready_to_run: true,
+              ready_to_run: false,
               models: [{ ...model, status: "available", status_label: "Available" }],
             },
           }),
@@ -2127,9 +2258,9 @@ describe("HomePage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Setup Workflow" })).not.toBeInTheDocument();
     });
-    await waitFor(() => {
-      expect(onConfigureDashboard).toHaveBeenCalledWith("setup_workflow", "Setup Workflow");
-    });
+    expect(await screen.findByRole("button", { name: "Configure dashboard" })).toBeInTheDocument();
+    expect(screen.getByText("Setup Workflow was added to your local workflows.")).toBeInTheDocument();
+    expect(onConfigureDashboard).not.toHaveBeenCalled();
     expect(onOpenWorkflow).not.toHaveBeenCalled();
   });
 });

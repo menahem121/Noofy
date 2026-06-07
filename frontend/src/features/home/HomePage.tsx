@@ -357,7 +357,11 @@ export function HomePage({
     readyImportAction,
     cancelImport,
     dismissImportResult,
-  } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
+  } = useWorkflowImportFlow({
+    onOpenWorkflow,
+    onConfigureDashboard,
+    deferConfigurationAfterDownloadedImport: true,
+  });
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
   const [draftDismissTick, setDraftDismissTick] = useState(0);

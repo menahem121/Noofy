@@ -42,10 +42,12 @@ export function useWorkflowImportFlow({
   onOpenWorkflow,
   onConfigureDashboard,
   allowUnverifiedCommunityPreparation = true,
+  deferConfigurationAfterDownloadedImport = false,
 }: {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   allowUnverifiedCommunityPreparation?: boolean;
+  deferConfigurationAfterDownloadedImport?: boolean;
 }) {
   const workflowLibrary = useWorkflowLibrary();
   const [state, setState] = useState<WorkflowImportFlowState>(initialWorkflowImportFlowState);
@@ -375,30 +377,38 @@ export function useWorkflowImportFlow({
   ]);
 
   useEffect(() => {
-    const sessionId = state.pendingImport?.import_session_id;
+    const pendingImport = state.pendingImport;
+    const sessionId = pendingImport?.import_session_id;
     const jobId = state.downloadJob?.job_id;
     if (!sessionId || !jobId) return;
     if (state.importing || state.downloadingModels) return;
-    if (state.pendingImport?.duplicate_identity) return;
+    if (pendingImport?.duplicate_identity) return;
     if (state.downloadJob?.status !== "completed") return;
 
-    const summary = state.downloadJob.model_summary ?? state.pendingImport?.model_summary;
-    if (!summary?.ready_to_run) return;
+    const summary = state.downloadJob.model_summary ?? pendingImport?.model_summary;
+    if (!summary?.models.length || !summary.models.every((model) => model.status === "available")) return;
+
+    // Use the final filesystem availability, not terminal download progress or
+    // a potentially stale aggregate flag, as the commit boundary.
     const jobKey = `${sessionId}:${jobId}`;
     if (autoCommittedDownloadJobs.current.has(jobKey)) return;
 
     autoCommittedDownloadJobs.current.add(jobKey);
+    if (deferConfigurationAfterDownloadedImport && pendingImport && importNeedsConfiguration(pendingImport)) {
+      void continueImport();
+      return;
+    }
     void readyImportAction();
   }, [
+    continueImport,
+    deferConfigurationAfterDownloadedImport,
     readyImportAction,
     state.downloadJob?.job_id,
     state.downloadJob?.model_summary,
     state.downloadJob?.status,
     state.downloadingModels,
     state.importing,
-    state.pendingImport?.duplicate_identity,
-    state.pendingImport?.import_session_id,
-    state.pendingImport?.model_summary,
+    state.pendingImport,
   ]);
 
   return {
