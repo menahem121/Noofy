@@ -101,7 +101,12 @@ class RecordingAdapter:
             status="queued",
         )
 
-    async def get_progress(self, job_id: str) -> JobProgress:
+    async def get_progress(
+        self,
+        job_id: str,
+        since_preview_sequence: int | None = None,
+    ) -> JobProgress:
+        del since_preview_sequence
         self.progress_calls.append(job_id)
         return JobProgress(job_id=job_id, status="running")
 

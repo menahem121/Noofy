@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 import zipfile
 from pathlib import Path
 
@@ -20,7 +21,13 @@ from app.runtime.noofy_runtime.service import (
 
 @pytest.fixture(autouse=True)
 def _supported_target(monkeypatch):
-    monkeypatch.setattr("app.runtime.noofy_runtime.service._machine", lambda: "arm64")
+    if sys.platform == "darwin":
+        machine = "arm64"
+    elif sys.platform == "win32":
+        machine = "amd64"
+    else:
+        machine = "x86_64"
+    monkeypatch.setattr("app.runtime.noofy_runtime.service._machine", lambda: machine)
 
 
 def _runtime_tree(root: Path, *, target: str | None = None, backend_hash: str | None = None) -> None:

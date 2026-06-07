@@ -5,7 +5,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "darwin-arm64-mps",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",
@@ -29,7 +29,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "darwin-arm64-cpu",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",
@@ -53,7 +53,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "windows-x64-cuda130",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",
@@ -77,7 +77,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "windows-x64-cpu",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",
@@ -101,7 +101,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "linux-x64-cuda130",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",
@@ -125,7 +125,7 @@
       "schema_version": "0.1.0",
       "runtime_profile_id": "noofy-comfyui-v1-default",
       "runtime_profile_variant_id": "linux-x64-cpu",
-      "runtime_profile_manifest_hash": "sha256:e1907e68d12356fdca556b09eae41808f2c508deb44e14aa9a2d65364e559aa4",
+      "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
       "node_types": [
         "CLIPTextEncode",
         "CheckpointLoaderSimple",

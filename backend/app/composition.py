@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Callable
 
 from app.core.config import settings
-from app.diagnostics import LogStore
 from app.engine.factory import create_default_engine_service
 from app.engine.service import EngineService
 from app.gallery import GalleryCaptureService, GalleryStore
@@ -227,7 +226,7 @@ def create_api_services(
         log_store=getattr(engine_service, "log_store", None),
     )
     developer_runtime_override = settings.developer_runtime_override_active
-    noofy_runtime_log_store = getattr(engine_service, "log_store", None) or LogStore()
+    noofy_runtime_log_store = getattr(engine_service, "log_store", None)
     noofy_runtime_updates = noofy_runtime_update_service or NoofyRuntimeUpdateService(
         paths=settings.paths,
         packaged_runtime=settings.packaged_runtime_active,
