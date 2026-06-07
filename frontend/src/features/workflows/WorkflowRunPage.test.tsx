@@ -2846,6 +2846,7 @@ describe("WorkflowRunPage", () => {
       "required-models-modal__body",
       "required-models-modal__footer",
     ]);
+    expect(within(missingModelsDialog).getByText("Checkpoint")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download Missing Models" }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/models/downloads", {

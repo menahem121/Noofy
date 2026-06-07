@@ -2147,8 +2147,9 @@ def add_custom_node_to_zip(package: zipfile.ZipFile, record: CustomNodeRecord) -
         package.write(root / rel_path, f"{archive_root}/{rel_path}")
 
 
-def build_export_filename(package_id: str) -> str:
-    return f"{slugify(package_id)}.noofy"
+def build_export_filename(display_name: str) -> str:
+    filename_stem = re.sub(r"[^a-zA-Z0-9._-]+", "-", display_name.strip()).strip("-._")
+    return f"{filename_stem or 'workflow'}.noofy"
 
 
 def output_export_path(output_directory: str, filename: str) -> Path:

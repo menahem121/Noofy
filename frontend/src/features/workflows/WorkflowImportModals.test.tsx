@@ -109,6 +109,13 @@ function renderImportModal(result: WorkflowImportResponse) {
 }
 
 describe("RequiredModelsModal", () => {
+  it("shows the precise destination-folder model type", () => {
+    renderImportModal(importResult);
+
+    expect(screen.getByText("VAE · 321 MB")).toBeInTheDocument();
+    expect(screen.queryByText(/Image helper/)).not.toBeInTheDocument();
+  });
+
   it("highlights Download Missing Models until models resolve, then makes Replace primary", () => {
     const { unmount } = renderImportModal(duplicateMissingImport);
 
@@ -371,6 +378,7 @@ describe("RequiredModelsModal", () => {
     );
 
     expect(screen.getAllByRole("heading", { name: "ltx-2.3-22b-dev-fp8.safetensors" })).toHaveLength(1);
+    expect(screen.getByText("Checkpoint · 321 MB")).toBeInTheDocument();
     expect(screen.getByText("Used in 3 places in this workflow")).toBeInTheDocument();
     expect(screen.getByText("Show technical details")).toBeInTheDocument();
     expect(screen.getByText("Workflow nodes (3)")).toBeInTheDocument();

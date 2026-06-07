@@ -435,7 +435,7 @@ export function HomePage({
         kind: "import",
         workflowId: result.workflow.id,
         workflowName: name,
-        title: result.user_facing_message,
+        title: "The workflow needs setup",
         message: `${name} was added to your local workflows.`,
       });
     }

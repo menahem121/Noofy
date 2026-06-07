@@ -295,7 +295,7 @@ if PromptServer is not None:
                 bundled_input_assets=bundled_input_assets,
                 export_metadata=export_metadata,
             )
-            filename = build_export_filename(documents["package_id"])
+            filename = build_export_filename(documents["package_json"]["display_name"])
             target_path = output_export_path(folder_paths.get_output_directory(), filename)
             write_noofy_package(
                 target_path=target_path,

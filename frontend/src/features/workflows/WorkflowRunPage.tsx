@@ -114,6 +114,7 @@ import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
+import { requiredModelTypeLabel } from "./requiredModelLabels";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
 import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
@@ -3503,7 +3504,11 @@ function WorkflowRequiredModelRow({
     <article className="required-model-row">
       <div className="required-model-row__main">
         <h3>{model.filename}</h3>
-        <p>{[friendlyRequiredModelType(model.model_type), formatRequiredModelSize(model.size_bytes)].filter(Boolean).join(" · ")}</p>
+        <p>
+          {[requiredModelTypeLabel(model.folder, model.model_type), formatRequiredModelSize(model.size_bytes)]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
         {model.reference_count > 1 ? (
           <span className="required-model-row__usage">
             Used in {model.reference_count} places in this workflow
@@ -3604,17 +3609,6 @@ function formatRequiredModelSize(size: number | null) {
 function formatRequiredModelSpeed(bytesPerSecond: number) {
   const size = formatRequiredModelSize(bytesPerSecond);
   return size ? `${size}/s` : null;
-}
-
-function friendlyRequiredModelType(type?: string | null) {
-  const normalized = (type ?? "").toLowerCase();
-  if (!normalized) return "AI model";
-  if (normalized.includes("checkpoint")) return "AI model";
-  if (normalized.includes("lora")) return "Style add-on";
-  if (normalized.includes("controlnet")) return "Guidance model";
-  if (normalized.includes("vae")) return "Image helper";
-  if (normalized.includes("upscale")) return "Upscale model";
-  return "AI model";
 }
 
 function requiredModelVerificationLabel(level: string) {

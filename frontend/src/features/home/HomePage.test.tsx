@@ -1033,7 +1033,7 @@ describe("HomePage", () => {
         body: undefined,
       });
     });
-    expect((await screen.findAllByText("Needs input setup")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("The workflow needs setup")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "EraserV4.5" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "eraser" } });
     expect(await screen.findByRole("option", { name: /EraserV4.5/i })).toBeInTheDocument();

@@ -162,8 +162,8 @@ def test_text_input_asset_is_exported_as_generic_file_default(tmp_path: Path) ->
     assert exporter.dashboard_input_for_bundled_asset(asset)["control"] == "load_file"
 
 
-def test_build_export_filename_uses_only_package_id() -> None:
-    assert exporter.build_export_filename("eraserv4.5") == "eraserv4.5.noofy"
+def test_build_export_filename_preserves_display_name_case() -> None:
+    assert exporter.build_export_filename("EraserV4.5 Workflow") == "EraserV4.5-Workflow.noofy"
 
 
 def test_package_metadata_is_canonical_and_mirrored_to_top_level() -> None:
@@ -206,6 +206,30 @@ def test_package_metadata_is_canonical_and_mirrored_to_top_level() -> None:
     for key in ("display_name", "description", "author", "website", "category", "tags"):
         assert package_json[key] == metadata[key]
     exporter.assert_metadata_mirrors_consistent(package_json)
+
+
+def test_package_display_name_preserves_entered_case_while_package_id_is_normalized() -> None:
+    documents = exporter.build_package_documents(
+        graph={},
+        workflow_name="Original Name",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-04T00:00:00Z",
+        finished_at="2026-06-04T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        export_metadata={"name": "My SDXL Workflow"},
+    )
+
+    package_json = documents["package_json"]
+    assert documents["package_id"] == "my-sdxl-workflow"
+    assert package_json["display_name"] == "My SDXL Workflow"
+    assert package_json["metadata"]["name"] == "My SDXL Workflow"
+    assert package_json["metadata"]["display_name"] == "My SDXL Workflow"
 
 
 def test_metadata_mirror_consistency_helper_rejects_drift() -> None:

@@ -22,6 +22,7 @@ import {
 import { workflowDisplayName } from "../../lib/workflowNames";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
+import { requiredModelTypeLabel } from "./requiredModelLabels";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
 export function DuplicateWorkflowModal({
@@ -271,7 +272,7 @@ function RequiredModelRow({
       <div className="required-model-row__main">
         <h3>{model.filename}</h3>
         <p>
-          {[friendlyModelType(model.model_type), formatModelSize(model.size_bytes)]
+          {[requiredModelTypeLabel(model.folder, model.model_type), formatModelSize(model.size_bytes)]
             .filter(Boolean)
             .join(" · ")}
         </p>
@@ -400,17 +401,6 @@ function formatModelSize(size: number | null) {
 function formatModelSpeed(bytesPerSecond: number) {
   const size = formatModelSize(bytesPerSecond);
   return size ? `${size}/s` : null;
-}
-
-function friendlyModelType(type?: string | null) {
-  const normalized = (type ?? "").toLowerCase();
-  if (!normalized) return "AI model";
-  if (normalized.includes("checkpoint")) return "AI model";
-  if (normalized.includes("lora")) return "Style add-on";
-  if (normalized.includes("controlnet")) return "Guidance model";
-  if (normalized.includes("vae")) return "Image helper";
-  if (normalized.includes("upscale")) return "Upscale model";
-  return "AI model";
 }
 
 function verificationLabel(level: string) {
