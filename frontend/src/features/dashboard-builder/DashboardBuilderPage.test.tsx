@@ -591,7 +591,7 @@ describe("DashboardBuilderPage", () => {
     fireEvent.mouseEnter(samplerValue);
 
     const preview = await screen.findByRole("tooltip");
-    expect(preview).toHaveTextContent("Suggested widget");
+    expect(preview).toHaveTextContent("Widget type");
     expect(preview).toHaveTextContent("Dropdown");
     expect(preview).toHaveTextContent("Current/default");
     expect(preview).toHaveTextContent("euler");

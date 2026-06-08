@@ -1407,7 +1407,6 @@ export function WorkflowRunPage({
       outputIndex,
       layoutOverrides,
       creatorActionBarPosition,
-      inputValues,
     );
     if (schema) onEditWidgets?.(schema);
   }
@@ -4098,7 +4097,6 @@ function buildDashboardSchemaForEditing(
   outputIndex: Map<string, WorkflowOutputDef>,
   layoutOverrides: Record<string, GridItemLayout>,
   actionBarPosition: CanvasActionBarPosition | null,
-  inputValues: Record<string, unknown>,
 ): DashboardSchema | null {
   const widgets: DashboardWidget[] = [];
   const referencedInputIds = new Set<string>();
@@ -4113,7 +4111,7 @@ function buildDashboardSchemaForEditing(
     if (control.type === "note") {
       const input = control.input_id ? inputIndex.get(control.input_id) : undefined;
       if (input) referencedInputIds.add(input.id);
-      const defaultValue = input ? builderDefaultValueForInput(input, inputValues) : null;
+      const defaultValue = input ? builderDefaultValueForInput(input) : null;
       widgets.push({
         id: control.id,
         valueId: input?.id ?? `note:${control.id}`,
@@ -4142,7 +4140,7 @@ function buildDashboardSchemaForEditing(
         widgetType: toBuilderWidgetType(control.type),
         title: control.label,
         description: control.description ?? "",
-        defaultValue: builderDefaultValueForInput(input, inputValues),
+        defaultValue: builderDefaultValueForInput(input),
         ...(input.default_pinned === true ? { defaultPinned: true } : {}),
         min: numberValidation(input.validation.min),
         max: numberValidation(input.validation.max),
@@ -4175,7 +4173,7 @@ function buildDashboardSchemaForEditing(
   if (widgets.length === 0) return null;
   const hiddenWidgets = Array.from(inputIndex.values())
     .filter((input) => !referencedInputIds.has(input.id))
-    .map((input) => hiddenBuilderWidgetForInput(input, inputValues))
+    .map((input) => hiddenBuilderWidgetForInput(input))
     .filter((widget): widget is DashboardWidget => Boolean(widget));
 
   return {
@@ -4210,7 +4208,6 @@ function buildDashboardSchemaForEditing(
 
 function hiddenBuilderWidgetForInput(
   input: WorkflowInputDef,
-  inputValues: Record<string, unknown>,
 ): DashboardWidget | null {
   const widgetType = inputWidgetTypeForBuilder(input.control);
   if (!widgetType) return null;
@@ -4221,7 +4218,7 @@ function hiddenBuilderWidgetForInput(
     widgetType,
     title: input.label,
     description: "",
-    defaultValue: builderDefaultValueForInput(input, inputValues),
+    defaultValue: builderDefaultValueForInput(input),
     ...(input.default_pinned === true ? { defaultPinned: true } : {}),
     min: numberValidation(input.validation.min),
     max: numberValidation(input.validation.max),
@@ -4236,11 +4233,8 @@ function hiddenBuilderWidgetForInput(
 
 function builderDefaultValueForInput(
   input: WorkflowInputDef,
-  inputValues: Record<string, unknown>,
 ): unknown {
-  return Object.prototype.hasOwnProperty.call(inputValues, input.id)
-    ? inputValues[input.id]
-    : input.default;
+  return defaultValueForWorkflowInput(input);
 }
 
 function layoutForBuilderGroup(

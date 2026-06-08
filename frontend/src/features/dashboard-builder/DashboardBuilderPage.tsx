@@ -1238,7 +1238,7 @@ function WorkflowValuePreview({ preview }: { preview: HoveredValuePreview }) {
 
       <dl className="builder-value-preview__details">
         <div className="builder-value-preview__row">
-          <dt>Suggested widget</dt>
+          <dt>Widget type</dt>
           <dd>{WIDGET_TYPE_LABELS[summary.widgetType]}</dd>
         </div>
         {summary.details.map((detail) => (

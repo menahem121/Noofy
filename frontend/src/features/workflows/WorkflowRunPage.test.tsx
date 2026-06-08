@@ -281,6 +281,180 @@ const imageInputPackageData = {
   },
 };
 
+const allEditableWidgetTypesPackageData = {
+  ...configuredPackageData,
+  inputs: [
+    {
+      id: "title",
+      label: "Title",
+      control: "string_field",
+      binding: { node_id: "1", input_name: "title" },
+      default: "package title",
+      validation: {},
+    },
+    {
+      id: "prompt",
+      label: "Prompt",
+      control: "textarea",
+      binding: { node_id: "2", input_name: "text" },
+      default: "package prompt",
+      validation: {},
+    },
+    {
+      id: "steps",
+      label: "Steps",
+      control: "int_field",
+      binding: { node_id: "3", input_name: "steps" },
+      default: 24,
+      validation: { min: 1, max: 80, step: 1 },
+    },
+    {
+      id: "height",
+      label: "Height",
+      control: "slider",
+      binding: { node_id: "4", input_name: "height" },
+      default: 768,
+      validation: { min: 64, max: 2048, step: 64 },
+    },
+    {
+      id: "random_seed",
+      label: "Seed",
+      control: "seed_widget",
+      binding: { node_id: "5", input_name: "seed" },
+      default: 1234,
+      validation: {},
+    },
+    {
+      id: "enabled",
+      label: "Enabled",
+      control: "toggle",
+      binding: { node_id: "6", input_name: "enabled" },
+      default: false,
+      validation: {},
+    },
+    {
+      id: "sampler",
+      label: "Sampler",
+      control: "select",
+      binding: { node_id: "7", input_name: "sampler_name" },
+      default: "euler",
+      validation: { options: ["euler", "dpmpp_2m"] },
+    },
+    {
+      id: "style_lora",
+      label: "Style LoRA",
+      control: "lora_loader",
+      binding: { node_id: "8", input_name: "lora_name" },
+      default: "",
+      validation: { options: ["None", "package-style.safetensors", "runtime-style.safetensors"] },
+    },
+    {
+      id: "source_image",
+      label: "Source image",
+      control: "load_image",
+      binding: { node_id: "9", input_name: "image" },
+      default: "package-image.png",
+      validation: { accepted_extensions: [".png"] },
+    },
+    {
+      id: "mask_image",
+      label: "Mask image",
+      control: "load_image_mask",
+      binding: { node_id: "10", input_name: "mask" },
+      default: "package-mask.png",
+      validation: { accepted_extensions: [".png"] },
+    },
+    {
+      id: "source_audio",
+      label: "Source audio",
+      control: "load_audio",
+      binding: { node_id: "11", input_name: "audio" },
+      default: "package-audio.wav",
+      validation: { accepted_extensions: [".wav"] },
+    },
+    {
+      id: "source_video",
+      label: "Source video",
+      control: "load_video",
+      binding: { node_id: "12", input_name: "video" },
+      default: "package-video.mp4",
+      validation: { accepted_extensions: [".mp4"] },
+    },
+    {
+      id: "source_file",
+      label: "Source file",
+      control: "load_file",
+      binding: { node_id: "13", input_name: "file" },
+      default: "package-file.json",
+      validation: { accepted_extensions: [".json"] },
+    },
+    {
+      id: "source_3d",
+      label: "Source 3D",
+      control: "load_3d",
+      binding: { node_id: "14", input_name: "model" },
+      default: "package-model.glb",
+      validation: { accepted_extensions: [".glb"] },
+    },
+    {
+      id: "note_value",
+      label: "Note value",
+      control: "string_field",
+      binding: { node_id: "15", input_name: "note" },
+      default: "package note",
+      validation: {},
+    },
+    {
+      id: "hidden_strength",
+      label: "Hidden strength",
+      control: "slider",
+      binding: { node_id: "16", input_name: "strength" },
+      default: 0.35,
+      default_pinned: true,
+      validation: { min: 0, max: 1, step: 0.05 },
+    },
+  ],
+  outputs: [
+    { id: "image", label: "Image", node_id: "20", type: "image" },
+    { id: "audio", label: "Audio", node_id: "21", type: "audio", kind: "audio" },
+    { id: "video", label: "Video", node_id: "22", type: "video", kind: "video" },
+    { id: "file", label: "File", node_id: "23", type: "file", kind: "file" },
+    { id: "model", label: "Model", node_id: "24", type: "3d", kind: "3d" },
+  ],
+  dashboard: {
+    version: "0.1.0",
+    status: "configured",
+    sections: [
+      {
+        id: "main",
+        title: "Main",
+        controls: [
+          { id: "title", type: "string_field", label: "Title", input_id: "title", layout: { x: 0, y: 0, w: 8, h: 4 } },
+          { id: "prompt", type: "textarea", label: "Prompt", input_id: "prompt", layout: { x: 8, y: 0, w: 10, h: 6 } },
+          { id: "steps", type: "int_field", label: "Steps", input_id: "steps", layout: { x: 18, y: 0, w: 6, h: 4 } },
+          { id: "height", type: "slider", label: "Height", input_id: "height", layout: { x: 24, y: 0, w: 8, h: 4 } },
+          { id: "random_seed", type: "seed_widget", label: "Seed", input_id: "random_seed", layout: { x: 0, y: 6, w: 8, h: 4 } },
+          { id: "enabled", type: "toggle", label: "Enabled", input_id: "enabled", layout: { x: 8, y: 6, w: 6, h: 4 } },
+          { id: "sampler", type: "select", label: "Sampler", input_id: "sampler", layout: { x: 14, y: 6, w: 8, h: 4 } },
+          { id: "style_lora", type: "lora_loader", label: "Style LoRA", input_id: "style_lora", layout: { x: 22, y: 6, w: 10, h: 4 } },
+          { id: "source_image", type: "load_image", label: "Source image", input_id: "source_image", layout: { x: 0, y: 10, w: 8, h: 6 } },
+          { id: "mask_image", type: "load_image_mask", label: "Mask image", input_id: "mask_image", layout: { x: 8, y: 10, w: 8, h: 6 } },
+          { id: "source_audio", type: "load_audio", label: "Source audio", input_id: "source_audio", layout: { x: 16, y: 10, w: 8, h: 6 } },
+          { id: "source_video", type: "load_video", label: "Source video", input_id: "source_video", layout: { x: 24, y: 10, w: 8, h: 6 } },
+          { id: "source_file", type: "load_file", label: "Source file", input_id: "source_file", layout: { x: 0, y: 16, w: 8, h: 6 } },
+          { id: "source_3d", type: "load_3d", label: "Source 3D", input_id: "source_3d", layout: { x: 8, y: 16, w: 8, h: 6 } },
+          { id: "note-card", type: "note", label: "Note", description: "Read this first.", input_id: "note_value", layout: { x: 16, y: 16, w: 8, h: 4 } },
+          { id: "result-image", type: "display_image", label: "Result image", output_id: "image", layout: { x: 24, y: 16, w: 8, h: 6 } },
+          { id: "result-audio", type: "display_audio", label: "Result audio", output_id: "audio", layout: { x: 0, y: 22, w: 8, h: 6 } },
+          { id: "result-video", type: "display_video", label: "Result video", output_id: "video", layout: { x: 8, y: 22, w: 8, h: 6 } },
+          { id: "result-file", type: "display_file", label: "Result file", output_id: "file", layout: { x: 16, y: 22, w: 8, h: 6 } },
+          { id: "result-3d", type: "display_3d", label: "Result 3D", output_id: "model", layout: { x: 24, y: 22, w: 8, h: 6 } },
+        ],
+      },
+    ],
+  },
+};
+
 function dashboardOnlyNotePackageData() {
   return {
     ...configuredPackageData,
@@ -490,6 +664,82 @@ function mockConfiguredDashboardFetch(
     }
     return Promise.reject(new Error(`Unexpected request: ${url}`));
   });
+}
+
+interface WorkflowPackageUserStateVersionFixture {
+  inputs: Array<{
+    id: string;
+    control: string;
+    binding: unknown;
+    default: unknown;
+    validation: unknown;
+  }>;
+  dashboard: {
+    version: string;
+    sections: Array<{
+      controls: Array<{
+        id: string;
+        type: string;
+        input_id?: string;
+        output_id?: string;
+      }>;
+      groups?: Array<{
+        id: string;
+        control_ids: string[];
+        layout?: unknown;
+      }>;
+    }>;
+  };
+}
+
+function dashboardUserStateVersionForTest(packageData: WorkflowPackageUserStateVersionFixture): string {
+  const valueStateShape = {
+    inputs: packageData.inputs.map((input) => ({
+      id: input.id,
+      control: input.control,
+      binding: input.binding,
+      default: input.default,
+      validation: input.validation,
+    })),
+    controls: packageData.dashboard.sections.flatMap((section) =>
+      section.controls.map((control) => ({
+        id: control.id,
+        type: control.type,
+        input_id: control.input_id,
+        output_id: control.output_id,
+      })),
+    ),
+    groups: packageData.dashboard.sections.flatMap((section) =>
+      (section.groups ?? []).map((group) => ({
+        id: group.id,
+        control_ids: group.control_ids,
+        layout: group.layout,
+      })),
+    ),
+  };
+
+  return `${packageData.dashboard.version}:${hashStringForTest(stableJsonForTest(valueStateShape))}`;
+}
+
+function stableJsonForTest(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJsonForTest(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonForTest(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hashStringForTest(value: string): string {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function renderRunPage(
@@ -3971,7 +4221,7 @@ describe("WorkflowRunPage", () => {
     });
   });
 
-  it("opens the dashboard builder widget step from the canvas options menu", async () => {
+  it("opens the dashboard builder widget step from package defaults, not current run values", async () => {
     const onEditWidgets = vi.fn();
     mockConfiguredDashboardFetch(fetchMock);
 
@@ -3989,12 +4239,115 @@ describe("WorkflowRunPage", () => {
           expect.objectContaining({
             id: "prompt",
             widgetType: "textarea",
-            defaultValue: "current visible prompt",
+            defaultValue: "a lake",
             layout: expect.objectContaining({ x: 0, y: 0, w: 16, h: 6 }),
           }),
         ]),
       }),
     );
+  });
+
+  it("opens every editable widget type from package defaults, not saved current values", async () => {
+    const onEditWidgets = vi.fn();
+    const dashboardVersion = dashboardUserStateVersionForTest(allEditableWidgetTypesPackageData);
+    const currentValues = {
+      title: "runtime title",
+      prompt: "runtime prompt",
+      steps: 48,
+      height: 512,
+      random_seed: 9999,
+      enabled: true,
+      sampler: "dpmpp_2m",
+      style_lora: "runtime-style.safetensors",
+      source_image: "runtime-image.png",
+      mask_image: "runtime-mask.png",
+      source_audio: "runtime-audio.wav",
+      source_video: "runtime-video.mp4",
+      source_file: "runtime-file.json",
+      source_3d: "runtime-model.glb",
+      note_value: "runtime note",
+      hidden_strength: 0.9,
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, allEditableWidgetTypesPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: dashboardVersion,
+          values: currentValues,
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        });
+      }
+      if (/\/api\/assets\/[^/]+\/metadata$/.test(url)) {
+        const assetId = decodeURIComponent(url.split("/api/assets/")[1].replace("/metadata", ""));
+        return jsonResponse({
+          asset_id: assetId,
+          original_filename: assetId,
+          content_type: assetId.endsWith(".png")
+            ? "image/png"
+            : assetId.endsWith(".wav")
+              ? "audio/wav"
+              : assetId.endsWith(".mp4")
+                ? "video/mp4"
+                : assetId.endsWith(".glb")
+                  ? "model/gltf-binary"
+                  : "application/json",
+          kind: assetId.endsWith(".png")
+            ? "image"
+            : assetId.endsWith(".wav")
+              ? "audio"
+              : assetId.endsWith(".mp4")
+                ? "video"
+                : assetId.endsWith(".glb")
+                  ? "3d"
+                  : "file",
+        });
+      }
+      if (/\/api\/assets\/[^/]+$/.test(url)) {
+        return new Response(new Blob(["asset"], { type: "application/octet-stream" }), { status: 200 });
+      }
+      return undefined;
+    });
+
+    renderRunPage({ onEditWidgets });
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/user-state"))).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("runtime prompt")).toBeInTheDocument();
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit widgets/i }));
+
+    const schema = onEditWidgets.mock.calls[0]?.[0];
+    const widgetsById = new Map(
+      [...schema.widgets, ...(schema.hiddenWidgets ?? [])].map((widget) => [widget.id, widget]),
+    );
+
+    expect(widgetsById.get("title")).toEqual(expect.objectContaining({ widgetType: "string_field", defaultValue: "package title" }));
+    expect(widgetsById.get("prompt")).toEqual(expect.objectContaining({ widgetType: "textarea", defaultValue: "package prompt" }));
+    expect(widgetsById.get("steps")).toEqual(expect.objectContaining({ widgetType: "int_field", defaultValue: 24 }));
+    expect(widgetsById.get("height")).toEqual(expect.objectContaining({ widgetType: "slider", defaultValue: 768, min: 64, max: 2048, step: 64 }));
+    expect(widgetsById.get("random_seed")).toEqual(expect.objectContaining({ widgetType: "seed_widget", defaultValue: 1234 }));
+    expect(widgetsById.get("enabled")).toEqual(expect.objectContaining({ widgetType: "toggle", defaultValue: false }));
+    expect(widgetsById.get("sampler")).toEqual(expect.objectContaining({ widgetType: "select", defaultValue: "euler" }));
+    expect(widgetsById.get("style_lora")).toEqual(expect.objectContaining({ widgetType: "lora_loader", defaultValue: "None" }));
+    expect(widgetsById.get("source_image")).toEqual(expect.objectContaining({ widgetType: "load_image", defaultValue: "package-image.png" }));
+    expect(widgetsById.get("mask_image")).toEqual(expect.objectContaining({ widgetType: "load_image_mask", defaultValue: "package-mask.png" }));
+    expect(widgetsById.get("source_audio")).toEqual(expect.objectContaining({ widgetType: "load_audio", defaultValue: "package-audio.wav" }));
+    expect(widgetsById.get("source_video")).toEqual(expect.objectContaining({ widgetType: "load_video", defaultValue: "package-video.mp4" }));
+    expect(widgetsById.get("source_file")).toEqual(expect.objectContaining({ widgetType: "load_file", defaultValue: "package-file.json" }));
+    expect(widgetsById.get("source_3d")).toEqual(expect.objectContaining({ widgetType: "load_3d", defaultValue: "package-model.glb" }));
+    expect(widgetsById.get("note-card")).toEqual(expect.objectContaining({ widgetType: "note", defaultValue: "package note" }));
+    expect(widgetsById.get("hidden_strength")).toEqual(expect.objectContaining({ widgetType: "slider", defaultValue: 0.35 }));
+    expect(widgetsById.get("result-image")).toEqual(expect.objectContaining({ widgetType: "display_image", defaultValue: null }));
+    expect(widgetsById.get("result-audio")).toEqual(expect.objectContaining({ widgetType: "display_audio", defaultValue: null }));
+    expect(widgetsById.get("result-video")).toEqual(expect.objectContaining({ widgetType: "display_video", defaultValue: null }));
+    expect(widgetsById.get("result-file")).toEqual(expect.objectContaining({ widgetType: "display_file", defaultValue: null }));
+    expect(widgetsById.get("result-3d")).toEqual(expect.objectContaining({ widgetType: "display_3d", defaultValue: null }));
   });
 
   it("opens image input widgets with the current uploaded asset value", async () => {
