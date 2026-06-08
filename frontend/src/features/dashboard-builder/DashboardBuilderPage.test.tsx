@@ -174,6 +174,117 @@ function imageWorkflowBindableInputsResponse() {
   };
 }
 
+function valuePreviewBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "20",
+        node_type: "LoadFile",
+        node_title: "Source file",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "file",
+            current_value: "",
+            kind: "file_input",
+            suggested_widget_type: "load_file",
+            widget_types: ["load_file"],
+          },
+        ],
+      },
+      {
+        node_id: "75",
+        node_type: "SaveVideo",
+        node_title: "Video result",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_video",
+            current_value: null,
+            kind: "video_output",
+            suggested_widget_type: "display_video",
+            widget_types: ["display_video"],
+            auto_select: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function duplicateNodeNamesBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "1",
+        node_type: "PrimitiveInt",
+        node_title: "PrimitiveInt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "value",
+            current_value: 8,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+      {
+        node_id: "2",
+        node_type: "PrimitiveInt",
+        node_title: "PrimitiveInt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "value",
+            current_value: 16,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+      {
+        node_id: "3",
+        node_type: "ComfyMathExpression",
+        node_title: "ComfyMathExpression",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "expression",
+            current_value: "a + b",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+          },
+        ],
+      },
+      {
+        node_id: "4",
+        node_type: "PrimitiveInt",
+        node_title: "PrimitiveInt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "value",
+            current_value: 32,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function dragWorkflowBindableInputsResponse() {
   return {
     nodes: [
@@ -364,7 +475,7 @@ describe("DashboardBuilderPage", () => {
 
   it("searches workflow values by their current node value", async () => {
     await renderDragBuilder(dragSchema());
-    const valuesPanel = screen.getByLabelText("Workflow values");
+    const valuesPanel = await screen.findByLabelText("Workflow values");
 
     fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
       target: { value: "lake" },
@@ -386,6 +497,163 @@ describe("DashboardBuilderPage", () => {
     expect(within(valuesPanel).queryByText("Positive prompt")).not.toBeInTheDocument();
     expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
     expect(within(valuesPanel).getByText("No values match your search.")).toBeInTheDocument();
+  });
+
+  it("groups workflow nodes with the same name into one value dropdown", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-duplicates",
+      workflowName: "Duplicate node workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-duplicates/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(duplicateNodeNamesBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-duplicates"
+        workflowName="Duplicate node workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const valuesPanel = await screen.findByLabelText("Workflow values");
+    await within(valuesPanel).findByRole("button", { name: /PrimitiveInt/i });
+
+    expect(within(valuesPanel).getAllByRole("button", { name: /PrimitiveInt/i })).toHaveLength(1);
+    expect(within(valuesPanel).getByRole("button", { name: /ComfyMathExpression/i })).toBeInTheDocument();
+    expect(within(valuesPanel).getByRole("button", { name: /PrimitiveInt\s*3/i })).toBeInTheDocument();
+    const nodeTitles = Array.from(valuesPanel.querySelectorAll(".builder-node__title")).map((item) => item.textContent);
+    expect(nodeTitles).toEqual(["ComfyMathExpression", "PrimitiveInt"]);
+    fireEvent.click(within(valuesPanel).getByRole("button", { name: /PrimitiveInt\s*3/i }));
+
+    const primitiveValues = within(valuesPanel).getAllByRole("button", { name: /value/i });
+    expect(primitiveValues).toHaveLength(3);
+    fireEvent.click(primitiveValues[1]);
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].widgets).toEqual([
+      expect.objectContaining({
+        valueId: "node-2-value",
+        binding: { nodeId: "2", inputName: "value" },
+        defaultValue: 16,
+      }),
+    ]);
+  });
+
+  it("shows a hover preview for workflow values without selecting or adding them", async () => {
+    const onContinue = vi.fn();
+    const promptOnlySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "imported_text_to_image_demo",
+      workflowName: "Text to Image Demo",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-6-text",
+          valueId: "node-6-text",
+          binding: { nodeId: "6", inputName: "text" },
+          widgetType: "textarea",
+          title: "Prompt",
+          description: "",
+          defaultValue: "a lake",
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderPage
+        initialSchema={promptOnlySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const valuesPanel = screen.getByLabelText("Workflow values");
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Prompt");
+    fireEvent.click(await within(valuesPanel).findByRole("button", { name: /sampler/i }));
+    const samplerValue = within(valuesPanel).getByRole("button", { name: /sampler_name/i });
+
+    fireEvent.mouseEnter(samplerValue);
+
+    const preview = await screen.findByRole("tooltip");
+    expect(preview).toHaveTextContent("Suggested widget");
+    expect(preview).toHaveTextContent("Dropdown");
+    expect(preview).toHaveTextContent("Current/default");
+    expect(preview).toHaveTextContent("euler");
+    expect(preview).toHaveTextContent("Options (5)");
+    expect(preview).toHaveTextContent("Sampler name");
+    expect(within(preview).queryByText(/^Source$/)).not.toBeInTheDocument();
+    expect(within(preview).queryByText(/^Other widgets$/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Prompt");
+
+    fireEvent.mouseLeave(samplerValue);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    expect(onContinue.mock.calls[0][0].widgets).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ valueId: "node-3-sampler_name" })]),
+    );
+  });
+
+  it("summarizes file input acceptance and result output kind in value previews", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-preview",
+      workflowName: "Preview workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-preview/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(valuePreviewBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-preview"
+        workflowName="Preview workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input file");
+    const valuesPanel = screen.getByLabelText("Workflow values");
+    const fileValue = within(valuesPanel).getByRole("button", { name: /^file/i });
+
+    fireEvent.mouseEnter(fileValue);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Load file");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(".txt, .json, .csv");
+    fireEvent.mouseLeave(fileValue);
+
+    fireEvent.click(within(valuesPanel).getByRole("button", { name: /video result/i }));
+    const videoOutputValue = within(valuesPanel).getByRole("button", { name: /output_video/i });
+    fireEvent.mouseEnter(videoOutputValue);
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Display video");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Generated video result");
   });
 
   it("reorders top-level widgets through horizontal insertion zones and saves that order", async () => {

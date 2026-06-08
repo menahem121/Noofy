@@ -49,6 +49,8 @@ import {
   normalizeDashboardSchema,
   removeDashboardWidgetsFromSchema,
   saveDashboardDraft,
+  suggestTitle,
+  suggestWidgetType,
   topLevelDashboardItems,
   widgetGroupIdMap,
   widgetTypesForKind,
@@ -90,6 +92,12 @@ type CreatedDropPreview =
 
 type PendingWidgetRemoval = { widget: DashboardWidget } | null;
 type WidgetScopedStatus = { widgetId: string; message: string };
+type HoveredValuePreview = {
+  node: WorkflowNode;
+  value: WorkflowNodeValue;
+  position: { top: number; left: number };
+  side: "left" | "right";
+} | null;
 
 function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
   return {
@@ -164,6 +172,7 @@ export function DashboardBuilderPage({
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<PendingWidgetRemoval>(null);
+  const [hoveredValuePreview, setHoveredValuePreview] = useState<HoveredValuePreview>(null);
 
   useEffect(() => {
     if (!workflowId) {
@@ -211,6 +220,7 @@ export function DashboardBuilderPage({
     setSearch("");
     setExpandedNodes(new Set());
     setSavedFlash(null);
+    setHoveredValuePreview(null);
   }, [activeWorkflowId]);
 
   useEffect(() => {
@@ -234,7 +244,7 @@ export function DashboardBuilderPage({
       setSelectedValueId(null);
       setSelectedGroupId(null);
     }
-    setExpandedNodes(new Set([workflow.nodes[0]?.id ?? ""]));
+    setExpandedNodes(new Set([groupWorkflowNodesByName(workflow.nodes)[0]?.id ?? ""]));
   }, [workflowState, activeWorkflowId, scopedInitialSchema]);
 
   const workflow = workflowState.workflow;
@@ -269,14 +279,15 @@ export function DashboardBuilderPage({
   const filteredNodes = useMemo(() => {
     if (!builderReady || !workflow) return [];
     const queryTerms = normalizeSearchText(search).split(/\s+/).filter(Boolean);
-    if (queryTerms.length === 0) return workflow.nodes;
+    if (queryTerms.length === 0) return groupWorkflowNodesByName(workflow.nodes);
 
-    return workflow.nodes
+    const matchingNodes = workflow.nodes
       .map((node) => {
         const filteredValues = node.values.filter((value) => valueMatchesSearch(node, value, queryTerms));
         return { ...node, values: filteredValues };
       })
       .filter((node) => node.values.length > 0);
+    return groupWorkflowNodesByName(matchingNodes);
   }, [builderReady, workflow, search]);
 
   const selectedWidget = useMemo(
@@ -310,6 +321,14 @@ export function DashboardBuilderPage({
     setSelectedValueId(valueId);
     setSelectedWidgetId(newWidget.id);
     setSelectedGroupId(null);
+  }
+
+  function handleShowValuePreview(node: WorkflowNode, value: WorkflowNodeValue, event: { currentTarget: HTMLButtonElement }) {
+    setHoveredValuePreview({
+      node,
+      value,
+      ...previewPositionForElement(event.currentTarget),
+    });
   }
 
   function handleAddNote() {
@@ -612,6 +631,8 @@ export function DashboardBuilderPage({
                       selectedValueId={selectedValueId}
                       onToggle={() => toggleNode(node.id)}
                       onSelectValue={handleSelectValue}
+                      onPreviewValue={handleShowValuePreview}
+                      onPreviewLeave={() => setHoveredValuePreview(null)}
                     />
                   ))}
                 </ul>
@@ -718,6 +739,7 @@ export function DashboardBuilderPage({
         onKeep={(widgetId) => commitRemoveWidget(widgetId, true)}
         onDelete={(widgetId) => commitRemoveWidget(widgetId, false)}
       />
+      <WorkflowValuePreview preview={hoveredValuePreview} />
     </AppLayout>
   );
 }
@@ -1038,6 +1060,60 @@ function normalizeSearchText(value: unknown): string {
   }
 }
 
+const VALUE_PREVIEW_WIDTH = 320;
+const VALUE_PREVIEW_MAX_HEIGHT = 420;
+const VALUE_PREVIEW_GAP = 12;
+const VALUE_PREVIEW_MARGIN = 14;
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function previewPositionForElement(element: HTMLElement): { position: { top: number; left: number }; side: "left" | "right" } {
+  const rect = element.getBoundingClientRect();
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720;
+  const rightLeft = rect.right + VALUE_PREVIEW_GAP;
+  const fitsRight = rightLeft + VALUE_PREVIEW_WIDTH <= viewportWidth - VALUE_PREVIEW_MARGIN;
+  const side = fitsRight ? "right" : "left";
+  const fallbackLeft = rect.left - VALUE_PREVIEW_WIDTH - VALUE_PREVIEW_GAP;
+  const rawLeft = fitsRight ? rightLeft : fallbackLeft;
+  const maxTop = Math.max(VALUE_PREVIEW_MARGIN, viewportHeight - VALUE_PREVIEW_MAX_HEIGHT - VALUE_PREVIEW_MARGIN);
+
+  return {
+    side,
+    position: {
+      left: clampNumber(rawLeft, VALUE_PREVIEW_MARGIN, Math.max(VALUE_PREVIEW_MARGIN, viewportWidth - VALUE_PREVIEW_WIDTH - VALUE_PREVIEW_MARGIN)),
+      top: clampNumber(rect.top, VALUE_PREVIEW_MARGIN, maxTop),
+    },
+  };
+}
+
+function groupWorkflowNodesByName(nodes: WorkflowNode[]): WorkflowNode[] {
+  const grouped: WorkflowNode[] = [];
+  const nodeByName = new Map<string, WorkflowNode>();
+
+  for (const node of nodes) {
+    const key = nodeGroupKey(node);
+    const existing = nodeByName.get(key);
+    if (existing) {
+      existing.values = [...existing.values, ...node.values];
+      continue;
+    }
+
+    const nextNode = { ...node, values: [...node.values] };
+    grouped.push(nextNode);
+    nodeByName.set(key, nextNode);
+  }
+
+  return grouped.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+}
+
+function nodeGroupKey(node: Pick<WorkflowNode, "title" | "classType">): string {
+  const title = node.title.trim() || node.classType.trim();
+  return title.toLocaleLowerCase();
+}
+
 function valueMatchesSearch(node: WorkflowNode, value: WorkflowNodeValue, queryTerms: string[]): boolean {
   const searchableText = [
     node.id,
@@ -1066,6 +1142,8 @@ function NodeListItem({
   selectedValueId,
   onToggle,
   onSelectValue,
+  onPreviewValue,
+  onPreviewLeave,
 }: {
   node: WorkflowNode;
   expanded: boolean;
@@ -1073,6 +1151,8 @@ function NodeListItem({
   selectedValueId: string | null;
   onToggle: () => void;
   onSelectValue: (id: string) => void;
+  onPreviewValue: (node: WorkflowNode, value: WorkflowNodeValue, event: { currentTarget: HTMLButtonElement }) => void;
+  onPreviewLeave: () => void;
 }) {
   const Icon = NODE_ICONS[node.iconKind];
   const exposedCount = node.values.filter((value) => exposedIds.has(value.id)).length;
@@ -1110,6 +1190,8 @@ function NodeListItem({
                     isSelected ? "builder-value--selected" : ""
                   }`}
                   onClick={() => onSelectValue(value.id)}
+                  onMouseEnter={(event) => onPreviewValue(node, value, event)}
+                  onMouseLeave={onPreviewLeave}
                 >
                   <span className="builder-value__icon" aria-hidden="true">
                     <ValueIcon size={13} />
@@ -1124,6 +1206,181 @@ function NodeListItem({
       ) : null}
     </li>
   );
+}
+
+interface ValuePreviewDetail {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}
+
+function WorkflowValuePreview({ preview }: { preview: HoveredValuePreview }) {
+  if (!preview) return null;
+
+  const summary = workflowValuePreviewSummary(preview.node, preview.value);
+  const Icon = VALUE_KIND_ICONS[preview.value.valueKind];
+
+  return (
+    <aside
+      className={`builder-value-preview builder-value-preview--${preview.side}`}
+      role="tooltip"
+      style={{ top: preview.position.top, left: preview.position.left }}
+    >
+      <div className="builder-value-preview__header">
+        <span className="builder-value-preview__icon" aria-hidden="true">
+          <Icon size={16} />
+        </span>
+        <div>
+          <span className="builder-value-preview__eyebrow">Workflow value preview</span>
+          <h3>{summary.title}</h3>
+        </div>
+      </div>
+
+      <dl className="builder-value-preview__details">
+        <div className="builder-value-preview__row">
+          <dt>Suggested widget</dt>
+          <dd>{WIDGET_TYPE_LABELS[summary.widgetType]}</dd>
+        </div>
+        {summary.details.map((detail) => (
+          <div className={`builder-value-preview__row ${detail.multiline ? "builder-value-preview__row--stacked" : ""}`} key={detail.label}>
+            <dt>{detail.label}</dt>
+            <dd>{detail.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </aside>
+  );
+}
+
+function workflowValuePreviewSummary(node: WorkflowNode, value: WorkflowNodeValue): {
+  title: string;
+  widgetType: WidgetType;
+  details: ValuePreviewDetail[];
+} {
+  const widgetType = suggestWidgetType(value);
+  const currentValue = formatPreviewValue(value.rawValue);
+  const details: ValuePreviewDetail[] = [
+    { label: "Dashboard label", value: suggestTitle(value, node.title) },
+    { label: "Value kind", value: valueKindPreviewLabel(value.valueKind) },
+    ...widgetSpecificPreviewDetails(value, widgetType),
+  ];
+
+  if (currentValue) {
+    details.splice(2, 0, { label: "Current/default", value: currentValue, multiline: currentValue.includes("\n") || currentValue.length > 64 });
+  }
+  if (value.hint) {
+    details.push({ label: "Hint", value: value.hint, multiline: value.hint.length > 64 });
+  }
+
+  return {
+    title: `${node.title}: ${value.label}`,
+    widgetType,
+    details,
+  };
+}
+
+function widgetSpecificPreviewDetails(value: WorkflowNodeValue, widgetType: WidgetType): ValuePreviewDetail[] {
+  if (widgetType === "slider" || widgetType === "int_field" || widgetType === "seed_widget") {
+    const range = defaultNumericRangeForValue(value);
+    const details: ValuePreviewDetail[] = [];
+    if (range) {
+      details.push({
+        label: widgetType === "slider" ? "Slider range" : "Number range",
+        value: `${range.min} to ${range.max}${range.step !== undefined ? `, step ${range.step}` : ""}`,
+      });
+    }
+    if (widgetType === "seed_widget") {
+      details.push({ label: "Behavior", value: "Integer seed value with randomize control" });
+    }
+    return details;
+  }
+
+  if (widgetType === "select" || widgetType === "lora_loader") {
+    const options = value.options ?? [];
+    return [
+      {
+        label: `Options${options.length > 0 ? ` (${options.length})` : ""}`,
+        value: options.length > 0 ? truncatePreviewText(options.join(", "), 260) : "No choices discovered yet",
+        multiline: options.join(", ").length > 64,
+      },
+    ];
+  }
+
+  if (widgetType === "load_image" || widgetType === "load_image_mask") {
+    return [
+      {
+        label: "Accepts",
+        value: widgetType === "load_image_mask" ? "Image files, with mask drawing available" : "Image files (image/*)",
+      },
+    ];
+  }
+
+  if (widgetType === "load_audio") return [{ label: "Accepts", value: "Audio files (audio/*)" }];
+  if (widgetType === "load_video") return [{ label: "Accepts", value: "Video files (video/*)" }];
+  if (widgetType === "load_3d") {
+    return [
+      {
+        label: "Accepts",
+        value: ".glb, .gltf, .obj, .stl, .fbx, .ply, .usdz, .dae, .spz, .splat, .ksplat",
+        multiline: true,
+      },
+    ];
+  }
+  if (widgetType === "load_file") {
+    return [{ label: "Accepts", value: DEFAULT_FILE_ACCEPTED_EXTENSIONS.join(", "), multiline: true }];
+  }
+
+  if (widgetType === "display_image") return [{ label: "Output", value: "Generated image result" }];
+  if (widgetType === "display_audio") return [{ label: "Output", value: "Generated audio result" }];
+  if (widgetType === "display_video") return [{ label: "Output", value: "Generated video result" }];
+  if (widgetType === "display_file") return [{ label: "Output", value: "Generated file result" }];
+  if (widgetType === "display_3d") return [{ label: "Output", value: "Generated 3D model result" }];
+
+  if (widgetType === "note") return [{ label: "Contains", value: "Creator guidance shown on the dashboard" }];
+  if (widgetType === "textarea") return [{ label: "Text", value: "Multi-line text input" }];
+  if (widgetType === "string_field") return [{ label: "Text", value: "Single-line text input" }];
+  if (widgetType === "toggle") return [{ label: "Value", value: "Boolean on/off value" }];
+
+  return [];
+}
+
+function valueKindPreviewLabel(kind: WorkflowNodeValue["valueKind"]): string {
+  const labels: Record<WorkflowNodeValue["valueKind"], string> = {
+    string: "Text",
+    number: "Number",
+    boolean: "Boolean",
+    note: "Note",
+    image_input: "Image input",
+    image_output: "Image output",
+    audio_input: "Audio input",
+    audio_output: "Audio output",
+    video_input: "Video input",
+    video_output: "Video output",
+    file_input: "File input",
+    file_output: "File output",
+    three_d_input: "3D model input",
+    three_d_output: "3D model output",
+    seed: "Seed",
+    lora: "LoRA",
+    select: "Dropdown choice",
+  };
+  return labels[kind];
+}
+
+function formatPreviewValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return truncatePreviewText(value.length > 0 ? value : "(empty text)", 520);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  try {
+    return truncatePreviewText(JSON.stringify(value, null, 2), 520);
+  } catch {
+    return truncatePreviewText(String(value), 520);
+  }
+}
+
+function truncatePreviewText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 type SliderValidationField = "defaultValue" | "min" | "max" | "step";
