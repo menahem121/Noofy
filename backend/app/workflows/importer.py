@@ -111,6 +111,7 @@ from app.workflows.import_capsule_lock import (
 )
 from app.workflows.library import workflow_package_display_name
 from app.workflows.store_paths import (
+    assert_path_within,
     imported_workflow_id,
     mutable_package_dir,
     package_identity_dir,
@@ -182,66 +183,99 @@ class ImportedWorkflowPackageStore:
             package = self._with_verified_import_trust(
                 package, importer.trust_payload()
             )
-            if duplicate_action == "copy":
-                package = _package_imported_as_copy(package, self.root_dir)
-            package = _package_with_source_policy(
-                package,
-                community_preparation_opted_in=allow_unverified_community_preparation,
-                policy_status=_source_policy_status_for_import(package),
-            )
-            package = self._with_resolved_community_sources(
-                package,
+            return self._persist_imported_archive(
+                data,
+                importer=importer,
+                package=package,
+                original_filename=original_filename,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
+                duplicate_action=duplicate_action,
             )
-            target_dir = self.package_dir(package)
-            runtime_resolution_unavailable: dict[str, object] | None = None
-            try:
-                app_capsule_lock: CapsuleLock | None = build_imported_package_capsule_lock(package)
-            except ImportCapsuleLockError as exc:
-                if isinstance(exc.__cause__, RuntimeProfileSelectionError):
-                    runtime_resolution_unavailable = _unsupported_local_runtime_resolution(
-                        exc.__cause__
-                    )
-                if runtime_resolution_unavailable is not None:
-                    self.log_store.add(
-                        "warning",
-                        "Capsule lock unavailable — no runtime profile for this platform",
-                        "workflow.import",
-                        details={
-                            **runtime_resolution_unavailable,
-                            "error": str(exc),
-                        },
-                    )
-                    app_capsule_lock = None
-                else:
-                    raise NoofyImportError(str(exc)) from exc
-            try:
-                write_imported_package_transaction(
-                    root_dir=self.root_dir,
-                    target_dir=target_dir,
-                    package=package,
-                    app_capsule_lock=app_capsule_lock,
-                    runtime_resolution_unavailable=runtime_resolution_unavailable,
-                    archive_data=data,
-                    original_filename=original_filename,
-                    schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
-                    extract_source_files=importer.extract_source_files,
-                    dashboard_assets_dir=self.dashboard_assets_dir,
-                    replace_existing=duplicate_action == "replace",
-                )
-            except FileExistsError as exc:
-                raise NoofyImportError(str(exc)) from exc
         except Exception as exc:
-            self.log_store.add(
-                "warning",
-                "Workflow import failed",
-                "workflow.import",
-                details={
-                    "original_filename": original_filename,
-                    "error": str(exc),
-                },
-            )
+            self._log_import_failure(original_filename, exc)
             raise
+
+    def import_prepared_archive(
+        self,
+        data: bytes,
+        *,
+        package: WorkflowPackage,
+        original_filename: str | None = None,
+        allow_unverified_community_preparation: bool = False,
+        duplicate_action: str | None = None,
+    ) -> WorkflowPackage:
+        try:
+            return self._persist_imported_archive(
+                data,
+                importer=NoofyArchiveImporter(data, original_filename=original_filename),
+                package=package,
+                original_filename=original_filename,
+                allow_unverified_community_preparation=allow_unverified_community_preparation,
+                duplicate_action=duplicate_action,
+            )
+        except Exception as exc:
+            self._log_import_failure(original_filename, exc)
+            raise
+
+    def _persist_imported_archive(
+        self,
+        data: bytes,
+        *,
+        importer: NoofyArchiveImporter,
+        package: WorkflowPackage,
+        original_filename: str | None,
+        allow_unverified_community_preparation: bool,
+        duplicate_action: str | None,
+    ) -> WorkflowPackage:
+        if duplicate_action == "copy":
+            package = _package_imported_as_copy(package, self.root_dir)
+        package = _package_with_source_policy(
+            package,
+            community_preparation_opted_in=allow_unverified_community_preparation,
+            policy_status=_source_policy_status_for_import(package),
+        )
+        package = self._with_resolved_community_sources(
+            package,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+        )
+        target_dir = self.package_dir(package)
+        runtime_resolution_unavailable: dict[str, object] | None = None
+        try:
+            app_capsule_lock: CapsuleLock | None = build_imported_package_capsule_lock(package)
+        except ImportCapsuleLockError as exc:
+            if isinstance(exc.__cause__, RuntimeProfileSelectionError):
+                runtime_resolution_unavailable = _unsupported_local_runtime_resolution(
+                    exc.__cause__
+                )
+            if runtime_resolution_unavailable is not None:
+                self.log_store.add(
+                    "warning",
+                    "Capsule lock unavailable — no runtime profile for this platform",
+                    "workflow.import",
+                    details={
+                        **runtime_resolution_unavailable,
+                        "error": str(exc),
+                    },
+                )
+                app_capsule_lock = None
+            else:
+                raise NoofyImportError(str(exc)) from exc
+        try:
+            write_imported_package_transaction(
+                root_dir=self.root_dir,
+                target_dir=target_dir,
+                package=package,
+                app_capsule_lock=app_capsule_lock,
+                runtime_resolution_unavailable=runtime_resolution_unavailable,
+                archive_data=data,
+                original_filename=original_filename,
+                schema_version=NOOFY_ARCHIVE_SCHEMA_VERSION,
+                extract_source_files=importer.extract_source_files,
+                dashboard_assets_dir=self.dashboard_assets_dir,
+                replace_existing=duplicate_action == "replace",
+            )
+        except FileExistsError as exc:
+            raise NoofyImportError(str(exc)) from exc
 
         self.log_store.add(
             "info",
@@ -260,6 +294,69 @@ class ImportedWorkflowPackageStore:
             },
         )
         return package
+
+    def persist_model_identities(self, package: WorkflowPackage) -> None:
+        package_dir = self.package_dir(package)
+        package_file = package_dir / "package.json"
+        capsule_file = package_dir / "capsule.lock.json"
+        assert_path_within(self.root_dir, package_file, purpose="update imported workflow models")
+        assert_path_within(self.root_dir, capsule_file, purpose="update imported workflow capsule")
+
+        package_payload = json.loads(package_file.read_text(encoding="utf-8"))
+        package_payload["required_models"] = [
+            model.model_dump(mode="json", exclude_none=True)
+            for model in package.required_models
+        ]
+        try:
+            capsule_lock = build_imported_package_capsule_lock(package)
+        except ImportCapsuleLockError as exc:
+            if not isinstance(exc.__cause__, RuntimeProfileSelectionError):
+                raise
+            capsule_lock = None
+
+        package_tmp = package_file.with_suffix(".json.tmp")
+        capsule_tmp = capsule_file.with_suffix(".json.tmp")
+        try:
+            package_tmp.write_text(
+                json.dumps(package_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            if capsule_lock is not None:
+                capsule_tmp.write_text(
+                    capsule_lock.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+            package_tmp.replace(package_file)
+            if capsule_lock is not None:
+                capsule_tmp.replace(capsule_file)
+        finally:
+            package_tmp.unlink(missing_ok=True)
+            capsule_tmp.unlink(missing_ok=True)
+        self.log_store.add(
+            "info",
+            "Persisted updated workflow model identities",
+            "workflow.models",
+            workflow_id=package.metadata.id,
+            details={
+                "model_count": len(unique_required_models(package.required_models)),
+                "capsule_lock_updated": capsule_lock is not None,
+            },
+        )
+
+    def _log_import_failure(
+        self,
+        original_filename: str | None,
+        exc: Exception,
+    ) -> None:
+        self.log_store.add(
+            "warning",
+            "Workflow import failed",
+            "workflow.import",
+            details={
+                "original_filename": original_filename,
+                "error": str(exc),
+            },
+        )
 
     def package_dir(self, package: WorkflowPackage) -> Path:
         package_dir = mutable_package_dir(self.root_dir, package)

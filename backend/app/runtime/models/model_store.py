@@ -8,12 +8,14 @@ ref, or materialized link behind.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import shutil
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,7 +258,7 @@ class ModelStore:
                     f"expected {model_lock.size_bytes}, got {bytes_written}"
                 )
 
-            actual_sha256 = _sha256_file(download_target)
+            actual_sha256 = await asyncio.to_thread(_sha256_file, download_target)
             if actual_sha256 != sha256:
                 raise ModelDownloadError(
                     f"Hash mismatch for {model_lock.id}: "
@@ -627,11 +629,27 @@ class ModelStore:
         last_error: Exception | None = None
         for url in urls:
             try:
-                return await self._invoke_downloader(
+                started_at = time.monotonic()
+                bytes_written = await self._invoke_downloader(
                     url,
                     dest,
                     headers=self._download_headers_for_url(url),
                 )
+                duration_seconds = max(time.monotonic() - started_at, 0.000001)
+                self.log_store.add(
+                    "info",
+                    "Model source download completed",
+                    "model.store",
+                    details={
+                        "source_host": urlparse(url).hostname,
+                        "size_bytes": bytes_written,
+                        "duration_seconds": round(duration_seconds, 3),
+                        "average_bytes_per_second": round(
+                            bytes_written / duration_seconds
+                        ),
+                    },
+                )
+                return bytes_written
             except Exception as exc:
                 last_error = exc
                 self.log_store.add(
@@ -702,7 +720,7 @@ class ModelStore:
                     f"Size mismatch for {model_lock.id}: "
                     f"expected {model_lock.size_bytes}, got {bytes_written}"
                 )
-            actual_sha256 = _sha256_file(download_target)
+            actual_sha256 = await asyncio.to_thread(_sha256_file, download_target)
             if actual_sha256 != sha256:
                 raise ModelDownloadError(
                     f"Hash mismatch for {model_lock.id}: "

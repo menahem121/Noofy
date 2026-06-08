@@ -248,6 +248,19 @@ Resolution order:
    when the package declares a SHA-256.
 4. Civitai query fallback (`GET https://civitai.com/api/v1/models`).
 
+An explicit package source URL is authoritative for the file it serves. If that
+file has changed since the workflow was exported, Noofy adopts the downloaded
+file's actual SHA-256 and size for the imported package instead of rejecting it
+against stale package identity metadata. Provider-resolved URLs remain subject
+to strict package size/SHA verification because Noofy selected those URLs rather
+than the workflow author. When this happens during staged import or a later
+workflow-scoped download, Noofy persists the adopted identity into the app-owned
+package metadata and generated capsule lock so later verification and runner
+preparation use the same file identity. This authority applies only to URLs
+declared by the workflow package; provider-generated direct downloads, such as
+a Civitai picker download, still require the provider-declared size and SHA-256
+to match.
+
 Authentication and rate limits:
 
 - Public access is allowed without keys when providers permit it.

@@ -395,6 +395,11 @@ class WorkflowLibraryService:
             metrics=metrics,
         )
 
+    def persist_model_identities(self, package: WorkflowPackage) -> None:
+        if self.imported_package_store is None or self._mutable_package_dir(package) is None:
+            return
+        self.imported_package_store.persist_model_identities(package)
+
     def workflow_summary(
         self,
         package: WorkflowPackage,

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ from app.workflows.package import RequiredModel, WorkflowPackage
 
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1 << 20
+DOWNLOAD_STATE_UPDATE_INTERVAL_SECONDS = 1.0
 DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = 3
 DEFAULT_MODEL_VERIFICATION_CONCURRENCY = 3
 # Network/remote filesystem types where parallel full-file hashing tends to hurt
@@ -678,12 +680,15 @@ class ModelAvailabilityService:
         *,
         progress_callback: ModelDownloadProgressCallback | None = None,
         cancel_event: asyncio.Event | None = None,
+        explicit_source_urls_authoritative: bool = True,
     ) -> ModelDownloadSummary:
+        # Workflow package URLs are author intent. Provider/direct-download callers
+        # pass False so provider-declared hashes remain strict integrity checks.
         # Group by physical file so the same blob is checked, resolved, and downloaded
         # once even when several graph nodes reference it. ``summarize`` groups in the
         # same order, so the grouped availabilities line up with these groups.
         groups = group_required_models(package.required_models)
-        before = self.summarize(package)
+        before = await asyncio.to_thread(self.summarize, package)
         downloaded_count = 0
         failed_count = 0
         failures: dict[str, ModelDownloadFailure] = {}
@@ -693,13 +698,10 @@ class ModelAvailabilityService:
             for group, availability in zip(groups, before.models, strict=True)
             if availability.status == "missing"
         ]
-        downloadable_models = [
-            _PendingModelDownload(
-                model=group.representative,
-                model_index=model_index,
-            )
-            for model_index, group in enumerate(missing_groups, start=1)
-        ]
+        downloadable_models = _download_plan_for_missing_groups(
+            missing_groups,
+            explicit_source_urls_authoritative=explicit_source_urls_authoritative,
+        )
         total_models = len(downloadable_models)
 
         outcomes = await self._download_missing_models(
@@ -707,6 +709,7 @@ class ModelAvailabilityService:
             downloadable_models,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            explicit_source_urls_authoritative=explicit_source_urls_authoritative,
         )
         for outcome in outcomes:
             if outcome.failure is not None:
@@ -718,7 +721,19 @@ class ModelAvailabilityService:
             if outcome.downloaded:
                 downloaded_count += 1
 
-        after = self.summarize(package)
+        successful_model_indices = {
+            outcome.model_index for outcome in outcomes if outcome.downloaded
+        }
+        if explicit_source_urls_authoritative:
+            _propagate_downloaded_model_identities(
+                package.required_models,
+                [
+                    item
+                    for item in downloadable_models
+                    if item.model_index in successful_model_indices
+                ],
+            )
+        after = await asyncio.to_thread(self.summarize, package)
         if failures:
             after = after.model_copy(
                 update={
@@ -761,6 +776,7 @@ class ModelAvailabilityService:
         *,
         progress_callback: ModelDownloadProgressCallback | None,
         cancel_event: asyncio.Event | None,
+        explicit_source_urls_authoritative: bool,
     ) -> list[_ModelDownloadOutcome]:
         if not items:
             return []
@@ -787,6 +803,7 @@ class ModelAvailabilityService:
                         total_models=total_models,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
+                        explicit_source_urls_authoritative=explicit_source_urls_authoritative,
                     )
                 )
             return outcomes
@@ -824,6 +841,7 @@ class ModelAvailabilityService:
                         total_models=total_models,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
+                        explicit_source_urls_authoritative=explicit_source_urls_authoritative,
                     )
                 completed_indices.add(item.model_index)
                 outcomes.append(outcome)
@@ -859,6 +877,7 @@ class ModelAvailabilityService:
         total_models: int,
         progress_callback: ModelDownloadProgressCallback | None,
         cancel_event: asyncio.Event | None,
+        explicit_source_urls_authoritative: bool,
     ) -> _ModelDownloadOutcome:
         model = item.model
         requirement_id = _requirement_id(model)
@@ -885,6 +904,7 @@ class ModelAvailabilityService:
                 cancel_event=cancel_event,
                 model_index=item.model_index,
                 total_models=total_models,
+                explicit_source_urls_authoritative=explicit_source_urls_authoritative,
             )
             if downloaded:
                 _emit_model_download_progress(
@@ -1297,6 +1317,7 @@ class ModelAvailabilityService:
         cancel_event: asyncio.Event | None = None,
         model_index: int | None = None,
         total_models: int | None = None,
+        explicit_source_urls_authoritative: bool = True,
     ) -> bool:
         if cancel_event is not None and cancel_event.is_set():
             raise ModelDownloadCanceled("Download canceled.")
@@ -1304,7 +1325,8 @@ class ModelAvailabilityService:
             return False
         if model.size_bytes is None or model.size_bytes <= 0:
             raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
-        urls = _prioritized_source_urls(_source_urls(model))
+        explicit_urls = _prioritized_source_urls(_source_urls(model))
+        urls = explicit_urls
         if not urls:
             self.log_store.add(
                 "info",
@@ -1345,15 +1367,34 @@ class ModelAvailabilityService:
         final_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_path_inside_noofy_models(final_path)
 
+        expected_sha256 = _model_sha256(model)
+        expected_size = model.size_bytes
+        identity_changed = False
         downloaded_sha256 = await self._download_verified_with_fallback(
             urls,
             model,
             final_path,
+            accept_source_identity=(
+                explicit_source_urls_authoritative and bool(explicit_urls)
+            ),
             progress_callback=progress_callback,
             cancel_event=cancel_event,
             model_index=model_index,
             total_models=total_models,
         )
+        if explicit_source_urls_authoritative and explicit_urls:
+            if downloaded_sha256 is None:
+                raise ModelAvailabilityError("Downloaded model identity could not be recorded.")
+            actual_size = final_path.stat().st_size
+            identity_changed = (
+                expected_sha256 != downloaded_sha256
+                or expected_size != actual_size
+            )
+            model.size_bytes = actual_size
+            model.checksum = f"sha256:{downloaded_sha256}"
+            model.verification_level = ModelVerificationLevel.SHA256_SIZE
+            if identity_changed:
+                model.identity_verified_by_exporter = False
         self.log_store.add(
             "info",
             "Required model downloaded",
@@ -1365,6 +1406,10 @@ class ModelAvailabilityService:
                 "sha256": f"sha256:{downloaded_sha256}"
                 if downloaded_sha256
                 else None,
+                "explicit_source_identity_authoritative": (
+                    explicit_source_urls_authoritative and bool(explicit_urls)
+                ),
+                "explicit_source_identity_changed": identity_changed,
             },
         )
         return True
@@ -1393,6 +1438,7 @@ class ModelAvailabilityService:
         model: RequiredModel,
         final_path: Path,
         *,
+        accept_source_identity: bool,
         progress_callback: ModelDownloadProgressCallback | None = None,
         cancel_event: asyncio.Event | None = None,
         model_index: int | None = None,
@@ -1412,16 +1458,22 @@ class ModelAvailabilityService:
                     else 0,
                 )
 
+                last_state_update_at = time.monotonic()
+
                 def stream_progress(
                     bytes_downloaded: int,
                     total_bytes: int | None,
                 ) -> None:
-                    transaction.write_state(
-                        status="downloading",
-                        source_url=url,
-                        provider=provider,
-                        bytes_downloaded=bytes_downloaded,
-                    )
+                    nonlocal last_state_update_at
+                    now = time.monotonic()
+                    if now - last_state_update_at >= DOWNLOAD_STATE_UPDATE_INTERVAL_SECONDS:
+                        transaction.write_state(
+                            status="downloading",
+                            source_url=url,
+                            provider=provider,
+                            bytes_downloaded=bytes_downloaded,
+                        )
+                        last_state_update_at = now
                     _emit_model_download_progress(
                         progress_callback,
                         model=model,
@@ -1433,6 +1485,7 @@ class ModelAvailabilityService:
                     )
 
                 headers = self.provider_resolver.auth_headers_for_provider(provider)
+                stream_started_at = time.monotonic()
                 if progress_callback is None and cancel_event is None:
                     await _stream_with_optional_headers(
                         url,
@@ -1447,6 +1500,25 @@ class ModelAvailabilityService:
                         progress_callback=stream_progress,
                         cancel_event=cancel_event,
                     )
+                stream_duration_seconds = max(
+                    time.monotonic() - stream_started_at,
+                    0.000001,
+                )
+                streamed_size_bytes = transaction.part_path.stat().st_size
+                self.log_store.add(
+                    "info",
+                    "Required model source download completed",
+                    "workflow.models",
+                    details={
+                        "provider": provider,
+                        "source_host": urlparse(url).hostname,
+                        "size_bytes": streamed_size_bytes,
+                        "duration_seconds": round(stream_duration_seconds, 3),
+                        "average_bytes_per_second": round(
+                            streamed_size_bytes / stream_duration_seconds
+                        ),
+                    },
+                )
                 transaction.write_state(
                     status="downloading",
                     source_url=url,
@@ -1468,7 +1540,12 @@ class ModelAvailabilityService:
                 )
                 if cancel_event is not None and cancel_event.is_set():
                     raise ModelDownloadCanceled("Download canceled.")
-                part_sha256 = self._verify_download(model, transaction.part_path)
+                part_sha256 = await asyncio.to_thread(
+                    self._verify_download,
+                    model,
+                    transaction.part_path,
+                    accept_source_identity=accept_source_identity,
+                )
                 transaction.write_state(
                     status="placing",
                     bytes_downloaded=transaction.part_path.stat().st_size,
@@ -1481,6 +1558,7 @@ class ModelAvailabilityService:
                         model,
                         final_path,
                         known_sha256=part_sha256,
+                        accept_source_identity=accept_source_identity,
                     )
                     if final_sha256:
                         self._remember_cached_sha256(
@@ -1551,21 +1629,24 @@ class ModelAvailabilityService:
         path: Path,
         *,
         known_sha256: str | None = None,
+        accept_source_identity: bool = False,
     ) -> str | None:
         size = path.stat().st_size
-        if model.size_bytes is not None and size != model.size_bytes:
+        if not accept_source_identity and model.size_bytes is not None and size != model.size_bytes:
             raise ModelAvailabilityError(
                 f"Downloaded model size mismatch: expected {model.size_bytes}, got {size}."
             )
-        if model.checksum is not None:
-            actual = known_sha256 or _sha256_file(path)
+        actual = known_sha256
+        if model.checksum is not None or accept_source_identity:
+            actual = actual or _sha256_file(path)
+        if not accept_source_identity and model.checksum is not None:
             expected = _normalize_sha256(model.checksum)
             if actual != expected:
                 raise ModelAvailabilityError(
                     f"Downloaded model hash mismatch: expected {expected}, got {actual}."
                 )
             return actual
-        return known_sha256
+        return actual
 
     def _remembered_sha256(self, path: Path, *, root: Path) -> str | None:
         """Return a previously cached SHA-256 without computing it.
@@ -2274,8 +2355,57 @@ def requirement_id_for(model: RequiredModel) -> str:
     return _requirement_id(model)
 
 
+def _propagate_downloaded_model_identities(
+    models: list[RequiredModel],
+    downloaded_models: list[_PendingModelDownload],
+) -> None:
+    identities_by_target = {
+        _model_download_target_key(item.model): item.model
+        for item in downloaded_models
+        if item.model.checksum is not None and _source_urls(item.model)
+    }
+    for model in models:
+        downloaded = identities_by_target.get(_model_download_target_key(model))
+        if downloaded is None or downloaded is model:
+            continue
+        model.checksum = downloaded.checksum
+        model.size_bytes = downloaded.size_bytes
+        model.verification_level = downloaded.verification_level
+        model.identity_verified_by_exporter = downloaded.identity_verified_by_exporter
+
+
 def _model_download_target_key(model: RequiredModel) -> tuple[str, str]:
     return (model.folder, model.filename.replace("\\", "/"))
+
+
+def _download_plan_for_missing_groups(
+    groups: list[ModelGroup],
+    *,
+    explicit_source_urls_authoritative: bool,
+) -> list[_PendingModelDownload]:
+    items: list[_PendingModelDownload] = []
+    explicit_targets = {
+        _model_download_target_key(group.representative)
+        for group in groups
+        if _source_urls(group.representative)
+    }
+    planned_explicit_targets: set[tuple[str, str]] = set()
+    for group in groups:
+        model = group.representative
+        target = _model_download_target_key(model)
+        if explicit_source_urls_authoritative and target in explicit_targets:
+            if target in planned_explicit_targets:
+                continue
+            if not _source_urls(model):
+                continue
+            planned_explicit_targets.add(target)
+        items.append(
+            _PendingModelDownload(
+                model=model,
+                model_index=len(items) + 1,
+            )
+        )
+    return items
 
 
 def _model_needs_download_disk_preflight(model: RequiredModel) -> bool:

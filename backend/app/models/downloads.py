@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.diagnostics import DiagnosticsSink
 from app.engine.models import ImportModelDownloadProgressItem
+from app.models.download_progress import AggregateDownloadSpeedTracker
 from app.models.schemas import (
     ModelDownloadActiveResponse,
     ModelDownloadJobStart,
@@ -189,12 +190,10 @@ class ModelDownloadJobService:
         failed = False
         completed = 0
         successful_downloads = 0
-        last_progress_at = job.updated_at
-        last_progress_by_model: dict[str, int] = {}
+        speed_tracker = AggregateDownloadSpeedTracker()
 
         def progress_callback(workflow_id: str):
             def _callback(event: dict[str, object]) -> None:
-                nonlocal last_progress_at
                 now = datetime.now(UTC)
                 requirement_id = str(event["requirement_id"])
                 filename = str(event["filename"])
@@ -208,11 +207,9 @@ class ModelDownloadJobService:
                     job.current_model_index = completed + model_index
                 job.current_model_filename = filename
                 if isinstance(bytes_downloaded, int):
-                    elapsed = max((now - last_progress_at).total_seconds(), 0.001)
-                    delta = max(bytes_downloaded - last_progress_by_model.get(progress_key, 0), 0)
-                    job.speed_bytes_per_second = delta / elapsed
-                    last_progress_at = now
-                    last_progress_by_model[progress_key] = bytes_downloaded
+                    speed = speed_tracker.update(progress_key, bytes_downloaded)
+                    if speed is not None:
+                        job.speed_bytes_per_second = speed
                 previous = job.models.get(progress_key)
                 previous_bytes = (
                     previous.bytes_downloaded
@@ -255,6 +252,7 @@ class ModelDownloadJobService:
                     direct_package,
                     progress_callback=progress_callback(workflow_id),
                     cancel_event=job.cancel_event,
+                    explicit_source_urls_authoritative=False,
                 )
                 completed += len(job.direct_models)
                 successful_downloads += getattr(
@@ -281,6 +279,11 @@ class ModelDownloadJobService:
                     "downloaded_count",
                     len(selected_package.required_models) if result.failed_count == 0 else 0,
                 )
+                if (
+                    getattr(result, "downloaded_count", 0) > 0
+                    and any(model.source_urls or model.source_url for model in models)
+                ):
+                    self._persist_workflow_model_identities(package)
                 failed = failed or result.failed_count > 0
                 self._mark_downloaded_models(models)
                 if result.status == "canceled":
@@ -345,6 +348,13 @@ class ModelDownloadJobService:
         if availability_service is None:
             raise ValueError("Model availability service is unavailable.")
         return availability_service
+
+    def _persist_workflow_model_identities(self, package: WorkflowPackage) -> None:
+        workflow_library_service = getattr(self.engine_service, "workflow_library_service", None)
+        persist = getattr(workflow_library_service, "persist_model_identities", None)
+        if persist is None:
+            return
+        persist(package)
 
     def _mark_downloaded_models(self, models: list[RequiredModel]) -> None:
         folder_settings = self.model_folder_service.settings(ensure_folders=True)

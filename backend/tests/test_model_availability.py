@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 
 import httpx
@@ -719,6 +720,49 @@ async def test_downloaded_model_final_hash_is_cached_for_future_summaries(
 
 
 @pytest.mark.anyio
+async def test_download_hash_verification_runs_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"downloaded-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    event_loop_thread = threading.get_ident()
+    hashing_threads: list[int] = []
+    original_sha256_file = availability_module._sha256_file
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    def recording_sha256(path: Path) -> str:
+        hashing_threads.append(threading.get_ident())
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    monkeypatch.setattr(availability_module, "_sha256_file", recording_sha256)
+
+    result = await _service(noofy_root=noofy_root).download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="model.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                    source_urls=["https://example.com/models/model.safetensors"],
+                )
+            ]
+        )
+    )
+
+    assert result.downloaded_count == 1
+    assert hashing_threads
+    assert all(thread_id != event_loop_thread for thread_id in hashing_threads)
+
+
+@pytest.mark.anyio
 async def test_download_reports_progress_with_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -946,8 +990,16 @@ async def test_failed_download_cleans_part_file(
 ) -> None:
     payload = b"wrong-bytes"
     noofy_root = tmp_path / "Noofy Models"
-    service = _service(noofy_root=noofy_root)
     seen_part_paths: list[Path] = []
+
+    class MismatchedResolver(ProviderModelResolver):
+        async def resolve(self, model: RequiredModel) -> list[str]:
+            return ["https://huggingface.co/example/broken.safetensors"]
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=MismatchedResolver(api_key_resolver=lambda provider: None),
+    )
 
     async def fake_stream(
         url: str,
@@ -975,7 +1027,6 @@ async def test_failed_download_cleans_part_file(
                     checksum="sha256:" + ("0" * 64),
                     size_bytes=len(payload),
                     verification_level="sha256_size",
-                    source_urls=["https://huggingface.co/example/broken.safetensors"],
                 )
             ]
         ),
@@ -991,6 +1042,199 @@ async def test_failed_download_cleans_part_file(
     assert result.model_summary.models[0].status_label == "Verification failed"
     assert any(event["status"] == "verification_failed" for event in events)
     assert "identity check" in (result.model_summary.models[0].message or "")
+
+
+@pytest.mark.anyio
+async def test_explicit_source_url_adopts_updated_model_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"updated-model-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    log_store = LogStore()
+    models = [
+        RequiredModel(
+            node_id=node_id,
+            input_name="lora_name",
+            folder="loras",
+            filename="Anima_Turbo_LoRA.safetensors",
+            checksum="sha256:" + ("0" * 64),
+            size_bytes=1,
+            verification_level="sha256_size",
+            source_urls=["https://example.com/models/Anima_Turbo_LoRA.safetensors"],
+        )
+        for node_id in ("loader-a", "loader-b")
+    ]
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await _service(
+        noofy_root=noofy_root,
+        log_store=log_store,
+    ).download_missing(_package(models))
+
+    assert result.failed_count == 0
+    assert result.downloaded_count == 1
+    assert result.model_summary.ready_to_run is True
+    assert result.model_summary.models[0].status == "available"
+    assert result.model_summary.models[0].reference_count == 2
+    assert (noofy_root / "loras" / "Anima_Turbo_LoRA.safetensors").read_bytes() == payload
+    assert {model.checksum for model in models} == {f"sha256:{sha}"}
+    assert {model.size_bytes for model in models} == {len(payload)}
+    downloaded_event = next(
+        event
+        for event in log_store.list_events().events
+        if event.message == "Required model downloaded"
+    )
+    assert downloaded_event.details["explicit_source_identity_authoritative"] is True
+    assert downloaded_event.details["explicit_source_identity_changed"] is True
+
+
+@pytest.mark.anyio
+async def test_direct_provider_source_url_still_requires_declared_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"tampered-provider-download"
+    noofy_root = tmp_path / "Noofy Models"
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await _service(noofy_root=noofy_root).download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="loras",
+                    filename="provider.safetensors",
+                    checksum="sha256:" + ("0" * 64),
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                    source_urls=["https://civitai.com/api/download/models/123"],
+                )
+            ]
+        ),
+        explicit_source_urls_authoritative=False,
+    )
+
+    assert result.downloaded_count == 0
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "verification_failed"
+    assert not (noofy_root / "loras" / "provider.safetensors").exists()
+
+
+@pytest.mark.anyio
+async def test_explicit_source_target_downloads_once_for_conflicting_stale_identities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"authoritative-explicit-source"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    stream_count = 0
+    models = [
+        RequiredModel(
+            node_id=node_id,
+            input_name="lora_name",
+            folder="loras",
+            filename="shared.safetensors",
+            checksum=f"sha256:{stale_hash * 64}",
+            size_bytes=stale_size,
+            verification_level="sha256_size",
+            source_urls=["https://example.com/models/shared.safetensors"],
+        )
+        for node_id, stale_hash, stale_size in (
+            ("loader-a", "0", 1),
+            ("loader-b", "1", 2),
+        )
+    ]
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal stream_count
+        stream_count += 1
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await _service(noofy_root=noofy_root).download_missing(_package(models))
+
+    assert stream_count == 1
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert result.model_summary.ready_to_run is True
+    assert result.model_summary.models[0].reference_count == 2
+    assert {model.checksum for model in models} == {f"sha256:{sha}"}
+    assert {model.size_bytes for model in models} == {len(payload)}
+
+
+@pytest.mark.anyio
+async def test_explicit_source_target_skips_source_less_duplicate_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"source-backed-duplicate-target"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    stream_count = 0
+    provider_calls = 0
+    models = [
+        RequiredModel(
+            node_id="loader-without-source",
+            input_name="lora_name",
+            folder="loras",
+            filename="shared.safetensors",
+            checksum="sha256:" + ("0" * 64),
+            size_bytes=1,
+            verification_level="sha256_size",
+        ),
+        RequiredModel(
+            node_id="loader-with-source",
+            input_name="lora_name",
+            folder="loras",
+            filename="shared.safetensors",
+            checksum="sha256:" + ("1" * 64),
+            size_bytes=2,
+            verification_level="sha256_size",
+            source_urls=["https://example.com/models/shared.safetensors"],
+        ),
+    ]
+
+    class RecordingResolver(ProviderModelResolver):
+        async def resolve(self, model: RequiredModel) -> list[str]:
+            nonlocal provider_calls
+            provider_calls += 1
+            return []
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal stream_count
+        stream_count += 1
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await _service(
+        noofy_root=noofy_root,
+        provider_resolver=RecordingResolver(api_key_resolver=lambda provider: None),
+    ).download_missing(_package(models))
+
+    assert stream_count == 1
+    assert provider_calls == 0
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert result.model_summary.ready_to_run is True
+    assert result.model_summary.models[0].reference_count == 2
+    assert {model.checksum for model in models} == {f"sha256:{sha}"}
+    assert {model.size_bytes for model in models} == {len(payload)}
 
 
 @pytest.mark.anyio

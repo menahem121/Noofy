@@ -810,7 +810,11 @@ class FakeDownloadAvailabilityService:
                         "model_index": index,
                     }
                 )
-        return SimpleNamespace(failed_count=0, status="completed")
+        return SimpleNamespace(
+            failed_count=0,
+            downloaded_count=len(package.required_models),
+            status="completed",
+        )
 
 
 class SparseFailureDownloadAvailabilityService:
@@ -855,8 +859,13 @@ async def _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_pa
         input_name="model",
         source_url="https://example.test/downloaded.safetensors",
     )
-    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[_package([model])])
+    package = _package([model])
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[package])
     engine.model_availability_service = FakeDownloadAvailabilityService(noofy_root)
+    persisted_packages: list[WorkflowPackage] = []
+    engine.workflow_library_service = SimpleNamespace(
+        persist_model_identities=persisted_packages.append
+    )
     ownership_store = ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json")
     service = ModelDownloadJobService(
         engine_service=engine,
@@ -880,6 +889,7 @@ async def _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_pa
     assert status.status == "completed"
     assert status.percent == 100
     assert ownership_store.origin_for_model("checkpoints/downloaded.safetensors") == "downloaded"
+    assert persisted_packages == [package]
 
 
 def test_model_download_job_preserves_totals_when_failure_progress_is_sparse(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ from app.engine.models import (
 )
 from app.history import HistoryService
 from app.artifacts import AssetOwnership
+from app.models.download_progress import AggregateDownloadSpeedTracker
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.library import workflow_package_display_name
@@ -172,6 +173,14 @@ class WorkflowImportOrchestrator:
             if self.history_service is not None:
                 self.history_service.record_import_failed(filename=original_filename, error=str(exc))
             raise
+        return self._imported_package_response(package, duplicate_action=duplicate_action)
+
+    def _imported_package_response(
+        self,
+        package: WorkflowPackage,
+        *,
+        duplicate_action: str | None,
+    ) -> dict[str, object]:
         if duplicate_action == "replace" and self.user_state_service is not None:
             self.user_state_service.delete(package.metadata.id)
         status = package.import_metadata.status if package.import_metadata else "imported"
@@ -380,10 +389,23 @@ class WorkflowImportOrchestrator:
             fast=True,
             verify_hashes=True,
         )
-        committed = self.import_workflow_archive(
-            pending.data,
-            original_filename=pending.original_filename,
-            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+        try:
+            imported_package = self.imported_package_store.import_prepared_archive(
+                pending.data,
+                package=pending.package,
+                original_filename=pending.original_filename,
+                allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+                duplicate_action=duplicate_action,
+            )
+        except Exception as exc:
+            if self.history_service is not None:
+                self.history_service.record_import_failed(
+                    filename=pending.original_filename,
+                    error=str(exc),
+                )
+            raise
+        committed = self._imported_package_response(
+            imported_package,
             duplicate_action=duplicate_action,
         )
         finished_at = datetime.now(UTC)
@@ -646,11 +668,9 @@ class WorkflowImportOrchestrator:
         job.user_facing_message = "Downloading required models..."
         job.updated_at = datetime.now(UTC)
         pending.updated_at = job.updated_at
-        last_progress_at = job.updated_at
-        last_progress_by_model: dict[str, int] = {}
+        speed_tracker = AggregateDownloadSpeedTracker()
 
         def progress_callback(event: dict[str, object]) -> None:
-            nonlocal last_progress_at
             now = datetime.now(UTC)
             requirement_id = str(event["requirement_id"])
             filename = str(event["filename"])
@@ -663,11 +683,11 @@ class WorkflowImportOrchestrator:
                 job.current_model_index = model_index
             job.current_model_filename = filename
             if isinstance(bytes_downloaded, int):
-                elapsed = max((now - last_progress_at).total_seconds(), 0.001)
-                delta = max(bytes_downloaded - last_progress_by_model.get(requirement_id, 0), 0)
-                job.speed_bytes_per_second = delta / elapsed
-                last_progress_by_model[requirement_id] = bytes_downloaded
-                last_progress_at = now
+                previous_downloaded = speed_tracker.total_bytes
+                speed = speed_tracker.update(requirement_id, bytes_downloaded)
+                if speed is not None:
+                    job.speed_bytes_per_second = speed
+                delta = speed_tracker.total_bytes - previous_downloaded
                 job.bytes_downloaded = (job.bytes_downloaded or 0) + delta
             if isinstance(total_bytes, int):
                 known_total = (

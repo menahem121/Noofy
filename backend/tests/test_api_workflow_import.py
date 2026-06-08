@@ -29,6 +29,8 @@ class FakePackageStore:
         self.package = package
         self.preview_count = 0
         self.import_count = 0
+        self.prepared_import_count = 0
+        self.prepared_package: WorkflowPackage | None = None
 
     def preview_archive(self, data: bytes, **kwargs):
         self.preview_count += 1
@@ -36,6 +38,11 @@ class FakePackageStore:
 
     def import_archive(self, data: bytes, **kwargs):
         self.import_count += 1
+        return self.package
+
+    def import_prepared_archive(self, data: bytes, *, package: WorkflowPackage, **kwargs):
+        self.prepared_import_count += 1
+        self.prepared_package = package
         return self.package
 
 
@@ -559,7 +566,9 @@ def test_staged_import_commit_reuses_previewed_package_for_model_summary(tmp_pat
     service.commit_workflow_import(session_id)
 
     assert package_store.preview_count == 1
-    assert package_store.import_count == 1
+    assert package_store.import_count == 0
+    assert package_store.prepared_import_count == 1
+    assert package_store.prepared_package is package_store.package
 
 
 def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> None:

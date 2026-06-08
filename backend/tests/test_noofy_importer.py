@@ -980,6 +980,70 @@ def test_import_store_persists_normalized_package_and_original_source_files(
     assert capsule.runtime.runtime_profile_manifest_hash.startswith("sha256:")
 
 
+def test_import_store_persists_prepared_package_model_identity(tmp_path: Path) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    archive = _archive_bytes()
+    prepared = store.preview_archive(archive)
+    prepared.required_models[0].checksum = "sha256:" + ("a" * 64)
+    prepared.required_models[0].size_bytes = 987654
+    prepared.required_models[0].identity_verified_by_exporter = False
+
+    imported = store.import_prepared_archive(archive, package=prepared)
+
+    loaded = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    ).get_package(imported.metadata.id)
+    assert loaded.required_models[0].checksum == "sha256:" + ("a" * 64)
+    assert loaded.required_models[0].size_bytes == 987654
+    assert loaded.required_models[0].identity_verified_by_exporter is False
+
+
+def test_import_store_persists_updated_model_identity_and_capsule_lock(
+    tmp_path: Path,
+) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    imported = store.import_archive(_archive_bytes())
+    updated_checksum = "sha256:" + ("b" * 64)
+    target = imported.required_models[0]
+    package_file = store.package_dir(imported) / "package.json"
+    package_payload = json.loads(package_file.read_text(encoding="utf-8"))
+    package_payload["future_metadata"] = {"preserve": True}
+    package_file.write_text(json.dumps(package_payload), encoding="utf-8")
+    for model in imported.required_models:
+        if (model.folder, model.filename) == (target.folder, target.filename):
+            model.checksum = updated_checksum
+            model.size_bytes = 123456
+            model.identity_verified_by_exporter = False
+
+    store.persist_model_identities(imported)
+
+    loaded = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    ).get_package(imported.metadata.id)
+    matching = [
+        model
+        for model in loaded.required_models
+        if (model.folder, model.filename) == (target.folder, target.filename)
+    ]
+    assert {model.checksum for model in matching} == {updated_checksum}
+    assert {model.size_bytes for model in matching} == {123456}
+    capsule = CapsuleLockLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    ).get_capsule_lock(imported.metadata.id)
+    locked = next(
+        model
+        for model in capsule.models
+        if (model.comfyui_folder, model.filename) == (target.folder, target.filename)
+    )
+    assert locked.sha256 == updated_checksum
+    assert locked.size_bytes == 123456
+    persisted_payload = json.loads(package_file.read_text(encoding="utf-8"))
+    assert persisted_payload["future_metadata"] == {"preserve": True}
+
+
 def test_import_store_rejects_silent_replacement_of_existing_package(
     tmp_path: Path,
 ) -> None:
