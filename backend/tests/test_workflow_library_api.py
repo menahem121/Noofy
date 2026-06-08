@@ -1220,7 +1220,18 @@ def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history
     assert package_data["metadata"]["name"] == "Edited Cleanup Workflow"
     assert package_data["metadata"]["display_name"] == "Edited Cleanup Workflow"
     assert package_data["metadata"]["description"] == "Updated description"
+    assert package_data["metadata"]["author"] == "Noofy User"
+    assert package_data["metadata"]["website"] == "https://example.test"
     assert package_data["metadata"]["category"] == "Inpainting"
+    assert package_data["metadata"]["tags"] == ["portrait", "cleanup"]
+    assert package_data["metadata"]["icon"] == "image"
+
+    payload = service.workflow_library_service.workflow_package_payload(workflow_id)
+    assert payload["metadata"]["author"] == "Noofy User"
+    assert payload["metadata"]["website"] == "https://example.test"
+    assert payload["metadata"]["category"] == "Inpainting"
+    assert payload["metadata"]["tags"] == ["portrait", "cleanup"]
+    assert payload["metadata"]["icon"] == "image"
 
     exported, _ = service.export_workflow_archive(workflow_id)
     with zipfile.ZipFile(io.BytesIO(exported)) as zf:

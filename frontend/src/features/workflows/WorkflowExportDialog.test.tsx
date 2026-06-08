@@ -16,6 +16,7 @@ describe("WorkflowExportDialog", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    window.localStorage.clear();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/workflow-icons")) {
@@ -32,6 +33,7 @@ describe("WorkflowExportDialog", () => {
   });
 
   afterEach(() => {
+    window.localStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     fetchMock.mockReset();
@@ -135,6 +137,40 @@ describe("WorkflowExportDialog", () => {
         tags: ["cleanup", "portrait"],
         icon: "sparkles",
       },
+    });
+  });
+
+  it("prefills and remembers creator details between noofy exports", async () => {
+    window.localStorage.setItem(
+      "noofy.workflowExport.creator.v1",
+      JSON.stringify({
+        author: "Saved Creator",
+        website: "https://saved.example",
+      }),
+    );
+    render(
+      <WorkflowExportDialog
+        workflowName="Creator Flow"
+        exportUrl="/api/workflows/creator/export"
+        extension=".noofy"
+        review={{ name: "Creator Flow" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Author")).toHaveValue("Saved Creator");
+    expect(screen.getByLabelText("Website")).toHaveValue("https://saved.example");
+
+    fireEvent.change(screen.getByLabelText("Author"), { target: { value: "Updated Creator" } });
+    fireEvent.change(screen.getByLabelText("Website"), { target: { value: "https://updated.example" } });
+    fireEvent.click(screen.getByRole("button", { name: "Export .noofy" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toBe(true);
+    });
+    expect(JSON.parse(window.localStorage.getItem("noofy.workflowExport.creator.v1") ?? "{}")).toEqual({
+      author: "Updated Creator",
+      website: "https://updated.example",
     });
   });
 

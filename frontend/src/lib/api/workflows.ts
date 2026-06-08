@@ -542,7 +542,18 @@ export interface DashboardSchemaDef {
 }
 
 export interface WorkflowPackageResponse {
-  metadata: { id: string; name: string; display_name?: string; version: string; description: string };
+  metadata: {
+    id: string;
+    name: string;
+    display_name?: string;
+    version: string;
+    description: string;
+    author?: string;
+    website?: string;
+    category?: string;
+    tags?: string[];
+    icon?: string;
+  };
   display_name?: string | null;
   identity?: Record<string, unknown> | null;
   required_models?: RequiredModelDef[];

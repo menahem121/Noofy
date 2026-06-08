@@ -31,6 +31,7 @@ from app.workflows.media_values import (
     media_metadata_matches_input,
     target_media_kind_for_input,
 )
+from app.workflows.metadata_inference import infer_workflow_category
 from app.workflows.package import WorkflowInput, WorkflowPackage
 from app.workflows.package_assets import (
     PackageAssetError,
@@ -613,6 +614,7 @@ def _build_export_package_json(
         _apply_library_metadata(base, metadata)
     if export_metadata is not None:
         _apply_export_metadata(base, export_metadata)
+    _apply_inferred_metadata_defaults(base, package)
 
     return base
 
@@ -816,7 +818,7 @@ def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> No
         if not isinstance(value, str):
             continue
         cleaned = value.strip()
-        if key == "name" and not cleaned:
+        if not cleaned:
             continue
         package_metadata[key] = cleaned
         if key == "name":
@@ -837,10 +839,28 @@ def _apply_export_metadata(base: dict[str, Any], metadata: dict[str, Any]) -> No
                 continue
             seen.add(cleaned.casefold())
             cleaned_tags.append(cleaned)
-        package_metadata["tags"] = cleaned_tags
-        base["tags"] = cleaned_tags
+        if cleaned_tags:
+            package_metadata["tags"] = cleaned_tags
+            base["tags"] = cleaned_tags
 
     base["metadata"] = package_metadata
+
+
+def _apply_inferred_metadata_defaults(base: dict[str, Any], package: WorkflowPackage) -> None:
+    package_metadata = base.get("metadata")
+    if not isinstance(package_metadata, dict):
+        package_metadata = {}
+    if _blank_metadata_value(package_metadata.get("category")):
+        category = infer_workflow_category(package)
+        package_metadata["category"] = category
+        base["category"] = category
+    base["metadata"] = package_metadata
+
+
+def _blank_metadata_value(value: Any) -> bool:
+    if not isinstance(value, str):
+        return True
+    return not value.strip()
 
 
 def _export_safe_required_models(value: Any) -> list[dict[str, Any]]:

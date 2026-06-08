@@ -18,6 +18,8 @@ import {
 } from "../../lib/workflowExport";
 import { NATIVE_WORKFLOW_ICON_OPTIONS, WORKFLOW_CATEGORY_OPTIONS } from "./workflowMetadataOptions";
 
+const WORKFLOW_EXPORT_CREATOR_STORAGE_KEY = "noofy.workflowExport.creator.v1";
+
 interface WorkflowExportDialogProps {
   workflowName: string | null | undefined;
   exportUrl: string;
@@ -36,11 +38,12 @@ export function WorkflowExportDialog({
   onClose,
 }: WorkflowExportDialogProps) {
   const [filenameInput, setFilenameInput] = useState(() => workflowExportFilename(workflowName, extension));
+  const rememberedCreator = useMemo(() => readRememberedWorkflowExportCreator(), []);
   const [metadataDraft, setMetadataDraft] = useState<WorkflowExportMetadata>(() => ({
     name: review?.name ?? workflowName ?? "",
     description: review?.description ?? "",
-    author: review?.author ?? "",
-    website: review?.website ?? "",
+    author: cleanExportText(review?.author) || rememberedCreator.author,
+    website: cleanExportText(review?.website) || rememberedCreator.website,
     category: review?.category ?? "",
     tags: review?.tags ?? [],
     icon: review?.icon ?? "",
@@ -81,11 +84,13 @@ export function WorkflowExportDialog({
     setExporting(true);
     setExportError(null);
     try {
+      const metadata = isNoofyExport ? normalizedMetadata(metadataDraft, tagInput, selectedCategory) : undefined;
+      if (metadata) rememberWorkflowExportCreator(metadata);
       const exported = await saveWorkflowExportWithFilename(
         workflowExportDownloadRequest(
           exportUrl,
           inputValues,
-          isNoofyExport ? normalizedMetadata(metadataDraft, tagInput, selectedCategory) : undefined,
+          metadata,
         ),
         validation.filename,
       );
@@ -339,12 +344,45 @@ function normalizedMetadata(
   selectedCategory: string,
 ): WorkflowExportMetadata {
   return {
-    name: metadata.name ?? "",
-    description: metadata.description ?? "",
-    author: metadata.author ?? "",
-    website: metadata.website ?? "",
+    name: cleanExportText(metadata.name),
+    description: cleanExportText(metadata.description),
+    author: cleanExportText(metadata.author),
+    website: cleanExportText(metadata.website),
     category: selectedCategory,
     tags: tagInput.split(",").map((tag) => tag.trim()).filter(Boolean),
-    icon: metadata.icon ?? "",
+    icon: cleanExportText(metadata.icon),
   };
+}
+
+function cleanExportText(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function readRememberedWorkflowExportCreator() {
+  try {
+    const raw = window.localStorage.getItem(WORKFLOW_EXPORT_CREATOR_STORAGE_KEY);
+    if (!raw) return { author: "", website: "" };
+    const parsed = JSON.parse(raw) as { author?: unknown; website?: unknown } | null;
+    if (!parsed || typeof parsed !== "object") return { author: "", website: "" };
+    return {
+      author: typeof parsed.author === "string" ? cleanExportText(parsed.author) : "",
+      website: typeof parsed.website === "string" ? cleanExportText(parsed.website) : "",
+    };
+  } catch {
+    return { author: "", website: "" };
+  }
+}
+
+function rememberWorkflowExportCreator(metadata: WorkflowExportMetadata) {
+  try {
+    window.localStorage.setItem(
+      WORKFLOW_EXPORT_CREATOR_STORAGE_KEY,
+      JSON.stringify({
+        author: cleanExportText(metadata.author),
+        website: cleanExportText(metadata.website),
+      }),
+    );
+  } catch {
+    // Export should not fail because browser storage is unavailable.
+  }
 }

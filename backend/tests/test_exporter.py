@@ -787,6 +787,106 @@ def test_exported_archive_applies_export_only_metadata_without_mutating_store(tm
     assert json.loads(package_file.read_text(encoding="utf-8")) == before
 
 
+def test_exported_archive_keeps_existing_discovery_metadata_when_review_fields_are_blank(tmp_path: Path) -> None:
+    archive = _archive_with_package_update(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        lambda package: package["metadata"].update(
+            {
+                "description": "Creator description",
+                "author": "Package Author",
+                "website": "https://package.example",
+                "category": "Restoration",
+                "tags": ["restoration", "starter"],
+                "icon": "maximize",
+            }
+        ),
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive,
+    )
+
+    archive_bytes, _ = exporter.export_archive(
+        workflow_id,
+        export_metadata={
+            "name": "Reviewed Export",
+            "description": " ",
+            "author": "",
+            "website": " ",
+            "category": "",
+            "tags": [],
+            "icon": "",
+        },
+    )
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+
+    assert package_data["metadata"]["name"] == "Reviewed Export"
+    assert package_data["metadata"]["display_name"] == "Reviewed Export"
+    assert package_data["metadata"]["description"] == "Creator description"
+    assert package_data["metadata"]["author"] == "Package Author"
+    assert package_data["metadata"]["website"] == "https://package.example"
+    assert package_data["metadata"]["category"] == "Restoration"
+    assert package_data["metadata"]["tags"] == ["restoration", "starter"]
+    assert package_data["metadata"]["icon"] == "maximize"
+    for key in ("description", "author", "website", "category", "tags", "icon"):
+        assert package_data[key] == package_data["metadata"][key]
+
+
+def test_exported_archive_infers_category_when_metadata_has_no_category(tmp_path: Path) -> None:
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "image",
+                "label": "Image",
+                "control": "load_image",
+                "binding": {"node_id": "1", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [
+            {
+                "id": "video",
+                "label": "Video",
+                "node_id": "2",
+                "type": "video",
+                "kind": "video",
+            }
+        ],
+        "sections": [],
+    }
+    archive = _archive_with_package_update(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        lambda package: package.update(
+            {
+                "inputs": dashboard["inputs"],
+                "outputs": dashboard["outputs"],
+                "comfyui_graph": {
+                    "1": {"class_type": "LoadImage", "inputs": {}},
+                    "2": {"class_type": "SaveVideo", "inputs": {}},
+                },
+            }
+        ),
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        dashboard=dashboard,
+        archive_bytes=archive,
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id, export_metadata={"category": ""})
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+
+    assert package_data["metadata"]["category"] == "img2vid"
+    assert package_data["category"] == "img2vid"
+
+
 def test_exported_package_json_excludes_internal_import_state(tmp_path: Path) -> None:
     exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
     package_dir = exporter._find_package_dir(workflow_id)

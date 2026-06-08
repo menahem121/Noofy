@@ -729,7 +729,7 @@ describe("HomePage", () => {
     expect(screen.getByRole("menuitem", { name: "View details" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Edit dashboard" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Edit Widgets" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Export .Noofy" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export the Noofy workflow" }));
     expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
     expect(screen.getByLabelText("Filename")).toHaveValue("Native Text.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

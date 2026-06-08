@@ -3308,7 +3308,7 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(optionsButton);
 
     expect(screen.getByRole("menu", { name: /workflow options/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: /export as noofy/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /export the noofy workflow/i }));
     expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
     expect(screen.getByLabelText("Filename")).toHaveValue("Text to Image.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -3493,7 +3493,18 @@ describe("WorkflowRunPage", () => {
   });
 
   it("posts the current dashboard values when exporting Noofy packages from the canvas", async () => {
-    mockConfiguredDashboardFetch(fetchMock);
+    const packageWithExportMetadata = {
+      ...configuredPackageData,
+      metadata: {
+        ...configuredPackageData.metadata,
+        author: "Canvas Creator",
+        website: "https://canvas.example",
+        category: "Txt2img",
+        tags: ["starter", "canvas"],
+        icon: "image",
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, packageWithExportMetadata);
     const createObjectUrl = vi.fn(() => "blob:workflow-noofy");
     const revokeObjectUrl = vi.fn();
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
@@ -3505,7 +3516,7 @@ describe("WorkflowRunPage", () => {
     const promptInput = await screen.findByRole("textbox");
     fireEvent.change(promptInput, { target: { value: "current noofy prompt" } });
     fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /export as noofy/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /export the noofy workflow/i }));
     fireEvent.click(screen.getByRole("button", { name: "Export .noofy" }));
 
     await waitFor(() => {
@@ -3516,6 +3527,13 @@ describe("WorkflowRunPage", () => {
       expect(exportCall).toBeTruthy();
       const body = JSON.parse(String((exportCall?.[1] as RequestInit).body));
       expect(body.input_values.prompt).toBe("current noofy prompt");
+      expect(body.export_metadata).toMatchObject({
+        author: "Canvas Creator",
+        website: "https://canvas.example",
+        category: "Txt2img",
+        tags: ["starter", "canvas"],
+        icon: "image",
+      });
     });
   });
 

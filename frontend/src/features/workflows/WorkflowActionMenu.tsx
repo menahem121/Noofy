@@ -175,7 +175,7 @@ export function WorkflowActionMenu({
                   }}
                 >
                   <Download size={14} aria-hidden="true" />
-                  Export .Noofy
+                  Export the Noofy workflow
                 </button>
               ) : null}
               {canExportComfyJson ? (

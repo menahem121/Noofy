@@ -1334,7 +1334,7 @@ function WorkflowDetailsDrawer({
             onClick={() => handleExportClick(exportWorkflowUrl(workflow.id), ".noofy")}
           >
             <Download size={15} aria-hidden="true" />
-            Export .Noofy
+            Export the Noofy workflow
           </button>
         ) : null}
         <button

@@ -621,7 +621,7 @@ export function CanvasDashboardView({
                         setExportDialog({ extension: ".noofy", url: exportNoofyUrl });
                       }}
                     >
-                      Export as Noofy
+                      Export the Noofy workflow
                     </button>
                     <button
                       className="canvas-options-menu__item"

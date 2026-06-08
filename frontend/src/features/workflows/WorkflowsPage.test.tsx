@@ -543,13 +543,13 @@ describe("WorkflowsPage", () => {
     const panel = await screen.findByRole("complementary", { name: "Details for Cleanup Flow" });
     expect(panel).toHaveClass("workflow-detail-drawer");
     expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
-    const noofyExport = screen.getByRole("button", { name: "Export .Noofy" });
+    const noofyExport = screen.getByRole("button", { name: "Export the Noofy workflow" });
     const comfyExport = screen.getByRole("button", { name: "Export ComfyUI JSON" });
     const exportActions = noofyExport.closest(".workflow-detail-export-actions");
     expect(exportActions).not.toBeNull();
     expect(comfyExport.closest(".workflow-detail-export-actions")).toBe(exportActions);
     expect(Array.from(exportActions!.querySelectorAll("button")).map((action) => action.textContent?.trim())).toEqual([
-      "Export .Noofy",
+      "Export the Noofy workflow",
       "Export ComfyUI JSON",
     ]);
     expect(screen.getByRole("button", { name: "Close workflow details" }).closest(".workflow-detail-sticky-top")).not.toBeNull();
@@ -797,7 +797,7 @@ describe("WorkflowsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Native Text" }));
 
     expect(screen.queryByRole("menuitem", { name: /remove workflow/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Export .Noofy" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export the Noofy workflow" }));
     expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
     expect(screen.getByLabelText("Filename")).toHaveValue("Native Text.noofy");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

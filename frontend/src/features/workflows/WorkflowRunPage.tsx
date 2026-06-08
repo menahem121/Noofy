@@ -1641,6 +1641,11 @@ export function WorkflowRunPage({
   const exportReview: WorkflowExportReviewModel = {
     name: workflowDisplayTitle,
     description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
+    author: state.packageData?.metadata?.author ?? "",
+    website: state.packageData?.metadata?.website ?? "",
+    category: state.packageData?.metadata?.category ?? workflowSummary?.category ?? "",
+    tags: state.packageData?.metadata?.tags ?? workflowSummary?.tags ?? [],
+    icon: state.packageData?.metadata?.icon ?? workflowSummary?.icon ?? "",
     source: workflowSummary?.source_label ?? workflowSummary?.trust?.label ?? "Noofy workflow",
     requiredModels: activeModelSummary?.models?.map((model) => ({
       name: model.filename,
