@@ -275,6 +275,23 @@ export function DashboardBuilderPage({
     () => new Set(builderReady ? schema.widgets.map((c) => c.valueId) : []),
     [builderReady, schema.widgets],
   );
+  const dashboardTitlesByValueId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    if (!builderReady) return map;
+
+    for (const widget of [...schema.widgets, ...(schema.hiddenWidgets ?? [])]) {
+      const title = widget.title.trim();
+      if (!title) continue;
+      const titles = map.get(widget.valueId);
+      if (titles) {
+        titles.push(title);
+      } else {
+        map.set(widget.valueId, [title]);
+      }
+    }
+
+    return map;
+  }, [builderReady, schema.widgets, schema.hiddenWidgets]);
 
   const filteredNodes = useMemo(() => {
     if (!builderReady || !workflow) return [];
@@ -283,12 +300,14 @@ export function DashboardBuilderPage({
 
     const matchingNodes = workflow.nodes
       .map((node) => {
-        const filteredValues = node.values.filter((value) => valueMatchesSearch(node, value, queryTerms));
+        const filteredValues = node.values.filter((value) =>
+          valueMatchesSearch(node, value, queryTerms, dashboardTitlesByValueId.get(value.id) ?? []),
+        );
         return { ...node, values: filteredValues };
       })
       .filter((node) => node.values.length > 0);
     return groupWorkflowNodesByName(matchingNodes);
-  }, [builderReady, workflow, search]);
+  }, [builderReady, workflow, search, dashboardTitlesByValueId]);
 
   const selectedWidget = useMemo(
     () => (builderReady && selectedWidgetId ? schema.widgets.find((c) => c.id === selectedWidgetId) ?? null : null),
@@ -1114,7 +1133,12 @@ function nodeGroupKey(node: Pick<WorkflowNode, "title" | "classType">): string {
   return title.toLocaleLowerCase();
 }
 
-function valueMatchesSearch(node: WorkflowNode, value: WorkflowNodeValue, queryTerms: string[]): boolean {
+function valueMatchesSearch(
+  node: WorkflowNode,
+  value: WorkflowNodeValue,
+  queryTerms: string[],
+  dashboardTitles: string[] = [],
+): boolean {
   const searchableText = [
     node.id,
     node.title,
@@ -1126,6 +1150,7 @@ function valueMatchesSearch(node: WorkflowNode, value: WorkflowNodeValue, queryT
     value.valueKind,
     value.hint,
     value.rawValue,
+    ...dashboardTitles,
     ...(value.options ?? []),
   ]
     .map(normalizeSearchText)

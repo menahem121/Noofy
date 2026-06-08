@@ -473,9 +473,18 @@ describe("DashboardBuilderPage", () => {
     return onContinue;
   }
 
-  it("searches workflow values by their current node value", async () => {
-    await renderDragBuilder(dragSchema());
+  it("searches workflow values by dashboard title and current node value", async () => {
+    const schema = dragSchema();
+    schema.widgets[0] = { ...schema.widgets[0], title: "Creative brief" };
+    await renderDragBuilder(schema);
     const valuesPanel = await screen.findByLabelText("Workflow values");
+
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+      target: { value: "creative brief" },
+    });
+
+    expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
+    expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
 
     fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
       target: { value: "lake" },
