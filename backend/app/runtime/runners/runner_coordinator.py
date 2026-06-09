@@ -28,6 +28,10 @@ from app.runtime.runners.supervisor import (
 AdapterFactory = Callable[[RunnerDescriptor], EngineAdapter]
 
 
+class RunnerRuntimeActivationInProgressError(RuntimeError):
+    """Raised when a runner process cannot start during runtime activation."""
+
+
 class RunnerProcessCoordinator:
     def __init__(
         self,
@@ -48,23 +52,30 @@ class RunnerProcessCoordinator:
         *,
         workflow_id: str | None = None,
     ) -> RunnerProcessHandle:
-        handle = await self.process_supervisor.start(spec)
-        adapter = self.adapter_factory(handle.descriptor)
-        self.runner_supervisor.upsert_runner(handle.descriptor, adapter)
-        if workflow_id is not None:
-            self.runner_supervisor.bind_workflow_runner(workflow_id, handle.runner_id)
-        self.log_store.add(
-            "info",
-            "Runner endpoint registered",
-            "runtime.runner_coordinator",
-            details={
-                "runner_id": handle.runner_id,
-                "base_url": handle.descriptor.base_url,
-                "fingerprint": handle.descriptor.fingerprint,
-                "workflow_id": workflow_id,
-            },
-        )
-        return handle
+        if not self.runner_supervisor.begin_runner_start(spec.runner_id):
+            raise RunnerRuntimeActivationInProgressError(
+                "ComfyUI runtime activation is in progress."
+            )
+        try:
+            handle = await self.process_supervisor.start(spec)
+            adapter = self.adapter_factory(handle.descriptor)
+            self.runner_supervisor.upsert_runner(handle.descriptor, adapter)
+            if workflow_id is not None:
+                self.runner_supervisor.bind_workflow_runner(workflow_id, handle.runner_id)
+            self.log_store.add(
+                "info",
+                "Runner endpoint registered",
+                "runtime.runner_coordinator",
+                details={
+                    "runner_id": handle.runner_id,
+                    "base_url": handle.descriptor.base_url,
+                    "fingerprint": handle.descriptor.fingerprint,
+                    "workflow_id": workflow_id,
+                },
+            )
+            return handle
+        finally:
+            self.runner_supervisor.end_runner_start(spec.runner_id)
 
     async def refresh_runner_status(self, runner_id: str) -> RunnerProcessStatus:
         status = await self.process_supervisor.status(runner_id)

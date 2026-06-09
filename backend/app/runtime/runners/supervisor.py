@@ -266,6 +266,9 @@ class RunnerSupervisor:
         self._workflow_runners: dict[str, str] = {}
         self._workflow_leases: dict[str, tuple[str, str]] = {}
         self._queued_runner_starts: dict[str, QueuedRunnerStart] = {}
+        self._runtime_activation_in_progress = False
+        self._runner_starts_in_progress: dict[str, int] = {}
+        self._workflow_preparations_in_progress: dict[str, int] = {}
         self._reservations: dict[str, RunnerReservation] = {}
         self._registry = JobRunnerRegistry()
         self._state_change_notifier: Callable[[str], None] | None = None
@@ -320,6 +323,88 @@ class RunnerSupervisor:
     def list_runners(self) -> list[RunnerDescriptor]:
         with self._lock:
             return list(self._descriptors.values())
+
+    def begin_runtime_activation(self) -> list[str]:
+        """Atomically block new submissions when no runner work is in flight."""
+        with self._lock:
+            busy_runner_ids = sorted(
+                {
+                    *self._runner_starts_in_progress,
+                    *(
+                        f"prepare:{workflow_id}"
+                        for workflow_id in self._workflow_preparations_in_progress
+                    ),
+                    *(
+                        runner.runner_id
+                        for runner in self._descriptors.values()
+                        if (
+                            runner.current_job_id is not None
+                            or runner.reservation_token is not None
+                            or runner.output_stream_lease_count > 0
+                            or runner.status
+                            in {
+                                RunnerStatus.RUNNING,
+                                RunnerStatus.RESERVING,
+                                RunnerStatus.SUBMITTING,
+                            }
+                        )
+                    ),
+                }
+            )
+            if self._runtime_activation_in_progress:
+                return ["runtime_activation_in_progress"]
+            if busy_runner_ids:
+                return busy_runner_ids
+            self._runtime_activation_in_progress = True
+        self._notify_state_change("runtime_activation_started")
+        return []
+
+    def end_runtime_activation(self) -> None:
+        with self._lock:
+            was_active = self._runtime_activation_in_progress
+            self._runtime_activation_in_progress = False
+        if was_active:
+            self._notify_state_change("runtime_activation_finished")
+
+    def runtime_activation_in_progress(self) -> bool:
+        with self._lock:
+            return self._runtime_activation_in_progress
+
+    def begin_runner_start(self, runner_id: str) -> bool:
+        """Reserve a process startup so activation cannot race it."""
+        with self._lock:
+            if self._runtime_activation_in_progress:
+                return False
+            self._runner_starts_in_progress[runner_id] = (
+                self._runner_starts_in_progress.get(runner_id, 0) + 1
+            )
+        return True
+
+    def end_runner_start(self, runner_id: str) -> None:
+        with self._lock:
+            count = self._runner_starts_in_progress.get(runner_id, 0)
+            if count <= 1:
+                self._runner_starts_in_progress.pop(runner_id, None)
+            else:
+                self._runner_starts_in_progress[runner_id] = count - 1
+
+    def begin_workflow_preparation(self, workflow_id: str) -> bool:
+        """Reserve profile/source use so activation cannot race preparation."""
+        with self._lock:
+            if self._runtime_activation_in_progress:
+                return False
+            self._workflow_preparations_in_progress[workflow_id] = (
+                self._workflow_preparations_in_progress.get(workflow_id, 0) + 1
+            )
+        return True
+
+    def end_workflow_preparation(self, workflow_id: str) -> None:
+        with self._lock:
+            count = self._workflow_preparations_in_progress.get(workflow_id, 0)
+            if count <= 1:
+                self._workflow_preparations_in_progress.pop(workflow_id, None)
+            else:
+                self._workflow_preparations_in_progress[workflow_id] = count - 1
 
     def get_runner(self, runner_id: str) -> RunnerDescriptor:
         with self._lock:
@@ -609,6 +694,11 @@ class RunnerSupervisor:
         workflow_id: str | None = None,
     ) -> RunnerReservation | None:
         with self._lock:
+            if (
+                kind is RunnerReservationKind.SUBMISSION
+                and self._runtime_activation_in_progress
+            ):
+                return None
             descriptor = self._descriptor_locked(runner_id)
             if descriptor.reservation_token is not None or descriptor.current_job_id is not None:
                 return None

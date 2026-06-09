@@ -12,13 +12,13 @@ import json
 import shutil
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.dependencies.isolation import CapsuleLock, CustomNodeLock, TrustLevel
-from app.runtime.profiles import RuntimeProfileSelection
+from app.runtime.profiles import RuntimeProfileCatalog, RuntimeProfileSelection
 
 CORE_NODE_MANIFEST_SCHEMA_VERSION = "0.1.0"
 CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION = "0.1.0"
@@ -176,6 +176,29 @@ def load_core_node_manifest_catalog(path: Path = DEFAULT_CORE_NODE_MANIFEST_PATH
         return CoreNodeManifestCatalog.model_validate(json.load(file))
 
 
+def core_node_manifest_catalog_for_runtime_profiles(
+    base_catalog: CoreNodeManifestCatalog,
+    runtime_profile_catalog: RuntimeProfileCatalog,
+) -> CoreNodeManifestCatalog:
+    """Rebind the approved core-node allowlist to active local profile hashes."""
+    manifests: list[CoreNodeManifest] = []
+    for manifest in base_catalog.manifests:
+        profile = runtime_profile_catalog.profile_by_id(manifest.runtime_profile_id)
+        if profile is None:
+            manifests.append(manifest)
+            continue
+        manifests.append(
+            manifest.model_copy(
+                update={
+                    "runtime_profile_manifest_hash": (
+                        profile.runtime_profile_manifest_hash
+                    )
+                }
+            )
+        )
+    return base_catalog.model_copy(update={"manifests": manifests})
+
+
 def validate_custom_node_source_relative_paths(relative_paths: list[str]) -> None:
     """Validate archive/source path names before filesystem materialization."""
     seen_casefolded: set[str] = set()
@@ -195,10 +218,12 @@ class CustomNodeWorkspaceMaterializer:
         self,
         *,
         core_node_manifest_catalog: CoreNodeManifestCatalog | None = None,
+        runtime_profile_catalog_provider: Callable[[], RuntimeProfileCatalog] | None = None,
         max_files: int = MAX_CUSTOM_NODE_FILES,
         max_bytes: int = MAX_CUSTOM_NODE_BYTES,
     ) -> None:
         self.core_node_manifest_catalog = core_node_manifest_catalog or load_core_node_manifest_catalog()
+        self.runtime_profile_catalog_provider = runtime_profile_catalog_provider
         self.max_files = max_files
         self.max_bytes = max_bytes
 
@@ -210,7 +235,13 @@ class CustomNodeWorkspaceMaterializer:
         cached_source_dirs: dict[str, Path] | None = None,
         profile_selection: RuntimeProfileSelection | None = None,
     ) -> CustomNodeWorkspaceManifest:
-        core_manifest = self.core_node_manifest_catalog.get(
+        core_node_manifest_catalog = self.core_node_manifest_catalog
+        if self.runtime_profile_catalog_provider is not None:
+            core_node_manifest_catalog = core_node_manifest_catalog_for_runtime_profiles(
+                core_node_manifest_catalog,
+                self.runtime_profile_catalog_provider(),
+            )
+        core_manifest = core_node_manifest_catalog.get(
             runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
             runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
             runtime_profile_manifest_hash=capsule_lock.runtime.runtime_profile_manifest_hash,

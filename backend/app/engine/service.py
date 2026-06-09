@@ -701,11 +701,23 @@ class EngineService:
             return None
 
         runner = self.runner_supervisor.runner_for_workflow(workflow_id)
-        if runner is not None and runner.status in {
-            RunnerStatus.READY,
-            RunnerStatus.IDLE,
-            RunnerStatus.IDLE_WARM,
-        }:
+        expected_compatibility_key = (
+            getattr(capsule_lock.runtime, "runner_process_compatibility_key", None)
+            or getattr(capsule_lock.runtime, "runner_fingerprint", None)
+        )
+        if (
+            runner is not None
+            and (
+                expected_compatibility_key is None
+                or runner.runner_process_compatibility_key == expected_compatibility_key
+            )
+            and runner.status
+            in {
+                RunnerStatus.READY,
+                RunnerStatus.IDLE,
+                RunnerStatus.IDLE_WARM,
+            }
+        ):
             return None
 
         install = self.workflow_runner_lifecycle_service.get_install_state(workflow_id)
@@ -724,6 +736,11 @@ class EngineService:
                 workflow_id
             )
 
+        if install.get("status") in {
+            RunnerStatus.QUEUED_PENDING_MEMORY.value,
+            RunnerStatus.QUEUED_PENDING_SWITCH.value,
+        }:
+            return install
         if install.get("status") != InstallStatus.READY.value:
             return _workflow_runner_unavailable_message(install)
 

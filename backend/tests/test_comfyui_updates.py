@@ -17,6 +17,7 @@ from app.runtime.comfyui.comfyui_updates import (
     _start_failure_is_repairable,
     resolve_active_runtime_selection,
 )
+from app.runtime.runners.runtime_activation import ComfyUIActivationError
 from app.runtime.environment import CommandResult
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult, RuntimeHardwareProfile
 from app.runtime.manager import RuntimeManager
@@ -280,6 +281,255 @@ async def test_successful_update_installs_fresh_env_and_activates(
     assert manager.repo_dir == Path(versions.current.source_path)
     assert manager.environment is not None
     assert manager.environment.venv_dir == Path(versions.current.env_path)
+
+
+@pytest.mark.anyio
+async def test_successful_update_prepares_and_commits_workflow_runtime_activation(
+    tmp_path: Path,
+) -> None:
+    source_archive = tmp_path / "source.zip"
+    _source_zip(source_archive)
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    manager = _manager(tmp_path)
+    original_repo = manager.repo_dir
+    events: list[str] = []
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(source_archive.read_bytes())
+        return dest.stat().st_size
+
+    async def prepare(record: LocalComfyUIVersionRecord) -> None:
+        assert manager.repo_dir == original_repo
+        events.append(f"prepare:{record.tag}")
+
+    def commit(record: LocalComfyUIVersionRecord) -> None:
+        assert manager.repo_dir == Path(record.source_path or "")
+        events.append(f"commit:{record.tag}")
+
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=manager,
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        release_fetcher=lambda: _async_releases([_release("v0.20.1")]),
+        archive_downloader=downloader,
+        command_runner=_fake_command,
+        smoke_tester=lambda *_: _async_noop(),
+        prepare_runtime_activation=prepare,
+        commit_runtime_activation=commit,
+        log_store=LogStore(),
+    )
+
+    await service._run_update("v0.20.1", "job-1")
+
+    assert service.update_status().status == "completed"
+    assert events == ["prepare:v0.20.1", "commit:v0.20.1"]
+
+
+@pytest.mark.anyio
+async def test_activation_block_keeps_validated_runtime_available_for_retry(
+    tmp_path: Path,
+) -> None:
+    source_archive = tmp_path / "source.zip"
+    _source_zip(source_archive)
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    manager = _manager(tmp_path)
+    original_repo = manager.repo_dir
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(source_archive.read_bytes())
+        return dest.stat().st_size
+
+    async def blocked(record: LocalComfyUIVersionRecord) -> None:
+        raise ComfyUIActivationError("workflow jobs are active")
+
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=manager,
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        release_fetcher=lambda: _async_releases([_release("v0.20.1")]),
+        archive_downloader=downloader,
+        command_runner=_fake_command,
+        smoke_tester=lambda *_: _async_noop(),
+        prepare_runtime_activation=blocked,
+        log_store=LogStore(),
+    )
+
+    await service._run_update("v0.20.1", "job-1")
+    record = (await service.versions()).options[0]
+
+    assert service.update_status().status == "failed"
+    assert "workflow jobs are active" in (service.update_status().error or "")
+    assert manager.repo_dir == original_repo
+    assert record.locally_verified
+    assert not record.failed_validation
+    assert not list(paths.install_transactions_dir.glob("install-comfyui-update-*"))
+
+
+@pytest.mark.anyio
+async def test_activation_failure_after_prepare_invokes_abort_hook(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("", encoding="utf-8")
+    env = tmp_path / "env"
+    python = env / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+
+    class StopFailureManager(FakeRepairManager):
+        def is_managed_process_running(self) -> bool:
+            return True
+
+        async def stop(self) -> ProcessActionResult:
+            return ProcessActionResult(status="failed", comfyui=await self.status())
+
+    events: list[str] = []
+
+    async def prepare(record: LocalComfyUIVersionRecord) -> None:
+        events.append("prepare")
+
+    def abort(record: LocalComfyUIVersionRecord) -> None:
+        events.append("abort")
+
+    service = ComfyUIUpdateService(
+        paths=resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")}),
+        runtime_manager=StopFailureManager(source),  # type: ignore[arg-type]
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        prepare_runtime_activation=prepare,
+        abort_runtime_activation=abort,
+        log_store=LogStore(),
+    )
+    record = LocalComfyUIVersionRecord(
+        tag="v9.9.9",
+        locally_verified=True,
+        source_hash="sha256:" + ("9" * 64),
+        source_path=str(source),
+        env_path=str(env),
+    )
+
+    with pytest.raises(RuntimeError, match="Could not stop active ComfyUI"):
+        await service._activate(record)
+
+    assert events == ["prepare", "abort"]
+
+
+@pytest.mark.anyio
+async def test_activation_reconfigure_failure_keeps_previous_active_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("", encoding="utf-8")
+    env = tmp_path / "env"
+    python = env / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    previous = LocalComfyUIVersionRecord(
+        tag="v1.0.0",
+        installed=True,
+        active=True,
+        locally_verified=True,
+    )
+    _write_active(paths, previous)
+
+    class ReconfigureFailureManager(FakeRepairManager):
+        def reconfigure_managed_runtime(
+            self, *, repo_dir, python_executable, environment, version_metadata
+        ) -> None:
+            raise RuntimeError("concurrent sidecar start")
+
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=ReconfigureFailureManager(source),  # type: ignore[arg-type]
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        log_store=LogStore(),
+    )
+    record = LocalComfyUIVersionRecord(
+        tag="v9.9.9",
+        locally_verified=True,
+        source_hash="sha256:" + ("9" * 64),
+        source_path=str(source),
+        env_path=str(env),
+    )
+
+    with pytest.raises(RuntimeError, match="concurrent sidecar start"):
+        await service._activate(record)
+
+    assert service._active_record() == previous
+
+
+@pytest.mark.anyio
+async def test_rebuild_activation_block_keeps_validated_runtime_for_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("", encoding="utf-8")
+    env = tmp_path / "env"
+    python = env / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    active = LocalComfyUIVersionRecord(
+        tag="v9.9.9",
+        installed=True,
+        active=True,
+        locally_verified=True,
+        source_hash="sha256:" + ("9" * 64),
+        source_path=str(source),
+        env_path=str(env),
+    )
+    _write_active(paths, active)
+
+    async def blocked(record: LocalComfyUIVersionRecord) -> None:
+        raise ComfyUIActivationError("workflow jobs are active")
+
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=FakeRepairManager(source),  # type: ignore[arg-type]
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        prepare_runtime_activation=blocked,
+        log_store=LogStore(),
+    )
+
+    async def rebuilt(*args, **kwargs) -> LocalComfyUIVersionRecord:
+        return active
+
+    monkeypatch.setattr(service, "_repair_record", rebuilt)
+
+    await service._run_rebuild("current", "job-1")
+
+    assert service.update_status().status == "failed"
+    assert "rebuilt and validated" in (service.update_status().progress_label or "")
+    assert service._read_records()[active.tag].repair_status == "activation_blocked"
+    assert service._active_record() == active
 
 
 @pytest.mark.anyio
@@ -1145,7 +1395,7 @@ def test_resolve_active_runtime_selection_reports_bundled_comfyui_version(
     )
 
     assert selection.version_metadata.source_kind == "bundled"
-    assert selection.version_metadata.active_tag == "v0.20.1"
+    assert selection.version_metadata.active_tag == "v0.24.0-post.184009c2"
 
 
 def test_resolve_active_runtime_selection_keeps_broken_installed_runtime_for_repair(

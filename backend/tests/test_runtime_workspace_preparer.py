@@ -163,6 +163,32 @@ def test_prepare_creates_staged_dependency_and_runner_manifests(tmp_path: Path) 
     assert not preparer.runner_workspace_store.manifest_path(prepared.runner_workspace_manifest.fingerprint).exists()
 
 
+def test_prepare_reads_current_comfyui_source_from_provider(tmp_path: Path) -> None:
+    first_source = tmp_path / "first-source"
+    first_source.mkdir()
+    (first_source / "main.py").write_text("first\n", encoding="utf-8")
+    second_source = tmp_path / "second-source"
+    second_source.mkdir()
+    (second_source / "main.py").write_text("second\n", encoding="utf-8")
+    active_source = [first_source]
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(
+            tmp_path / "runner-workspaces"
+        ),
+        comfyui_source_dir_provider=lambda: active_source[0],
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    first = preparer.prepare(_capsule_lock(runner_fingerprint="sha256:" + ("1" * 64)))
+    active_source[0] = second_source
+    second = preparer.prepare(_capsule_lock(runner_fingerprint="sha256:" + ("2" * 64)))
+
+    assert (first.runner_workspace_path / "main.py").read_text(encoding="utf-8") == "first\n"
+    assert (second.runner_workspace_path / "main.py").read_text(encoding="utf-8") == "second\n"
+
+
 def test_prepare_installs_dependency_env_in_transaction_before_promotion(tmp_path: Path) -> None:
     capsule, lock = _capsule_with_dependency_lock()
     installer = _FakeDependencyEnvInstaller()

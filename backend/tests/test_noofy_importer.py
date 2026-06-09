@@ -33,7 +33,7 @@ from app.runtime.node_registry import (
     NodeRegistryResolver,
     NoofyNodeRegistry,
 )
-from app.runtime.profiles import load_runtime_profile_catalog
+from app.runtime.profiles import ActiveRuntimeProfileState, load_runtime_profile_catalog
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
     CORE_RUNNER_ID,
@@ -1042,6 +1042,78 @@ def test_import_store_persists_updated_model_identity_and_capsule_lock(
     assert locked.size_bytes == 123456
     persisted_payload = json.loads(package_file.read_text(encoding="utf-8"))
     assert persisted_payload["future_metadata"] == {"preserve": True}
+
+
+def test_import_store_refreshes_stale_runtime_capsule_lock(tmp_path: Path) -> None:
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+    imported = store.import_archive(_archive_bytes())
+    capsule_file = store.package_dir(imported) / "capsule.lock.json"
+    stale = json.loads(capsule_file.read_text(encoding="utf-8"))
+    stale["runtime"]["runtime_profile_manifest_hash"] = "sha256:" + ("0" * 64)
+    stale["runtime"]["runner_fingerprint"] = "sha256:" + ("1" * 64)
+    capsule_file.write_text(json.dumps(stale), encoding="utf-8")
+
+    refreshed = store.refresh_capsule_lock(imported)
+
+    assert refreshed is not None
+    assert refreshed.runtime.runtime_profile_manifest_hash != stale["runtime"][
+        "runtime_profile_manifest_hash"
+    ]
+    assert refreshed.runtime.runner_fingerprint != stale["runtime"]["runner_fingerprint"]
+    persisted = CapsuleLockLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    ).get_capsule_lock(imported.metadata.id)
+    assert persisted == refreshed
+    assert log_store.list_events().events[-1].message == (
+        "Refreshed imported workflow runtime capsule"
+    )
+
+
+def test_import_store_refreshes_capsule_for_active_managed_comfyui(
+    tmp_path: Path,
+) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "main.py").write_text("", encoding="utf-8")
+    updated = tmp_path / "updated"
+    updated.mkdir()
+    (updated / "main.py").write_text("", encoding="utf-8")
+    state = ActiveRuntimeProfileState(
+        base_catalog=load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json")),
+        source_dir=bundled,
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        runtime_profile_catalog_provider=state.catalog,
+    )
+    imported = store.import_archive(_archive_bytes())
+    original = store.refresh_capsule_lock(imported)
+    assert original is not None
+
+    state.activate(
+        state.prepare_local_activation(
+            comfyui_core_version="v9.9.9",
+            comfyui_core_source_hash="sha256:" + ("9" * 64),
+            source_reference="https://example.test/v9.9.9.zip",
+            source_dir=updated,
+        )
+    )
+    refreshed = store.refresh_capsule_lock(imported)
+
+    assert refreshed is not None
+    assert refreshed.engine.comfyui_version == "v9.9.9"
+    assert refreshed.engine.core_source_hash == "sha256:" + ("9" * 64)
+    assert refreshed.runtime.runtime_profile_manifest_hash != (
+        original.runtime.runtime_profile_manifest_hash
+    )
+    assert refreshed.runtime.dependency_env_fingerprint != (
+        original.runtime.dependency_env_fingerprint
+    )
+    assert refreshed.runtime.runner_fingerprint != original.runtime.runner_fingerprint
+    assert refreshed.runtime.capsule_fingerprint != original.runtime.capsule_fingerprint
 
 
 def test_import_store_rejects_silent_replacement_of_existing_package(

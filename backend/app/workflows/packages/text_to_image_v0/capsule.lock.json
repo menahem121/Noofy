@@ -9,25 +9,25 @@
   },
   "engine": {
     "type": "comfyui",
-    "comfyui_version": "v0.20.1",
-    "core_source_hash": "sha256:cac6d4de1b9111dcc36183321aa4599f49718c63e1918a4ef275dc2cd3656f29"
+    "comfyui_version": "v0.24.0-post.184009c2",
+    "core_source_hash": "sha256:cb1b555e57c269ecb9f152dc3a32c44b0de96181dbfb6bc31fb62fa1482eff0e"
   },
   "runtime": {
     "runtime_profile_id": "noofy-comfyui-v1-default",
     "runtime_profile_variant_id": "linux-x64-cuda130",
-    "runtime_profile_manifest_hash": "sha256:506f83502aa8b43ccbc33b98e0b64f54237d7c48671313ae491632af43099194",
+    "runtime_profile_manifest_hash": "sha256:fc21f3c8d79afe72eee2788926b288aec1940514f7c4fd76ce6ec88bd6417c61",
     "runtime_profile_catalog_version": "0.1.0",
     "fingerprint_schema_version": "0.1.0",
-    "dependency_env_fingerprint": "sha256:31c1246ee6fc0c3c5b6d29e1a37957c0c40dbb9498ef69c76ce0aa01603e0bcd",
-    "runner_fingerprint": "sha256:66f22d9061989d262eafb8ab06f0f657024d50aeda590da24b1d3a38aa3c9011",
-    "capsule_fingerprint": "sha256:9e00a36dcb60edb5b3685a8d8c8ada40cb6fc738362e1e0112dba0a5f9b21040",
+    "dependency_env_fingerprint": "sha256:4327158db7e3877a5206217c808bee9d1b8fc2131ef6d81974cf5daee154721f",
+    "runner_fingerprint": "sha256:ad8dfb53590684780e1b0a484e4d407b2506dfecb499dd16dc3ac6bb274fe465",
+    "capsule_fingerprint": "sha256:35dba56e043ffd0b01dd8057d5a20a78fe9b4ba93159675956761e8459f7bdc8",
     "os": "linux",
     "architecture": "x64",
     "python_version": "3.13",
     "python_build_id": "cpython-3.13-noofy-v1",
     "gpu_backend": "cuda",
     "dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
-    "runner_workspace_hash": "sha256:66f22d9061989d262eafb8ab06f0f657024d50aeda590da24b1d3a38aa3c9011"
+    "runner_workspace_hash": "sha256:ad8dfb53590684780e1b0a484e4d407b2506dfecb499dd16dc3ac6bb274fe465"
   },
   "custom_nodes": [],
   "dependencies": {

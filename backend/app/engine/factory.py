@@ -19,6 +19,9 @@ from app.runtime.comfyui.comfyui_updates import (
     ComfyUIUpdateService,
     resolve_active_runtime_selection,
 )
+from app.runtime.comfyui.comfyui_update_records import (
+    read_active_record,
+)
 from app.runtime.dependencies.custom_nodes import CustomNodeWorkspaceMaterializer
 from app.runtime.dependencies.dependency_env import UvDependencyEnvironmentInstaller
 from app.runtime.dependencies.dependency_lock import core_dependency_lock_from_capsule
@@ -40,11 +43,13 @@ from app.runtime.node_registry import (
     NoofyNodeRegistry,
 )
 from app.runtime.profiles import (
+    ActiveRuntimeProfileState,
     DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
     load_runtime_profile_catalog,
 )
 from app.runtime.runners.runner_coordinator import AdapterFactory, RunnerProcessCoordinator
 from app.runtime.runners.runner_process import RunnerProcessSupervisor
+from app.runtime.runners.runtime_activation import WorkflowRuntimeActivationCoordinator
 from app.runtime.smoke_test import RunnerSmokeTester
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_FINGERPRINT,
@@ -124,13 +129,17 @@ def create_default_engine_service() -> EngineService:
     paths = settings.paths
     paths.ensure_directories()
     log_store = LogStore()
-    runtime_profile_catalog = load_runtime_profile_catalog(
+    base_runtime_profile_catalog = load_runtime_profile_catalog(
         DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
+    )
+    runtime_profile_state = ActiveRuntimeProfileState(
+        base_catalog=base_runtime_profile_catalog,
+        source_dir=settings.comfyui_repo_dir,
     )
     selected_runtime_profile_variant = None
     try:
         _, selected_runtime_profile_variant = select_import_runtime_profile(
-            runtime_profile_catalog.profiles
+            base_runtime_profile_catalog.profiles
         )
     except RuntimeProfileSelectionError as exc:
         log_store.add(
@@ -205,6 +214,30 @@ def create_default_engine_service() -> EngineService:
         mode=settings.comfyui_runtime_mode,
         developer_override=developer_runtime_override,
     )
+    if active_runtime.version_metadata.source_kind == "installed":
+        active_record = read_active_record(paths)
+        if (
+            active_record is not None
+            and active_record.source_hash
+            and active_record.source_path
+        ):
+            try:
+                runtime_profile_state.activate(
+                    runtime_profile_state.prepare_local_activation(
+                        comfyui_core_version=active_record.tag,
+                        comfyui_core_source_hash=active_record.source_hash,
+                        source_reference=active_record.archive_url or active_record.tag,
+                        source_dir=Path(active_record.source_path),
+                    )
+                )
+            except (OSError, ValueError) as exc:
+                log_store.add(
+                    "warning",
+                    "Active managed ComfyUI could not initialize the workflow runtime profile",
+                    "runtime.profiles",
+                    details={"tag": active_record.tag, "error": str(exc)},
+                )
+    runtime_profile_catalog = runtime_profile_state.catalog()
     launch_settings_store = ComfyUILaunchSettingsStore(
         paths.runtime_store_dir / "settings" / "comfyui-launch.json"
     )
@@ -294,6 +327,7 @@ def create_default_engine_service() -> EngineService:
             cache_dir=paths.custom_node_cache_dir,
             log_store=log_store,
         ),
+        runtime_profile_catalog_provider=runtime_profile_state.catalog,
     )
 
     supervisor = RunnerSupervisor()
@@ -401,6 +435,7 @@ def create_default_engine_service() -> EngineService:
             comfyui_source_dir=active_runtime.repo_dir,
             model_view_dir=paths.model_materialized_dir,
             runtime_profile_catalog=runtime_profile_catalog,
+            active_runtime_profile_provider=runtime_profile_state.snapshot,
             dependency_env_installer=UvDependencyEnvironmentInstaller(
                 wheel_cache_dir=paths.wheel_cache_dir,
                 uv_cache_dir=paths.cache_dir / "uv",
@@ -415,7 +450,9 @@ def create_default_engine_service() -> EngineService:
                 uv_executable=resolve_noofy_uv_executable(),
                 log_store=log_store,
             ),
-            custom_node_materializer=CustomNodeWorkspaceMaterializer(),
+            custom_node_materializer=CustomNodeWorkspaceMaterializer(
+                runtime_profile_catalog_provider=runtime_profile_state.catalog,
+            ),
             custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
                 workflow_id,
                 workflow_loader=loader,
@@ -423,7 +460,11 @@ def create_default_engine_service() -> EngineService:
             ),
             custom_node_source_cache_dir=paths.custom_node_cache_dir,
             dependency_transactions_dir=paths.install_transactions_dir,
-            dependency_python_executable_provider=lambda: runtime_environment.python_executable,
+            dependency_python_executable_provider=lambda: (
+                runtime_manager.environment.python_executable
+                if runtime_manager.environment is not None
+                else runtime_manager.python_executable
+            ),
             log_store=log_store,
         ),
         workspace_smoke_test=runner_smoke_tester.run,
@@ -450,6 +491,13 @@ def create_default_engine_service() -> EngineService:
         )
 
     runtime_manager._on_restart = _reconfigure_adapter
+    workflow_runtime_activation = WorkflowRuntimeActivationCoordinator(
+        runtime_profile_state=runtime_profile_state,
+        runner_supervisor=supervisor,
+        runner_process_coordinator=runner_process_coordinator,
+        log_store=log_store,
+    )
+
     comfyui_update_service = ComfyUIUpdateService(
         paths=paths,
         runtime_manager=runtime_manager,
@@ -481,6 +529,9 @@ def create_default_engine_service() -> EngineService:
             logs_dir=paths.logs_dir,
             cache_dir=paths.cache_dir,
         ).python_executable,
+        prepare_runtime_activation=workflow_runtime_activation.prepare,
+        commit_runtime_activation=workflow_runtime_activation.commit,
+        abort_runtime_activation=workflow_runtime_activation.abort,
         log_store=log_store,
     )
     comfyui_sidecar_service = ComfyUISidecarService(

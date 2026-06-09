@@ -10,9 +10,14 @@ from app.runtime.dependencies.custom_nodes import (
     CustomNodeMaterializationError,
     CustomNodeMaterializationErrorCode,
     CustomNodeWorkspaceMaterializer,
+    core_node_manifest_catalog_for_runtime_profiles,
     validate_custom_node_source_relative_paths,
 )
 from app.runtime.dependencies.isolation import CapsuleLock
+from app.runtime.profiles import (
+    load_runtime_profile_catalog,
+    runtime_profile_catalog_for_local_comfyui,
+)
 
 
 RUNTIME_PROFILE_HASH = "sha256:" + ("9" * 64)
@@ -33,6 +38,43 @@ def _materializer(*, max_files: int = 20_000, max_bytes: int = 512 * 1024 * 1024
         max_files=max_files,
         max_bytes=max_bytes,
     )
+
+
+def test_core_node_allowlist_rebinds_to_locally_validated_runtime_profile() -> None:
+    runtime_catalog = load_runtime_profile_catalog(
+        Path("app/runtime/profile_catalog.json")
+    )
+    profile = runtime_catalog.profiles[0]
+    variant = profile.variants[0]
+    core_catalog = CoreNodeManifestCatalog(
+        manifests=[
+            CoreNodeManifest(
+                runtime_profile_id=profile.runtime_profile_id,
+                runtime_profile_variant_id=variant.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+                node_types=["KSampler", "LoadImage"],
+            )
+        ]
+    )
+    local_catalog = runtime_profile_catalog_for_local_comfyui(
+        runtime_catalog,
+        comfyui_core_version="v9.9.9",
+        comfyui_core_source_hash="sha256:" + ("9" * 64),
+        source_reference="https://example.test/v9.9.9.zip",
+    )
+
+    rebound = core_node_manifest_catalog_for_runtime_profiles(
+        core_catalog,
+        local_catalog,
+    ).get(
+        runtime_profile_id=profile.runtime_profile_id,
+        runtime_profile_variant_id=variant.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=(
+            local_catalog.profiles[0].runtime_profile_manifest_hash
+        ),
+    )
+
+    assert rebound.node_types == ["KSampler", "LoadImage"]
 
 
 def test_materializer_recognizes_core_nodes_and_materializes_required_bundled_nodes(tmp_path: Path) -> None:

@@ -55,6 +55,7 @@ from app.runtime.dependencies.isolation import (
     SmokeTestStatus,
 )
 from app.runtime.profiles import (
+    ActiveRuntimeProfileSnapshot,
     RuntimeProfileCatalog,
     RuntimeProfileErrorCode,
     RuntimeProfileResolutionError,
@@ -93,6 +94,11 @@ class RuntimeWorkspacePreparer:
         comfyui_source_dir: Path | None = None,
         model_view_dir: Path | None = None,
         runtime_profile_catalog: RuntimeProfileCatalog | None = None,
+        active_runtime_profile_provider: (
+            Callable[[], ActiveRuntimeProfileSnapshot] | None
+        ) = None,
+        comfyui_source_dir_provider: Callable[[], Path] | None = None,
+        runtime_profile_catalog_provider: Callable[[], RuntimeProfileCatalog] | None = None,
         dependency_env_installer: DependencyEnvironmentInstaller | None = None,
         dependency_locks: Mapping[str, ResolvedDependencyLock] | None = None,
         dependency_lock_store: ResolvedDependencyLockStore | None = None,
@@ -112,6 +118,9 @@ class RuntimeWorkspacePreparer:
         self.comfyui_source_dir = comfyui_source_dir
         self.model_view_dir = model_view_dir
         self.runtime_profile_catalog = runtime_profile_catalog
+        self.active_runtime_profile_provider = active_runtime_profile_provider
+        self.comfyui_source_dir_provider = comfyui_source_dir_provider
+        self.runtime_profile_catalog_provider = runtime_profile_catalog_provider
         self.dependency_env_installer = dependency_env_installer
         self.dependency_locks = dict(dependency_locks or {})
         self.dependency_lock_store = dependency_lock_store
@@ -150,12 +159,34 @@ class RuntimeWorkspacePreparer:
             capsule_fingerprint=capsule_lock.runtime.capsule_fingerprint,
         )
         try:
+            active_runtime_profile = (
+                self.active_runtime_profile_provider()
+                if self.active_runtime_profile_provider is not None
+                else None
+            )
+            if active_runtime_profile is not None:
+                comfyui_source_dir = active_runtime_profile.source_dir
+                runtime_profile_catalog = active_runtime_profile.catalog
+            else:
+                comfyui_source_dir = (
+                    self.comfyui_source_dir_provider()
+                    if self.comfyui_source_dir_provider is not None
+                    else self.comfyui_source_dir
+                )
+                runtime_profile_catalog = (
+                    self.runtime_profile_catalog_provider()
+                    if self.runtime_profile_catalog_provider is not None
+                    else self.runtime_profile_catalog
+                )
             source_policy = capsule_source_policy(capsule_lock)
             if not source_policy.automatic_preparation_allowed:
                 raise RuntimeError(
                     "Workflow preparation is blocked by the source policy."
                 )
-            profile_selection = self._resolve_runtime_profile(capsule_lock)
+            profile_selection = self._resolve_runtime_profile(
+                capsule_lock,
+                runtime_profile_catalog=runtime_profile_catalog,
+            )
             custom_node_manifest = self._custom_node_workspace_manifest(
                 capsule_lock,
                 profile_selection,
@@ -203,6 +234,7 @@ class RuntimeWorkspacePreparer:
                         capsule_lock
                     ),
                     model_view_dir=model_view_dir,
+                    comfyui_source_dir=comfyui_source_dir,
                 )
             )
 
@@ -807,6 +839,7 @@ class RuntimeWorkspacePreparer:
         source_files_dir: Path | None = None,
         cached_source_dirs: dict[str, Path] | None = None,
         model_view_dir: Path | None = None,
+        comfyui_source_dir: Path | None = None,
     ) -> tuple[RunnerWorkspaceManifest, Path]:
         workspace_path = self.install_transaction_store.staged_runner_workspace_dir(
             transaction, manifest.fingerprint
@@ -836,6 +869,7 @@ class RuntimeWorkspacePreparer:
                 source_files_dir=source_files_dir,
                 cached_source_dirs=cached_source_dirs,
                 model_view_dir=model_view_dir,
+                comfyui_source_dir=comfyui_source_dir,
             )
             if existing != manifest:
                 self._write_transaction_manifest(workspace_path, manifest)
@@ -863,6 +897,7 @@ class RuntimeWorkspacePreparer:
             source_files_dir=source_files_dir,
             cached_source_dirs=cached_source_dirs,
             model_view_dir=model_view_dir,
+            comfyui_source_dir=comfyui_source_dir,
         )
         self._write_transaction_manifest(workspace_path, manifest)
         self.log_store.add(
@@ -1012,13 +1047,17 @@ class RuntimeWorkspacePreparer:
         )
 
     def _resolve_runtime_profile(
-        self, capsule_lock: CapsuleLock
+        self,
+        capsule_lock: CapsuleLock,
+        *,
+        runtime_profile_catalog: RuntimeProfileCatalog | None = None,
     ) -> RuntimeProfileSelection | None:
-        if self.runtime_profile_catalog is None:
+        catalog = runtime_profile_catalog or self.runtime_profile_catalog
+        if catalog is None:
             return None
         runtime = capsule_lock.runtime
         selection = resolve_runtime_profile(
-            self.runtime_profile_catalog,
+            catalog,
             runtime_profile_id=runtime.runtime_profile_id,
             runtime_profile_variant_id=runtime.runtime_profile_variant_id,
             os_name=runtime.os,
@@ -1129,8 +1168,10 @@ class RuntimeWorkspacePreparer:
         source_files_dir: Path | None = None,
         cached_source_dirs: dict[str, Path] | None = None,
         model_view_dir: Path | None = None,
+        comfyui_source_dir: Path | None = None,
     ) -> None:
-        if self.comfyui_source_dir is None:
+        source_dir = comfyui_source_dir or self.comfyui_source_dir
+        if source_dir is None:
             if (
                 custom_node_manifest is not None
                 and self.custom_node_materializer is not None
@@ -1142,7 +1183,6 @@ class RuntimeWorkspacePreparer:
                     runner_workspace_dir=workspace_path,
                 )
             return
-        source_dir = self.comfyui_source_dir
         if not source_dir.exists():
             raise FileNotFoundError(f"Noofy could not find the bundled ComfyUI engine files: {source_dir}")
         if not (source_dir / "main.py").exists():

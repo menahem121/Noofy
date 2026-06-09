@@ -11,8 +11,10 @@ import json
 import platform
 import shutil
 import sys
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -167,6 +169,74 @@ class RuntimeProfileSelection(BaseModel):
     variant: RuntimeProfileVariant
 
 
+@dataclass(frozen=True)
+class ActiveRuntimeProfileSnapshot:
+    catalog: RuntimeProfileCatalog
+    source_dir: Path
+
+
+class ActiveRuntimeProfileState:
+    """Atomically exposes the runtime profile and source used by workflow runners."""
+
+    def __init__(
+        self,
+        *,
+        base_catalog: RuntimeProfileCatalog,
+        source_dir: Path,
+    ) -> None:
+        base_catalog.validate_integrity()
+        self._base_catalog = base_catalog
+        self._lock = Lock()
+        self._snapshot = ActiveRuntimeProfileSnapshot(
+            catalog=base_catalog,
+            source_dir=source_dir,
+        )
+
+    def snapshot(self) -> ActiveRuntimeProfileSnapshot:
+        with self._lock:
+            return self._snapshot
+
+    def catalog(self) -> RuntimeProfileCatalog:
+        return self.snapshot().catalog
+
+    def source_dir(self) -> Path:
+        return self.snapshot().source_dir
+
+    def prepare_local_activation(
+        self,
+        *,
+        comfyui_core_version: str,
+        comfyui_core_source_hash: str,
+        source_reference: str,
+        source_dir: Path,
+    ) -> ActiveRuntimeProfileSnapshot:
+        if not source_dir.is_dir() or not (source_dir / "main.py").is_file():
+            raise ValueError(
+                f"Cannot activate workflow runtime from invalid ComfyUI source: {source_dir}"
+            )
+        base_profile = self._base_catalog.profiles[0]
+        if (
+            comfyui_core_version == base_profile.comfyui_core_version
+            and comfyui_core_source_hash == base_profile.comfyui_core_source_hash
+        ):
+            return ActiveRuntimeProfileSnapshot(
+                catalog=self._base_catalog,
+                source_dir=source_dir,
+            )
+        catalog = runtime_profile_catalog_for_local_comfyui(
+            self._base_catalog,
+            comfyui_core_version=comfyui_core_version,
+            comfyui_core_source_hash=comfyui_core_source_hash,
+            source_reference=source_reference,
+        )
+        return ActiveRuntimeProfileSnapshot(catalog=catalog, source_dir=source_dir)
+
+    def activate(self, snapshot: ActiveRuntimeProfileSnapshot) -> None:
+        snapshot.catalog.validate_integrity()
+        with self._lock:
+            self._snapshot = snapshot
+
+
 class RuntimeSourceManifestEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -242,6 +312,45 @@ def build_runtime_profile(
     )
     validate_runtime_profile_integrity(profile)
     return profile.model_copy(update={"runtime_profile_manifest_hash": profile.computed_manifest_hash()})
+
+
+def runtime_profile_catalog_for_local_comfyui(
+    base_catalog: RuntimeProfileCatalog,
+    *,
+    comfyui_core_version: str,
+    comfyui_core_source_hash: str,
+    source_reference: str,
+) -> RuntimeProfileCatalog:
+    """Derive the locally validated workflow-runner profile for a managed update."""
+    base_catalog.validate_integrity()
+    base_profile = base_catalog.profiles[0]
+    source_identity = comfyui_core_source_hash.removeprefix("sha256:")[:16]
+    profile = base_profile.model_copy(
+        update={
+            "runtime_profile_manifest_hash": _PROFILE_MANIFEST_HASH_PLACEHOLDER,
+            "comfyui_core_version": comfyui_core_version,
+            "comfyui_core_source_hash": comfyui_core_source_hash,
+            "comfyui_source_origin_kind": RuntimeSourceOriginKind.UPSTREAM_SOURCE_ARCHIVE,
+            "comfyui_source_reference": source_reference,
+            "comfyui_source_manifest_hash": comfyui_core_source_hash,
+            "source_status": RuntimeSourceStatus.CLEAN_REPRODUCIBLE,
+            "comfyui_frontend_version": (
+                f"managed-with-comfyui-{comfyui_core_version}-{source_identity}"
+            ),
+            "profile_signature": None,
+            "signed_manifest_reference": (
+                f"noofy-local-validation://comfyui/{comfyui_core_version}/{source_identity}"
+            ),
+        }
+    )
+    profile = profile.model_copy(
+        update={"runtime_profile_manifest_hash": profile.computed_manifest_hash()}
+    )
+    catalog = base_catalog.model_copy(
+        update={"profiles": [profile, *base_catalog.profiles[1:]]}
+    )
+    catalog.validate_integrity()
+    return catalog
 
 
 def load_runtime_profile_catalog(path: Path) -> RuntimeProfileCatalog:

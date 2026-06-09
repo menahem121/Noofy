@@ -30,6 +30,8 @@ implementation details that do not need to live in the orchestration service:
   records, and JSON persistence.
 - `backend/app/runtime/comfyui/comfyui_update_smoke.py`: required route checks, prompt/WebSocket smoke, and
   runtime-directory contamination checks.
+- `backend/app/runtime/runners/runtime_activation.py`: active-job activation gate, queued runner cancellation,
+  isolated runner shutdown, and workflow runtime-profile commit.
 
 ## Storage Contract
 
@@ -56,11 +58,31 @@ Activation is transactional:
 3. Hash the source tree and copy it into `runtime-store/core-engines/`.
 4. Create a fresh per-version venv under `runtime-store/core-envs/`.
 5. Run startup, API route, workflow, WebSocket, and path-isolation smoke checks.
-6. Stop the current managed sidecar if needed.
-7. Atomically update active metadata.
+6. Refuse activation while a core or isolated workflow job, submission reservation, output stream, runner
+   process startup, or workflow runtime preparation is active.
+7. Close the submission/start gate, cancel queued isolated-runner starts, and stop idle isolated runners.
+8. Stop the current managed sidecar if needed.
+9. Atomically update active metadata and the workflow-runner runtime profile/source snapshot.
 
 If validation fails, Noofy keeps the current working ComfyUI unchanged and records
 the selected version as `Failed validation`.
+
+Imported workflow capsules are refreshed against the active locally validated
+runtime profile before preparation or runner start. A ComfyUI source change
+therefore creates new capsule, dependency-environment, and runner-workspace
+fingerprints instead of reusing artifacts prepared for the previous source.
+The locally active profile rebinds Noofy's shipped approved core-node allowlist
+to the new profile hash; a Settings update does not silently expand the trusted
+core-node surface.
+The next workflow run prepares those new artifacts automatically; restarting
+Noofy after a successful Settings update is not required.
+
+If validation succeeds but activation cannot complete, including when active
+workflow work blocks the switch, Noofy keeps the validated version installed
+and available for a later activation attempt. It does not misclassify the
+version as incompatible or failed validation. New submissions wait while the
+short activation critical section is open, and the gate is reopened on both
+commit and abort.
 
 ## Automatic Repair
 

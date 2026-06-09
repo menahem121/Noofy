@@ -32,7 +32,10 @@ from app.runtime.memory.memory_governor import (
     MemoryReleaseStatus,
 )
 from app.runtime.models.model_store import LocalModelRequirement
-from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runners.runner_coordinator import (
+    RunnerProcessCoordinator,
+    RunnerRuntimeActivationInProgressError,
+)
 from app.runtime.runners.runner_process import RunnerLaunchSpec
 from app.runtime.python_abi import detect_python_major_minor
 from app.runtime.smoke_test import SmokeExecutionFixture
@@ -336,6 +339,20 @@ class WorkflowRunnerLifecycleService:
     # ------------------------------------------------------------------
 
     async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
+        if not self.runner_supervisor.begin_workflow_preparation(workflow_id):
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "user_facing_message": "Waiting for the ComfyUI update to finish.",
+                "cancelable": False,
+                "error": "ComfyUI runtime activation is in progress.",
+            }
+        try:
+            return await self._prepare_workflow(workflow_id)
+        finally:
+            self.runner_supervisor.end_workflow_preparation(workflow_id)
+
+    async def _prepare_workflow(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
             self.log_store.add(
                 "warning",
@@ -409,6 +426,15 @@ class WorkflowRunnerLifecycleService:
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         """Start and bind an isolated runner for a prepared verified workflow."""
+        if self.runner_supervisor.runtime_activation_in_progress():
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "runner": None,
+                "pid": None,
+                "install_status": None,
+                "error": "ComfyUI runtime activation is in progress.",
+            }
         if self.runner_process_coordinator is None:
             self.log_store.add(
                 "warning",
@@ -655,6 +681,15 @@ class WorkflowRunnerLifecycleService:
                     },
                 )
             handle = await self.runner_process_coordinator.start_runner(spec, workflow_id=workflow_id)
+        except RunnerRuntimeActivationInProgressError as exc:
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                "runner": None,
+                "pid": None,
+                "install_status": InstallStatus.READY.value,
+                "error": str(exc),
+            }
         except Exception as exc:
             self.log_store.add(
                 "error",
@@ -805,10 +840,12 @@ class WorkflowRunnerLifecycleService:
         try:
             capsule_lock = self.capsule_loader.get_bundled_capsule_lock(workflow_id)
         except KeyError:
-            try:
-                capsule_lock = self.capsule_loader.get_capsule_lock(workflow_id)
-            except KeyError:
-                return None
+            capsule_lock = self._refreshed_imported_capsule_lock(workflow_id)
+            if capsule_lock is None:
+                try:
+                    capsule_lock = self.capsule_loader.get_capsule_lock(workflow_id)
+                except KeyError:
+                    return None
         if capsule_lock.workflow.package_id != workflow_id and _imported_workflow_id_str(capsule_lock) != workflow_id:
             return None
         if capsule_lock.workflow.trust_level not in _PREPARABLE_TRUST_LEVELS:
@@ -816,6 +853,30 @@ class WorkflowRunnerLifecycleService:
         if capsule_lock.trust.level not in _PREPARABLE_TRUST_LEVELS:
             return None
         return capsule_lock
+
+    def _refreshed_imported_capsule_lock(
+        self,
+        workflow_id: str,
+    ) -> CapsuleLock | None:
+        if self.imported_package_store is None:
+            return None
+        try:
+            package = self.workflow_loader.get_package(workflow_id)
+        except KeyError:
+            return None
+        if not self.imported_package_store.has_package_identity(package):
+            return None
+        try:
+            return self.imported_package_store.refresh_capsule_lock(package)
+        except NoofyImportError as exc:
+            self.log_store.add(
+                "warning",
+                "Imported workflow runtime capsule could not be refreshed",
+                "workflow.runtime",
+                workflow_id=workflow_id,
+                details={"error": str(exc)},
+            )
+            return None
 
     def _runner_launch_spec(self, capsule_lock: CapsuleLock, install_state: InstallState) -> RunnerLaunchSpec:
         assert self.runtime_manager is not None, "runtime_manager required for runner launch"

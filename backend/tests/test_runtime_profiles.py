@@ -5,6 +5,7 @@ import pytest
 
 from app.runtime.fingerprints import FINGERPRINT_SCHEMA_VERSION
 from app.runtime.profiles import (
+    ActiveRuntimeProfileState,
     COMFYUI_SOURCE_MANIFEST_FILENAME,
     RuntimeProfileCatalog,
     RuntimeProfileErrorCode,
@@ -31,7 +32,7 @@ def test_runtime_profile_catalog_loads_and_validates_manifest_hash() -> None:
     assert profile.runtime_profile_id == "noofy-comfyui-v1-default"
     assert profile.runtime_profile_manifest_hash == profile.computed_manifest_hash()
     assert profile.source_status is RuntimeSourceStatus.CLEAN_REPRODUCIBLE
-    assert profile.comfyui_core_version == "v0.20.1"
+    assert profile.comfyui_core_version == "v0.24.0-post.184009c2"
     assert profile.comfyui_source_origin_kind is RuntimeSourceOriginKind.UPSTREAM_SOURCE_ARCHIVE
     assert profile.signed_manifest_reference is not None
     assert all(
@@ -39,6 +40,34 @@ def test_runtime_profile_catalog_loads_and_validates_manifest_hash() -> None:
         and variant.launch_defaults.preview_size == 512
         for variant in profile.variants
     )
+
+
+def test_active_runtime_profile_state_commits_validated_local_source_atomically(
+    tmp_path: Path,
+) -> None:
+    bundled = _fake_clean_comfyui_source(tmp_path / "bundled")
+    updated = _fake_clean_comfyui_source(tmp_path / "updated")
+    catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    state = ActiveRuntimeProfileState(base_catalog=catalog, source_dir=bundled)
+
+    pending = state.prepare_local_activation(
+        comfyui_core_version="v9.9.9",
+        comfyui_core_source_hash="sha256:" + ("9" * 64),
+        source_reference="https://example.test/v9.9.9.zip",
+        source_dir=updated,
+    )
+
+    assert state.source_dir() == bundled
+    assert state.catalog() == catalog
+
+    state.activate(pending)
+
+    profile = state.catalog().profiles[0]
+    assert state.source_dir() == updated
+    assert profile.comfyui_core_version == "v9.9.9"
+    assert profile.comfyui_core_source_hash == "sha256:" + ("9" * 64)
+    assert profile.runtime_profile_manifest_hash == profile.computed_manifest_hash()
+    assert profile.variants == catalog.profiles[0].variants
 
 
 def test_resolve_runtime_profile_selects_supported_variant() -> None:

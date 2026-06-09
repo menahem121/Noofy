@@ -7,13 +7,15 @@ import shutil
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
+from app.runtime.profiles import RuntimeProfileCatalog
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     CustomNodeSourceResolutionRequest,
@@ -145,6 +147,7 @@ class ImportedWorkflowPackageStore:
         node_registry_resolver: NodeRegistryResolver | None = None,
         custom_node_source_cache: CustomNodeSourceCache | None = None,
         trust_verifier: TrustVerifier | None = None,
+        runtime_profile_catalog_provider: Callable[[], RuntimeProfileCatalog] | None = None,
     ) -> None:
         self.root_dir = root_dir
         self.log_store = log_store
@@ -152,6 +155,7 @@ class ImportedWorkflowPackageStore:
         self.node_registry_resolver = node_registry_resolver
         self.custom_node_source_cache = custom_node_source_cache
         self.trust_verifier = trust_verifier or TrustVerifier()
+        self.runtime_profile_catalog_provider = runtime_profile_catalog_provider
 
     def preview_archive(
         self,
@@ -241,7 +245,7 @@ class ImportedWorkflowPackageStore:
         target_dir = self.package_dir(package)
         runtime_resolution_unavailable: dict[str, object] | None = None
         try:
-            app_capsule_lock: CapsuleLock | None = build_imported_package_capsule_lock(package)
+            app_capsule_lock: CapsuleLock | None = self._build_capsule_lock(package)
         except ImportCapsuleLockError as exc:
             if isinstance(exc.__cause__, RuntimeProfileSelectionError):
                 runtime_resolution_unavailable = _unsupported_local_runtime_resolution(
@@ -308,14 +312,14 @@ class ImportedWorkflowPackageStore:
             for model in package.required_models
         ]
         try:
-            capsule_lock = build_imported_package_capsule_lock(package)
+            capsule_lock = self._build_capsule_lock(package)
         except ImportCapsuleLockError as exc:
             if not isinstance(exc.__cause__, RuntimeProfileSelectionError):
                 raise
             capsule_lock = None
 
         package_tmp = package_file.with_suffix(".json.tmp")
-        capsule_tmp = capsule_file.with_suffix(".json.tmp")
+        capsule_tmp = capsule_file.with_suffix(f".json.{uuid4().hex}.tmp")
         try:
             package_tmp.write_text(
                 json.dumps(package_payload, indent=2, sort_keys=True),
@@ -341,6 +345,69 @@ class ImportedWorkflowPackageStore:
                 "model_count": len(unique_required_models(package.required_models)),
                 "capsule_lock_updated": capsule_lock is not None,
             },
+        )
+
+    def refresh_capsule_lock(self, package: WorkflowPackage) -> CapsuleLock | None:
+        """Refresh the app-owned lock when the selected runtime profile changes."""
+        capsule_file = self.package_dir(package) / "capsule.lock.json"
+        assert_path_within(
+            self.root_dir,
+            capsule_file,
+            purpose="refresh imported workflow capsule",
+        )
+        try:
+            capsule_lock = self._build_capsule_lock(package)
+        except ImportCapsuleLockError as exc:
+            if not isinstance(exc.__cause__, RuntimeProfileSelectionError):
+                raise NoofyImportError(str(exc)) from exc
+            return None
+
+        try:
+            current = CapsuleLock.model_validate_json(
+                capsule_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            current = None
+        if current == capsule_lock:
+            return capsule_lock
+
+        capsule_tmp = capsule_file.with_suffix(".json.tmp")
+        try:
+            capsule_tmp.write_text(
+                capsule_lock.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            capsule_tmp.replace(capsule_file)
+        finally:
+            capsule_tmp.unlink(missing_ok=True)
+        self.log_store.add(
+            "info",
+            "Refreshed imported workflow runtime capsule",
+            "workflow.runtime",
+            workflow_id=package.metadata.id,
+            details={
+                "previous_capsule_fingerprint": (
+                    current.runtime.capsule_fingerprint if current is not None else None
+                ),
+                "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                "runtime_profile_manifest_hash": (
+                    capsule_lock.runtime.runtime_profile_manifest_hash
+                ),
+            },
+        )
+        return capsule_lock
+
+    def _build_capsule_lock(self, package: WorkflowPackage) -> CapsuleLock:
+        catalog = (
+            self.runtime_profile_catalog_provider()
+            if self.runtime_profile_catalog_provider is not None
+            else None
+        )
+        if catalog is None:
+            return build_imported_package_capsule_lock(package)
+        return build_imported_package_capsule_lock(
+            package,
+            runtime_profile_catalog=catalog,
         )
 
     def _log_import_failure(

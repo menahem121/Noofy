@@ -5,7 +5,10 @@ import pytest
 from app.diagnostics import LogStore
 from app.engine.factory import comfyui_adapter_factory
 from app.engine.models import ModelInfo
-from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
+from app.runtime.runners.runner_coordinator import (
+    RunnerProcessCoordinator,
+    RunnerRuntimeActivationInProgressError,
+)
 from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.runners.supervisor import (
     RunnerDescriptor,
@@ -98,6 +101,84 @@ async def test_coordinator_registers_started_runner_endpoint_and_adapter(
         runner_supervisor.runner_for_workflow("text_to_image_v0").runner_id
         == "isolated-1"
     )
+
+
+@pytest.mark.anyio
+async def test_coordinator_refuses_runner_start_during_runtime_activation(
+    tmp_path: Path,
+) -> None:
+    process_started = False
+
+    async def process_factory(command: list[str], **kwargs):
+        nonlocal process_started
+        process_started = True
+        return FakeProcess()
+
+    async def healthy(base_url: str):
+        return True, None
+
+    runner_supervisor = RunnerSupervisor()
+    process_supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        log_store=LogStore(),
+    )
+    coordinator = RunnerProcessCoordinator(
+        runner_supervisor=runner_supervisor,
+        process_supervisor=process_supervisor,
+        adapter_factory=lambda descriptor: RecordingAdapter(
+            descriptor.base_url, descriptor.ws_url
+        ),
+        log_store=LogStore(),
+    )
+    assert runner_supervisor.begin_runtime_activation() == []
+
+    with pytest.raises(
+        RunnerRuntimeActivationInProgressError,
+        match="runtime activation is in progress",
+    ):
+        await coordinator.start_runner(_spec(tmp_path))
+
+    assert not process_started
+    runner_supervisor.end_runtime_activation()
+
+
+@pytest.mark.anyio
+async def test_coordinator_holds_start_lease_through_runner_registration(
+    tmp_path: Path,
+) -> None:
+    async def process_factory(command: list[str], **kwargs):
+        return FakeProcess()
+
+    async def healthy(base_url: str):
+        return True, None
+
+    runner_supervisor = RunnerSupervisor()
+    process_supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
+    )
+    activation_busy_runners: list[str] = []
+
+    def adapter_factory(descriptor: RunnerDescriptor) -> RecordingAdapter:
+        activation_busy_runners.extend(runner_supervisor.begin_runtime_activation())
+        return RecordingAdapter(descriptor.base_url, descriptor.ws_url)
+
+    coordinator = RunnerProcessCoordinator(
+        runner_supervisor=runner_supervisor,
+        process_supervisor=process_supervisor,
+        adapter_factory=adapter_factory,
+        log_store=LogStore(),
+    )
+
+    await coordinator.start_runner(_spec(tmp_path))
+
+    assert activation_busy_runners == ["isolated-1"]
+    assert runner_supervisor.begin_runtime_activation() == []
+    runner_supervisor.end_runtime_activation()
 
 
 @pytest.mark.anyio

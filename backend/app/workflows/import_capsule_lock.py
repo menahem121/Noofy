@@ -19,6 +19,7 @@ from app.runtime.dependencies.isolation import (
 )
 from app.runtime.profiles import (
     DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
+    RuntimeProfileCatalog,
     RuntimeProfileVariant,
     load_runtime_profile_catalog,
 )
@@ -42,13 +43,19 @@ class ImportCapsuleLockError(RuntimeError):
     """Raised when an imported workflow cannot receive an app-owned capsule lock."""
 
 
-def imported_package_capsule_lock(package: WorkflowPackage) -> CapsuleLock:
+def imported_package_capsule_lock(
+    package: WorkflowPackage,
+    *,
+    runtime_profile_catalog: RuntimeProfileCatalog | None = None,
+) -> CapsuleLock:
     if package.identity is None:
         raise ImportCapsuleLockError("Imported package is missing identity metadata.")
     try:
         reject_unsupported_exported_launch_options(package.exported_capsule)
         reject_unsupported_exported_launch_options(package.exported_package)
-        catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
+        catalog = runtime_profile_catalog or load_runtime_profile_catalog(
+            DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
+        )
         profile, variant = select_import_runtime_profile(catalog.profiles)
     except (ImportNormalizationError, RuntimeProfileSelectionError) as exc:
         raise ImportCapsuleLockError(str(exc)) from exc

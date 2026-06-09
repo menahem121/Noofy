@@ -22,6 +22,7 @@ from app.diagnostics import DiagnosticsSink
 from app.engine.models import ComfyUIVersionMetadata, ProcessActionResult
 from app.runtime.environment import CommandRunner, RuntimeEnvironment
 from app.runtime.manager import RuntimeManager
+from app.runtime.runners.runtime_activation import ComfyUIActivationError
 from app.runtime.comfyui.comfyui_update_archive import (
     extract_github_zip,
     safe_tag,
@@ -136,6 +137,9 @@ class ActiveRuntimeSelection:
 ReleaseFetcher = Callable[[], Awaitable[list[UpstreamComfyUIRelease]]]
 ArchiveDownloader = Callable[[str, Path], Awaitable[int]]
 SmokeTester = Callable[[Path, Path, LocalComfyUIVersionRecord], Awaitable[None]]
+PrepareRuntimeActivation = Callable[[LocalComfyUIVersionRecord], Awaitable[None]]
+CommitRuntimeActivation = Callable[[LocalComfyUIVersionRecord], None]
+AbortRuntimeActivation = Callable[[LocalComfyUIVersionRecord], None]
 
 
 class ComfyUIRepairError(RuntimeError):
@@ -228,6 +232,9 @@ class ComfyUIUpdateService:
         archive_downloader: ArchiveDownloader | None = None,
         command_runner: CommandRunner | None = None,
         smoke_tester: SmokeTester | None = None,
+        prepare_runtime_activation: PrepareRuntimeActivation | None = None,
+        commit_runtime_activation: CommitRuntimeActivation | None = None,
+        abort_runtime_activation: AbortRuntimeActivation | None = None,
     ) -> None:
         self.paths = paths
         self.runtime_manager = runtime_manager
@@ -245,6 +252,9 @@ class ComfyUIUpdateService:
         self.archive_downloader = archive_downloader or self._download_archive
         self.command_runner = command_runner
         self.smoke_tester = smoke_tester or self._default_smoke_test
+        self.prepare_runtime_activation = prepare_runtime_activation
+        self.commit_runtime_activation = commit_runtime_activation
+        self.abort_runtime_activation = abort_runtime_activation
         self.record_store = ComfyUIVersionRecordStore(paths)
         self._job = ComfyUIUpdateJobStatus()
         self._task: asyncio.Task[None] | None = None
@@ -691,34 +701,52 @@ class ComfyUIUpdateService:
                 shutil.rmtree(transaction_dir, ignore_errors=True)
             except Exception as exc:
                 if transaction_dir.exists():
-                    _write_json(
-                        transaction_dir / "quarantine.json",
-                        {
-                            "schema_version": UPDATE_METADATA_SCHEMA_VERSION,
-                            "status": "quarantined",
-                            "reason": str(exc),
-                            "quarantined_at": _now_iso(),
-                        },
-                    )
+                    if isinstance(exc, ComfyUIActivationError):
+                        shutil.rmtree(transaction_dir, ignore_errors=True)
+                    else:
+                        _write_json(
+                            transaction_dir / "quarantine.json",
+                            {
+                                "schema_version": UPDATE_METADATA_SCHEMA_VERSION,
+                                "status": "quarantined",
+                                "reason": str(exc),
+                                "quarantined_at": _now_iso(),
+                            },
+                        )
                 tag = self._job.resolved_tag
                 if tag:
                     existing = self._read_records().get(
                         tag
                     ) or LocalComfyUIVersionRecord(tag=tag)
-                    self._upsert_record(
-                        existing.model_copy(
-                            update={
-                                "failed_validation": True,
-                                "failed_reason": str(exc),
-                                "locally_verified": False,
-                            }
+                    if isinstance(exc, ComfyUIActivationError):
+                        self._upsert_record(
+                            existing.model_copy(
+                                update={
+                                    "failed_validation": False,
+                                    "failed_reason": None,
+                                    "locally_verified": True,
+                                }
+                            )
                         )
-                    )
+                    else:
+                        self._upsert_record(
+                            existing.model_copy(
+                                update={
+                                    "failed_validation": True,
+                                    "failed_reason": str(exc),
+                                    "locally_verified": False,
+                                }
+                            )
+                        )
                 self._set_job(
                     job_id,
                     "failed",
                     selected_version,
-                    "ComfyUI update failed. The current engine was left unchanged.",
+                    (
+                        "ComfyUI was validated but could not activate. The current engine was left unchanged."
+                        if isinstance(exc, ComfyUIActivationError)
+                        else "ComfyUI update failed. The current engine was left unchanged."
+                    ),
                     status="failed",
                     error=str(exc),
                 )
@@ -815,6 +843,33 @@ class ComfyUIUpdateService:
                     incompatible_version=(
                         tag if exc.category == "incompatible" else None
                     ),
+                )
+            except ComfyUIActivationError as exc:
+                tag = self._job.resolved_tag or (
+                    None
+                    if selected_version in {"current", "latest"}
+                    else selected_version
+                )
+                if tag:
+                    existing = self._read_records().get(
+                        tag
+                    ) or LocalComfyUIVersionRecord(tag=tag)
+                    self._upsert_record(
+                        existing.model_copy(
+                            update={
+                                "repair_status": "activation_blocked",
+                                "last_repair_error": str(exc),
+                            }
+                        )
+                    )
+                self._set_job(
+                    job_id,
+                    "failed",
+                    selected_version,
+                    "ComfyUI was rebuilt and validated but could not activate. The current engine was left unchanged.",
+                    operation="rebuild",
+                    status="failed",
+                    error=str(exc),
                 )
             except Exception as exc:
                 tag = self._job.resolved_tag or (
@@ -1129,7 +1184,12 @@ class ComfyUIUpdateService:
             self.bundled_repo_dir is not None
             and self.bundled_python_executable is not None
         ):
+            activation_prepared = False
             try:
+                bundled_record = self._bundled_runtime_record()
+                if self.prepare_runtime_activation is not None:
+                    await self.prepare_runtime_activation(bundled_record)
+                    activation_prepared = True
                 environment = RuntimeEnvironment(
                     repo_dir=self.bundled_repo_dir,
                     runtime_dir=self.paths.core_envs_dir / "bundled-comfyui",
@@ -1152,6 +1212,9 @@ class ComfyUIUpdateService:
                 )
                 started = await self.runtime_manager.start()
                 if started.status in {"started", "already_running"}:
+                    if self.commit_runtime_activation is not None:
+                        self.commit_runtime_activation(bundled_record)
+                    activation_prepared = False
                     self._set_job(
                         job_id,
                         "failed",
@@ -1178,6 +1241,12 @@ class ComfyUIUpdateService:
                         "error": str(fallback_exc),
                     },
                 )
+            finally:
+                if (
+                    activation_prepared
+                    and self.abort_runtime_activation is not None
+                ):
+                    self.abort_runtime_activation(bundled_record)
 
         self._set_job(
             job_id,
@@ -1194,6 +1263,20 @@ class ComfyUIUpdateService:
         return ProcessActionResult(
             status="repair_failed_no_fallback",
             comfyui=await self.runtime_manager.status(),
+        )
+
+    def _bundled_runtime_record(self) -> LocalComfyUIVersionRecord:
+        if self.bundled_repo_dir is None:
+            raise RuntimeError("Bundled ComfyUI source is not configured.")
+        catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
+        profile = catalog.profiles[0]
+        return LocalComfyUIVersionRecord(
+            tag=profile.comfyui_core_version,
+            installed=True,
+            locally_verified=True,
+            source_hash=profile.comfyui_core_source_hash,
+            source_path=str(self.bundled_repo_dir),
+            archive_url=profile.comfyui_source_reference,
         )
 
     async def _activate(self, record: LocalComfyUIVersionRecord) -> None:
@@ -1213,43 +1296,59 @@ class ComfyUIUpdateService:
         if not Path(python).exists():
             raise RuntimeError(f"ComfyUI environment Python is missing: {python}")
 
-        if self.runtime_manager.is_managed_process_running():
-            stopped = await self.runtime_manager.stop()
-            if stopped.status not in {"stopped", "not_running"}:
-                raise RuntimeError(
-                    f"Could not stop active ComfyUI before activation: {stopped.status}"
-                )
+        activation_prepared = False
+        try:
+            if self.prepare_runtime_activation is not None:
+                await self.prepare_runtime_activation(record)
+                activation_prepared = True
 
-        activated = record.model_copy(
-            update={"active": True, "activated_at": _now_iso()}
-        )
-        self._write_active_record(activated)
-        self._mark_active(activated.tag)
-        environment = RuntimeEnvironment(
-            repo_dir=source_path,
-            runtime_dir=env_path.parent,
-            bootstrap_python_executable=self.bootstrap_python_executable,
-            expected_python_version=self.expected_python_version,
-            packaged_runtime=self.packaged_runtime,
-            torch_cuda_index_url=self.torch_cuda_index_url,
-            torch_cpu_index_url=self.torch_cpu_index_url,
-            log_store=self.log_store,
-            logs_dir=self.paths.logs_dir,
-            cache_dir=self.paths.cache_dir,
-            command_runner=self.command_runner,
-            venv_dir_override=env_path,
-        )
-        self.runtime_manager.reconfigure_managed_runtime(
-            repo_dir=source_path,
-            python_executable=python,
-            environment=environment,
-            version_metadata=ComfyUIVersionMetadata(
-                active_tag=activated.tag,
-                source_hash=activated.source_hash,
-                source_kind="installed",
-                local_validation_status="locally_verified",
-            ),
-        )
+            if self.runtime_manager.is_managed_process_running():
+                stopped = await self.runtime_manager.stop()
+                if stopped.status not in {"stopped", "not_running"}:
+                    raise RuntimeError(
+                        f"Could not stop active ComfyUI before activation: {stopped.status}"
+                    )
+
+            activated = record.model_copy(
+                update={"active": True, "activated_at": _now_iso()}
+            )
+            environment = RuntimeEnvironment(
+                repo_dir=source_path,
+                runtime_dir=env_path.parent,
+                bootstrap_python_executable=self.bootstrap_python_executable,
+                expected_python_version=self.expected_python_version,
+                packaged_runtime=self.packaged_runtime,
+                torch_cuda_index_url=self.torch_cuda_index_url,
+                torch_cpu_index_url=self.torch_cpu_index_url,
+                log_store=self.log_store,
+                logs_dir=self.paths.logs_dir,
+                cache_dir=self.paths.cache_dir,
+                command_runner=self.command_runner,
+                venv_dir_override=env_path,
+            )
+            self.runtime_manager.reconfigure_managed_runtime(
+                repo_dir=source_path,
+                python_executable=python,
+                environment=environment,
+                version_metadata=ComfyUIVersionMetadata(
+                    active_tag=activated.tag,
+                    source_hash=activated.source_hash,
+                    source_kind="installed",
+                    local_validation_status="locally_verified",
+                ),
+            )
+            self._write_active_record(activated)
+            self._mark_active(activated.tag)
+            if self.commit_runtime_activation is not None:
+                self.commit_runtime_activation(activated)
+            activation_prepared = False
+        except ComfyUIActivationError:
+            raise
+        except Exception as exc:
+            raise ComfyUIActivationError(str(exc)) from exc
+        finally:
+            if activation_prepared and self.abort_runtime_activation is not None:
+                self.abort_runtime_activation(record)
 
     async def _fetch_upstream_releases(self) -> list[UpstreamComfyUIRelease]:
         return await fetch_upstream_releases()

@@ -329,6 +329,34 @@ def test_get_install_state_for_unknown_workflow_returns_unsupported(tmp_path: Pa
     assert payload["capsule_fingerprint"] is None
 
 
+@pytest.mark.anyio
+async def test_start_workflow_runner_waits_during_runtime_activation(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    assert service.runner_supervisor.begin_runtime_activation() == []
+
+    result = await service.start_workflow_runner("text_to_image_v0")
+
+    assert result["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
+    assert result["error"] == "ComfyUI runtime activation is in progress."
+    service.runner_supervisor.end_runtime_activation()
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_waits_during_runtime_activation(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    assert service.runner_supervisor.begin_runtime_activation() == []
+
+    result = await service.prepare_workflow("text_to_image_v0")
+
+    assert result["status"] == RunnerStatus.QUEUED_PENDING_SWITCH.value
+    assert result["error"] == "ComfyUI runtime activation is in progress."
+    service.runner_supervisor.end_runtime_activation()
+
+
 def test_install_payload_distinguishes_phase5i_statuses() -> None:
     service = EngineService.__new__(EngineService)
     statuses = [
@@ -1252,6 +1280,60 @@ async def test_start_custom_node_workflow_runner_allows_materialized_custom_node
     assert "--preview-method" in coordinator.started_specs[0].extra_args
     assert "--preview-size" in coordinator.started_specs[0].extra_args
     assert "--disable-all-custom-nodes" not in coordinator.started_specs[0].extra_args
+
+
+@pytest.mark.anyio
+async def test_run_does_not_reuse_bound_runner_from_stale_runtime_fingerprint(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="c")
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    service.runner_supervisor.upsert_runner(
+        RunnerDescriptor(
+            runner_id="stale-runner",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            base_url="http://127.0.0.1:9191",
+            fingerprint="stale",
+            status=RunnerStatus.READY,
+            runner_process_compatibility_key="stale",
+        ),
+        StubAdapter(),
+    )
+    service.runner_supervisor.bind_workflow_runner("runner_workflow", "stale-runner")
+
+    unavailable = await service._ensure_workflow_runner_for_run(
+        service.workflow_loader.get_package("runner_workflow")
+    )
+
+    assert unavailable is None
+    assert coordinator is not None
+    assert len(coordinator.started_specs) == 1
+    assert (
+        service.runner_supervisor.runner_for_workflow("runner_workflow").runner_id
+        != "stale-runner"
+    )
 
 
 @pytest.mark.anyio
