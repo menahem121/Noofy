@@ -1120,8 +1120,10 @@ function ImageMaskEditorModal({
 }) {
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const initialMaskRef = useRef<ImageData | null>(null);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverPointRef = useRef<{ x: number; y: number } | null>(null);
   const drawingRef = useRef(false);
   const [tool, setTool] = useState<"brush" | "eraser">("brush");
   const [strokeSize, setStrokeSize] = useState(36);
@@ -1141,9 +1143,11 @@ function ImageMaskEditorModal({
       const height = sourceImage.naturalHeight || sourceImage.height;
       const baseCanvas = baseCanvasRef.current;
       const maskCanvas = maskCanvasRef.current;
+      const previewCanvas = previewCanvasRef.current;
       const baseContext = baseCanvas?.getContext("2d");
       const maskContext = maskCanvas?.getContext("2d");
-      if (!baseCanvas || !maskCanvas || !baseContext || !maskContext || width <= 0 || height <= 0) {
+      const previewContext = previewCanvas?.getContext("2d");
+      if (!baseCanvas || !maskCanvas || !previewCanvas || !baseContext || !maskContext || !previewContext || width <= 0 || height <= 0) {
         throw new Error("Mask editor could not open this image.");
       }
 
@@ -1151,9 +1155,12 @@ function ImageMaskEditorModal({
       baseCanvas.height = height;
       maskCanvas.width = width;
       maskCanvas.height = height;
+      previewCanvas.width = width;
+      previewCanvas.height = height;
       baseContext.clearRect(0, 0, width, height);
       baseContext.drawImage(sourceImage, 0, 0, width, height);
       maskContext.clearRect(0, 0, width, height);
+      previewContext.clearRect(0, 0, width, height);
 
       if (initializeFromAlpha && maskUrl) {
         const existingMaskImage = await loadCanvasImage(maskUrl);
@@ -1192,6 +1199,16 @@ function ImageMaskEditorModal({
       canceled = true;
     };
   }, [initializeFromAlpha, maskUrl, sourceUrl]);
+
+  useEffect(() => {
+    if (!ready || saving || drawingRef.current) {
+      clearBrushPreview();
+      return;
+    }
+    if (hoverPointRef.current) {
+      drawBrushPreview(hoverPointRef.current);
+    }
+  }, [opacity, ready, saving, strokeSize, tool]);
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
@@ -1239,6 +1256,40 @@ function ImageMaskEditorModal({
     context.restore();
   }
 
+  function clearBrushPreview() {
+    const canvas = previewCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function drawBrushPreview(point: { x: number; y: number }) {
+    const canvas = previewCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    clearBrushPreview();
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    context.lineWidth = Math.max(1, Math.min(3, strokeSize / 12));
+    context.shadowBlur = 14;
+    if (tool === "eraser") {
+      context.fillStyle = "rgba(244, 240, 250, 0.16)";
+      context.shadowColor = "rgba(244, 240, 250, 0.34)";
+      context.setLineDash?.([Math.max(3, strokeSize / 7), Math.max(3, strokeSize / 9)]);
+    } else {
+      const previewOpacity = Math.max(0.18, Math.min(0.34, opacity * 0.34));
+      context.fillStyle = `rgba(139, 92, 246, ${previewOpacity})`;
+      context.shadowColor = "rgba(139, 92, 246, 0.42)";
+      context.setLineDash?.([]);
+    }
+    context.beginPath();
+    context.arc(point.x, point.y, strokeSize / 2, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = tool === "eraser" ? "rgba(244, 240, 250, 0.86)" : "rgba(196, 181, 253, 0.9)";
+    context.stroke();
+    context.restore();
+  }
+
   function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!ready || saving) return;
     event.preventDefault();
@@ -1246,18 +1297,26 @@ function ImageMaskEditorModal({
     const point = pointFromEvent(event);
     if (!point) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    clearBrushPreview();
     drawingRef.current = true;
     lastPointRef.current = point;
     drawStroke(point, point);
   }
 
   function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current || !ready || saving) return;
+    if (!ready || saving) return;
     event.preventDefault();
     event.stopPropagation();
     const nextPoint = pointFromEvent(event);
+    if (!nextPoint) return;
+    hoverPointRef.current = nextPoint;
+    if (!drawingRef.current) {
+      drawBrushPreview(nextPoint);
+      return;
+    }
     const lastPoint = lastPointRef.current;
-    if (!nextPoint || !lastPoint) return;
+    if (!lastPoint) return;
+    clearBrushPreview();
     drawStroke(lastPoint, nextPoint);
     lastPointRef.current = nextPoint;
   }
@@ -1270,12 +1329,17 @@ function ImageMaskEditorModal({
     }
     drawingRef.current = false;
     lastPointRef.current = null;
+    if (event.type === "pointerleave" || event.type === "pointercancel") {
+      hoverPointRef.current = null;
+      clearBrushPreview();
+    }
   }
 
   function clearMask() {
     const canvas = maskCanvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
+    clearBrushPreview();
     context.clearRect(0, 0, canvas.width, canvas.height);
   }
 
@@ -1284,6 +1348,7 @@ function ImageMaskEditorModal({
     const context = canvas?.getContext("2d");
     const initialMask = initialMaskRef.current;
     if (!canvas || !context || !initialMask) return;
+    clearBrushPreview();
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.putImageData(initialMask, 0, 0);
   }
@@ -1322,6 +1387,7 @@ function ImageMaskEditorModal({
               onPointerCancel={stopDrawing}
               onPointerLeave={stopDrawing}
             />
+            <canvas className="mask-editor__canvas mask-editor__canvas--preview" ref={previewCanvasRef} aria-hidden="true" />
             {!ready ? <span className="mask-editor__loading">Loading image...</span> : null}
           </div>
 

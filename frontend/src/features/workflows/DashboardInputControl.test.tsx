@@ -104,7 +104,7 @@ function renderEditableImageWithMask({
   onImageMaskApply: (sourceAssetId: string, mask: Blob) => Promise<string>;
   onChange: (value: unknown) => void;
 }) {
-  mockMaskEditorCanvas();
+  const canvasMock = mockMaskEditorCanvas();
   const fetchMock = vi.mocked(fetch);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = String(input);
@@ -119,7 +119,7 @@ function renderEditableImageWithMask({
     return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
   });
 
-  return render(
+  const renderResult = render(
     <DashboardInputControl
       control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
       input={{
@@ -136,6 +136,7 @@ function renderEditableImageWithMask({
       onImageMaskApply={onImageMaskApply}
     />,
   );
+  return { ...renderResult, canvasMock };
 }
 
 describe("DashboardInputControl", () => {
@@ -504,6 +505,27 @@ describe("DashboardInputControl", () => {
 
     expect(canvasMock.calls).toContain("clear");
     expect(canvasMock.calls).toContain("reset");
+  });
+
+  it("shows brush and eraser hover previews before drawing", async () => {
+    const { canvasMock } = renderEditableImageWithMask({
+      onImageMaskApply: vi.fn(),
+      onChange: vi.fn(),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
+    await screen.findByRole("dialog", { name: "Mask" });
+    await waitFor(() => expect(screen.getByLabelText("Mask strength")).not.toBeDisabled());
+    const maskCanvas = document.querySelector(".mask-editor__canvas--mask") as HTMLCanvasElement;
+
+    fireEvent.pointerMove(maskCanvas, { clientX: 50, clientY: 25, pointerId: 1 });
+    expect(canvasMock.calls.some((call) => call.startsWith("fill:rgba(139, 92, 246,"))).toBe(true);
+    expect(canvasMock.calls).toContain("stroke:rgba(196, 181, 253, 0.9)");
+
+    fireEvent.click(screen.getByRole("button", { name: "Eraser" }));
+    fireEvent.pointerMove(maskCanvas, { clientX: 60, clientY: 30, pointerId: 1 });
+    expect(canvasMock.calls).toContain("fill:rgba(244, 240, 250, 0.16)");
+    expect(canvasMock.calls).toContain("stroke:rgba(244, 240, 250, 0.86)");
   });
 
   it("shows a recoverable missing-asset state only when a selected asset cannot load", async () => {
