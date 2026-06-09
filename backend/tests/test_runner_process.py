@@ -158,6 +158,54 @@ def test_runner_startup_sweep_removes_stale_pid_file(
 
 
 @pytest.mark.anyio
+async def test_stop_all_continues_after_one_runner_stop_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processes = [FakeProcess(pid=1234), FakeProcess(pid=5678)]
+
+    async def process_factory(command: list[str], **kwargs):
+        return processes.pop(0)
+
+    async def healthy(base_url: str) -> tuple[bool, str | None]:
+        return True, None
+
+    log_store = LogStore()
+    supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        log_store=log_store,
+    )
+    await supervisor.start(_launch_spec(tmp_path, port=8188))
+    await supervisor.start(
+        _launch_spec(tmp_path, port=8189).model_copy(update={"runner_id": "runner-2"})
+    )
+    original_terminate = supervisor._terminate_runner_process
+
+    async def flaky_terminate(record):
+        if record.spec.runner_id == "runner-1":
+            raise RuntimeError("runner stop failed")
+        await original_terminate(record)
+
+    monkeypatch.setattr(supervisor, "_terminate_runner_process", flaky_terminate)
+
+    statuses = await supervisor.stop_all()
+
+    assert [status.runner_id for status in statuses] == ["runner-1", "runner-2"]
+    assert statuses[0].status is RunnerStatus.STOPPING
+    assert statuses[0].error == "runner stop failed"
+    assert statuses[1].status is RunnerStatus.STOPPED
+    assert supervisor.descriptor("runner-1") is not None
+    assert supervisor.descriptor("runner-2") is None
+    assert any(
+        event.message == "Runner process stop failed during stop-all"
+        for event in log_store.list_events().events
+    )
+
+
+@pytest.mark.anyio
 async def test_start_copies_launch_metadata_to_descriptor(tmp_path: Path) -> None:
     async def process_factory(command: list[str], **kwargs):
         return FakeProcess(pid=1234)

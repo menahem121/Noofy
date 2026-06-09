@@ -93,6 +93,7 @@ def _build_service(
     runner_coordinator_factory=None,
     include_workspace_preparer: bool = True,
     memory_observer=None,
+    comfyui_sidecar_service=None,
 ) -> EngineService:
     log_store = LogStore()
     supervisor = RunnerSupervisor()
@@ -167,6 +168,7 @@ def _build_service(
         capsule_installer=capsule_installer,
         runner_process_coordinator=runner_process_coordinator,
         memory_observer=memory_observer,
+        comfyui_sidecar_service=comfyui_sidecar_service,
     )
 
 
@@ -308,6 +310,20 @@ class RecordingRunnerCoordinator:
     async def stop_all_runners(self) -> list[RunnerProcessStatus]:
         self.stop_all_called = True
         return []
+
+
+class FailingStopAllRunnerCoordinator(RecordingRunnerCoordinator):
+    async def stop_all_runners(self) -> list[RunnerProcessStatus]:
+        self.stop_all_called = True
+        raise RuntimeError("runner cleanup failed")
+
+
+class RecordingSidecarService:
+    def __init__(self) -> None:
+        self.shutdown_called = False
+
+    async def shutdown(self) -> None:
+        self.shutdown_called = True
 
 
 def test_get_install_state_for_bundled_workflow_starts_pending(tmp_path: Path) -> None:
@@ -1750,6 +1766,36 @@ async def test_shutdown_stops_backend_owned_workflow_runners(tmp_path: Path) -> 
 
     assert coordinator is not None
     assert coordinator.stop_all_called
+
+
+@pytest.mark.anyio
+async def test_shutdown_still_stops_sidecar_when_runner_cleanup_fails(
+    tmp_path: Path,
+) -> None:
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> FailingStopAllRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = FailingStopAllRunnerCoordinator(supervisor)
+        return coordinator
+
+    sidecar = RecordingSidecarService()
+    service = _build_service(
+        tmp_path,
+        runner_coordinator_factory=coordinator_factory,
+        comfyui_sidecar_service=sidecar,
+    )
+
+    await service.shutdown()
+
+    assert coordinator is not None
+    assert coordinator.stop_all_called
+    assert sidecar.shutdown_called
+    assert any(
+        event.message == "Backend shutdown step failed"
+        and event.details.get("step") == "runner_process_coordinator"
+        for event in service.log_store.list_events().events
+    )
 
 
 @pytest.mark.anyio

@@ -284,7 +284,23 @@ class RunnerProcessSupervisor:
     async def stop_all(self) -> list[RunnerProcessStatus]:
         statuses: list[RunnerProcessStatus] = []
         for runner_id in list(self._records):
-            statuses.append(await self.stop(runner_id))
+            try:
+                statuses.append(await self.stop(runner_id))
+            except Exception as exc:
+                record = self._records.get(runner_id)
+                self.log_store.add(
+                    "error",
+                    "Runner process stop failed during stop-all",
+                    "runtime.runner_process",
+                    details={
+                        "runner_id": runner_id,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                if record is not None:
+                    record.last_error = str(exc)
+                    statuses.append(self._status_from_record(record))
         return statuses
 
     async def status(self, runner_id: str) -> RunnerProcessStatus:

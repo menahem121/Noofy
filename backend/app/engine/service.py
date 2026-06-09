@@ -1007,12 +1007,39 @@ class EngineService:
         return self.comfyui_sidecar_service.update_status()
 
     async def shutdown(self) -> None:
-        await self.run_lifecycle_service.shutdown()
+        async def _run_shutdown_step(step: str, operation) -> None:
+            try:
+                await operation()
+            except Exception as exc:
+                self.log_store.add(
+                    "error",
+                    "Backend shutdown step failed",
+                    "engine.service.shutdown",
+                    details={
+                        "step": step,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+
+        await _run_shutdown_step(
+            "run_lifecycle_service",
+            self.run_lifecycle_service.shutdown,
+        )
         if self.gallery_capture_service is not None:
-            await self.gallery_capture_service.shutdown()
+            await _run_shutdown_step(
+                "gallery_capture_service",
+                self.gallery_capture_service.shutdown,
+            )
         if self.runner_process_coordinator is not None:
-            await self.runner_process_coordinator.stop_all_runners()
-        await self.comfyui_sidecar_service.shutdown()
+            await _run_shutdown_step(
+                "runner_process_coordinator",
+                self.runner_process_coordinator.stop_all_runners,
+            )
+        await _run_shutdown_step(
+            "comfyui_sidecar_service",
+            self.comfyui_sidecar_service.shutdown,
+        )
 
     # ------------------------------------------------------------------
     # Internals
