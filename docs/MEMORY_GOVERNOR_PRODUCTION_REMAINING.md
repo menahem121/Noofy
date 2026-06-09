@@ -345,6 +345,34 @@ Improve attribution when platform signals allow it:
 - avoid labeling unattributed VRAM as external unless there is explicit
   non-Noofy process evidence
 
+### Attributed External-Process Pressure Signal
+
+Follow-up to the 2026-06-09 single-runner advisory policy change. Admission now
+hard-blocks a single-runner shortfall only on trusted evidence, one branch of
+which is **attributed external-process pressure**: a `pressure_reasons` entry
+starting with `external_process` maps to the `blocked_external_pressure` state.
+That consumer exists (`_shortfall_requires_hard_block`, `_blocked_memory_state`)
+and is covered by tests, but **no observer emits `external_process_*` reasons
+today**. Until one does, genuine live contention from a non-Noofy process is
+treated as unattributed and cautious-starts rather than blocks.
+
+Remaining work:
+
+- add a best-effort observer that detects memory used by processes outside
+  Noofy's runner process trees (CUDA via NVML per-PID, or system-level) and,
+  above a threshold, adds `external_process_vram_pressure` /
+  `external_process_ram_pressure` to `MachineMemorySnapshot.pressure_reasons`
+- reuse existing attribution plumbing (`sample_process_vram`,
+  `ProcessTreeMemoryObserver`, and the `unattributed_or_external_used_*`
+  computation in `_memory_ownership_details`)
+- require positive per-PID attribution to a non-Noofy process before tagging
+  `external_process_*`, so transient/unattributed low free margin still
+  cautious-starts (no regression to the 2026-06-09 policy)
+- acceptance: a non-Noofy process holding significant VRAM/RAM blocks a
+  single-runner heavy run with `blocked_external_pressure`, and
+  `test_memory_user_status_reports_external_pressure_only_with_explicit_evidence`
+  stays green
+
 ## Long-Term EngineService Cleanup
 
 `EngineService` should eventually stop serving as a broad application front

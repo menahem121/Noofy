@@ -1,8 +1,11 @@
 # Memory Governor
 
-Date: 2026-06-02
+Date: 2026-06-02 (updated 2026-06-09)
 
 Status: current architecture/reference with remaining hardware-validation notes.
+
+2026-06-09 update: refined the single-runner admission policy so advisory
+estimates no longer pre-block a run. See "Single-Runner Advisory Policy" below.
 
 This document explains what the Memory Governor does now, what is intentionally
 conservative, and where real hardware validation is still needed.
@@ -61,10 +64,48 @@ Before submitting a workflow run through the backend run path, Noofy:
    declared requirements, installed model size, or heuristics.
 2. Reads a machine memory snapshot.
 3. Compares the requested runner with relevant resident runners.
-4. Chooses one of: start co-resident, evict idle runners then start, queue behind
-   active work, or refuse execution when the available evidence is too strong to
-   justify a run attempt.
+4. Chooses one of: reuse a warm runner, start co-resident, evict idle runners
+   then start, queue behind active work, cautious-start with a warning, or
+   refuse execution when there is trusted evidence the run cannot proceed
+   safely.
 5. Records a structured diagnostic and memory metric.
+
+### Single-Runner Advisory Policy
+
+When the only candidate is a single selected runner with no active runner to
+queue behind and no idle runner to reclaim, a free-margin or pressure shortfall
+must not hard-block on an advisory estimate. Creator/export-time observations
+and heuristic estimates describe other machines or are inferred, so their
+magnitude is advisory, not proof that ComfyUI cannot run the workflow. In that
+situation Noofy cautious-starts (`start_co_resident` with a `memory_warning`
+state and `advisory_estimate_allowed_to_run` in developer details) and lets
+ComfyUI try. If the run then fails with a real memory error, that becomes local
+evidence that makes future decisions for the same workflow/profile/machine more
+conservative.
+
+On this single-runner path Noofy still hard-blocks before submission only when
+the evidence is trusted for this machine:
+
+- a recorded local memory failure for the same workflow/profile
+  (`recent_memory_error`),
+- attributed external-process pressure (explicit non-Noofy-process evidence in
+  `pressure_reasons`), or
+- strong local/direct evidence that the workflow cannot physically fit, meaning
+  a trusted local-observed or declared estimate whose peak *alone* exceeds total
+  memory.
+
+The fixed safety margin is a policy buffer used to choose between reversible
+preparation steps, not proof of guaranteed OOM. An advisory estimate is
+therefore never refused merely because `peak + margin > total`, nor even because
+`peak > total`, since we do not trust an off-machine number's magnitude for this
+machine. Local successful evidence overrides creator observations, so a proven
+smaller local peak supersedes a larger creator hint.
+
+Multi-runner protections are unchanged. The cautious-start downgrade is gated to
+the genuine single-runner case, so queue-behind-active, evict-idle, and
+co-residence compatibility denials (for example heavy/heavy without a large GPU
+and high-confidence local evidence) still apply when other warm runners are
+present.
 
 The same admission path now covers isolated runners and the core/default runner.
 Idle isolated runners can be evicted before a run. The core process stays
@@ -171,7 +212,12 @@ while `memory_status.state` exposes the precise backend condition:
 `memory_cleanup_failed`, `blocked_external_pressure`,
 `blocked_exceeds_capacity`, or `blocked_unattributed_pressure`. Noofy reports
 external pressure only when observation includes explicit non-Noofy-process
-evidence; unexplained residual usage remains unattributed.
+evidence; unexplained residual usage remains unattributed. Per the Single-Runner
+Advisory Policy above, a single-runner shortfall against an advisory estimate
+resolves to a `memory_warning` cautious-start rather than these blocked states;
+the blocked states apply when other runners are involved or when trusted
+evidence (local failure, attributed external pressure, or a peak that alone
+exceeds total) shows the run cannot proceed.
 
 ## Library Advisory Warnings
 
@@ -189,8 +235,10 @@ when the user actually presses Run.
 Local observations stay in local app data and are not written into `.noofy`
 packages, package metadata, capsule locks, or exports. Creator/export-time
 observations remain advisory hints and never override evidence learned on the
-current machine. Card warnings use recent local memory failures so stale errors
-do not keep a workflow flagged indefinitely.
+current machine. This advisory treatment now extends to run-time admission as
+well: their magnitude alone cannot hard-block a single-runner run (see
+"Single-Runner Advisory Policy"). Card warnings use recent local memory failures
+so stale errors do not keep a workflow flagged indefinitely.
 
 ## Core Runner Policy
 
@@ -342,6 +390,11 @@ queueing, or refusal. Margins that are too small will cause avoidable memory
 failures. Do not add an abstract adaptive-margin formula without evidence. If
 Noofy still needs its own margins, keep them small, justified, and secondary to
 real pressure/budget/backend signals and local empirical learning.
+
+Because a margin is a policy buffer rather than proof, it is not used to refuse a
+run on an advisory estimate. A capacity check that would hard-block (peak alone
+exceeding total) applies only to trusted local/declared evidence, not to
+creator/heuristic magnitudes. See "Single-Runner Advisory Policy".
 
 ## Source Of Truth
 
