@@ -174,6 +174,65 @@ function imageWorkflowBindableInputsResponse() {
   };
 }
 
+function optionalMediaAndTextOutputBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "2",
+        node_type: "NoofyOptionalLoadImage",
+        node_title: "Optional Load Image",
+        is_image_node: true,
+        is_audio_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "",
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+          },
+        ],
+      },
+      {
+        node_id: "7",
+        node_type: "NoofyOptionalLoadAudio",
+        node_title: "Optional Load Audio",
+        is_image_node: false,
+        is_audio_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "audio",
+            current_value: "",
+            kind: "audio_input",
+            suggested_widget_type: "load_audio",
+            widget_types: ["load_audio"],
+          },
+        ],
+      },
+      {
+        node_id: "4",
+        node_type: "PreviewAny",
+        node_title: "Preview as Text",
+        is_image_node: false,
+        is_audio_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_text",
+            current_value: null,
+            kind: "text_output",
+            suggested_widget_type: "display_text",
+            widget_types: ["display_text"],
+            auto_select: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function valuePreviewBindableInputsResponse() {
   return {
     nodes: [
@@ -663,6 +722,48 @@ describe("DashboardBuilderPage", () => {
 
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Display video");
     expect(screen.getByRole("tooltip")).toHaveTextContent("Generated video result");
+  });
+
+  it("shows optional media inputs and PreviewAny text output in Workflow values", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-optional-media",
+      workflowName: "Optional media workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-optional-media/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(optionalMediaAndTextOutputBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-optional-media"
+        workflowName="Optional media workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const valuesPanel = await screen.findByLabelText("Workflow values");
+    const search = within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i });
+    fireEvent.change(search, { target: { value: "optional load" } });
+    expect(await within(valuesPanel).findByRole("button", { name: /^image/i })).toBeInTheDocument();
+    expect(await within(valuesPanel).findByRole("button", { name: /^audio/i })).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "preview as text" } });
+    const textOutput = await within(valuesPanel).findByRole("button", { name: /output_text/i });
+    expect(textOutput).toBeInTheDocument();
+
+    fireEvent.click(textOutput);
+    expect(screen.getByLabelText(/widget type/i)).toHaveValue("display_text");
   });
 
   it("reorders top-level widgets through horizontal insertion zones and saves that order", async () => {

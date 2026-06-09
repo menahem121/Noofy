@@ -112,6 +112,7 @@ DASHBOARD_CONTROL_TYPES = frozenset(
         "load_3d",
         "display_image",
         "display_audio",
+        "display_text",
         "display_video",
         "display_file",
         "display_3d",

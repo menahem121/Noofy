@@ -481,6 +481,26 @@ def test_validator_accepts_three_d_output_widget() -> None:
     assert WorkflowPackageValidator().validate_structure(package).valid
 
 
+def test_validator_accepts_text_output_widget() -> None:
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "text_widget", "name": "Text Widget", "version": "1"},
+            "engine": "comfyui",
+            "comfyui_graph": {"4": {"class_type": "PreviewAny", "inputs": {"source": ["1", 0]}}},
+            "outputs": [{"id": "text", "label": "Text", "node_id": "4", "type": "text", "kind": "text"}],
+            "dashboard": {
+                "version": "1",
+                "status": "configured",
+                "sections": [{"id": "main", "title": "Main", "controls": [
+                    {"id": "text-output", "type": "display_text", "label": "Text", "output_id": "text"},
+                ]}],
+            },
+        }
+    )
+
+    assert WorkflowPackageValidator().validate_structure(package).valid
+
+
 def test_validator_accepts_file_widget_with_accept_rules() -> None:
     package = WorkflowPackage.model_validate(
         {

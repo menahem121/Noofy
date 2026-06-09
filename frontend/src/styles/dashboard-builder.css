@@ -2042,6 +2042,8 @@
   .widget-output-placeholder *,
   .widget-output-audio,
   .widget-output-audio *,
+  .widget-output-text,
+  .widget-output-text *,
   .widget-output-video,
   .widget-output-video *,
   .widget-output-file,

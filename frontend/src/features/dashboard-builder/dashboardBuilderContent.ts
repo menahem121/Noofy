@@ -37,6 +37,7 @@ export type WidgetType =
   | "load_3d"
   | "display_image"
   | "display_audio"
+  | "display_text"
   | "display_video"
   | "display_file"
   | "display_3d"
@@ -53,6 +54,7 @@ export type WorkflowValueKind =
   | "image_output"
   | "audio_input"
   | "audio_output"
+  | "text_output"
   | "video_input"
   | "video_output"
   | "file_input"
@@ -224,6 +226,7 @@ export const VALUE_KIND_ICONS: Record<WorkflowValueKind, LucideIcon> = {
   image_output: ImageIcon,
   audio_input: FileAudio,
   audio_output: FileAudio,
+  text_output: Type,
   video_input: Video,
   video_output: Video,
   file_input: File,
@@ -250,6 +253,7 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   load_3d: "Load 3D model",
   display_image: "Display image",
   display_audio: "Display audio",
+  display_text: "Display text",
   display_video: "Display video",
   display_file: "Display file",
   display_3d: "Display 3D model",
@@ -276,7 +280,7 @@ const INPUT_WIDGET_TYPES: WidgetType[] = [
 ];
 
 export function isOutputWidgetType(widgetType: string): boolean {
-  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "display_video" || widgetType === "display_file" || widgetType === "display_3d" || widgetType === "result_image";
+  return widgetType === "display_image" || widgetType === "display_audio" || widgetType === "display_text" || widgetType === "display_video" || widgetType === "display_file" || widgetType === "display_3d" || widgetType === "result_image";
 }
 
 export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
@@ -290,6 +294,9 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
 
   if (kind === "audio_output") {
     return ["display_audio"];
+  }
+  if (kind === "text_output") {
+    return ["display_text"];
   }
   if (kind === "video_output") {
     return ["display_video"];
@@ -346,6 +353,7 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "image_output") return "display_image";
   if (value.valueKind === "image_input") return "load_image";
   if (value.valueKind === "audio_output") return "display_audio";
+  if (value.valueKind === "text_output") return "display_text";
   if (value.valueKind === "audio_input") return "load_audio";
   if (value.valueKind === "video_output") return "display_video";
   if (value.valueKind === "video_input") return "load_video";
@@ -427,6 +435,7 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
     audio: "Input audio",
     file: "Input file",
     output_audio: "Result",
+    output_text: "Result",
     output_file: "Result",
     lora_name: "LoRA model",
     filename_prefix: "Save name",
@@ -462,6 +471,7 @@ export function suggestDescription(value: WorkflowNodeValue): string {
     lora_name: "Pick a LoRA style to apply.",
     output_image: "Generated image will appear here.",
     output_audio: "Generated audio will appear here.",
+    output_text: "Generated text will appear here.",
     output_file: "Generated file will appear here.",
   };
 
@@ -795,6 +805,7 @@ export function workflowFromBindableInputs(
     if (kind === "image_output") return "image_output";
     if (kind === "audio_input") return "audio_input";
     if (kind === "audio_output") return "audio_output";
+    if (kind === "text_output") return "text_output";
     if (kind === "video_input") return "video_input";
     if (kind === "video_output") return "video_output";
     if (kind === "three_d_input") return "three_d_input";
@@ -953,8 +964,9 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   return { inputs, dashboard };
 }
 
-function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "video" | "3d" | "file" {
+function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "text" | "video" | "3d" | "file" {
   if (widgetType === "display_audio") return "audio";
+  if (widgetType === "display_text") return "text";
   if (widgetType === "display_video") return "video";
   if (widgetType === "display_file") return "file";
   if (widgetType === "display_3d") return "3d";
@@ -1089,9 +1101,26 @@ export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: 
   next = addAutomaticFileInputWidgets(next, workflow);
   next = addAutomaticImageOutputWidget(next, workflow);
   next = addAutomaticAudioOutputWidget(next, workflow);
+  next = addAutomaticTextOutputWidget(next, workflow);
   next = addAutomaticVideoOutputWidget(next, workflow);
   next = addAutomaticThreeDOutputWidget(next, workflow);
   return addAutomaticFileOutputWidget(next, workflow);
+}
+
+export function addAutomaticTextOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const outputRecords = workflow.nodes.flatMap((node) =>
+    node.values.filter((value) => value.valueKind === "text_output").map((value) => ({ node, value })),
+  );
+  const selected = outputRecords.find((record) => record.value.autoSelect) ?? outputRecords[outputRecords.length - 1];
+  if (!selected) return schema;
+  if (schemaHasOutputWidgetForRecords(schema, outputRecords, (type) => type === "display_text")) {
+    return schema;
+  }
+
+  return {
+    ...schema,
+    widgets: [...schema.widgets, { ...createDashboardWidgetForValue(selected.value, selected.node), widgetType: "display_text", defaultValue: null }],
+  };
 }
 
 export function addAutomaticThreeDInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {

@@ -456,6 +456,10 @@ export function WorkflowRunPage({
     }
     return map;
   }, [state.result]);
+  const outputTextsByNodeId = useMemo<Map<string, string[]>>(
+    () => extractTextOutputsByNodeId(state.result),
+    [state.result],
+  );
 
   const outputVideosByNodeId = useMemo<Map<string, OutputVideoMedia[]>>(
     () => extractVideoOutputsByNodeId(state.result),
@@ -1368,7 +1372,7 @@ export function WorkflowRunPage({
   } : null;
 
   const inputControls = allControls.filter(
-    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_video" && c.type !== "display_file" && c.type !== "display_3d" && c.input_id),
+    (c) => c.type === "note" || c.type === "api_credential" || (c.type !== "result_image" && c.type !== "display_image" && c.type !== "display_audio" && c.type !== "display_text" && c.type !== "display_video" && c.type !== "display_file" && c.type !== "display_3d" && c.input_id),
   );
   const inputControlIds = useMemo(() => new Set(inputControls.map((control) => control.id)), [inputControls]);
   const inputTopLevelItems = useMemo(
@@ -1712,6 +1716,7 @@ export function WorkflowRunPage({
           outputIndex={outputIndex}
           outputImagesByNodeId={outputImagesByNodeId}
           outputAudiosByNodeId={outputAudiosByNodeId}
+          outputTextsByNodeId={outputTextsByNodeId}
           outputVideosByNodeId={outputVideosByNodeId}
           outputFilesByNodeId={outputFilesByNodeId}
           outputThreeDsByNodeId={outputThreeDsByNodeId}
@@ -3651,6 +3656,23 @@ function extractAudioOutputs(result: JobResult | null): OutputAudioMedia[] {
     .filter((item): item is OutputAudioMedia => Boolean(item));
 }
 
+function extractTextOutputsByNodeId(result: JobResult | null): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  if (!result) return map;
+  for (const output of result.outputs) {
+    const outputPayload = output.output;
+    if (!outputPayload || typeof outputPayload !== "object") continue;
+    const nodeIdKey = Object.keys(output).find((key) => key !== "output");
+    const nodeId = typeof output.node_id === "string" ? output.node_id : nodeIdKey ?? null;
+    if (!nodeId) continue;
+    const rawText = (outputPayload as Record<string, unknown>).text;
+    const values = Array.isArray(rawText) ? rawText : typeof rawText === "string" ? [rawText] : [];
+    const texts = values.filter((value): value is string => typeof value === "string");
+    if (texts.length > 0) map.set(nodeId, [...(map.get(nodeId) ?? []), ...texts]);
+  }
+  return map;
+}
+
 function extractVideoOutputs(result: JobResult | null): OutputVideoMedia[] {
   return extractMediaItems(result, "video")
     .map(({ item }) => normalizeVideoOutput(item))
@@ -4161,7 +4183,7 @@ function buildDashboardSchemaForEditing(
         id: control.id,
         valueId: output.id,
         binding: { nodeId: output.node_id, inputName: "" },
-        widgetType: outputKind === "audio" ? "display_audio" : outputKind === "video" ? "display_video" : outputKind === "3d" ? "display_3d" : outputKind === "file" ? "display_file" : "display_image",
+        widgetType: outputKind === "audio" ? "display_audio" : outputKind === "text" ? "display_text" : outputKind === "video" ? "display_video" : outputKind === "3d" ? "display_3d" : outputKind === "file" ? "display_file" : "display_image",
         title: control.label,
         description: control.description ?? "",
         defaultValue: null,
@@ -4304,6 +4326,7 @@ function inputWidgetTypeForBuilder(type: string): WidgetType | null {
     "load_3d",
     "display_image",
     "display_audio",
+    "display_text",
     "display_video",
     "display_file",
     "display_3d",

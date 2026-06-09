@@ -873,6 +873,64 @@ def test_classify_graph_inputs_includes_audio_widgets() -> None:
     }
 
 
+def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "2": {
+                "_meta": {"title": "Noofy Optional Load Image"},
+                "class_type": "NoofyOptionalLoadImage",
+                "inputs": {"enabled": False, "image": "", "mode": "auto"},
+            },
+            "4": {
+                "_meta": {"title": "Preview as Text"},
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["1", 0]},
+            },
+            "7": {
+                "_meta": {"title": "Noofy Optional Load Audio"},
+                "class_type": "NoofyOptionalLoadAudio",
+                "inputs": {
+                    "enabled": False,
+                    "audio": "",
+                    "mode": "auto",
+                    "audioUI": "/api/view?filename=&type=input",
+                },
+            },
+        }
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["2"]["inputs"] == [
+        {
+            "input_name": "image",
+            "current_value": "",
+            "kind": "image_input",
+            "suggested_widget_type": "load_image",
+            "widget_types": ["load_image", "load_image_mask"],
+        }
+    ]
+    assert input_nodes["7"]["inputs"] == [
+        {
+            "input_name": "audio",
+            "current_value": "",
+            "kind": "audio_input",
+            "suggested_widget_type": "load_audio",
+            "widget_types": ["load_audio"],
+        }
+    ]
+    assert input_nodes["4"]["node_title"] == "Preview as Text"
+    assert input_nodes["4"]["inputs"] == [
+        {
+            "input_name": "output_text",
+            "current_value": None,
+            "kind": "text_output",
+            "suggested_widget_type": "display_text",
+            "widget_types": ["display_text"],
+            "auto_select": True,
+        }
+    ]
+
+
 def test_classify_graph_inputs_includes_video_widgets_and_custom_binding_hint() -> None:
     nodes = _classify_graph_inputs(
         {

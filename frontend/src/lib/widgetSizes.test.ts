@@ -18,6 +18,7 @@ describe("widget sizing policy", () => {
       "display_audio",
       "display_file",
       "display_image",
+      "display_text",
       "display_video",
       "int_field",
       "load_3d",
@@ -47,12 +48,13 @@ describe("widget sizing policy", () => {
     ["toggle", 6, 4, 4, 3],
     ["load_image", 10, 10, 6, 6],
     ["load_image_mask", 10, 10, 6, 6],
-    ["load_audio", 10, 4, 6, 4],
+    ["load_audio", 10, 8, 6, 4],
     ["load_video", 14, 12, 7, 6],
     ["load_file", 10, 6, 5, 4],
     ["load_3d", 12, 10, 7, 6],
     ["display_image", 14, 14, 6, 6],
     ["display_audio", 12, 6, 8, 5],
+    ["display_text", 12, 8, 6, 5],
     ["display_video", 16, 14, 8, 7],
     ["display_file", 10, 6, 6, 5],
     ["display_3d", 16, 14, 8, 8],
@@ -78,6 +80,13 @@ describe("widget sizing policy", () => {
       expect(sizing.minimum.h <= sizing.default.h).toBe(true);
       expect(sizing.minimum.w < sizing.default.w || sizing.minimum.h < sizing.default.h).toBe(true);
     }
+  });
+
+  it("treats legacy four-row audio inputs as compact", () => {
+    expect(isWidgetLayoutCompact(
+      { x: 0, y: 0, w: 10, h: 4, minW: 6, minH: 4 },
+      "load_audio",
+    )).toBe(true);
   });
 
   it("uses the current widget minimum without changing loaded dimensions", () => {

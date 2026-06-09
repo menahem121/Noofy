@@ -25,6 +25,7 @@ export type WidgetTypeKey =
   | "load_3d"
   | "display_image"
   | "display_audio"
+  | "display_text"
   | "display_video"
   | "display_file"
   | "display_3d"
@@ -48,12 +49,13 @@ export const WIDGET_SIZING_POLICY: Record<WidgetTypeKey, WidgetSizingPolicy> = {
   toggle: { default: { w: 6, h: 4 }, minimum: { w: 4, h: 3 } },
   load_image: { default: { w: 10, h: 10 }, minimum: { w: 6, h: 6 } },
   load_image_mask: { default: { w: 10, h: 10 }, minimum: { w: 6, h: 6 } },
-  load_audio: { default: { w: 10, h: 4 }, minimum: { w: 6, h: 4 } },
+  load_audio: { default: { w: 10, h: 8 }, minimum: { w: 6, h: 4 } },
   load_video: { default: { w: 14, h: 12 }, minimum: { w: 7, h: 6 } },
   load_file: { default: { w: 10, h: 6 }, minimum: { w: 5, h: 4 } },
   load_3d: { default: { w: 12, h: 10 }, minimum: { w: 7, h: 6 } },
   display_image: { default: { w: 14, h: 14 }, minimum: { w: 6, h: 6 } },
   display_audio: { default: { w: 12, h: 6 }, minimum: { w: 8, h: 5 } },
+  display_text: { default: { w: 12, h: 8 }, minimum: { w: 6, h: 5 } },
   display_video: { default: { w: 16, h: 14 }, minimum: { w: 8, h: 7 } },
   display_file: { default: { w: 10, h: 6 }, minimum: { w: 6, h: 5 } },
   display_3d: { default: { w: 16, h: 14 }, minimum: { w: 8, h: 8 } },

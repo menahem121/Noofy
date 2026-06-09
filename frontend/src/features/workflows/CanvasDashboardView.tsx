@@ -115,6 +115,7 @@ interface CanvasDashboardViewProps {
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
+  outputTextsByNodeId: Map<string, string[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
@@ -164,6 +165,7 @@ export function CanvasDashboardView({
   outputIndex,
   outputImagesByNodeId,
   outputAudiosByNodeId,
+  outputTextsByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
@@ -733,6 +735,7 @@ export function CanvasDashboardView({
                 outputIndex={outputIndex}
                 outputImagesByNodeId={outputImagesByNodeId}
                 outputAudiosByNodeId={outputAudiosByNodeId}
+                outputTextsByNodeId={outputTextsByNodeId}
                 outputVideosByNodeId={outputVideosByNodeId}
                 outputFilesByNodeId={outputFilesByNodeId}
                 outputThreeDsByNodeId={outputThreeDsByNodeId}
@@ -824,6 +827,7 @@ function CanvasWidgetCell({
   outputIndex,
   outputImagesByNodeId,
   outputAudiosByNodeId,
+  outputTextsByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
@@ -855,6 +859,7 @@ function CanvasWidgetCell({
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
+  outputTextsByNodeId: Map<string, string[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
@@ -881,6 +886,7 @@ function CanvasWidgetCell({
   const isGroup = item.kind === "group";
   const control = item.kind === "control" ? item.control : null;
   const isOutput = control ? isOutputControlType(control.type) : false;
+  const supportsGallery = control ? isGalleryOutputControlType(control.type) : false;
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
   const description = isGroup ? item.group.description : control!.type === "note" ? undefined : control!.description;
@@ -910,7 +916,7 @@ function CanvasWidgetCell({
             {description ? <p>{description}</p> : null}
           </div>
         </div>
-        {control && isOutput ? (
+        {control && supportsGallery ? (
           <button
             className={`auto-save-toggle${outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""}`}
             type="button"
@@ -937,6 +943,7 @@ function CanvasWidgetCell({
             outputIndex={outputIndex}
             outputImagesByNodeId={outputImagesByNodeId}
             outputAudiosByNodeId={outputAudiosByNodeId}
+            outputTextsByNodeId={outputTextsByNodeId}
             outputVideosByNodeId={outputVideosByNodeId}
             outputFilesByNodeId={outputFilesByNodeId}
             outputThreeDsByNodeId={outputThreeDsByNodeId}
@@ -968,6 +975,7 @@ function CanvasWidgetCell({
               outputIndex={outputIndex}
               outputImagesByNodeId={outputImagesByNodeId}
               outputAudiosByNodeId={outputAudiosByNodeId}
+              outputTextsByNodeId={outputTextsByNodeId}
               outputVideosByNodeId={outputVideosByNodeId}
               outputFilesByNodeId={outputFilesByNodeId}
               outputThreeDsByNodeId={outputThreeDsByNodeId}
@@ -975,7 +983,7 @@ function CanvasWidgetCell({
               comparisonBeforeImageUrl={comparisonBeforeImageUrl}
               imagePreviewEnabled={!isEditingLayout}
             />
-            {onSaveOutputToGallery && onCancelOutputGallerySave ? (
+            {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
               <div className="widget-output-gallery-action">
                 <GallerySaveAction status={gallerySaveByControlId?.[control!.id]} onSave={() => onSaveOutputToGallery(control!.id)} onCancel={() => onCancelOutputGallerySave(control!.id)} />
               </div>
@@ -1010,6 +1018,7 @@ function GroupedCanvasControls({
   outputIndex,
   outputImagesByNodeId,
   outputAudiosByNodeId,
+  outputTextsByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
@@ -1037,6 +1046,7 @@ function GroupedCanvasControls({
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
+  outputTextsByNodeId: Map<string, string[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
@@ -1063,6 +1073,7 @@ function GroupedCanvasControls({
     <div className="canvas-widget-group">
       {item.controls.map((control) => {
         const isOutput = isOutputControlType(control.type);
+        const supportsGallery = isGalleryOutputControlType(control.type);
         const controlClasses = [
           "canvas-widget-group__control",
           control.type === "textarea" ? "canvas-widget-group__control--textarea" : "",
@@ -1079,6 +1090,7 @@ function GroupedCanvasControls({
                   outputIndex={outputIndex}
                   outputImagesByNodeId={outputImagesByNodeId}
                   outputAudiosByNodeId={outputAudiosByNodeId}
+                  outputTextsByNodeId={outputTextsByNodeId}
                   outputVideosByNodeId={outputVideosByNodeId}
                   outputFilesByNodeId={outputFilesByNodeId}
                   outputThreeDsByNodeId={outputThreeDsByNodeId}
@@ -1086,28 +1098,30 @@ function GroupedCanvasControls({
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
-                {onSaveOutputToGallery && onCancelOutputGallerySave ? (
+                {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
                   <div className="widget-output-gallery-action">
                     <GallerySaveAction status={gallerySaveByControlId?.[control.id]} onSave={() => onSaveOutputToGallery(control.id)} onCancel={() => onCancelOutputGallerySave(control.id)} />
                   </div>
                 ) : null}
-                <button
-                  className={`auto-save-toggle canvas-widget-group__auto-save${
-                    outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""
-                  }`}
-                  type="button"
-                  aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
-                  aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
-                  }}
-                >
-                  <span className="auto-save-toggle__track" aria-hidden="true">
-                    <span className="auto-save-toggle__knob" />
-                  </span>
-                  <span>Auto Save</span>
-                </button>
+                {supportsGallery ? (
+                  <button
+                    className={`auto-save-toggle canvas-widget-group__auto-save${
+                      outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""
+                    }`}
+                    type="button"
+                    aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
+                    aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
+                    }}
+                  >
+                    <span className="auto-save-toggle__track" aria-hidden="true">
+                      <span className="auto-save-toggle__knob" />
+                    </span>
+                    <span>Auto Save</span>
+                  </button>
+                ) : null}
               </>
             ) : (
               <>
@@ -1156,6 +1170,7 @@ function iconForControlType(type: string): typeof Type {
   if (type === "load_3d") return Box;
   if (type === "display_image" || type === "result_image") return Sparkles;
   if (type === "display_audio") return FileAudio;
+  if (type === "display_text") return Type;
   if (type === "display_video") return Video;
   if (type === "display_file") return FileIcon;
   if (type === "display_3d") return Box;
@@ -1167,7 +1182,11 @@ function iconForControlType(type: string): typeof Type {
 }
 
 function isOutputControlType(type: string): boolean {
-  return type === "display_image" || type === "display_audio" || type === "display_video" || type === "display_file" || type === "display_3d" || type === "result_image";
+  return type === "display_image" || type === "display_audio" || type === "display_text" || type === "display_video" || type === "display_file" || type === "display_3d" || type === "result_image";
+}
+
+function isGalleryOutputControlType(type: string): boolean {
+  return isOutputControlType(type) && type !== "display_text";
 }
 
 function isLivePreviewVisualOutput(outputKind: string | null | undefined, controlType: string): boolean {
@@ -1234,6 +1253,7 @@ function OutputWidgetContent({
   outputIndex,
   outputImagesByNodeId,
   outputAudiosByNodeId,
+  outputTextsByNodeId,
   outputVideosByNodeId,
   outputFilesByNodeId,
   outputThreeDsByNodeId,
@@ -1245,6 +1265,7 @@ function OutputWidgetContent({
   outputIndex: Map<string, WorkflowOutputDef>;
   outputImagesByNodeId: Map<string, string[]>;
   outputAudiosByNodeId: Map<string, OutputAudioMedia[]>;
+  outputTextsByNodeId: Map<string, string[]>;
   outputVideosByNodeId: Map<string, OutputVideoMedia[]>;
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
@@ -1255,11 +1276,13 @@ function OutputWidgetContent({
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
   const outputKind = output?.kind ?? output?.type;
   const wantsAudio = outputKind === "audio" || control.type === "display_audio";
+  const wantsText = outputKind === "text" || control.type === "display_text";
   const wantsVideo = outputKind === "video" || control.type === "display_video";
   const wantsFile = outputKind === "file" || control.type === "display_file";
   const wantsThreeD = outputKind === "3d" || control.type === "display_3d";
-  const imageUrls = output && !wantsAudio && !wantsVideo && !wantsThreeD && !wantsFile ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
+  const imageUrls = output && !wantsAudio && !wantsText && !wantsVideo && !wantsThreeD && !wantsFile ? outputImagesByNodeId.get(output.node_id) ?? [] : [];
   const audioOutputs = output && wantsAudio ? outputAudiosByNodeId.get(output.node_id) ?? [] : [];
+  const textOutputs = output && wantsText ? outputTextsByNodeId.get(output.node_id) ?? [] : [];
   const videoOutputs = output && wantsVideo ? outputVideosByNodeId.get(output.node_id) ?? [] : [];
   const fileOutputs = output && wantsFile ? outputFilesByNodeId.get(output.node_id) ?? [] : [];
   const threeDOutputs = output && wantsThreeD ? outputThreeDsByNodeId.get(output.node_id) ?? [] : [];
@@ -1394,6 +1417,16 @@ function OutputWidgetContent({
     );
   }
 
+  if (textOutputs.length > 0) {
+    return (
+      <div className="widget-output-text">
+        {textOutputs.map((text, index) => (
+          <pre key={`${index}-${text.slice(0, 32)}`}>{text}</pre>
+        ))}
+      </div>
+    );
+  }
+
   if (threeDOutputs.length > 0) {
     return <div className="widget-output-three-d">{threeDOutputs.map((model, index) => <ThreeDViewer key={`${model.url}-${index}`} url={model.url} filename={model.filename} size={model.size} />)}</div>;
   }
@@ -1502,10 +1535,12 @@ function OutputWidgetContent({
 
   return (
     <div className="widget-output-placeholder">
-      {wantsAudio ? <FileAudio size={36} aria-hidden="true" /> : wantsVideo ? <Video size={36} aria-hidden="true" /> : wantsFile ? <FileIcon size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
+      {wantsAudio ? <FileAudio size={36} aria-hidden="true" /> : wantsText ? <Type size={36} aria-hidden="true" /> : wantsVideo ? <Video size={36} aria-hidden="true" /> : wantsFile ? <FileIcon size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
       <span>
         {wantsAudio
           ? "Your generated audio will appear here."
+          : wantsText
+            ? "Your generated text will appear here."
           : wantsVideo
             ? "Your generated video will appear here."
             : wantsFile

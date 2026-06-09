@@ -1833,6 +1833,47 @@ async def test_prepare_workflow_reuses_filename_size_local_model_candidate(tmp_p
 
 
 @pytest.mark.anyio
+async def test_prepare_workflow_reuses_hash_verified_local_model_without_source_url(
+    tmp_path: Path,
+) -> None:
+    payload = b"hash-verified-local-model"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "text_encoders" / "gemma.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    capsule_payload = _runner_capsule_payload(runner_char="b")
+    capsule_payload["models"] = [
+        {
+            "id": "text_encoders/gemma.safetensors",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+            "source_urls": [],
+            "comfyui_folder": "text_encoders",
+            "filename": "gemma.safetensors",
+        }
+    ]
+    packages_dir = tmp_path / "packages"
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        local_model_roots=[local_root],
+    )
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.READY.value
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    ref = state.model_references[0]
+    assert ref.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert ref.asset_ownership is AssetOwnership.USER_LOCAL
+    assert ref.source_path == str(local_path)
+    assert ref.blob_path is None
+    assert Path(ref.materialized_path or "").read_bytes() == payload
+
+
+@pytest.mark.anyio
 async def test_prepare_workflow_reports_missing_filename_size_local_candidate(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     workflow_dir = packages_dir / "runner_workflow"

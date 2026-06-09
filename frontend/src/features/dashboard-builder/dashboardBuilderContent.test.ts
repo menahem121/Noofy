@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAutomaticDashboardWidgets,
   addAutomaticImageOutputWidget,
   addAutomaticVideoOutputWidget,
   addAutomaticImageInputWidgets,
@@ -1120,5 +1121,60 @@ describe("workflowFromBindableInputs", () => {
         },
       ],
     });
+  });
+
+  it("turns PreviewAny text outputs into display text values and widgets", () => {
+    const workflow = workflowFromBindableInputs("wf-text", "Text Workflow", [
+      {
+        node_id: "4",
+        node_type: "PreviewAny",
+        node_title: "Preview as Text",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_text",
+            current_value: null,
+            kind: "text_output",
+            suggested_widget_type: "display_text",
+            widget_types: ["display_text"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+
+    const value = workflow.nodes[0].values[0];
+    expect(value).toMatchObject({
+      valueKind: "text_output",
+      inputName: "output_text",
+      autoSelect: true,
+    });
+    expect(createDashboardWidgetForValue(value, workflow.nodes[0])).toMatchObject({
+      widgetType: "display_text",
+      title: "Result",
+    });
+
+    const schema = addAutomaticDashboardWidgets(
+      {
+        version: 1,
+        workflowId: "wf-text",
+        workflowName: "Text Workflow",
+        widgets: [],
+        groups: [],
+        layout: { gridColumns: 32, rowHeight: 30, gridGap: 8, responsive: true },
+      },
+      workflow,
+    );
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        widgetType: "display_text",
+        binding: { nodeId: "4", inputName: "output_text" },
+      }),
+    ]);
+    expect(toBackendPayload(schema).dashboard.outputs).toEqual([
+      expect.objectContaining({ node_id: "4", type: "text", kind: "text" }),
+    ]);
   });
 });

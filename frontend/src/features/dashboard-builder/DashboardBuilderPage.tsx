@@ -19,6 +19,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Type,
   Video,
   Wand2,
   X,
@@ -1352,6 +1353,7 @@ function widgetSpecificPreviewDetails(value: WorkflowNodeValue, widgetType: Widg
 
   if (widgetType === "display_image") return [{ label: "Output", value: "Generated image result" }];
   if (widgetType === "display_audio") return [{ label: "Output", value: "Generated audio result" }];
+  if (widgetType === "display_text") return [{ label: "Output", value: "Generated text result" }];
   if (widgetType === "display_video") return [{ label: "Output", value: "Generated video result" }];
   if (widgetType === "display_file") return [{ label: "Output", value: "Generated file result" }];
   if (widgetType === "display_3d") return [{ label: "Output", value: "Generated 3D model result" }];
@@ -1374,6 +1376,7 @@ function valueKindPreviewLabel(kind: WorkflowNodeValue["valueKind"]): string {
     image_output: "Image output",
     audio_input: "Audio input",
     audio_output: "Audio output",
+    text_output: "Text output",
     video_input: "Video input",
     video_output: "Video output",
     file_input: "File input",
@@ -2738,6 +2741,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
       <div className="preview-image-output">
         <FileAudio size={22} aria-hidden="true" />
         <span>Generated audio will appear here</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "display_text") {
+    return (
+      <div className="preview-image-output">
+        <Type size={22} aria-hidden="true" />
+        <span>Generated text will appear here</span>
       </div>
     );
   }

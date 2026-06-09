@@ -418,6 +418,100 @@ async def test_materialize_model_view_reuses_existing_blob_without_download(tmp_
 
 
 @pytest.mark.anyio
+async def test_materialize_model_view_reuses_hash_verified_local_candidate_without_source_url(
+    tmp_path: Path,
+) -> None:
+    payload = b"hash-verified-local-candidate"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "text_encoders" / "local.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    lock = ModelLock(
+        id="text_encoders/local.safetensors",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        source_urls=[],
+        comfyui_folder="text_encoders",
+        filename="local.safetensors",
+    )
+
+    async def unexpected_downloader(url: str, dest: Path) -> int:
+        raise AssertionError(f"local candidate should avoid download: {url} -> {dest}")
+
+    store, log_store = _build_store(
+        tmp_path,
+        unexpected_downloader,
+        local_model_roots=[local_root],
+    )
+
+    view = await store.materialize_model_view(
+        view_id="capsule-local",
+        model_locks=[lock],
+        source_policy=_source_policy(
+            model_source_trust="hashed",
+            allowed_model_origins=["hashed-download", "user-local"],
+        ),
+    )
+
+    ref = view.model_references[0]
+    assert Path(ref.materialized_path or "").read_bytes() == payload
+    assert ref.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert ref.asset_ownership is AssetOwnership.USER_LOCAL
+    assert ref.source_path == str(local_path)
+    assert ref.blob_path is None
+    assert ref.store_ref is None
+    assert ref.sha256 == f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    assert any(
+        "Reusing hash-verified local model candidate" in event.message
+        for event in log_store.list_events().events
+    )
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_reuses_hash_verified_local_candidate_by_sha_scan(
+    tmp_path: Path,
+) -> None:
+    payload = b"hash-verified-local-candidate-with-different-name"
+    local_root = tmp_path / "user-models"
+    local_path = local_root / "checkpoints" / "renamed.safetensors"
+    local_path.parent.mkdir(parents=True)
+    local_path.write_bytes(payload)
+    lock = ModelLock(
+        id="text_encoders/expected.safetensors",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        source_urls=[],
+        comfyui_folder="text_encoders",
+        filename="expected.safetensors",
+    )
+    store, log_store = _build_store(
+        tmp_path,
+        _make_downloader({}),
+        local_model_roots=[local_root],
+    )
+
+    view = await store.materialize_model_view(
+        view_id="capsule-local",
+        model_locks=[lock],
+        source_policy=_source_policy(
+            model_source_trust="hashed",
+            allowed_model_origins=["hashed-download", "user-local"],
+        ),
+    )
+
+    ref = view.model_references[0]
+    materialized = view.view_path / "text_encoders" / "expected.safetensors"
+    assert materialized.read_bytes() == payload
+    assert ref.source_path == str(local_path)
+    assert ref.materialized_path == str(materialized)
+    assert ref.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert any(
+        event.details.get("matched_by") == "sha256_scan"
+        for event in log_store.list_events().events
+    )
+
+
+@pytest.mark.anyio
 async def test_materialize_model_view_projects_downloaded_model_to_owned_folder(tmp_path: Path) -> None:
     payload = b"downloaded-owned-model"
     lock = _model_lock(payload, folder="loras", filename="style.safetensors")

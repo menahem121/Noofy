@@ -98,6 +98,7 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   load_3d: Box,
   display_image: Sparkles,
   display_audio: FileAudio,
+  display_text: Type,
   display_video: Video,
   display_file: File,
   display_3d: Box,
@@ -1052,6 +1053,15 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
       <div className="layout-preview-output">
         <FileAudio size={22} aria-hidden="true" />
         <span>{widget.widgetType === "load_audio" ? "Click here to upload audio" : "Generated audio will appear here"}</span>
+      </div>
+    );
+  }
+
+  if (widget.widgetType === "display_text") {
+    return (
+      <div className="layout-preview-output">
+        <Type size={22} aria-hidden="true" />
+        <span>Generated text will appear here</span>
       </div>
     );
   }

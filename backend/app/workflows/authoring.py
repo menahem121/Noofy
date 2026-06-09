@@ -525,10 +525,11 @@ _SCALAR_INPUT_KINDS: dict[type, str] = {
     bool: "boolean",
 }
 
-_IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask"})
+_IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask", "NoofyOptionalLoadImage"})
 _IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
-_AUDIO_NODE_TYPES = frozenset({"LoadAudio"})
+_AUDIO_NODE_TYPES = frozenset({"LoadAudio", "NoofyOptionalLoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
+_TEXT_OUTPUT_NODE_TYPES = frozenset({"PreviewAny"})
 _VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
 _VIDEO_OUTPUT_NODE_TYPES = frozenset({"PreviewVideo", "SaveVideo", "SaveWEBM", "VHS_VideoCombine"})
 _THREE_D_NODE_TYPES = frozenset({"Load3D", "Load3DAnimation"})
@@ -621,12 +622,23 @@ def _classify_graph_inputs(
                     "auto_select": node_id_str == default_audio_output_node_id,
                 }
             )
+        if node_type in _TEXT_OUTPUT_NODE_TYPES:
+            scalar_inputs.append(
+                {
+                    "input_name": "output_text",
+                    "current_value": None,
+                    "kind": "text_output",
+                    "suggested_widget_type": "display_text",
+                    "widget_types": ["display_text"],
+                    "auto_select": True,
+                }
+            )
 
         for input_name, value in raw_inputs.items():
             # Skip link references (arrays like ["3", 0]).
             if isinstance(value, list):
                 continue
-            if _is_ignored_image_node_input(node_type, input_name):
+            if _is_ignored_media_node_input(node_type, input_name):
                 continue
             option_spec = _options_for_node_input(object_info, node_type, input_name)
             kind = _value_kind(input_name, value, node_type)
@@ -895,8 +907,12 @@ def _default_video_output_node_id(graph: dict[str, Any]) -> str | None:
     return max(candidate_ids, key=lambda node_id: (depth(node_id), node_order.get(node_id, -1)))
 
 
-def _is_ignored_image_node_input(node_type: str, input_name: str) -> bool:
-    return node_type in _IMAGE_NODE_TYPES and input_name == "upload"
+def _is_ignored_media_node_input(node_type: str, input_name: str) -> bool:
+    if node_type in _IMAGE_NODE_TYPES:
+        return input_name in {"upload", "enabled", "mode"}
+    if node_type in _AUDIO_NODE_TYPES:
+        return input_name in {"upload", "audioUI", "enabled", "mode"}
+    return False
 
 
 def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
@@ -932,6 +948,7 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "image_input": ["load_image", "load_image_mask"],
         "audio_input": ["load_audio"],
         "audio_output": ["display_audio"],
+        "text_output": ["display_text"],
         "video_input": ["load_video"],
         "video_output": ["display_video"],
         "three_d_input": ["load_3d"],

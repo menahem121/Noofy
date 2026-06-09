@@ -617,6 +617,21 @@
   overflow: auto;
 }
 
+.widget-output-text {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.widget-output-text pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
 .widget-output-audio__item {
   display: grid;
   gap: 8px;

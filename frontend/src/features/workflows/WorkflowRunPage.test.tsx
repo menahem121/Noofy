@@ -2905,6 +2905,56 @@ describe("WorkflowRunPage", () => {
     );
   });
 
+  it("renders generated text from PreviewAny in a text output widget", async () => {
+    const textPackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "text", label: "Text", node_id: "4", type: "text", kind: "text" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [{
+            id: "result-text",
+            type: "display_text",
+            label: "Text result",
+            output_id: "text",
+            layout: { x: 0, y: 0, w: 12, h: 8 },
+          }],
+        }],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, textPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-text", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
+      }
+      if (url.endsWith("/api/jobs/job-text/progress")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-text", status: "completed", value: 1, max: 1, message: "Execution completed" }));
+      }
+      if (url.endsWith("/api/jobs/job-text/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-text",
+          status: "completed",
+          outputs: [{ node_id: "4", output: { text: ["Hello from Gemma."] } }],
+          error: null,
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByText("Text result")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /auto save/i })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByText("Hello from Gemma.")).toBeInTheDocument();
+    expect(document.querySelector(".widget-output-text pre")).toHaveTextContent("Hello from Gemma.");
+    expect(screen.queryByRole("button", { name: /save.*gallery/i })).not.toBeInTheDocument();
+  });
+
   it("renders generated video with backend-owned player, metadata, and Auto Save actions", async () => {
     const videoPackageData = {
       ...configuredPackageData,

@@ -365,6 +365,58 @@ class ModelStore:
             seen_targets[key] = local_model.sha256
 
         for model_lock in model_locks:
+            sha256 = _normalize_sha256(model_lock.sha256)
+            local_source = None
+            if (
+                not self._blob_path(sha256).exists()
+                and _source_policy_allows_exact_local_reuse(source_policy)
+            ):
+                local_source = await asyncio.to_thread(
+                    self._find_exact_local_candidate, model_lock
+                )
+            if local_source is not None:
+                target = self._model_view_path(view_path, model_lock)
+                strategy = self._materialize_link_or_copy(local_source, target)
+                verified = self._verify_materialized_file(
+                    target, sha256, model_lock.size_bytes
+                )
+                if not verified:
+                    raise ModelDownloadError(
+                        "Materialized hash-verified local model failed verification for "
+                        f"{model_lock.comfyui_folder}/{model_lock.filename}."
+                    )
+                refs.append(
+                    InstalledModelReference(
+                        requirement_id=model_lock.id,
+                        comfyui_folder=model_lock.comfyui_folder,
+                        filename=model_lock.filename,
+                        verification_level=ModelVerificationLevel.SHA256_SIZE,
+                        asset_ownership=AssetOwnership.USER_LOCAL,
+                        model_id=model_lock.id,
+                        sha256=f"sha256:{sha256}",
+                        size_bytes=model_lock.size_bytes,
+                        source_path=str(local_source),
+                        materialized_path=str(target),
+                        materialization_strategy=strategy,
+                        materialized_file_verified=verified,
+                    )
+                )
+                self.log_store.add(
+                    "info",
+                    "Hash-verified local model candidate materialized into view",
+                    "model.store",
+                    details={
+                        "model_id": model_lock.id,
+                        "sha256": sha256,
+                        "source_path": str(local_source),
+                        "view_fingerprint": view_fingerprint,
+                        "strategy": strategy,
+                        "verification_level": ModelVerificationLevel.SHA256_SIZE.value,
+                        "asset_ownership": AssetOwnership.USER_LOCAL.value,
+                    },
+                )
+                continue
+
             blob_path, sha256, reused_existing_blob = await self._ensure_blob(
                 model_lock,
                 transactions_dir=staged_blobs_dir,
@@ -910,6 +962,71 @@ class ModelStore:
             f"No local model candidate found for {requirement.requirement_id}; checked {checked}"
         )
 
+    def _find_exact_local_candidate(self, model_lock: ModelLock) -> Path | None:
+        folder_parts = _safe_relative_parts(
+            model_lock.comfyui_folder, field_name="comfyui_folder"
+        )
+        filename_parts = _safe_relative_parts(
+            model_lock.filename, field_name="filename"
+        )
+        expected_sha256 = _normalize_sha256(model_lock.sha256)
+        expected_paths: set[Path] = set()
+        for root in self.local_model_roots:
+            candidate = root.joinpath(*folder_parts, *filename_parts)
+            expected_paths.add(candidate)
+            if self._local_file_matches_model_lock(candidate, model_lock):
+                self._log_exact_local_candidate(
+                    model_lock, candidate, expected_sha256, matched_by="expected_path"
+                )
+                return candidate
+        for root in self.local_model_roots:
+            if not root.is_dir():
+                continue
+            for candidate in root.rglob("*"):
+                if candidate in expected_paths:
+                    continue
+                if self._local_file_matches_model_lock(candidate, model_lock):
+                    self._log_exact_local_candidate(
+                        model_lock, candidate, expected_sha256, matched_by="sha256_scan"
+                    )
+                    return candidate
+        return None
+
+    def _local_file_matches_model_lock(self, candidate: Path, model_lock: ModelLock) -> bool:
+        try:
+            if not candidate.is_file():
+                return False
+            if candidate.stat().st_size != model_lock.size_bytes:
+                return False
+            return _sha256_file(candidate) == _normalize_sha256(model_lock.sha256)
+        except OSError:
+            return False
+
+    def _log_exact_local_candidate(
+        self,
+        model_lock: ModelLock,
+        candidate: Path,
+        sha256: str,
+        *,
+        matched_by: str,
+    ) -> None:
+        self.log_store.add(
+            "info",
+            "Reusing hash-verified local model candidate",
+            "model.store",
+            details={
+                "model_id": model_lock.id,
+                "comfyui_folder": model_lock.comfyui_folder,
+                "filename": model_lock.filename,
+                "size_bytes": model_lock.size_bytes,
+                "sha256": sha256,
+                "source_path": str(candidate),
+                "matched_by": matched_by,
+                "verification_level": ModelVerificationLevel.SHA256_SIZE.value,
+                "asset_ownership": AssetOwnership.USER_LOCAL.value,
+            },
+        )
+
     def _validate_model_source_policy(
         self,
         source_policy: SourcePolicy | None,
@@ -1087,6 +1204,14 @@ def _model_lock_origins(model_lock: ModelLock) -> set[str]:
         if parsed.netloc:
             origins.add(parsed.netloc.lower())
     return origins
+
+
+def _source_policy_allows_exact_local_reuse(
+    source_policy: SourcePolicy | None,
+) -> bool:
+    if source_policy is None or not source_policy.allowed_model_origins:
+        return True
+    return "user-local" in source_policy.allowed_model_origins
 
 
 def _validate_materialized_target_path(target: Path) -> None:
