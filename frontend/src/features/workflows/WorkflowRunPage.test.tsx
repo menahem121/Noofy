@@ -2906,6 +2906,11 @@ describe("WorkflowRunPage", () => {
   });
 
   it("renders generated text from PreviewAny in a text output widget", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     const textPackageData = {
       ...configuredPackageData,
       outputs: [{ id: "text", label: "Text", node_id: "4", type: "text", kind: "text" }],
@@ -2952,6 +2957,9 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
     expect(await screen.findByText("Hello from Gemma.")).toBeInTheDocument();
     expect(document.querySelector(".widget-output-text pre")).toHaveTextContent("Hello from Gemma.");
+    expect(canvasCss).toMatch(/\.widget-output-text pre\s*{[^}]*user-select:\s*text;/);
+    fireEvent.click(screen.getByRole("button", { name: /copy text result output/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Hello from Gemma."));
     expect(screen.queryByRole("button", { name: /save.*gallery/i })).not.toBeInTheDocument();
   });
 

@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Download,
   ExternalLink,
   File as FileIcon,
@@ -890,9 +891,25 @@ function CanvasWidgetCell({
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
   const description = isGroup ? item.group.description : control!.type === "note" ? undefined : control!.description;
+  const output = control?.output_id ? outputIndex.get(control.output_id) : null;
+  const outputKind = output?.kind ?? output?.type;
+  const textOutputs = control && output && (outputKind === "text" || control.type === "display_text") ? outputTextsByNodeId.get(output.node_id) ?? [] : [];
+  const textToCopy = textOutputs.join("\n\n");
+  const [copiedTextOutput, setCopiedTextOutput] = useState(false);
   const compact = isGroup
     ? isWidgetGroupLayoutCompact(layout, item.controls.map((child) => child.type))
     : isWidgetLayoutCompact(layout, control!.type);
+
+  useEffect(() => {
+    if (!copiedTextOutput) return undefined;
+    const timeoutId = window.setTimeout(() => setCopiedTextOutput(false), 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [copiedTextOutput]);
+
+  async function copyTextOutput() {
+    await navigator.clipboard.writeText(textToCopy);
+    setCopiedTextOutput(true);
+  }
 
   return (
     <DashboardCanvasWidgetShell
@@ -916,22 +933,42 @@ function CanvasWidgetCell({
             {description ? <p>{description}</p> : null}
           </div>
         </div>
-        {control && supportsGallery ? (
-          <button
-            className={`auto-save-toggle${outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""}`}
-            type="button"
-            aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
-            aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
-            }}
-          >
-            <span className="auto-save-toggle__track" aria-hidden="true">
-              <span className="auto-save-toggle__knob" />
-            </span>
-            <span>Auto Save</span>
-          </button>
+        {control && (supportsGallery || textOutputs.length > 0) ? (
+          <div className="layout-canvas-widget__header-actions">
+            {textOutputs.length > 0 ? (
+              <button
+                className="widget-output-text__copy"
+                type="button"
+                aria-label={`Copy ${control.label} output`}
+                title={copiedTextOutput ? "Copied" : "Copy text"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void copyTextOutput().catch((error: unknown) => {
+                    console.error("Text output copy failed", error);
+                  });
+                }}
+              >
+                {copiedTextOutput ? <CheckCircle2 size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+              </button>
+            ) : null}
+            {supportsGallery ? (
+              <button
+                className={`auto-save-toggle${outputPreferences[control.id]?.auto_save ? " auto-save-toggle--on" : ""}`}
+                type="button"
+                aria-pressed={Boolean(outputPreferences[control.id]?.auto_save)}
+                aria-label={`${outputPreferences[control.id]?.auto_save ? "Disable" : "Enable"} Auto Save for ${control.label}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOutputPreferenceChange(control.id, !outputPreferences[control.id]?.auto_save);
+                }}
+              >
+                <span className="auto-save-toggle__track" aria-hidden="true">
+                  <span className="auto-save-toggle__knob" />
+                </span>
+                <span>Auto Save</span>
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </header>
 
@@ -1421,7 +1458,9 @@ function OutputWidgetContent({
     return (
       <div className="widget-output-text">
         {textOutputs.map((text, index) => (
-          <pre key={`${index}-${text.slice(0, 32)}`}>{text}</pre>
+          <div className="widget-output-text__item" key={`${index}-${text.slice(0, 32)}`}>
+            <pre>{text}</pre>
+          </div>
         ))}
       </div>
     );

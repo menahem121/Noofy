@@ -2073,6 +2073,16 @@
   user-select: text;
 }
 
+.layout-canvas-widget :where(.widget-output-text, .widget-output-text__item, .widget-output-text pre) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.layout-canvas-widget :where(.widget-output-text__copy, .widget-output-text__copy *) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .builder-layout-workspace .layout-canvas-widget :where(input, textarea, select),
 .layout-canvas-widget--run-editing :where(input, textarea, select) {
   -webkit-user-select: none;
@@ -2137,6 +2147,13 @@
   border-radius: 9px;
   background: rgba(139, 92, 246, 0.13);
   color: var(--primary-hover);
+}
+
+.layout-canvas-widget__header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .auto-save-toggle {
