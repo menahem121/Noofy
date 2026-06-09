@@ -529,7 +529,7 @@ _IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask", "NoofyOptionalLoadI
 _IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
 _AUDIO_NODE_TYPES = frozenset({"LoadAudio", "NoofyOptionalLoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
-_TEXT_OUTPUT_NODE_TYPES = frozenset({"PreviewAny"})
+_PREVIEW_ANY_NODE_TYPES = frozenset({"PreviewAny"})
 _VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
 _VIDEO_OUTPUT_NODE_TYPES = frozenset({"PreviewVideo", "SaveVideo", "SaveWEBM", "VHS_VideoCombine"})
 _THREE_D_NODE_TYPES = frozenset({"Load3D", "Load3DAnimation"})
@@ -622,16 +622,14 @@ def _classify_graph_inputs(
                     "auto_select": node_id_str == default_audio_output_node_id,
                 }
             )
-        if node_type in _TEXT_OUTPUT_NODE_TYPES:
+        if node_type in _PREVIEW_ANY_NODE_TYPES:
             scalar_inputs.append(
-                {
-                    "input_name": "output_text",
-                    "current_value": None,
-                    "kind": "text_output",
-                    "suggested_widget_type": "display_text",
-                    "widget_types": ["display_text"],
-                    "auto_select": True,
-                }
+                _preview_any_output_input(
+                    graph,
+                    node_type,
+                    raw_inputs,
+                    object_info=object_info,
+                )
             )
 
         for input_name, value in raw_inputs.items():
@@ -915,6 +913,144 @@ def _is_ignored_media_node_input(node_type: str, input_name: str) -> bool:
     return False
 
 
+def _preview_any_output_input(
+    graph: dict[str, Any],
+    node_type: str,
+    raw_inputs: Mapping[str, Any],
+    *,
+    object_info: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    kind = _preview_any_output_kind(
+        graph,
+        node_type,
+        raw_inputs,
+        object_info=object_info,
+    )
+    return _synthetic_output_input(kind, auto_select=True)
+
+
+def _synthetic_output_input(kind: str, *, auto_select: bool) -> dict[str, Any]:
+    input_names = {
+        "image_output": "output_image",
+        "audio_output": "output_audio",
+        "text_output": "output_text",
+        "video_output": "output_video",
+        "three_d_output": "output_3d",
+        "file_output": "output_file",
+    }
+    widget_types = _widget_types_for_kind(kind)
+    return {
+        "input_name": input_names.get(kind, "output_text"),
+        "current_value": None,
+        "kind": kind,
+        "suggested_widget_type": widget_types[0] if widget_types else "display_text",
+        "widget_types": widget_types,
+        "auto_select": auto_select,
+    }
+
+
+def _preview_any_output_kind(
+    graph: dict[str, Any],
+    node_type: str,
+    raw_inputs: Mapping[str, Any],
+    *,
+    object_info: Mapping[str, Any] | None,
+) -> str:
+    declared_output_type = _object_info_output_type(object_info, node_type, 0)
+    declared_kind = _output_kind_for_comfy_type(declared_output_type)
+    if declared_kind is not None:
+        return declared_kind
+    if declared_output_type is None:
+        return "text_output"
+
+    linked = _first_linked_input(raw_inputs)
+    if linked is None:
+        return "text_output"
+    source_node_id, output_index = linked
+    source = graph.get(source_node_id)
+    if not isinstance(source, Mapping):
+        return "text_output"
+    source_type = str(source.get("class_type") or source.get("type") or "")
+    object_output_type = _object_info_output_type(object_info, source_type, output_index)
+    inferred = _output_kind_for_comfy_type(object_output_type)
+    if inferred is not None:
+        return inferred
+    return _fallback_preview_output_kind_for_node_type(source_type)
+
+
+def _first_linked_input(raw_inputs: Mapping[str, Any]) -> tuple[str, int] | None:
+    preferred = raw_inputs.get("source")
+    if isinstance(preferred, list) and len(preferred) >= 2 and isinstance(preferred[1], int):
+        return str(preferred[0]), preferred[1]
+    for value in raw_inputs.values():
+        if isinstance(value, list) and len(value) >= 2 and isinstance(value[1], int):
+            return str(value[0]), value[1]
+    return None
+
+
+def _object_info_output_type(
+    object_info: Mapping[str, Any] | None,
+    node_type: str,
+    output_index: int,
+) -> str | None:
+    if object_info is None:
+        return None
+    node_info = object_info.get(node_type)
+    if not isinstance(node_info, Mapping):
+        return None
+    outputs = node_info.get("output")
+    if not isinstance(outputs, (list, tuple)) or output_index < 0 or output_index >= len(outputs):
+        return None
+    output_type = outputs[output_index]
+    if isinstance(output_type, str):
+        return output_type
+    if isinstance(output_type, (list, tuple)):
+        for item in output_type:
+            if isinstance(item, str):
+                return item
+    return None
+
+
+def _output_kind_for_comfy_type(output_type: str | None) -> str | None:
+    if not output_type:
+        return None
+    normalized = output_type.upper()
+    if "AUDIO" in normalized or "SOUND" in normalized:
+        return "audio_output"
+    if "VIDEO" in normalized:
+        return "video_output"
+    if any(token in normalized for token in ("3D", "MESH", "GLB", "GLTF")):
+        return "three_d_output"
+    if "IMAGE" in normalized or "MASK" in normalized:
+        return "image_output"
+    if any(token in normalized for token in ("FILE", "PATH")):
+        return "file_output"
+    if any(token in normalized for token in ("STRING", "TEXT", "INT", "FLOAT", "BOOLEAN", "NUMBER")):
+        return "text_output"
+    if normalized in {"ANY", "*"}:
+        return None
+    return "text_output"
+
+
+def _fallback_preview_output_kind_for_node_type(node_type: str) -> str:
+    if node_type in _IMAGE_NODE_TYPES or node_type in _IMAGE_OUTPUT_NODE_TYPES:
+        return "image_output"
+    if node_type in _AUDIO_NODE_TYPES or node_type in _AUDIO_OUTPUT_NODE_TYPES:
+        return "audio_output"
+    if _is_video_input_node_type(node_type) or _is_video_output_node_type(node_type):
+        return "video_output"
+    if _is_three_d_input_node_type(node_type) or _is_three_d_output_node_type(node_type):
+        return "three_d_output"
+    if _is_file_output_node_type(node_type):
+        return "file_output"
+    normalized = node_type.lower()
+    if "vae" in normalized and "decode" in normalized:
+        return "image_output"
+    if any(token in normalized for token in ("text", "string", "prompt", "llm", "gemma", "generate")):
+        return "text_output"
+    return "text_output"
+
+
 def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
     if node_type in _IMAGE_NODE_TYPES and input_name == "image":
         return "image_input"
@@ -946,6 +1082,7 @@ def _widget_types_for_kind(kind: str) -> list[str]:
         "boolean": ["toggle"],
         "seed": ["seed_widget", "int_field"],
         "image_input": ["load_image", "load_image_mask"],
+        "image_output": ["display_image"],
         "audio_input": ["load_audio"],
         "audio_output": ["display_audio"],
         "text_output": ["display_text"],

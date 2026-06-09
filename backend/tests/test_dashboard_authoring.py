@@ -876,6 +876,10 @@ def test_classify_graph_inputs_includes_audio_widgets() -> None:
 def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -> None:
     nodes = _classify_graph_inputs(
         {
+            "1": {
+                "class_type": "TextGenerate",
+                "inputs": {"model": ["8", 0]},
+            },
             "2": {
                 "_meta": {"title": "Noofy Optional Load Image"},
                 "class_type": "NoofyOptionalLoadImage",
@@ -896,7 +900,11 @@ def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -
                     "audioUI": "/api/view?filename=&type=input",
                 },
             },
-        }
+        },
+        object_info={
+            "PreviewAny": {"output": ["STRING"]},
+            "TextGenerate": {"output": ["STRING"]},
+        },
     )
 
     input_nodes = {node["node_id"]: node for node in nodes}
@@ -929,6 +937,121 @@ def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -
             "auto_select": True,
         }
     ]
+
+
+def test_classify_graph_inputs_uses_preview_any_declared_string_output() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["2", 0], "vae": ["3", 0]},
+            },
+            "4": {
+                "_meta": {"title": "Preview decoded image"},
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["1", 0]},
+            },
+        },
+        object_info={
+            "PreviewAny": {"output": ["STRING"]},
+            "VAEDecode": {"output": ["IMAGE"]},
+        },
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["4"]["inputs"] == [
+        {
+            "input_name": "output_text",
+            "current_value": None,
+            "kind": "text_output",
+            "suggested_widget_type": "display_text",
+            "widget_types": ["display_text"],
+            "auto_select": True,
+        }
+    ]
+
+
+def test_classify_graph_inputs_infers_ambiguous_preview_any_image_output_from_source_object_info() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["2", 0], "vae": ["3", 0]},
+            },
+            "4": {
+                "_meta": {"title": "Preview decoded image"},
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["1", 0]},
+            },
+        },
+        object_info={
+            "PreviewAny": {"output": ["ANY"]},
+            "VAEDecode": {"output": ["IMAGE"]},
+        },
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["4"]["inputs"] == [
+        {
+            "input_name": "output_image",
+            "current_value": None,
+            "kind": "image_output",
+            "suggested_widget_type": "display_image",
+            "widget_types": ["display_image"],
+            "auto_select": True,
+        }
+    ]
+
+
+def test_classify_graph_inputs_infers_ambiguous_preview_any_audio_output_from_source_object_info() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "AudioPreviewSource",
+                "inputs": {"seed": ["2", 0]},
+            },
+            "4": {
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["1", 0]},
+            },
+        },
+        object_info={
+            "AudioPreviewSource": {"output": ["AUDIO"]},
+            "PreviewAny": {"output": ["ANY"]},
+        },
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["4"]["inputs"] == [
+        {
+            "input_name": "output_audio",
+            "current_value": None,
+            "kind": "audio_output",
+            "suggested_widget_type": "display_audio",
+            "widget_types": ["display_audio"],
+            "auto_select": True,
+        }
+    ]
+
+
+def test_classify_graph_inputs_falls_back_to_ambiguous_preview_any_source_node_type() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "LoadImage",
+                "inputs": {"image": ["2", 0]},
+            },
+            "4": {
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["1", 0]},
+            },
+        },
+        object_info={"PreviewAny": {"output": ["ANY"]}},
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["4"]["inputs"][0]["kind"] == "image_output"
+    assert input_nodes["4"]["inputs"][0]["widget_types"] == ["display_image"]
 
 
 def test_classify_graph_inputs_includes_video_widgets_and_custom_binding_hint() -> None:
