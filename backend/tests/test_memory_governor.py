@@ -247,7 +247,7 @@ def test_memory_governor_decision_serializes_and_records_diagnostics() -> None:
         MemoryGovernorDecision(
             action=MemoryDecisionAction.REUSE_RUNNER,
             reason_code="compatible_runner_warm",
-            extra_field=True,
+            extra_field=True,  # type: ignore[call-arg]
         )
 
 
