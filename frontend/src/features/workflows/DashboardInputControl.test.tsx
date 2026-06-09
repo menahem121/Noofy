@@ -879,6 +879,7 @@ describe("DashboardInputControl", () => {
       expect(screen.getByText("narration.wav")).toBeInTheDocument();
       expect(screen.getByText(/WAV/)).toBeInTheDocument();
     });
+    expect(screen.getByLabelText("Duration 0:04")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(onChange).toHaveBeenCalledWith(null);

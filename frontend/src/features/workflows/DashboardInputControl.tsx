@@ -24,7 +24,7 @@ import {
   type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
-import { audioMetadataLabel, fileMetadataLabel, isGalleryMediaReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, formatMediaDuration, isGalleryMediaReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { GalleryPickerModal } from "./GalleryPickerModal";
 
@@ -1499,6 +1499,8 @@ function AssetAudioInput({
   const extension = galleryReference?.extension ?? metadata?.format ?? extensionFromFilename(filename);
   const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
   const size = galleryReference?.size_bytes ?? metadata?.size;
+  const durationLabel = typeof duration === "number" ? formatMediaDuration(duration) : null;
+  const detailsLabel = audioMetadataLabel(extension, mimeType, size, null, "Audio file");
 
   return (
     <div className={`dashboard-audio-input dashboard-audio-input--${variant}${hasSelection ? " dashboard-audio-input--selected" : ""}`}>
@@ -1526,20 +1528,32 @@ function AssetAudioInput({
       ) : null}
       {hasSelection && mediaUrl ? (
         <div className="dashboard-audio-input__selected">
-          <audio
-            className="dashboard-audio-input__player"
-            controls
-            src={mediaUrl}
-            preload="metadata"
-            onLoadedMetadata={(event) => {
-              const nextDuration = event.currentTarget.duration;
-              if (Number.isFinite(nextDuration)) setDuration(nextDuration);
-            }}
-            onError={() => setError("Audio could not be loaded. Choose another file.")}
-          />
-          <div className="dashboard-audio-input__meta">
-            <strong>{filename}</strong>
-            <span>{audioMetadataLabel(extension, mimeType, size, duration, "Audio file")}</span>
+          <div className="dashboard-audio-input__summary">
+            <span className="dashboard-audio-input__icon" aria-hidden="true">
+              <FileAudio size={18} />
+            </span>
+            <div className="dashboard-audio-input__meta">
+              <strong>{filename}</strong>
+              <span>{detailsLabel}</span>
+            </div>
+            {durationLabel ? (
+              <span className="dashboard-audio-input__duration" aria-label={`Duration ${durationLabel}`}>
+                {durationLabel}
+              </span>
+            ) : null}
+          </div>
+          <div className="dashboard-audio-input__player-frame">
+            <audio
+              className="dashboard-audio-input__player"
+              controls
+              src={mediaUrl}
+              preload="metadata"
+              onLoadedMetadata={(event) => {
+                const nextDuration = event.currentTarget.duration;
+                if (Number.isFinite(nextDuration)) setDuration(nextDuration);
+              }}
+              onError={() => setError("Audio could not be loaded. Choose another file.")}
+            />
           </div>
           <GallerySelectedActions disabled={disabled || uploading} onReplace={() => setReplaceChoiceOpen((current) => !current)} onRemove={removeAudio} />
         </div>
