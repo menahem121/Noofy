@@ -7,12 +7,39 @@ import { describe, expect, it, vi } from "vitest";
 import { NOOFY_GITHUB_REPO_URL } from "../../lib/noofyLinks";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { AppLayout, SidebarProvider } from "./AppLayout";
+import { RuntimeStatusProvider, type RuntimeHealthState } from "./RuntimeStatusProvider";
 
 vi.mock("../../lib/openExternalUrl", () => ({
   openExternalUrl: vi.fn(),
 }));
 
 const layoutCss = readFileSync(resolve(process.cwd(), "src/styles/layout.css"), "utf8");
+
+const offlineRuntimeState: Partial<RuntimeHealthState> = {
+  backendStatus: "reachable",
+  engineStatus: "offline",
+  runtime: {
+    mode: "managed",
+    reachable: false,
+    base_url: "http://127.0.0.1:8188",
+    repo_dir: "/tmp/ComfyUI",
+    managed_process_running: true,
+    sidecar_starting: false,
+    pid: 123,
+    error: "ComfyUI did not answer the health check.",
+    environment: { prepared: true },
+    crash_count: 0,
+    restart_attempt: 0,
+    max_restart_attempts: 3,
+    uptime_seconds: 60,
+    last_crash_at: null,
+  },
+  refreshing: false,
+  refreshError: null,
+  lastCheckedAt: Date.now(),
+  consecutiveSilentFailures: 0,
+  hasKnownState: true,
+};
 
 describe("AppLayout sidebar", () => {
   it("replaces the workspace status card with a GitHub repository card", () => {
@@ -80,5 +107,24 @@ describe("AppLayout sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel current run and all queued runs for this workflow" }));
     expect(onCancelRemaining).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the status pill on Working while workflow progress is active", () => {
+    render(
+      <RuntimeStatusProvider initialRuntimeState={offlineRuntimeState} skipInitialRefresh>
+        <SidebarProvider>
+          <AppLayout
+            activeRoute="workflows"
+            onNavigate={vi.fn()}
+            progress={{ percent: 37 }}
+          >
+            <div>Dashboard</div>
+          </AppLayout>
+        </SidebarProvider>
+      </RuntimeStatusProvider>,
+    );
+
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.queryByText("Engine offline")).not.toBeInTheDocument();
   });
 });

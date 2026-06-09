@@ -2352,7 +2352,7 @@ describe("WorkflowRunPage", () => {
       queueId: null,
     });
 
-    await waitForReadyStatus();
+    expect((await screen.findAllByText("Working")).length).toBeGreaterThan(0);
     const cancelButton = await screen.findByRole("button", { name: /cancel run/i });
     await waitFor(() => expect(cancelButton).toBeEnabled());
     fireEvent.click(cancelButton);
@@ -3585,6 +3585,34 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
+    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
+    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
+  });
+
+  it("does not show engine repair guidance while workflow progress is active", async () => {
+    mockConfiguredDashboardFetch(fetchMock, engineOfflineRuntimeState.runtime);
+
+    renderRunPageWithWorkflowRuntime(
+      {
+        activeJobId: "job-loading-models",
+        activeJobStatus: "running",
+        activeJobProgress: {
+          job_id: "job-loading-models",
+          status: "running",
+          value: 1,
+          max: 10,
+          current_node: "3",
+          message: "Loading models...",
+        },
+        activeJobUpdatedAt: Date.now(),
+        handleSource: "job",
+        queueId: null,
+      },
+      {},
+      engineOfflineRuntimeState,
+    );
+
+    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeDisabled();
     expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
     expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
   });

@@ -86,7 +86,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   const { sidebarOpen, setSidebarOpen } = useContext(SidebarContext);
   const runtimeStatus = useOptionalRuntimeStatus();
-  const effectiveStatus = runtimeStatus?.statusView ?? {
+  const runtimeStatusView = runtimeStatus?.statusView ?? {
     label: "Checking Noofy",
     description: "Looking for the local app service",
     tone: "info",
@@ -97,6 +97,7 @@ export function AppLayout({
   const resources = useTopBarResources();
   const globalProgress = useGlobalWorkflowProgress();
   const effectiveProgress = progress ?? globalProgress;
+  const effectiveStatus = statusViewForWorkflowActivity(runtimeStatusView, effectiveProgress);
   const remainingTitle = effectiveProgress?.remainingCount === 1
     ? "1 run remaining"
     : effectiveProgress?.remainingCount
@@ -227,6 +228,19 @@ export function AppLayout({
       </main>
     </div>
   );
+}
+
+function statusViewForWorkflowActivity(
+  statusView: AppStatusView,
+  progress: AppTopBarProgress | null,
+): AppStatusView {
+  if (!progress || statusView.label === "Service offline") return statusView;
+  return {
+    label: "Working",
+    description: "The local engine is running a workflow",
+    tone: "info",
+    loading: true,
+  };
 }
 
 function useGlobalWorkflowProgress(): AppTopBarProgress | null {

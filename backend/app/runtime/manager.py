@@ -33,7 +33,13 @@ OnRestartCallback = Callable[[], None]
 _TRANSIENT_HEALTH_FAILURE_GRACE_SECONDS = 30 * 60
 _TRANSIENT_HEALTH_FAILURE_MARKERS = frozenset(
     {
+        "connection aborted",
+        "connection reset",
+        "connecterror",
         "health_check_timeout",
+        "readerror",
+        "remote protocol error",
+        "server disconnected",
         "timeout",
         "timed out",
         "readtimeout",

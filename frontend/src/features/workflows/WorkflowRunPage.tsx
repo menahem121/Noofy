@@ -1328,6 +1328,7 @@ export function WorkflowRunPage({
   const showUserFacingMemoryNotice = Boolean(memoryNotice && !showMemoryLoadedPill && memoryNotice.title !== "Memory status");
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
+    !isRunning &&
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));

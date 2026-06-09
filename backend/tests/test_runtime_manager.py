@@ -549,6 +549,38 @@ async def test_passive_status_preserves_recent_reachable_runtime_during_health_t
 
 
 @pytest.mark.anyio
+async def test_passive_status_preserves_recent_reachable_runtime_during_disconnected_health_probe(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    checks = 0
+
+    async def health(_: str) -> tuple[bool, str | None]:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            return True, None
+        return False, "Server disconnected without sending a response."
+
+    manager = RuntimeManager(
+        mode="external",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        health_check=health,
+        log_store=LogStore(),
+    )
+
+    assert (await manager.status()).reachable
+    busy = await manager.status()
+
+    assert busy.reachable
+    assert busy.transient_health_failure
+    assert busy.error == "Server disconnected without sending a response."
+
+
+@pytest.mark.anyio
 async def test_passive_status_does_not_preserve_first_health_timeout(
     tmp_path: Path,
 ) -> None:
