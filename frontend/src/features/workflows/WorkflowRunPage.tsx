@@ -1346,7 +1346,7 @@ export function WorkflowRunPage({
   const hasRequiredModelFixAction = Boolean(
     activeModelSummary && (missingModels.length > 0 || activeModelSummary.ready_to_run === false),
   );
-  const runDisabledReason = canRun
+  const runDisabledReason = canRun || isRunning
     ? null
     : workflowRunDisabledReason({
         backendKnownUnreachable,

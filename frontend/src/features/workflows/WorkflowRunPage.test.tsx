@@ -1416,6 +1416,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
+    expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
 
     runRequest.resolve(
@@ -2303,6 +2304,8 @@ describe("WorkflowRunPage", () => {
       expect(topBarProgress).toHaveAttribute("aria-valuenow", "20");
       expect(screen.getByText("20%")).toBeInTheDocument();
     });
+    expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
@@ -2355,6 +2358,7 @@ describe("WorkflowRunPage", () => {
     expect((await screen.findAllByText("Working")).length).toBeGreaterThan(0);
     const cancelButton = await screen.findByRole("button", { name: /cancel run/i });
     await waitFor(() => expect(cancelButton).toBeEnabled());
+    expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     fireEvent.click(cancelButton);
 
     await waitFor(() => expect(cancelCalls).toBe(1));
