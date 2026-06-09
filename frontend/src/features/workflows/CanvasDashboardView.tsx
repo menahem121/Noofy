@@ -332,9 +332,11 @@ export function CanvasDashboardView({
   }
 
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
+    const item = topLevelItems.find((candidateItem) => candidateItem.id === controlId);
     const fitted = fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS);
+    if (!item) return fitted;
     return layoutCollides(controlId, fitted)
-      ? effectiveLayout(topLevelItems.find((item) => item.id === controlId)!)
+      ? effectiveLayout(item)
       : fitted;
   }
 

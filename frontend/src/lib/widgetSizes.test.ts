@@ -118,5 +118,6 @@ describe("widget sizing policy", () => {
     expect(isWidgetLayoutCompact({ x: 0, y: 0, w: 8, h: 5 }, "textarea")).toBe(true);
     expect(isWidgetGroupLayoutCompact({ x: 0, y: 0, w: 14, h: 20 }, ["textarea", "display_image"])).toBe(false);
     expect(isWidgetGroupLayoutCompact({ x: 0, y: 0, w: 14, h: 19 }, ["textarea", "display_image"])).toBe(true);
+    expect(isWidgetGroupLayoutCompact({ x: 0, y: 0, w: 10, h: 20 }, ["textarea", "display_image"])).toBe(false);
   });
 });

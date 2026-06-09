@@ -121,7 +121,7 @@ export function isWidgetLayoutCompact(layout: GridItemLayout, widgetType: string
 
 export function isWidgetGroupLayoutCompact(layout: GridItemLayout, widgetTypes: string[]): boolean {
   const size = defaultSizeForWidgetGroup(widgetTypes);
-  return layout.w < size.w || layout.h < size.h;
+  return layout.h < size.h;
 }
 
 function sizingPolicyForWidgetType(widgetType: string): WidgetSizingPolicy {

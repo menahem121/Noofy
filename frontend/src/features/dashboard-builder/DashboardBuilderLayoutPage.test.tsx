@@ -94,6 +94,48 @@ const groupedPlacedSchema: DashboardSchema = {
   ],
 };
 
+const sliderGroupSchema: DashboardSchema = {
+  version: 1,
+  workflowId: "wf-1",
+  workflowName: "Workflow",
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [
+    {
+      id: "size-group",
+      title: "Width + Height",
+      description: "",
+      widgetIds: ["ctrl-width", "ctrl-height"],
+      layout: { x: 0, y: 0, w: 16, h: 18 },
+    },
+  ],
+  widgets: [
+    {
+      id: "ctrl-width",
+      valueId: "node-4-width",
+      binding: { nodeId: "4", inputName: "width" },
+      widgetType: "slider",
+      title: "Width",
+      description: "Output width in pixels.",
+      defaultValue: 640,
+      min: 64,
+      max: 2048,
+      step: 64,
+    },
+    {
+      id: "ctrl-height",
+      valueId: "node-4-height",
+      binding: { nodeId: "4", inputName: "height" },
+      widgetType: "slider",
+      title: "Height",
+      description: "Output height in pixels.",
+      defaultValue: 640,
+      min: 64,
+      max: 2048,
+      step: 64,
+    },
+  ],
+};
+
 describe("DashboardBuilderLayoutPage", () => {
   const fetchMock = vi.fn();
 
@@ -439,6 +481,49 @@ describe("DashboardBuilderLayoutPage", () => {
         min_h: 4,
       });
     });
+  });
+
+  it("preserves grouped widget height during width-only resize", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={sliderGroupSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const resizeHandle = await screen.findByRole("button", { name: /resize width \+ height from bottom-right/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    dispatchPointer(resizeHandle, "pointerdown", { clientX: 600, clientY: 576 });
+    dispatchPointer(window, "pointermove", { clientX: 375, clientY: 576 });
+
+    const groupCell = screen.getByText("Width + Height").closest("article")!;
+    await waitFor(() => {
+      expect(groupCell).toHaveStyle({ width: "31.25%", height: "576px" });
+    });
+    expect(groupCell).not.toHaveClass("layout-canvas-widget--compact");
+    dispatchPointer(window, "pointerup", { clientX: 375, clientY: 576 });
   });
 
   it("treats a group as one canvas item instead of child widget blocks", async () => {
