@@ -219,6 +219,37 @@ describe("DashboardInputControl", () => {
     expect(progress).toBeCloseTo(23.81, 2);
   });
 
+  it("renders canvas toggles with the fixed switch layout", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <DashboardInputControl
+        control={{ id: "turbo", type: "toggle", label: "Turbo mode", input_id: "turbo" }}
+        input={{
+          id: "turbo",
+          label: "Turbo mode",
+          control: "toggle",
+          binding: { node_id: "7", input_name: "enabled" },
+          default: false,
+          validation: {},
+        }}
+        value
+        variant="canvas"
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "On" });
+    const toggle = checkbox.closest(".canvas-widget-toggle") as HTMLElement;
+
+    expect(toggle).toHaveClass("canvas-widget-toggle--on");
+    expect(container.querySelector(".canvas-widget-toggle__track")).toBeInTheDocument();
+    expect(container.querySelector(".canvas-widget-toggle__knob")).toBeInTheDocument();
+
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+
   it("renders decimal sliders with configured step size", () => {
     const onChange = vi.fn();
 

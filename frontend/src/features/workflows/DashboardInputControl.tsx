@@ -192,15 +192,33 @@ function renderControl(
       );
 
     case "toggle":
+      if (variant === "canvas") {
+        const isOn = Boolean(value);
+        return (
+          <label className={`canvas-widget-toggle${isOn ? " canvas-widget-toggle--on" : ""}${disabled ? " canvas-widget-toggle--disabled" : ""}`}>
+            <input
+              className="sr-only"
+              type="checkbox"
+              checked={isOn}
+              disabled={disabled}
+              onChange={(event) => onChange(event.target.checked)}
+            />
+            <span className="canvas-widget-toggle__track" aria-hidden="true">
+              <span className="canvas-widget-toggle__knob" />
+            </span>
+            <span className="canvas-widget-toggle__label">{isOn ? "On" : "Off"}</span>
+          </label>
+        );
+      }
+
       return (
-        <label className={variant === "canvas" ? "canvas-widget-toggle" : undefined}>
+        <label>
           <input
             type="checkbox"
             checked={Boolean(value)}
             disabled={disabled}
             onChange={(event) => onChange(event.target.checked)}
           />
-          {variant === "canvas" ? <span>{Boolean(value) ? "On" : "Off"}</span> : null}
         </label>
       );
 
