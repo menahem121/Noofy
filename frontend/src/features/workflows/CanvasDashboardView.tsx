@@ -1069,11 +1069,11 @@ function GroupedCanvasControls({
         ].filter(Boolean).join(" ");
         return (
           <div className={controlClasses} key={control.id} data-dashboard-control-id={control.id}>
-            {control.type !== "note" && control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
             {control.type === "note" ? (
               <DashboardNoteBody title={control.label} body={control.description} />
             ) : isOutput ? (
               <>
+                <GroupedCanvasControlHeader control={control} />
                 <OutputWidgetContent
                   control={control}
                   outputIndex={outputIndex}
@@ -1110,25 +1110,37 @@ function GroupedCanvasControls({
                 </button>
               </>
             ) : (
-              <InputWidgetContent
-                control={control}
-                inputIndex={inputIndex}
-                inputValues={inputValues}
-                disabled={disabled}
-                onChange={onChange}
-                onImageUpload={onImageUpload}
-                onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
-                onImageMaskApply={onImageMaskApply}
-                onAudioUpload={onAudioUpload}
-                onVideoUpload={onVideoUpload}
-                onFileUpload={onFileUpload}
-                onThreeDUpload={onThreeDUpload}
-                loraBrowserFor={loraBrowserFor}
-              />
+              <>
+                <GroupedCanvasControlHeader control={control} />
+                <InputWidgetContent
+                  control={control}
+                  inputIndex={inputIndex}
+                  inputValues={inputValues}
+                  disabled={disabled}
+                  onChange={onChange}
+                  onImageUpload={onImageUpload}
+                  onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+                  onImageMaskApply={onImageMaskApply}
+                  onAudioUpload={onAudioUpload}
+                  onVideoUpload={onVideoUpload}
+                  onFileUpload={onFileUpload}
+                  onThreeDUpload={onThreeDUpload}
+                  loraBrowserFor={loraBrowserFor}
+                />
+              </>
             )}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function GroupedCanvasControlHeader({ control }: { control: DashboardControlDef }) {
+  return (
+    <div className="canvas-widget-group__control-header">
+      <h4>{control.label}</h4>
+      {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
     </div>
   );
 }

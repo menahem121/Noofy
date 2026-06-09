@@ -2815,6 +2815,10 @@ describe("WorkflowRunPage", () => {
     const groupedTextareaControls = document.querySelectorAll(".canvas-widget-group__control--textarea");
 
     expect(groupedTextareaControls).toHaveLength(2);
+    expect(within(groupedTextareaControls[0] as HTMLElement).getByRole("heading", { name: "Prompt" })).toBeInTheDocument();
+    expect(within(groupedTextareaControls[0] as HTMLElement).getByText("Describe what you want to create.")).toBeInTheDocument();
+    expect(within(groupedTextareaControls[1] as HTMLElement).getByRole("heading", { name: "Negative Prompt" })).toBeInTheDocument();
+    expect(within(groupedTextareaControls[1] as HTMLElement).getByText("Describe what you don't want to create.")).toBeInTheDocument();
     groupedTextareaControls.forEach((control) => {
       expect(control.querySelector(".canvas-widget-textarea")).toBeInTheDocument();
     });

@@ -376,6 +376,23 @@
   flex: 1 1 0;
 }
 
+.canvas-widget-group__control-header {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.canvas-widget-group__control-header h4 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .canvas-widget-group__description {
   margin: 0;
   color: var(--text-muted);
