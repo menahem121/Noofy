@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ComponentProps } from "react";
+import { useEffect, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
+import { WorkflowTabsProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 
 const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
@@ -768,6 +769,41 @@ function renderRunPage(
       />
     </RuntimeStatusProvider>,
   );
+}
+
+function renderRunPageWithWorkflowRuntime(
+  workflowRuntime: Partial<WorkflowTabRuntimeState>,
+  props: Partial<ComponentProps<typeof WorkflowRunPage>> = {},
+  runtimeState: Partial<RuntimeHealthState> = readyRuntimeState,
+) {
+  return render(
+    <RuntimeStatusProvider initialRuntimeState={runtimeState} skipInitialRefresh>
+      <WorkflowTabsProvider>
+        <WorkflowRuntimeSeeder workflowRuntime={workflowRuntime}>
+          <WorkflowRunPage
+            workflowId="text_to_image_v0"
+            onBack={vi.fn()}
+            onNavigate={vi.fn()}
+            {...props}
+          />
+        </WorkflowRuntimeSeeder>
+      </WorkflowTabsProvider>
+    </RuntimeStatusProvider>,
+  );
+}
+
+function WorkflowRuntimeSeeder({
+  children,
+  workflowRuntime,
+}: {
+  children: ReactNode;
+  workflowRuntime: Partial<WorkflowTabRuntimeState>;
+}) {
+  const { setWorkflowRuntime } = useWorkflowTabs();
+  useEffect(() => {
+    setWorkflowRuntime("text_to_image_v0", workflowRuntime);
+  }, [workflowRuntime, setWorkflowRuntime]);
+  return <>{children}</>;
 }
 
 async function waitForReadyStatus() {
@@ -2274,6 +2310,54 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("progressbar", { name: /workflow progress/i })).not.toBeInTheDocument();
     });
+  });
+
+  it("enables cancellation from active progress when the local job object is unavailable", async () => {
+    let cancelCalls = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      null,
+      (url, init) => {
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/active-and-queued")) {
+          return jsonResponse({ active_count: 1, queued_count: 0, total_count: 1 });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") && init?.method === "POST") {
+          cancelCalls += 1;
+          return jsonResponse({
+            canceled_active_count: 1,
+            canceled_queued_count: 0,
+            already_terminal_count: 0,
+            failed_to_cancel_count: 0,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "running",
+      activeJobProgress: {
+        job_id: "job-progress-only",
+        status: "running",
+        value: 2,
+        max: 10,
+        current_node: "3",
+        message: "Loading models...",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    await waitForReadyStatus();
+    const cancelButton = await screen.findByRole("button", { name: /cancel run/i });
+    await waitFor(() => expect(cancelButton).toBeEnabled());
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => expect(cancelCalls).toBe(1));
   });
 
   it("submits Batch Count runs with identical captured payloads and no seed mutation", async () => {

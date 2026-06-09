@@ -306,6 +306,13 @@ export function WorkflowRunPage({
   const isRunning = !warmReusableMemoryReady && (isSubmittingRun || remainingTrackedRunCount > 0 || isActiveWorkflowProgress(displayedProgress));
   const isWaitingForMemory = activeJobStatus === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
   const isBlockedByMemory = activeJobStatus === "blocked_by_memory";
+  const activeProgressJobId =
+    displayedProgress &&
+    isActiveWorkflowProgress(displayedProgress) &&
+    displayedProgress.job_id !== optimisticJobId
+      ? displayedProgress.job_id
+      : null;
+  const activeCancelableRunHandle = activeRuntimeJobId ?? activeProgressJobId;
   const outputImages = useMemo(() => extractImageUrls(state.result), [state.result]);
   const outputAudios = useMemo(() => extractAudioOutputs(state.result), [state.result]);
   const outputVideos = useMemo(() => extractVideoOutputs(state.result), [state.result]);
@@ -781,7 +788,7 @@ export function WorkflowRunPage({
 
   async function handleCancel() {
     const trackedCount = cancelableWorkflowRunCount(trackedRunsRef.current);
-    const fallbackCount = Math.max(trackedCount, activeRuntimeJobId ? 1 : 0);
+    const fallbackCount = Math.max(trackedCount, activeCancelableRunHandle ? 1 : 0);
     let count = fallbackCount;
     try {
       const summary = await fetchWorkflowActiveAndQueuedRuns(workflowId);
@@ -1354,7 +1361,9 @@ export function WorkflowRunPage({
         validation: activeValidation,
         workflowStatus: state.workflowStatus,
       });
-  const canCancel = Boolean((remainingTrackedRunCount > 0 || (isRunning && (state.job || activeRuntimeJobId))) && !isBlockedByMemory);
+  const canCancel = Boolean(
+    (remainingTrackedRunCount > 0 || (isRunning && (state.job || activeCancelableRunHandle))) && !isBlockedByMemory,
+  );
   const progressPercent =
     displayedProgress?.value !== null && displayedProgress?.value !== undefined && displayedProgress.max
       ? Math.min(100, Math.round((displayedProgress.value / displayedProgress.max) * 100))
@@ -2704,7 +2713,7 @@ function workflowCancelProgress(workflowId: string): JobProgress {
 
 function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): JobProgress | null {
   const status = runtime?.activeJobStatus;
-  const jobId = runtime?.activeJobId ?? runtime?.queueId;
+  const jobId = runtime?.activeJobId ?? runtime?.queueId ?? runtime?.activeJobProgress?.job_id;
   if (!status || !jobId || !activeWorkflowProgressStatuses.has(status)) return null;
   return runtime.activeJobProgress ?? {
     job_id: jobId,
