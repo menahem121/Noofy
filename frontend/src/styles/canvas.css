@@ -412,7 +412,8 @@
 
 .layout-canvas-resize-handles {
   position: absolute;
-  inset: 0;
+  inset: var(--layout-widget-visual-inset, 0px);
+  z-index: 2;
   pointer-events: none;
 }
 

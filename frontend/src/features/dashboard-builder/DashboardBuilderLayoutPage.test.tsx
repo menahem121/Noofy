@@ -575,6 +575,14 @@ describe("DashboardBuilderLayoutPage", () => {
     });
   });
 
+  it("keeps canvas widget separation visual without changing tile geometry", () => {
+    expect(builderLayoutCss).toMatch(/--layout-widget-visual-gap:\s*var\(--layout-grid-gap, 0px\);/);
+    expect(builderLayoutCss).toMatch(/--layout-widget-visual-inset:\s*calc\(var\(--layout-widget-visual-gap\) \/ 2\);/);
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget\s*{[^}]*padding:\s*calc\(15px \+ var\(--layout-widget-visual-inset, 0px\)\);/);
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget::before\s*{[^}]*inset:\s*var\(--layout-widget-visual-inset, 0px\);/);
+    expect(canvasCss).toMatch(/\.layout-canvas-resize-handles\s*{[^}]*inset:\s*var\(--layout-widget-visual-inset, 0px\);/);
+  });
+
   it("lets multiline text widgets fill the resized canvas widget height", () => {
     expect(builderLayoutCss).toMatch(/\.layout-canvas-widget__preview-surface\s*{[^}]*flex:\s*1;/);
     expect(builderLayoutCss).toMatch(/\.layout-preview-input--textarea\s*{[^}]*flex:\s*1;/);
