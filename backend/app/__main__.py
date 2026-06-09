@@ -29,10 +29,23 @@ def parse_args() -> argparse.Namespace:
 
 def uvicorn_log_config() -> dict[str, object]:
     config = deepcopy(LOGGING_CONFIG)
+    config.setdefault("formatters", {})["noofy_events"] = {
+        "format": "NOOFY %(message)s",
+    }
+    config.setdefault("handlers", {})["noofy_events"] = {
+        "class": "logging.StreamHandler",
+        "formatter": "noofy_events",
+        "stream": "ext://sys.stdout",
+    }
     config.setdefault("filters", {})["noofy_resource_monitor"] = {
         "()": "app.core.logging.SuppressResourceMonitorAccessLogFilter",
     }
     config["handlers"]["access"]["filters"] = ["noofy_resource_monitor"]
+    config.setdefault("loggers", {})["noofy.events"] = {
+        "handlers": ["noofy_events"],
+        "level": "INFO",
+        "propagate": False,
+    }
     return config
 
 

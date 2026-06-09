@@ -1,4 +1,5 @@
 import inspect
+import logging
 import re
 from pathlib import Path
 
@@ -134,6 +135,75 @@ def test_log_store_redacts_prompt_like_details_and_truncates_large_payloads() ->
     assert len(event.details["items"]) == 51
     assert event.details["items"][-1] == "[truncated 10 more items]"
     assert "[truncated 500 chars]" in event.details["large_text"]
+
+
+def test_log_store_emits_warning_and_error_events_to_console_logger(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    warning = store.add(
+        "warning",
+        "Workflow validation failed",
+        "runs.orchestrator",
+        workflow_id="workflow-1",
+        details={"runner_id": "runner-1", "reason": "missing_models"},
+    )
+    error = store.add(
+        "error",
+        "Managed ComfyUI startup failed",
+        "runtime.manager",
+        details={"error_type": "RuntimeError"},
+    )
+
+    assert store.list_events(limit=2).events == [warning, error]
+    messages = [record.getMessage() for record in caplog.records if record.name == "noofy.events"]
+    assert messages == [
+        "warning runs.orchestrator: Workflow validation failed workflow=workflow-1 runner_id=runner-1 reason=missing_models",
+        "error runtime.manager: Managed ComfyUI startup failed error_type=RuntimeError",
+    ]
+
+
+def test_log_store_does_not_emit_routine_debug_or_uncurated_info(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    store.add("debug", "Low-level object info unavailable", "workflow.authoring")
+    store.add("info", "global event", "test")
+
+    assert [record for record in caplog.records if record.name == "noofy.events"] == []
+
+
+def test_log_store_emits_curated_workflow_runtime_info_with_concise_fields(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    store.add(
+        "info",
+        "Workflow run queued",
+        "runs.orchestrator",
+        job_id="job-1",
+        workflow_id="workflow-1",
+        details={"runner_id": "runner-1", "input_keys": ["prompt"]},
+    )
+    store.add(
+        "info",
+        "Managed ComfyUI started",
+        "runtime.manager",
+        details={"status": "started", "base_url": "http://127.0.0.1:8188"},
+    )
+    store.add(
+        "info",
+        "Gallery save progress",
+        "gallery.capture",
+        job_id="job-1",
+        details={"control_id": "image"},
+    )
+
+    messages = [record.getMessage() for record in caplog.records if record.name == "noofy.events"]
+    assert messages == [
+        "info runs.orchestrator: Workflow run queued workflow=workflow-1 job=job-1 runner_id=runner-1",
+        "info runtime.manager: Managed ComfyUI started status=started",
+    ]
 
 
 def test_install_developer_details_redacts_private_paths() -> None:

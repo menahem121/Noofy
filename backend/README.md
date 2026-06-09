@@ -64,6 +64,12 @@ Before first managed startup on a machine, prepare the app-owned ComfyUI Python 
 
 Log endpoints accept optional `level` and `limit` query parameters.
 
+## Console Logging
+
+`python -m app` and `make run` keep successful `/api/*` access logs quiet by default and print concise `NOOFY ...` diagnostics for important runtime, workflow, model, import, and Gallery events. Failed API requests (`4xx`/`5xx`) still appear in the uvicorn access log.
+
+Set `NOOFY_ACCESS_LOGS=all` when debugging transport-level behavior and you need the full successful HTTP request stream. Token-bearing query strings are still dropped from access logs.
+
 ## Environment Overrides
 
 - `COMFYUI_RUNTIME_MODE`: `external` for a manually launched development ComfyUI, or `managed` for backend-owned sidecar startup. Defaults to `external`.
@@ -88,6 +94,7 @@ Log endpoints accept optional `level` and `limit` query parameters.
 - `NOOFY_BACKEND_HOST`: host used by `python -m app`, default `127.0.0.1`.
 - `NOOFY_BACKEND_PORT`: port used by `python -m app`, default `0` for a free port.
 - `NOOFY_BACKEND_LOG_LEVEL`: uvicorn log level used by `python -m app`, default `info`.
+- `NOOFY_ACCESS_LOGS`: set to `all` to show successful `/api/*` access logs during local debugging. By default, successful API access logs are suppressed and failures remain visible.
 
 External-mode overrides are development conveniences. Product builds should use `COMFYUI_RUNTIME_MODE=managed` with app-managed runtime paths and ports. Packaged builds set `COMFYUI_BOOTSTRAP_PYTHON_EXECUTABLE` to the bundled Noofy-owned Python from `noofy-runtime/python`, so users do not install Python manually. Source checkouts fail fast with a developer-facing message if the selected runtime profile requires Python 3.13 and no matching local interpreter is available. Managed bootstrap detects OS, architecture, and available GPU backend before installing PyTorch. Noofy supports managed runtimes on macOS Apple Silicon, Windows, and Linux. macOS Intel is unsupported and fails closed before runtime preparation. Apple Silicon uses standard macOS wheels with MPS available when supported, Linux/Windows without NVIDIA use CPU wheels, and NVIDIA machines use the detected CUDA driver capability to select a CUDA wheel index. Managed startup checks the ComfyUI source, `main.py`, `requirements.txt`, runtime directory writability, runtime Python availability, selected Python ABI, and required ComfyUI runtime imports before starting the sidecar.
 

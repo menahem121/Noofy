@@ -1,3 +1,4 @@
+import logging
 import threading
 from collections import deque
 from datetime import UTC, datetime
@@ -5,6 +6,40 @@ from typing import Any, Protocol
 
 from app.diagnostics.redaction import sanitize, sanitize_text
 from app.engine.models import DiagnosticEvent, DiagnosticLogResponse, LogLevel
+
+EVENT_LOGGER_NAME = "noofy.events"
+INFO_EVENT_SOURCE_PREFIXES = (
+    "app.",
+    "runs.",
+    "runtime.",
+    "memory_governor",
+    "model.",
+    "model_sources.",
+    "models.",
+    "workflow.import",
+    "workflow.models",
+    "workflow.runtime",
+    "workflows.import",
+    "gallery.capture",
+)
+NOISY_INFO_MESSAGES = {
+    "Gallery save progress",
+}
+CONSOLE_DETAIL_KEYS = (
+    "runner_id",
+    "queue_id",
+    "status",
+    "action",
+    "reason",
+    "reason_code",
+    "memory_decision_id",
+    "control_id",
+    "item_count",
+    "downloaded_count",
+    "failed_count",
+    "model_count",
+    "error_type",
+)
 
 
 class DiagnosticsSink(Protocol):
@@ -73,6 +108,7 @@ class LogStore:
             )
             self._next_id += 1
             self._events.append(event)
+        _emit_console_event(event)
         return event
 
     def list_events(
@@ -106,3 +142,65 @@ def _sanitized_event(event: DiagnosticEvent) -> DiagnosticEvent:
             "details": sanitize(event.details),
         }
     )
+
+
+def _emit_console_event(event: DiagnosticEvent) -> None:
+    if not _should_emit_console_event(event):
+        return
+    logging.getLogger(EVENT_LOGGER_NAME).log(
+        _python_log_level(event.level),
+        _format_console_event(event),
+    )
+
+
+def _should_emit_console_event(event: DiagnosticEvent) -> bool:
+    level = str(event.level)
+    if level in {"warning", "error"}:
+        return True
+    if level != "info":
+        return False
+    if event.message in NOISY_INFO_MESSAGES:
+        return False
+    return any(event.source.startswith(prefix) for prefix in INFO_EVENT_SOURCE_PREFIXES)
+
+
+def _python_log_level(level: LogLevel) -> int:
+    if level == "error":
+        return logging.ERROR
+    if level == "warning":
+        return logging.WARNING
+    if level == "debug":
+        return logging.DEBUG
+    return logging.INFO
+
+
+def _format_console_event(event: DiagnosticEvent) -> str:
+    fields: list[str] = []
+    if event.workflow_id:
+        fields.append(f"workflow={_console_value(event.workflow_id)}")
+    if event.job_id:
+        fields.append(f"job={_console_value(event.job_id)}")
+    for key in CONSOLE_DETAIL_KEYS:
+        if key not in event.details:
+            continue
+        value = event.details[key]
+        if value is None or isinstance(value, dict):
+            continue
+        fields.append(f"{key}={_console_value(value)}")
+    suffix = f" {' '.join(fields)}" if fields else ""
+    return f"{event.level} {event.source}: {event.message}{suffix}"
+
+
+def _console_value(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        text = ",".join(str(item) for item in value)
+    else:
+        text = str(value)
+    text = sanitize_text(" ".join(text.split()))
+    if len(text) > 160:
+        text = f"{text[:157]}..."
+    if not text:
+        return '""'
+    if any(character.isspace() for character in text) or "=" in text:
+        return repr(text)
+    return text

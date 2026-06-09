@@ -19,9 +19,11 @@ def test_backend_log_config_filters_resource_monitor_access_logs() -> None:
     log_config = uvicorn_log_config()
 
     assert log_config["handlers"]["access"]["filters"] == ["noofy_resource_monitor"]
+    assert log_config["loggers"]["noofy.events"]["handlers"] == ["noofy_events"]
 
 
-def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() -> None:
+def test_access_log_filter_suppresses_successful_api_requests_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_ACCESS_LOGS", raising=False)
     access_filter = SuppressResourceMonitorAccessLogFilter()
     resources_record = logging_record(("127.0.0.1:1234", "GET", "/api/resources", "1.1", 200))
     verification_record = logging_record((
@@ -31,6 +33,7 @@ def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() 
         "1.1",
         200,
     ))
+    workflows_record = logging_record(("127.0.0.1:1234", "GET", "/api/workflows", "1.1", 200))
     runtime_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime", "1.1", 200))
     runtime_query_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime?detail=1", "1.1", 200))
     runtime_line_record = logging_record((
@@ -47,13 +50,35 @@ def test_resource_monitor_access_log_filter_suppresses_high_frequency_polling() 
 
     assert access_filter.filter(resources_record) is False
     assert access_filter.filter(verification_record) is False
+    assert access_filter.filter(workflows_record) is False
     assert access_filter.filter(runtime_record) is False
     assert access_filter.filter(runtime_query_record) is False
     assert access_filter.filter(runtime_line_record) is False
-    assert access_filter.filter(import_preview_record) is True
+    assert access_filter.filter(import_preview_record) is False
 
 
-def test_access_log_filter_drops_query_token_requests() -> None:
+def test_access_log_filter_keeps_failed_api_requests(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_ACCESS_LOGS", raising=False)
+    access_filter = SuppressResourceMonitorAccessLogFilter()
+    missing_workflow_record = logging_record(("127.0.0.1:1234", "GET", "/api/workflows/missing", "1.1", 404))
+    failed_run_record = logging_record(("127.0.0.1:1234", "POST", "/api/workflows/text/run", "1.1", 500))
+
+    assert access_filter.filter(missing_workflow_record) is True
+    assert access_filter.filter(failed_run_record) is True
+
+
+def test_access_log_filter_can_restore_verbose_access_logs(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_ACCESS_LOGS", "all")
+    access_filter = SuppressResourceMonitorAccessLogFilter()
+    runtime_record = logging_record(("127.0.0.1:1234", "GET", "/api/runtime", "1.1", 200))
+    workflows_record = logging_record(("127.0.0.1:1234", "GET", "/api/workflows", "1.1", 200))
+
+    assert access_filter.filter(runtime_record) is True
+    assert access_filter.filter(workflows_record) is True
+
+
+def test_access_log_filter_drops_query_token_requests(monkeypatch) -> None:
+    monkeypatch.setenv("NOOFY_ACCESS_LOGS", "all")
     access_filter = SuppressResourceMonitorAccessLogFilter()
     event_record = logging_record((
         "127.0.0.1:1234",
