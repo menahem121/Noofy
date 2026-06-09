@@ -5,7 +5,7 @@ The app owns the engine contract. UI code should depend on this contract, not on
 ## Core Operations
 
 - `runWorkflow(workflowId, inputs, options)`: validate and start a workflow job.
-- `getProgress(jobId, sincePreviewSequence?)`: return current job progress and status, plus transient live preview metadata when available.
+- `getProgress(jobId, sincePreviewSequence?)`: return current job progress and status, backend-owned timing estimates, plus transient live preview metadata when available.
 - `streamProgress(jobId)`: stream frontend-ready progress/result events.
 - `cancelJob(jobId)`: stop a running or queued job.
 - `getResult(jobId)`: return final outputs, errors, and generated files.
@@ -66,8 +66,10 @@ Load workflow package
 For the first adapter:
 
 - Submit workflow graph through ComfyUI `/prompt`.
-- Track progress through ComfyUI `/ws`.
-- Normalize WebSocket progress into app progress fields: status, current node, value, max, and message.
+- Track raw progress through ComfyUI `/ws`; the app backend then merges raw engine progress with local timing estimates before returning frontend-ready progress.
+- Normalize WebSocket progress into app progress fields: status, current node, value, max, message, and optional estimate diagnostics.
+- Local progress estimates are stored under Noofy app data, not in `.noofy` packages. Timing history is keyed by workflow ID plus runtime/model/execution profile signals, never raw prompt text.
+- Model loading and execution are estimated as separate phases. Cold runs update only model-loading history, while warm runs update execution history; progress is monotonic and capped below completion until the backend has fetched and cached the final result.
 - Parse ComfyUI sampler preview WebSocket binary frames inside `ComfyUIEngineAdapter` and expose them only as transient `live_preview` hints on `GET /api/jobs/{job_id}/progress?since_preview_sequence=<number>`. These previews are image/latent previews, not final outputs being progressively created. They may help image workflows and may sometimes show a representative frame during video latent sampling; they are not progressive audio, 3D, generic file, text, or final video previews.
 - Return `live_preview_sequence` on progress responses when a live preview exists. Return preview image data only when the latest preview sequence is newer than `since_preview_sequence`; otherwise return lightweight metadata with `data_url: null`. Live preview bytes stay memory-only and are never gallery/output media.
 - Read queue and job state through `/queue` and `/history`.

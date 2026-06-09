@@ -79,6 +79,7 @@ from app.runtime.runners.supervisor import (
 from app.runs.job_service import RunJobService
 from app.runs.lifecycle_service import RunLifecycleService
 from app.runs.orchestrator import RunOrchestrator
+from app.runs.progress_estimator import WorkflowProgressEstimator
 from app.runs.queue_service import WorkflowRunQueueService
 from app.runs.result_service import RunResultService
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
@@ -137,6 +138,7 @@ class EngineService:
         credential_resolver=None,
         workflow_run_queue_service: WorkflowRunQueueService | None = None,
         run_lifecycle_service: RunLifecycleService | None = None,
+        progress_estimator: WorkflowProgressEstimator | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -192,13 +194,16 @@ class EngineService:
         else:
             self.workflow_import_orchestrator = workflow_import_orchestrator
         self.workflow_run_queue_service = workflow_run_queue_service or WorkflowRunQueueService()
+        self.progress_estimator = progress_estimator
         self.run_job_service: RunJobService = run_job_service or RunJobService(
             runner_supervisor=runner_supervisor,
             log_store=log_store,
             workflow_loader=self.workflow_loader,
             workflow_run_queue_service=self.workflow_run_queue_service,
+            progress_estimator=self.progress_estimator,
         )
         self.run_job_service.workflow_run_queue_service = self.workflow_run_queue_service
+        self.run_job_service.progress_estimator = self.progress_estimator
         self.model_availability_service.cleanup_interrupted_downloads()
         self.comfyui_sidecar_service = comfyui_sidecar_service or ComfyUISidecarService(
             runtime_manager=runtime_manager,
@@ -254,6 +259,7 @@ class EngineService:
             history_service=self.history_service,
             workflow_run_queue_service=self.workflow_run_queue_service,
             request_run_dispatch=self.run_lifecycle_service.request_dispatch,
+            progress_estimator=self.progress_estimator,
         )
         self.run_orchestrator: RunOrchestrator = run_orchestrator or RunOrchestrator(
             workflow_loader=self.workflow_loader,
@@ -282,6 +288,11 @@ class EngineService:
             api_nodes_unavailable_reason=self._api_nodes_unavailable_reason,
             request_run_dispatch=self.run_lifecycle_service.request_dispatch,
             submitted_job_callback=self.run_lifecycle_service.track_submitted_job,
+            register_progress_timing=(
+                self.progress_estimator.register_job
+                if self.progress_estimator is not None
+                else None
+            ),
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow

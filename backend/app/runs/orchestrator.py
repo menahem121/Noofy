@@ -60,6 +60,7 @@ MemoryStatusPayload = Callable[..., dict[str, Any]]
 RecordMemoryMetric = Callable[[str], None]
 StartMemorySampling = Callable[..., None]
 ApiNodesUnavailableReason = Callable[[WorkflowPackage, EngineAdapter], Awaitable[str | None]]
+RegisterProgressTiming = Callable[..., None]
 
 
 class RunOrchestrator:
@@ -99,6 +100,7 @@ class RunOrchestrator:
         media_staging_resolver: MediaInputStagingResolver | None = None,
         request_run_dispatch: Callable[[str], None] | None = None,
         submitted_job_callback: Callable[[str], None] | None = None,
+        register_progress_timing: RegisterProgressTiming | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -127,6 +129,7 @@ class RunOrchestrator:
         self.media_staging_resolver = media_staging_resolver
         self.request_run_dispatch = request_run_dispatch
         self.submitted_job_callback = submitted_job_callback
+        self.register_progress_timing = register_progress_timing
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -709,6 +712,11 @@ class RunOrchestrator:
             if memory_decision is not None
             else None
         )
+        memory_decision_developer_details = (
+            memory_decision.developer_details
+            if memory_decision is not None
+            else None
+        )
         model_residency_signature = (
             memory_signatures.get("model_residency_signature")
             if isinstance(memory_signatures, dict)
@@ -744,6 +752,35 @@ class RunOrchestrator:
             self.job_memory_signatures[job.job_id] = memory_signatures
         self.job_run_snapshots[job.job_id] = run_submission_snapshot
         self.memory_retry_roots.setdefault(job.job_id, job.job_id)
+        if self.register_progress_timing is not None:
+            try:
+                self.register_progress_timing(
+                    job_id=job.job_id,
+                    workflow_id=workflow_id,
+                    engine=job.engine,
+                    runner=runner,
+                    machine_profile_id=(
+                        pre_submit_snapshot.machine_profile_id
+                        if pre_submit_snapshot is not None
+                        else None
+                    ),
+                    model_residency_signature=model_residency_signature,
+                    execution_profile_signature=execution_profile_signature,
+                    warm_model_expected=_progress_timing_warm_model_expected(
+                        runner=runner,
+                        model_residency_signature=model_residency_signature,
+                        memory_decision_developer_details=memory_decision_developer_details,
+                    ),
+                )
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Workflow progress timing context could not be registered",
+                    "runs.orchestrator",
+                    job_id=job.job_id,
+                    workflow_id=workflow_id,
+                    details={"error": str(exc), "error_type": type(exc).__name__},
+                )
         self.start_memory_sampling(
             job_id=job.job_id,
             workflow_id=workflow_id,
@@ -856,3 +893,21 @@ def _memory_signature_payload(
         return {}
     payload = payloads.get(payload_name)
     return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _progress_timing_warm_model_expected(
+    *,
+    runner: RunnerDescriptor,
+    model_residency_signature: str | None,
+    memory_decision_developer_details: dict[str, Any] | None,
+) -> bool:
+    if memory_decision_developer_details is not None:
+        if memory_decision_developer_details.get("same_runner_model_residency_reuse") is True:
+            return True
+        if memory_decision_developer_details.get("warm_runner_reuse") is True:
+            return True
+    return (
+        bool(model_residency_signature)
+        and runner.model_residency_signature is not None
+        and runner.model_residency_signature == model_residency_signature
+    )

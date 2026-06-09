@@ -7,6 +7,7 @@ from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, EngineOutputStream, JobProgress, LogLevel
 from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerStatus, RunnerSupervisor
+from app.runs.progress_estimator import WorkflowProgressEstimator
 from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
 from app.workflows.loader import WorkflowPackageLoader
 
@@ -26,11 +27,13 @@ class RunJobService:
         log_store: DiagnosticsStore,
         workflow_loader: WorkflowPackageLoader | None = None,
         workflow_run_queue_service: WorkflowRunQueueService | None = None,
+        progress_estimator: WorkflowProgressEstimator | None = None,
     ) -> None:
         self.runner_supervisor = runner_supervisor
         self.log_store = log_store
         self.workflow_loader = workflow_loader
         self.workflow_run_queue_service = workflow_run_queue_service
+        self.progress_estimator = progress_estimator
         self.terminal_job_progress: Callable[[str], JobProgress | None] | None = None
 
     async def get_progress(
@@ -42,7 +45,10 @@ class RunJobService:
         if self.terminal_job_progress is not None:
             terminal = self.terminal_job_progress(resolved.job_id)
             if terminal is not None:
-                return terminal.model_copy(update={"queue_id": resolved.queue_id})
+                return self._decorate_progress(
+                    terminal.model_copy(update={"queue_id": resolved.queue_id}),
+                    final_result_ready=True,
+                )
         if self.workflow_run_queue_service is not None:
             progress = self.workflow_run_queue_service.progress(resolved.queue_id or job_id)
             if progress is not None:
@@ -52,7 +58,7 @@ class RunJobService:
             resolved.job_id,
             since_preview_sequence=since_preview_sequence,
         )
-        return progress.model_copy(update={"queue_id": resolved.queue_id})
+        return self._decorate_progress(progress.model_copy(update={"queue_id": resolved.queue_id}))
 
     async def cancel_job(self, job_id: str) -> JobProgress:
         self.log_store.add("info", "Cancel requested", "runs.job_service", job_id=job_id)
@@ -351,6 +357,19 @@ class RunJobService:
         if self.workflow_run_queue_service is None:
             return _ResolvedJobHandle(job_id=handle)
         return self.workflow_run_queue_service.resolve(handle)
+
+    def _decorate_progress(
+        self,
+        progress: JobProgress,
+        *,
+        final_result_ready: bool = False,
+    ) -> JobProgress:
+        if self.progress_estimator is None:
+            return progress
+        return self.progress_estimator.decorate(
+            progress,
+            final_result_ready=final_result_ready,
+        )
 
     def _core_adapter(self) -> EngineAdapter:
         descriptor = self.runner_supervisor.core_runner()

@@ -9,6 +9,7 @@ from app.engine.models import EngineJob, JobProgress, JobResult
 from app.gallery import GalleryCaptureService, GalleryItem, RunSubmissionSnapshot
 from app.history import HistoryService
 from app.runs.job_service import RunJobService
+from app.runs.progress_estimator import WorkflowProgressEstimator, progress_ready_for_result_fetch
 from app.runs.queue_service import WorkflowRunQueueService
 from app.workflows.library import WorkflowLibraryStore
 
@@ -41,6 +42,7 @@ class RunResultService:
         history_service: HistoryService | None = None,
         workflow_run_queue_service: WorkflowRunQueueService | None = None,
         request_run_dispatch: Callable[[str], None] | None = None,
+        progress_estimator: WorkflowProgressEstimator | None = None,
     ) -> None:
         self.job_service = job_service
         self.log_store = log_store
@@ -55,6 +57,7 @@ class RunResultService:
         self.history_service = history_service
         self.workflow_run_queue_service = workflow_run_queue_service
         self.request_run_dispatch = request_run_dispatch
+        self.progress_estimator = progress_estimator
         self._terminal_locks: dict[str, asyncio.Lock] = {}
         self._terminal_outcomes: dict[str, JobResult | EngineJob] = {}
 
@@ -82,6 +85,11 @@ class RunResultService:
             self.record_memory_observation(result)
             retry_job = await self.maybe_retry_after_memory_cleanup(result)
             outcome: JobResult | EngineJob = retry_job or result
+            if self.progress_estimator is not None:
+                if retry_job is None:
+                    self.progress_estimator.finalize_result(result)
+                else:
+                    self.progress_estimator.discard_job(result.job_id)
             if retry_job is None:
                 self._register_gallery_run(result)
                 self._record_run_history_and_activity(result, [])
@@ -130,7 +138,7 @@ class RunResultService:
             progress = await self.job_service.get_progress(job_id)
             yield f"event: progress\ndata: {progress.model_dump_json()}\n\n"
 
-            if progress.status in {"completed", "failed", "canceled"}:
+            if progress_ready_for_result_fetch(progress):
                 result = await self.get_result(job_id)
                 yield f"event: result\ndata: {result.model_dump_json()}\n\n"
                 return

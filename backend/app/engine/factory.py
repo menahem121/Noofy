@@ -36,6 +36,7 @@ from app.runtime.memory.memory_governor import (
     LocalMemoryLearningStore,
     default_memory_observer,
 )
+from app.runs.progress_estimator import ProgressTimingStore, WorkflowProgressEstimator
 from app.runtime.models.model_store import ModelStore, http_streaming_downloader
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
@@ -591,6 +592,13 @@ def create_default_engine_service() -> EngineService:
         memory_observer=default_memory_observer(),
         memory_learning_store=LocalMemoryLearningStore(
             paths.user_state_dir / "memory-learning"
+        ),
+        progress_estimator=WorkflowProgressEstimator(
+            timing_store=ProgressTimingStore(
+                paths.user_state_dir / "progress-timing",
+                log_store=log_store,
+            ),
+            log_store=log_store,
         ),
         comfyui_update_service=comfyui_update_service,
         comfyui_launch_settings_store=launch_settings_store,

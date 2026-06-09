@@ -279,6 +279,22 @@ class JobLivePreview(BaseModel):
     target_node_ids: list[str] = Field(default_factory=list)
 
 
+class JobProgressEstimate(BaseModel):
+    phase: Literal["preparing", "loading_model", "executing", "saving_result"]
+    source: Literal[
+        "no_history",
+        "loading_history",
+        "running_history",
+        "real_engine_progress",
+    ]
+    elapsed_seconds: float
+    estimated_seconds: float | None = None
+    history_count: int = 0
+    warm_model_expected: bool
+    slower_than_expected: bool = False
+    timing_key_hash: str | None = None
+
+
 class JobProgress(BaseModel):
     job_id: str
     queue_id: str | None = None
@@ -289,6 +305,7 @@ class JobProgress(BaseModel):
     message: str | None = None
     live_preview_sequence: int | None = None
     live_preview: JobLivePreview | None = None
+    estimate: JobProgressEstimate | None = None
 
 
 class JobResult(BaseModel):

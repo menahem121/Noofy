@@ -13,8 +13,8 @@ Current feedback surfaces:
 - `GET /api/runtime`: lightweight backend/engine status used for frontend refreshes.
 - `GET /api/logs`: recent global diagnostic events.
 - `GET /api/jobs/{job_id}/logs`: diagnostics for a single workflow job.
-- `GET /api/jobs/{job_id}/progress`: latest normalized progress.
-- `GET /api/jobs/{job_id}/events`: frontend-ready progress/result stream.
+- `GET /api/jobs/{job_id}/progress`: latest normalized progress, including backend-owned timing estimates when available.
+- `GET /api/jobs/{job_id}/events`: frontend-ready progress/result stream; estimated progress is capped below completion until final outputs are available.
 - `GET /api/runners`: runner lifecycle state, including warm/queued/memory-related state.
 - Workflow runner lease endpoints: frontend reports open/close intent; backend decides warm retention.
 - `GET /api/workflows/{id}/model-summary`: identity-verified required-model availability for an installed workflow.
@@ -37,6 +37,7 @@ Add diagnostic events for important state transitions:
 - missing models
 - workflow submission
 - job queued, completed, failed, or canceled
+- workflow progress estimate source, phase transitions, slow-overrun states, real engine progress, and timing sample persistence
 - ComfyUI HTTP errors
 - ComfyUI WebSocket disconnects or execution errors
 - managed sidecar start, stop, crash, and recovery events

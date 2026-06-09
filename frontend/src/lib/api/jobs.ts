@@ -41,6 +41,18 @@ export interface JobProgress {
   message: string | null;
   live_preview_sequence?: number | null;
   live_preview?: JobLivePreview | null;
+  estimate?: JobProgressEstimate | null;
+}
+
+export interface JobProgressEstimate {
+  phase: "preparing" | "loading_model" | "executing" | "saving_result";
+  source: "no_history" | "loading_history" | "running_history" | "real_engine_progress";
+  elapsed_seconds: number;
+  estimated_seconds?: number | null;
+  history_count: number;
+  warm_model_expected: boolean;
+  slower_than_expected: boolean;
+  timing_key_hash?: string | null;
 }
 
 export interface JobLivePreview {

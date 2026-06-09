@@ -9,6 +9,7 @@ from typing import Any
 
 from app.diagnostics import DiagnosticsSink
 from app.engine.models import EngineJob, JobResult, WorkflowValidationResult
+from app.runs.progress_estimator import progress_ready_for_result_fetch
 from app.runs.queue_service import (
     WorkflowRunQueueRecord,
     WorkflowRunQueueService,
@@ -198,7 +199,7 @@ class RunLifecycleService:
         try:
             while True:
                 progress = await self.get_progress(job_id)
-                if progress.status in {"completed", "failed", "canceled"}:
+                if progress_ready_for_result_fetch(progress):
                     await self.finalize_job(job_id)
                     self.request_dispatch("job_terminal")
                     return
