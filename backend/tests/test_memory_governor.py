@@ -2055,7 +2055,12 @@ def test_memory_status_reports_isolated_runner_eviction_as_unloading_previous_wo
     assert status.state == "unloading_previous_workflow"
 
 
-def test_memory_admission_reports_external_pressure_when_no_noofy_memory_is_reclaimable() -> None:
+def test_memory_admission_cautious_starts_on_unattributed_pressure_with_advisory_estimate() -> None:
+    # Creator-observed estimate, single runner, no Noofy-reclaimable memory, and
+    # a low free margin from *unattributed* pressure (no external_process tag and
+    # within physical capacity). The advisory estimate must not hard-block: Noofy
+    # cautious-starts and lets ComfyUI try, while still reporting the ownership
+    # accounting so the warning surface can explain the pressure.
     decision = decide_memory_admission(
         MemoryAdmissionRequest(
             workflow_estimate=_estimate(
@@ -2069,14 +2074,15 @@ def test_memory_admission_reports_external_pressure_when_no_noofy_memory_is_recl
         )
     )
 
-    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
-    assert decision.reason_code == "insufficient_vram_margin"
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.reason_code == "insufficient_vram_margin_cautious_start"
+    assert decision.developer_details["advisory_estimate_allowed_to_run"] is True
     ownership = decision.developer_details["memory_ownership"]
     assert ownership["free_vram_mb"] == 500
     assert ownership["reclaimable_idle_runner_ids"] == []
     assert ownership["active_noofy_runner_ids"] == []
     assert ownership["unattributed_or_external_used_vram_mb"] == 11_500
-    assert memory_user_status_for_decision(decision).state == "blocked_unattributed_pressure"
+    assert memory_user_status_for_decision(decision).state == "memory_warning"
 
 
 def test_memory_user_status_reports_external_pressure_only_with_explicit_evidence() -> None:
@@ -2102,13 +2108,15 @@ def test_memory_user_status_reports_external_pressure_only_with_explicit_evidenc
 
 
 def test_memory_user_status_reports_capacity_shortfall_separately() -> None:
+    # Trusted local evidence whose peak alone exceeds total maps to the
+    # capacity-shortfall state (distinct from unattributed/external pressure).
     decision = decide_memory_admission(
         MemoryAdmissionRequest(
             workflow_estimate=_estimate(
                 "workflow-too-large",
                 RunnerMemoryClass.GPU_HEAVY,
                 20_000,
-                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
             ),
             machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=11_000),
         )
@@ -2164,9 +2172,15 @@ def test_cpu_backend_uses_vram_estimate_as_ram_pressure_proxy() -> None:
         )
     )
 
-    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
-    assert decision.reason_code == "insufficient_ram_margin"
+    # The CPU backend still charges the VRAM estimate against RAM (proxy), so the
+    # 12_000 estimate against 13_000 free RAM is a free-margin shortfall. With an
+    # advisory creator estimate, a single runner, and capacity not exceeded
+    # (12_000 + 2_048 < 16_000), Noofy cautious-starts instead of blocking, but
+    # the proxy is still visible in the predicted free RAM.
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.reason_code == "insufficient_ram_margin_cautious_start"
     assert decision.required_vram_margin_mb == 0
+    assert decision.predicted_free_ram_after_mb == 1_000
 
 
 def test_eviction_candidates_prefers_idle_unused_large_runners() -> None:
@@ -2179,6 +2193,196 @@ def test_eviction_candidates_prefers_idle_unused_large_runners() -> None:
     )
 
     assert [runner.runner_id for runner in candidates] == ["runner-large-idle", "runner-small-open"]
+
+
+def test_creator_observed_low_free_margin_single_runner_does_not_block() -> None:
+    # Regression for the gemma txt2txt false positive: an A10G-class box, a
+    # creator/export-time observation, first run (no local evidence), and a
+    # momentarily low free margin in *both* VRAM and RAM. The workflow fits well
+    # within physical capacity, so Noofy must cautious-start instead of returning
+    # BLOCKED_BY_MEMORY and let ComfyUI try.
+    estimate = WorkflowMemoryEstimate(
+        workflow_id="txt2txt_gemma4-e4b-it",
+        memory_class=RunnerMemoryClass.GPU_MEDIUM,
+        confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+        source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+        estimated_peak_vram_mb=8_462,
+        estimated_peak_ram_mb=5_615,
+    )
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            # free_vram 9000 - 8462 = 538 < 3388 margin, and free_ram
+            # 7000 - 5615 = 1385 < 2048 margin: a shortfall in both dimensions.
+            machine_snapshot=_machine(
+                total_vram_mb=22_590,
+                free_vram_mb=9_000,
+                total_ram_mb=15_783,
+                free_ram_mb=7_000,
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.reason_code.endswith("_cautious_start")
+    assert decision.developer_details["advisory_estimate_allowed_to_run"] is True
+    assert decision.developer_details["estimate_source"] == "creator_observed"
+    status = memory_user_status_for_decision(decision)
+    assert status.state == "memory_warning"
+
+
+def test_advisory_capacity_shortfall_cautious_starts_not_blocks() -> None:
+    # The safety margin is a policy buffer, not proof. A creator/heuristic
+    # estimate must not hard-block on capacity: neither ``peak + margin > total``
+    # nor even ``peak > total`` blocks an advisory estimate, because we do not
+    # trust an off-machine number's magnitude for this machine. ComfyUI is
+    # allowed to try, and a real failure becomes local evidence.
+    def _decide(peak_vram_mb: int) -> MemoryGovernorDecision:
+        return decide_memory_admission(
+            MemoryAdmissionRequest(
+                workflow_estimate=_estimate(
+                    "workflow-advisory",
+                    RunnerMemoryClass.GPU_HEAVY,
+                    peak_vram_mb,
+                    confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                    source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                ),
+                machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=11_500),
+                resident_runners=[],
+            )
+        )
+
+    # peak + margin > total but peak < total
+    margin_case = _decide(11_000)
+    assert margin_case.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert margin_case.reason_code.endswith("_cautious_start")
+    assert margin_case.developer_details["advisory_estimate_allowed_to_run"] is True
+
+    # peak alone > total: still advisory, still cautious-start (untrusted magnitude)
+    over_total_case = _decide(20_000)
+    assert over_total_case.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert over_total_case.reason_code.endswith("_cautious_start")
+
+
+def test_trusted_local_evidence_blocks_when_peak_exceeds_total() -> None:
+    # Strong, this-machine evidence that the workflow cannot physically fit (the
+    # estimated peak alone exceeds total VRAM) is the one capacity case that may
+    # still hard-block, and it surfaces as a capacity shortfall.
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-too-large",
+                RunnerMemoryClass.GPU_HEAVY,
+                20_000,
+                source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            ),
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=11_000),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert decision.reason_code == "insufficient_vram_margin"
+    assert memory_user_status_for_decision(decision).state == "blocked_exceeds_capacity"
+
+
+def test_local_memory_failure_keeps_single_runner_conservative() -> None:
+    # A recorded local memory failure for this profile keeps Noofy conservative:
+    # a free-margin shortfall then hard-blocks. The identical shape without the
+    # failure cautious-starts. (CPU backend exercises the RAM-pressure proxy and
+    # reaches the shortfall path before the uncertain-estimate branch.)
+    def _decide(recent_failure: bool) -> MemoryGovernorDecision:
+        return decide_memory_admission(
+            MemoryAdmissionRequest(
+                workflow_estimate=WorkflowMemoryEstimate(
+                    workflow_id="workflow-cpu",
+                    memory_class=RunnerMemoryClass.CPU_ONLY,
+                    confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                    source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+                    estimated_peak_ram_mb=12_000,
+                    recent_memory_error=recent_failure,
+                ),
+                machine_snapshot=MachineMemorySnapshot(
+                    backend=MemoryBackend.CPU,
+                    total_ram_mb=16_000,
+                    free_ram_mb=13_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+                resident_runners=[],
+            )
+        )
+
+    blocked = _decide(recent_failure=True)
+    assert blocked.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert blocked.reason_code == "insufficient_ram_margin"
+
+    allowed = _decide(recent_failure=False)
+    assert allowed.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert allowed.reason_code == "insufficient_ram_margin_cautious_start"
+
+
+def test_local_success_overrides_creator_observation_and_avoids_block() -> None:
+    # Two local successes on this machine produce a LOCAL_OBSERVED estimate that
+    # overrides a larger creator observation, so a machine that would shortfall
+    # against the creator peak comfortably fits the proven local peak and starts.
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            creator_observed_peak_vram_mb=15_000,
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                backend=MemoryBackend.CUDA,
+                successful_runs=2,
+                observed_peak_vram_mb=7_000,
+            ),
+        )
+    )
+    assert estimate.effective_source is RunnerMemoryEstimateSource.LOCAL_OBSERVED
+    assert estimate.estimated_peak_vram_mb == 7_000
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(total_vram_mb=16_000, free_vram_mb=12_000),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+    assert decision.reason_code in {"co_residence_margin_available", "no_resident_runners"}
+
+
+def test_advisory_shortfall_still_blocks_when_idle_runner_cannot_be_evicted() -> None:
+    # The cautious-start downgrade is scoped to the genuine single-runner case.
+    # When another runner holds memory that cannot be reclaimed, heavy/heavy
+    # co-residence stays protected and Noofy still blocks rather than risking the
+    # machine by co-residing two heavy workflows.
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-heavy-b",
+                RunnerMemoryClass.GPU_HEAVY,
+                9_000,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            ),
+            machine_snapshot=_machine(total_vram_mb=16_000, free_vram_mb=12_500),
+            resident_runners=[
+                _runner(
+                    "runner-heavy-a",
+                    RunnerMemoryClass.GPU_HEAVY,
+                    confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                    source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                    idle_vram_mb=7_000,
+                )
+            ],
+            runner_cleanup_capabilities={"runner-heavy-a": []},
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert decision.reason_code == "heavy_heavy_requires_large_gpu_and_high_confidence"
 
 
 def _estimate(

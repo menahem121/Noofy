@@ -2878,6 +2878,81 @@ def _decision(
     )
 
 
+def _estimate_capacity_block_is_trusted(estimate: WorkflowMemoryEstimate) -> bool:
+    """Whether the estimate is strong enough to refuse a run on capacity grounds.
+
+    Only direct, this-machine evidence is trusted for that: a local observation
+    from a prior run on this machine, or a declared peak measured from a real
+    execution here. Creator/export-time observations and heuristic guesses
+    describe other machines or are inferred, so their magnitude is advisory and
+    must not by itself produce a hard block.
+    """
+    return estimate.effective_source in {
+        RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+        RunnerMemoryEstimateSource.DECLARED,
+    }
+
+
+def _estimate_peak_exceeds_total(
+    estimate: WorkflowMemoryEstimate, machine: MachineMemorySnapshot
+) -> bool:
+    """Whether the estimated peak ALONE exceeds physical total memory.
+
+    The safety margin is a policy buffer, not proof, so it is deliberately not
+    added here: only a peak that cannot physically fit counts as "cannot fit".
+    """
+    vram_pressure_mb = _estimated_vram_pressure_mb(machine, estimate)
+    if (
+        vram_pressure_mb is not None
+        and machine.total_vram_mb is not None
+        and vram_pressure_mb > machine.total_vram_mb
+    ):
+        return True
+    ram_pressure_mb = _estimated_ram_pressure_mb(machine, estimate)
+    if (
+        ram_pressure_mb is not None
+        and machine.total_ram_mb is not None
+        and ram_pressure_mb > machine.total_ram_mb
+    ):
+        return True
+    return False
+
+
+def _shortfall_requires_hard_block(
+    estimate: WorkflowMemoryEstimate,
+    machine: MachineMemorySnapshot,
+) -> bool:
+    """Decide whether a margin/pressure shortfall still warrants a hard block.
+
+    Reached only on the single-runner path where there is no active runner to
+    queue behind and no idle runner to reclaim. In that situation a creator/
+    export observation or a heuristic estimate is advisory, not proof, so we
+    refuse to run only for cases backed by evidence we trust for this machine:
+
+    * a recorded local memory failure for this profile on this machine,
+    * positive evidence that another process is actively holding the memory we
+      would need (attributed external pressure), or
+    * strong local/direct evidence that the workflow cannot physically fit
+      (the estimated peak alone exceeds total memory).
+
+    A free-margin shortfall against an advisory estimate — including the policy
+    case of ``peak + margin > total`` — is not a block: Noofy cautious-starts so
+    ComfyUI can try, and a real failure then becomes local evidence that
+    strengthens future decisions.
+    """
+    if estimate.recent_memory_error:
+        return True
+    if any(
+        reason.startswith("external_process") for reason in machine.pressure_reasons
+    ):
+        return True
+    if _estimate_capacity_block_is_trusted(estimate) and _estimate_peak_exceeds_total(
+        estimate, machine
+    ):
+        return True
+    return False
+
+
 def _memory_shortfall_decision(
     estimate: WorkflowMemoryEstimate,
     machine: MachineMemorySnapshot,
@@ -2937,6 +3012,37 @@ def _memory_shortfall_decision(
             evict_runner_ids=cleanup_plan["selected_runner_ids"],
             can_retry_after_cleanup=True,
             developer_details={"residency_pressure": cleanup_plan},
+        )
+
+    # No active runner to queue behind and no idle runner to reclaim. With no
+    # other warm runner to protect, a non-local estimate must not hard-block on
+    # a free-margin shortfall alone: cautious-start and let ComfyUI try, unless
+    # the run would be a guaranteed OOM, a known external process owns the
+    # memory, or this machine already failed this profile for memory.
+    if (
+        not active_runners
+        and not idle_runners
+        and not _shortfall_requires_hard_block(estimate, machine)
+    ):
+        return _decision(
+            MemoryDecisionAction.START_CO_RESIDENT,
+            risk_level,
+            f"{reason_code}_cautious_start",
+            "Noofy will try this workflow and watch memory closely.",
+            estimate,
+            machine,
+            runners,
+            required_vram_margin_mb,
+            required_ram_margin_mb,
+            predicted_free_vram_after_mb,
+            predicted_free_ram_after_mb,
+            developer_details={
+                "advisory_estimate_allowed_to_run": True,
+                "shortfall_reason_code": reason_code,
+                "estimate_source": estimate.effective_source.value,
+                "estimate_confidence": estimate.confidence.value,
+                "residency_pressure": cleanup_plan,
+            },
         )
 
     return _decision(
