@@ -220,7 +220,7 @@ function duplicateNodeNamesBindableInputsResponse() {
       {
         node_id: "1",
         node_type: "PrimitiveInt",
-        node_title: "PrimitiveInt",
+        node_title: "Int (Steps)",
         is_image_node: false,
         is_lora_node: false,
         inputs: [
@@ -236,7 +236,7 @@ function duplicateNodeNamesBindableInputsResponse() {
       {
         node_id: "2",
         node_type: "PrimitiveInt",
-        node_title: "PrimitiveInt",
+        node_title: "Int (Split Steps)",
         is_image_node: false,
         is_lora_node: false,
         inputs: [
@@ -252,7 +252,7 @@ function duplicateNodeNamesBindableInputsResponse() {
       {
         node_id: "3",
         node_type: "ComfyMathExpression",
-        node_title: "ComfyMathExpression",
+        node_title: "Math Expression",
         is_image_node: false,
         is_lora_node: false,
         inputs: [
@@ -268,7 +268,7 @@ function duplicateNodeNamesBindableInputsResponse() {
       {
         node_id: "4",
         node_type: "PrimitiveInt",
-        node_title: "PrimitiveInt",
+        node_title: "Int (Steps)",
         is_image_node: false,
         is_lora_node: false,
         inputs: [
@@ -508,7 +508,7 @@ describe("DashboardBuilderPage", () => {
     expect(within(valuesPanel).getByText("No values match your search.")).toBeInTheDocument();
   });
 
-  it("groups workflow nodes with the same name into one value dropdown", async () => {
+  it("lists repeated primitive workflow nodes as separate value dropdowns", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,
       workflowId: "wf-duplicates",
@@ -539,18 +539,18 @@ describe("DashboardBuilderPage", () => {
     );
 
     const valuesPanel = await screen.findByLabelText("Workflow values");
-    await within(valuesPanel).findByRole("button", { name: /PrimitiveInt/i });
+    await within(valuesPanel).findByRole("button", { name: /Int \(Split Steps\).*PrimitiveInt/i });
 
-    expect(within(valuesPanel).getAllByRole("button", { name: /PrimitiveInt/i })).toHaveLength(1);
-    expect(within(valuesPanel).getByRole("button", { name: /ComfyMathExpression/i })).toBeInTheDocument();
-    expect(within(valuesPanel).getByRole("button", { name: /PrimitiveInt\s*3/i })).toBeInTheDocument();
+    expect(within(valuesPanel).getAllByText("PrimitiveInt")).toHaveLength(3);
+    expect(within(valuesPanel).getByRole("button", { name: /Math Expression.*ComfyMathExpression/i })).toBeInTheDocument();
+    expect(within(valuesPanel).getAllByRole("button", { name: /Int \(Steps\).*PrimitiveInt\s*1/i })).toHaveLength(2);
+    expect(within(valuesPanel).getByRole("button", { name: /Int \(Split Steps\).*PrimitiveInt\s*1/i })).toBeInTheDocument();
     const nodeTitles = Array.from(valuesPanel.querySelectorAll(".builder-node__title")).map((item) => item.textContent);
-    expect(nodeTitles).toEqual(["ComfyMathExpression", "PrimitiveInt"]);
-    fireEvent.click(within(valuesPanel).getByRole("button", { name: /PrimitiveInt\s*3/i }));
+    expect(nodeTitles).toEqual(["Int (Split Steps)", "Int (Steps)", "Int (Steps)", "Math Expression"]);
 
     const primitiveValues = within(valuesPanel).getAllByRole("button", { name: /value/i });
-    expect(primitiveValues).toHaveLength(3);
-    fireEvent.click(primitiveValues[1]);
+    expect(primitiveValues).toHaveLength(1);
+    fireEvent.click(primitiveValues[0]);
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
 
     expect(onContinue.mock.calls[0][0].widgets).toEqual([

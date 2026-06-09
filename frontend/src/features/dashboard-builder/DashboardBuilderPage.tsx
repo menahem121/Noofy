@@ -244,7 +244,7 @@ export function DashboardBuilderPage({
       setSelectedValueId(null);
       setSelectedGroupId(null);
     }
-    setExpandedNodes(new Set([groupWorkflowNodesByName(workflow.nodes)[0]?.id ?? ""]));
+    setExpandedNodes(new Set([sortWorkflowNodesByName(workflow.nodes)[0]?.id ?? ""]));
   }, [workflowState, activeWorkflowId, scopedInitialSchema]);
 
   const workflow = workflowState.workflow;
@@ -296,7 +296,7 @@ export function DashboardBuilderPage({
   const filteredNodes = useMemo(() => {
     if (!builderReady || !workflow) return [];
     const queryTerms = normalizeSearchText(search).split(/\s+/).filter(Boolean);
-    if (queryTerms.length === 0) return groupWorkflowNodesByName(workflow.nodes);
+    if (queryTerms.length === 0) return sortWorkflowNodesByName(workflow.nodes);
 
     const matchingNodes = workflow.nodes
       .map((node) => {
@@ -306,7 +306,7 @@ export function DashboardBuilderPage({
         return { ...node, values: filteredValues };
       })
       .filter((node) => node.values.length > 0);
-    return groupWorkflowNodesByName(matchingNodes);
+    return sortWorkflowNodesByName(matchingNodes);
   }, [builderReady, workflow, search, dashboardTitlesByValueId]);
 
   const selectedWidget = useMemo(
@@ -1108,29 +1108,21 @@ function previewPositionForElement(element: HTMLElement): { position: { top: num
   };
 }
 
-function groupWorkflowNodesByName(nodes: WorkflowNode[]): WorkflowNode[] {
-  const grouped: WorkflowNode[] = [];
-  const nodeByName = new Map<string, WorkflowNode>();
+const WORKFLOW_NODE_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-  for (const node of nodes) {
-    const key = nodeGroupKey(node);
-    const existing = nodeByName.get(key);
-    if (existing) {
-      existing.values = [...existing.values, ...node.values];
-      continue;
-    }
-
-    const nextNode = { ...node, values: [...node.values] };
-    grouped.push(nextNode);
-    nodeByName.set(key, nextNode);
-  }
-
-  return grouped.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+function sortWorkflowNodesByName(nodes: WorkflowNode[]): WorkflowNode[] {
+  return nodes
+    .map((node) => ({ ...node, values: [...node.values] }))
+    .sort(
+      (a, b) =>
+        WORKFLOW_NODE_COLLATOR.compare(nodeSortName(a), nodeSortName(b)) ||
+        WORKFLOW_NODE_COLLATOR.compare(a.classType, b.classType) ||
+        WORKFLOW_NODE_COLLATOR.compare(a.id, b.id),
+    );
 }
 
-function nodeGroupKey(node: Pick<WorkflowNode, "title" | "classType">): string {
-  const title = node.title.trim() || node.classType.trim();
-  return title.toLocaleLowerCase();
+function nodeSortName(node: Pick<WorkflowNode, "id" | "title" | "classType">): string {
+  return node.title.trim() || node.classType.trim() || node.id;
 }
 
 function valueMatchesSearch(
@@ -1196,7 +1188,10 @@ function NodeListItem({
         <span className="builder-node__icon" aria-hidden="true">
           <Icon size={14} />
         </span>
-        <span className="builder-node__title">{node.title}</span>
+        <span className="builder-node__text">
+          <span className="builder-node__title">{node.title}</span>
+          <span className="builder-node__class">{node.classType}</span>
+        </span>
         <span className="builder-node__count">{node.values.length}</span>
         {exposedCount > 0 ? <span className="builder-node__exposed-dot" aria-label={`${exposedCount} exposed`} /> : null}
       </button>

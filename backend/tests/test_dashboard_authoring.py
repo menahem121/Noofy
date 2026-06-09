@@ -653,6 +653,23 @@ def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> No
     ]
 
 
+def test_classify_graph_inputs_includes_comfyui_meta_title_for_scalar_nodes() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "128:116": {
+                "_meta": {"title": "Float(CFG)"},
+                "class_type": "PrimitiveFloat",
+                "inputs": {"value": 3.5},
+            }
+        }
+    )
+
+    assert nodes[0]["node_id"] == "128:116"
+    assert nodes[0]["node_type"] == "PrimitiveFloat"
+    assert nodes[0]["node_title"] == "Float(CFG)"
+    assert nodes[0]["inputs"][0]["input_name"] == "value"
+
+
 def test_classify_graph_inputs_suggests_dashboard_note_for_comfyui_note_nodes() -> None:
     nodes = _classify_graph_inputs(
         {

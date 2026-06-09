@@ -655,6 +655,7 @@ def _classify_graph_inputs(
                 {
                     "node_id": str(node_id),
                     "node_type": node_type,
+                    "node_title": _node_title(node, fallback=str(node_type or "Unknown node")),
                     "is_image_node": node_type in _IMAGE_NODE_TYPES,
                     "is_audio_node": node_type in _AUDIO_NODE_TYPES,
                     "is_video_node": _is_video_input_node_type(node_type),
@@ -723,6 +724,10 @@ def _iter_frontend_note_nodes(
 
 
 def _note_title(node: Mapping[str, Any]) -> str:
+    return _node_title(node, fallback="Note")
+
+
+def _node_title(node: Mapping[str, Any], *, fallback: str) -> str:
     title = node.get("title")
     if isinstance(title, str) and title.strip():
         return title.strip()
@@ -731,7 +736,7 @@ def _note_title(node: Mapping[str, Any]) -> str:
         title = metadata.get("title")
         if isinstance(title, str) and title.strip():
             return title.strip()
-    return "Note"
+    return fallback
 
 
 def _note_body(node: Mapping[str, Any]) -> str:

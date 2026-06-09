@@ -192,15 +192,42 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.builder-node__title {
+.builder-node__text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.builder-node__title,
+.builder-node__class {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.builder-node__title {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.builder-node__class {
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.builder-node__header:hover .builder-node__class,
+.builder-node__header--expanded .builder-node__class {
+  color: var(--text-secondary);
+}
+
 .builder-node__count {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -215,6 +242,7 @@
 }
 
 .builder-node__exposed-dot {
+  flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 999px;
