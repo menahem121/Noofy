@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use rand::{rngs::OsRng, RngCore};
+#[cfg(unix)]
+use std::time::Instant;
 use std::{
     collections::HashMap,
     ffi::OsString,
@@ -21,9 +23,63 @@ const OPEN_WORKFLOW_FILE_EVENT: &str = "noofy-open-workflow-file";
 const MAX_NOOFY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 struct BackendRuntime {
-    child: Child,
+    process: BackendProcess,
     api_base_url: String,
     api_token: String,
+}
+
+struct BackendProcess {
+    child: Option<Child>,
+    lease_path: Option<PathBuf>,
+    #[cfg(windows)]
+    job_handle: isize,
+}
+
+impl BackendProcess {
+    fn new(child: Child, lease_path: Option<PathBuf>) -> io::Result<Self> {
+        #[cfg(windows)]
+        let (child, job_handle) = {
+            let mut child = child;
+            let job_handle = match create_kill_on_close_job(&child) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            };
+            (child, job_handle)
+        };
+        Ok(Self {
+            child: Some(child),
+            lease_path,
+            #[cfg(windows)]
+            job_handle,
+        })
+    }
+
+    fn child_mut(&mut self) -> io::Result<&mut Child> {
+        self.child
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "backend process is unavailable"))
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            terminate_child_tree(&mut child);
+        }
+        if let Some(path) = &self.lease_path {
+            let _ = fs::remove_file(path);
+        }
+        #[cfg(windows)]
+        close_job_handle(&mut self.job_handle);
+    }
+}
+
+impl Drop for BackendProcess {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +135,16 @@ struct NativeNoofyFile {
     path: String,
     filename: String,
     bytes: Vec<u8>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct BackendProcessLease {
+    schema_version: u32,
+    pid: u32,
+    #[serde(default)]
+    process_identity: Option<String>,
+    program: String,
+    current_dir: String,
 }
 
 #[tauri::command]
@@ -197,7 +263,7 @@ fn open_folder(path: String) -> Result<(), String> {
 }
 
 fn main() {
-    let backend_process: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let backend_process: Arc<Mutex<Option<BackendProcess>>> = Arc::new(Mutex::new(None));
     let backend_for_setup = Arc::clone(&backend_process);
     let backend_for_window = Arc::clone(&backend_process);
     let backend_for_exit = Arc::clone(&backend_process);
@@ -243,7 +309,7 @@ fn main() {
             let mut backend_guard = backend_for_setup.lock().map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "backend process lock is poisoned")
             })?;
-            *backend_guard = Some(runtime.child);
+            *backend_guard = Some(runtime.process);
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Noofy")
@@ -376,7 +442,15 @@ fn validate_noofy_file_path(path: &Path) -> Result<String, String> {
 
 fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error::Error>> {
     let api_token = generate_api_token();
-    let launch = backend_launch_spec(&BackendLaunchContext::from_app(app)?)?;
+    let context = BackendLaunchContext::from_app(app)?;
+    let launch = backend_launch_spec(&context)?;
+    let lease_path = context
+        .app_data_dir
+        .as_ref()
+        .map(|path| path.join("launcher").join("backend-process.json"));
+    if let Some(path) = &lease_path {
+        recover_stale_backend(path, &launch)?;
+    }
 
     let mut command = Command::new(&launch.program);
     command
@@ -391,16 +465,21 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
     for (key, value) in &launch.env {
         command.env(key, value);
     }
+    configure_backend_process_tree(&mut command);
 
-    let mut child = command.spawn()?;
+    let child = command.spawn()?;
+    let mut process = BackendProcess::new(child, lease_path.clone())?;
+    if let Some(path) = &lease_path {
+        write_backend_process_lease(path, process.child_mut()?.id(), &launch)?;
+    }
 
-    let stdout = child.stdout.take().ok_or_else(|| {
+    let stdout = process.child_mut()?.stdout.take().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Other,
             "backend stdout pipe was not available",
         )
     })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
+    let stderr = process.child_mut()?.stderr.take().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Other,
             "backend stderr pipe was not available",
@@ -437,8 +516,7 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
     let handoff = match handoff_receiver.recv_timeout(Duration::from_secs(20)) {
         Ok(line) => line,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            process.shutdown();
             return Err(Box::new(error));
         }
     };
@@ -454,7 +532,7 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
         .to_string();
 
     Ok(BackendRuntime {
-        child,
+        process,
         api_base_url,
         api_token,
     })
@@ -1123,14 +1201,384 @@ fn redact_backend_log_line(line: &str, api_token: &str) -> String {
     line.replace(api_token, "[redacted]")
 }
 
-fn terminate_backend(process: &Arc<Mutex<Option<Child>>>) {
+#[cfg(unix)]
+fn configure_backend_process_tree(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(windows)]
+fn configure_backend_process_tree(_command: &mut Command) {}
+
+fn write_backend_process_lease(
+    path: &Path,
+    pid: u32,
+    launch: &BackendLaunchSpec,
+) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "backend process lease has no parent directory",
+        ));
+    };
+    fs::create_dir_all(parent)?;
+    let process_identity = process_creation_identity(pid).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("could not establish stable Noofy backend process identity (PID {pid})"),
+        )
+    })?;
+    let lease = BackendProcessLease {
+        schema_version: 2,
+        pid,
+        process_identity: Some(process_identity),
+        program: PathBuf::from(&launch.program)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&launch.program))
+            .to_string_lossy()
+            .to_string(),
+        current_dir: launch
+            .current_dir
+            .canonicalize()
+            .unwrap_or_else(|_| launch.current_dir.clone())
+            .to_string_lossy()
+            .to_string(),
+    };
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, serde_json::to_vec(&lease)?)?;
+    fs::rename(temporary, path)
+}
+
+fn recover_stale_backend(path: &Path, launch: &BackendLaunchSpec) -> io::Result<()> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let lease: BackendProcessLease = match serde_json::from_slice(&bytes) {
+        Ok(lease) => lease,
+        Err(_) => {
+            let _ = fs::remove_file(path);
+            return Ok(());
+        }
+    };
+    if !backend_process_tree_is_running(lease.pid) {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    if stale_backend_matches(&lease, launch) {
+        eprintln!(
+            "[noofy-launcher] stopping validated stale backend process group (PID {})",
+            lease.pid
+        );
+        terminate_stale_backend(lease.pid);
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "Recorded Noofy backend PID {} is still running but could not be safely identified.",
+            lease.pid
+        ),
+    ))
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn backend_process_tree_is_running(pid: u32) -> bool {
+    unsafe { libc::kill(-(pid as i32), 0) == 0 }
+}
+
+#[cfg(windows)]
+fn backend_process_tree_is_running(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn stale_backend_matches(lease: &BackendProcessLease, launch: &BackendLaunchSpec) -> bool {
+    let expected_program = PathBuf::from(&launch.program)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&launch.program))
+        .to_string_lossy()
+        .to_string();
+    let expected_cwd = launch
+        .current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| launch.current_dir.clone());
+    if lease.process_identity.as_deref() != process_creation_identity(lease.pid).as_deref()
+        || lease.process_identity.is_none()
+        || lease.program != expected_program
+        || PathBuf::from(&lease.current_dir) != expected_cwd
+        || unsafe { libc::getpgid(lease.pid as i32) } != lease.pid as i32
+    {
+        return false;
+    }
+    let command = unix_process_command(lease.pid);
+    let cwd = unix_process_cwd(lease.pid);
+    command.contains(&expected_program) && cwd.as_ref() == Some(&expected_cwd)
+}
+
+#[cfg(unix)]
+fn process_creation_identity(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if let Some(identity) = macos_process_creation_identity(pid) {
+        return Some(identity);
+    }
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+        if let Some(start_time) = linux_proc_stat_start_time(&stat) {
+            return Some(format!("proc-start:{start_time}"));
+        }
+    }
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|started| !started.is_empty())
+        .map(|started| format!("ps-start:{started}"))
+}
+
+#[cfg(unix)]
+fn linux_proc_stat_start_time(stat: &str) -> Option<&str> {
+    // The second field is parenthesized and may contain spaces or parentheses.
+    let command_end = stat.rfind(')')?;
+    stat[command_end + 1..].split_whitespace().nth(19)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_creation_identity(pid: u32) -> Option<String> {
+    #[repr(C)]
+    struct ProcBsdInfo {
+        pbi_flags: u32,
+        pbi_status: u32,
+        pbi_xstatus: u32,
+        pbi_pid: u32,
+        pbi_ppid: u32,
+        pbi_uid: u32,
+        pbi_gid: u32,
+        pbi_ruid: u32,
+        pbi_rgid: u32,
+        pbi_svuid: u32,
+        pbi_svgid: u32,
+        rfu_1: u32,
+        pbi_comm: [u8; 16],
+        pbi_name: [u8; 32],
+        pbi_nfiles: u32,
+        pbi_pgid: u32,
+        pbi_pjobc: u32,
+        e_tdev: u32,
+        e_tpgid: u32,
+        pbi_nice: i32,
+        pbi_start_tvsec: u64,
+        pbi_start_tvusec: u64,
+    }
+
+    unsafe extern "C" {
+        fn proc_pidinfo(
+            pid: i32,
+            flavor: i32,
+            arg: u64,
+            buffer: *mut std::ffi::c_void,
+            buffersize: i32,
+        ) -> i32;
+    }
+
+    let mut info: ProcBsdInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+    let written = unsafe {
+        proc_pidinfo(
+            pid as i32,
+            3,
+            0,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    Some(format!(
+        "macos-start:{}:{}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
+}
+
+#[cfg(windows)]
+fn process_creation_identity(pid: u32) -> Option<String> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FILETIME},
+        System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut creation: FILETIME = std::mem::zeroed();
+        let mut exit_time: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let result = GetProcessTimes(
+            handle,
+            &mut creation,
+            &mut exit_time,
+            &mut kernel,
+            &mut user,
+        );
+        CloseHandle(handle);
+        if result == 0 {
+            return None;
+        }
+        let ticks = ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
+        Some(format!("windows-created:{ticks}"))
+    }
+}
+
+#[cfg(unix)]
+fn unix_process_command(pid: u32) -> String {
+    let proc_cmdline = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    if let Ok(bytes) = fs::read(proc_cmdline) {
+        return String::from_utf8_lossy(&bytes)
+            .replace('\0', " ")
+            .trim()
+            .to_string();
+    }
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn unix_process_cwd(pid: u32) -> Option<PathBuf> {
+    if let Ok(path) = fs::read_link(format!("/proc/{pid}/cwd")) {
+        return path.canonicalize().ok();
+    }
+    Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find_map(|line| line.strip_prefix('n').map(PathBuf::from))
+        })
+        .and_then(|path| path.canonicalize().ok())
+}
+
+#[cfg(windows)]
+fn stale_backend_matches(_lease: &BackendProcessLease, _launch: &BackendLaunchSpec) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn terminate_stale_backend(pid: u32) {
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while backend_process_tree_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+    if backend_process_tree_is_running(pid) {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn terminate_stale_backend(_pid: u32) {}
+
+#[cfg(unix)]
+fn terminate_child_tree(child: &mut Child) {
+    let pid = child.id() as i32;
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while backend_process_tree_is_running(pid as u32) && Instant::now() < deadline {
+        let _ = child.try_wait();
+        thread::sleep(Duration::from_millis(100));
+    }
+    if backend_process_tree_is_running(pid as u32) {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn terminate_child_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn create_kill_on_close_job(child: &Child) -> io::Result<isize> {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+            || AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0
+        {
+            windows_sys::Win32::Foundation::CloseHandle(job);
+            return Err(io::Error::last_os_error());
+        }
+        Ok(job as isize)
+    }
+}
+
+#[cfg(windows)]
+fn close_job_handle(job_handle: &mut isize) {
+    if *job_handle != 0 {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(*job_handle as _);
+        }
+        *job_handle = 0;
+    }
+}
+
+fn terminate_backend(process: &Arc<Mutex<Option<BackendProcess>>>) {
     let Ok(mut guard) = process.lock() else {
         return;
     };
 
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(mut backend) = guard.take() {
+        backend.shutdown();
     }
 }
 
@@ -1603,6 +2051,107 @@ mod tests {
             ),
             "GET /api/jobs/job-1/events?token=[redacted] HTTP/1.1"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_process_tree_shutdown_terminates_descendants() {
+        let root = temp_dir("process-tree");
+        let child_pid_file = root.join("child.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; wait", child_pid_file.display());
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", &script])
+            .current_dir(&root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_backend_process_tree(&mut command);
+        let mut child = command.spawn().expect("spawn process tree");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !child_pid_file.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let descendant_pid: u32 = fs::read_to_string(&child_pid_file)
+            .expect("read descendant pid")
+            .trim()
+            .parse()
+            .expect("parse descendant pid");
+
+        terminate_child_tree(&mut child);
+
+        assert!(!process_is_running(child.id()));
+        assert!(!process_is_running(descendant_pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_backend_identity_requires_expected_program_cwd_and_process_group() {
+        let root = temp_dir("stale-backend");
+        let lease_path = root.join("launcher").join("backend-process.json");
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "while :; do sleep 1; done"])
+            .current_dir(&root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_backend_process_tree(&mut command);
+        let mut child = command.spawn().expect("spawn stale backend");
+        let pid = child.id();
+        let launch = BackendLaunchSpec {
+            program: OsString::from("/bin/sh"),
+            args: vec![
+                OsString::from("-c"),
+                OsString::from("while :; do sleep 1; done"),
+            ],
+            current_dir: root.clone(),
+            env: Vec::new(),
+            remove_env: Vec::new(),
+        };
+        write_backend_process_lease(&lease_path, pid, &launch).expect("write lease");
+        let lease: BackendProcessLease =
+            serde_json::from_slice(&fs::read(&lease_path).expect("read lease"))
+                .expect("parse lease");
+
+        assert!(lease.process_identity.is_some());
+        #[cfg(target_os = "macos")]
+        assert!(lease
+            .process_identity
+            .as_deref()
+            .expect("macOS process identity")
+            .starts_with("macos-start:"));
+        assert!(stale_backend_matches(&lease, &launch));
+        let reused = BackendProcessLease {
+            process_identity: Some("different-process-creation-time".to_string()),
+            ..lease
+        };
+        assert!(!stale_backend_matches(&reused, &launch));
+
+        terminate_child_tree(&mut child);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_proc_identity_parser_accepts_spaces_and_parentheses_in_command() {
+        let stat =
+            "123 (worker name) extra) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 424242 20";
+        assert_eq!(linux_proc_stat_start_time(stat), Some("424242"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn backend_process_uses_kill_on_close_job_object() {
+        let child = Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .spawn()
+            .expect("spawn backend fixture");
+        let pid = child.id();
+        let mut backend = BackendProcess::new(child, None).expect("assign Job Object");
+
+        assert_ne!(backend.job_handle, 0);
+        backend.shutdown();
+        assert!(backend.child.is_none());
+        assert_eq!(backend.job_handle, 0);
+        assert!(process_creation_identity(pid).is_none());
     }
 
     #[test]

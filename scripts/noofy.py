@@ -14,12 +14,13 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import BinaryIO, Callable, Mapping, Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,8 @@ DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_BACKEND_PORT = 8765
 RUNTIME_BOOTSTRAP_READY_STATUSES = {"prepared", "already_prepared"}
 RUNTIME_BOOTSTRAP_NONFATAL_INSTALL_STATUSES = {"platform_unsupported"}
+SOURCE_PROCESS_LEASE_NAME = "source-processes.json"
+SOURCE_PROCESS_LOCK_NAME = "source-processes.lock"
 
 BOOTSTRAP_RUNTIME_CODE = r"""
 import asyncio
@@ -81,6 +84,20 @@ CommandRunner = Callable[
     [list[str], Optional[Path], Optional[Mapping[str, str]], bool],
     CommandResult,
 ]
+
+
+class LauncherTermination(Exception):
+    def __init__(self, signal_number: int):
+        self.signal_number = signal_number
+        super().__init__(f"Noofy launcher received signal {signal_number}")
+
+
+@dataclass(frozen=True)
+class OwnedProcess:
+    process: subprocess.Popen[bytes]
+    role: str
+    cwd: Path
+    windows_job_handle: int | None = None
 
 
 def backend_python_path(root: Path = REPO_ROOT, *, os_name: str | None = None) -> Path:
@@ -550,7 +567,30 @@ class NoofyCheckout:
         env = source_checkout_env(data_dir=data_dir, backend_host=host, backend_port=backend_port)
         env["PATH"] = str(self.backend_venv_bin_dir) + os.pathsep + env.get("PATH", "")
         command = [str(self.backend_python), "-m", "app", "--host", host, "--port", str(backend_port)]
-        return subprocess.call(command, cwd=self.backend_dir, env=env)
+        processes: list[OwnedProcess] = []
+
+        def start_backend() -> None:
+            processes.append(
+                own_process(
+                    subprocess.Popen(
+                        command,
+                        cwd=self.backend_dir,
+                        env=env,
+                        **child_process_popen_kwargs(),
+                    ),
+                    "backend",
+                    self.backend_dir,
+                )
+            )
+            write_process_lease(data_dir, self.root, processes)
+
+        return supervise_processes(
+            processes,
+            start=start_backend,
+            prepare=lambda: recover_stale_processes(data_dir, self.root),
+            lease_path=source_process_lease_path(data_dir),
+            launcher_lock=source_launcher_lock(data_dir),
+        )
 
     def run(
         self,
@@ -584,24 +624,49 @@ class NoofyCheckout:
         backend_command = [str(self.backend_python), "-m", "app", "--host", host, "--port", str(backend_port)]
         frontend_command = ["npm", "run", "dev"]
 
-        print(f"Starting Noofy backend: {backend_api}")
-        backend = subprocess.Popen(
-            backend_command,
-            cwd=self.backend_dir,
-            env=backend_env,
-            **child_process_popen_kwargs(),
+        processes: list[OwnedProcess] = []
+
+        def start_processes() -> None:
+            print(f"Starting Noofy backend: {backend_api}")
+            processes.append(
+                own_process(
+                    subprocess.Popen(
+                        backend_command,
+                        cwd=self.backend_dir,
+                        env=backend_env,
+                        **child_process_popen_kwargs(),
+                    ),
+                    "backend",
+                    self.backend_dir,
+                )
+            )
+            write_process_lease(data_dir, self.root, processes)
+            wait_for_backend_listener(processes[0].process, host, backend_port)
+            print(f"Starting Noofy frontend: {frontend_url}")
+            processes.append(
+                own_process(
+                    subprocess.Popen(
+                        frontend_command,
+                        cwd=self.frontend_dir,
+                        env=frontend_env,
+                        **child_process_popen_kwargs(),
+                    ),
+                    "frontend",
+                    self.frontend_dir,
+                )
+            )
+            write_process_lease(data_dir, self.root, processes)
+            print()
+            print(f"Open Noofy at {frontend_url}")
+            print("Press Ctrl+C to stop Noofy.")
+
+        return supervise_processes(
+            processes,
+            start=start_processes,
+            prepare=lambda: recover_stale_processes(data_dir, self.root),
+            lease_path=source_process_lease_path(data_dir),
+            launcher_lock=source_launcher_lock(data_dir),
         )
-        print(f"Starting Noofy frontend: {frontend_url}")
-        frontend = subprocess.Popen(
-            frontend_command,
-            cwd=self.frontend_dir,
-            env=frontend_env,
-            **child_process_popen_kwargs(),
-        )
-        print()
-        print(f"Open Noofy at {frontend_url}")
-        print("Press Ctrl+C to stop Noofy.")
-        return wait_for_processes([backend, frontend])
 
 
 def require_python_version() -> None:
@@ -684,19 +749,462 @@ def _fail_old_node(found: str) -> None:
     )
 
 
-def wait_for_processes(processes: list[subprocess.Popen[bytes]]) -> int:
+def supervise_processes(
+    processes: list[OwnedProcess],
+    *,
+    start: Callable[[], None] | None = None,
+    prepare: Callable[[], None] | None = None,
+    lease_path: Path | None = None,
+    launcher_lock: contextlib.AbstractContextManager[None] | None = None,
+) -> int:
     try:
-        while True:
-            for process in processes:
-                returncode = process.poll()
-                if returncode is not None:
-                    terminate_processes(processes, except_process=process)
-                    return int(returncode)
-            time.sleep(0.5)
+        with termination_signal_handler():
+            with launcher_lock or contextlib.nullcontext():
+                if prepare is not None:
+                    prepare()
+                if start is not None:
+                    start()
+                return wait_for_processes(processes)
     except KeyboardInterrupt:
         print("\nStopping Noofy...")
-        terminate_processes(processes)
         return 130
+    except LauncherTermination as termination:
+        print("\nStopping Noofy...")
+        return 128 + termination.signal_number
+    finally:
+        terminate_processes(processes)
+        if processes and lease_path is not None:
+            lease_path.unlink(missing_ok=True)
+
+
+def wait_for_processes(processes: list[OwnedProcess]) -> int:
+    while True:
+        for owned in processes:
+            returncode = owned.process.poll()
+            if returncode is not None:
+                return int(returncode)
+        time.sleep(0.5)
+
+
+def wait_for_backend_listener(
+    process: subprocess.Popen[bytes],
+    host: str,
+    port: int,
+    *,
+    timeout_seconds: float = 30.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        returncode = process.poll()
+        if returncode is not None:
+            raise RuntimeError(f"Noofy backend exited before accepting connections (exit code {returncode}).")
+        try:
+            with socket.create_connection((host, port), timeout=0.25):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise TimeoutError(f"Noofy backend did not accept connections on {host}:{port} within {timeout_seconds:g}s.")
+
+
+def source_process_lease_path(data_dir: Path) -> Path:
+    return data_dir / "launcher" / SOURCE_PROCESS_LEASE_NAME
+
+
+def source_process_lock_path(data_dir: Path) -> Path:
+    return data_dir / "launcher" / SOURCE_PROCESS_LOCK_NAME
+
+
+@contextlib.contextmanager
+def source_launcher_lock(data_dir: Path):
+    path = source_process_lock_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = acquire_source_launcher_lock(path)
+    try:
+        yield
+    finally:
+        release_source_launcher_lock(lock_file)
+
+
+def acquire_source_launcher_lock(path: Path) -> BinaryIO:
+    lock_file = path.open("a+b", buffering=0)
+    try:
+        _lock_file_nonblocking(lock_file)
+    except OSError:
+        owner = _read_json_file(path)
+        lock_file.close()
+        owner_pid = owner.get("pid")
+        if isinstance(owner_pid, int):
+            raise SystemExit(
+                f"Noofy is already running for this checkout (launcher PID {owner_pid})."
+            ) from None
+        raise SystemExit(f"Noofy is already running for this checkout ({path}).") from None
+
+    try:
+        identity = require_process_identity(os.getpid(), "launcher")
+    except RuntimeError as error:
+        release_source_launcher_lock(lock_file)
+        raise SystemExit(str(error)) from error
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pid": os.getpid(),
+                "identity": identity,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    return lock_file
+
+
+def _lock_file_nonblocking(lock_file: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        if not lock_file.read(1):
+            lock_file.write(b"\0")
+            lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def release_source_launcher_lock(lock_file: BinaryIO) -> None:
+    if lock_file.closed:
+        return
+    try:
+        lock_file.seek(0)
+        lock_file.truncate()
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.write(b"\0")
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_file.close()
+
+
+def _read_json_file(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_process_lease(data_dir: Path, checkout_root: Path, processes: list[OwnedProcess]) -> None:
+    path = source_process_lease_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    launcher_identity = require_process_identity(os.getpid(), "launcher")
+    children = [
+        {
+            "pid": owned.process.pid,
+            "identity": require_process_identity(owned.process.pid, owned.role),
+            "role": owned.role,
+            "cwd": str(owned.cwd.resolve()),
+        }
+        for owned in processes
+    ]
+    payload = {
+        "schema_version": 2,
+        "checkout_root": str(checkout_root.resolve()),
+        "launcher_pid": os.getpid(),
+        "launcher_identity": launcher_identity,
+        "children": children,
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
+
+
+def recover_stale_processes(data_dir: Path, checkout_root: Path) -> None:
+    path = source_process_lease_path(data_dir)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (json.JSONDecodeError, OSError):
+        path.unlink(missing_ok=True)
+        return
+
+    if payload.get("checkout_root") != str(checkout_root.resolve()):
+        raise SystemExit(
+            f"Refusing to use process lease owned by another checkout: {path}"
+        )
+    launcher_pid = payload.get("launcher_pid")
+    launcher_identity = payload.get("launcher_identity")
+    if (
+        isinstance(launcher_pid, int)
+        and isinstance(launcher_identity, str)
+        and process_identity(launcher_pid) == launcher_identity
+    ):
+        raise SystemExit(
+            f"Noofy is already running for this checkout (launcher PID {launcher_pid})."
+        )
+
+    unresolved: list[int] = []
+    for child in payload.get("children", []):
+        if not isinstance(child, dict):
+            continue
+        pid = child.get("pid")
+        identity = child.get("identity")
+        role = child.get("role")
+        cwd = child.get("cwd")
+        if not isinstance(pid, int) or not owned_process_tree_exists(pid):
+            continue
+        if not isinstance(identity, str) or process_identity(pid) != identity:
+            unresolved.append(pid)
+            continue
+        if (
+            isinstance(role, str)
+            and isinstance(cwd, str)
+            and stale_process_matches(pid, role, Path(cwd), checkout_root)
+        ):
+            print(f"Stopping stale Noofy {role} process group from this checkout (PID {pid}).")
+            signal_stale_process_group(pid)
+        else:
+            unresolved.append(pid)
+    if unresolved:
+        raise SystemExit(
+            "Recorded Noofy child processes are still running but could not be safely "
+            f"identified: {', '.join(str(pid) for pid in unresolved)}"
+        )
+    path.unlink(missing_ok=True)
+
+
+def process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def process_identity(pid: int) -> str | None:
+    if os.name == "nt":
+        return windows_process_identity(pid)
+    if sys.platform == "darwin":
+        identity = macos_process_identity(pid)
+        if identity is not None:
+            return identity
+    proc_stat = Path("/proc") / str(pid) / "stat"
+    with contextlib.suppress(OSError):
+        start_time = linux_proc_stat_start_time(proc_stat.read_text(encoding="utf-8"))
+        if start_time is not None:
+            return f"proc-start:{start_time}"
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True,
+        text=True,
+    )
+    started = result.stdout.strip()
+    return f"ps-start:{started}" if started else None
+
+
+def require_process_identity(pid: int, role: str) -> str:
+    identity = process_identity(pid)
+    if identity is None:
+        raise RuntimeError(
+            f"Could not establish stable Noofy {role} process identity (PID {pid})."
+        )
+    return identity
+
+
+def linux_proc_stat_start_time(stat: str) -> str | None:
+    # The second field is parenthesized and may contain spaces or parentheses.
+    command_end = stat.rfind(")")
+    if command_end < 0:
+        return None
+    fields_after_command = stat[command_end + 1 :].split()
+    return fields_after_command[19] if len(fields_after_command) > 19 else None
+
+
+def macos_process_identity(pid: int) -> str | None:
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+
+    class ProcBsdInfo(ctypes.Structure):
+        _fields_ = [
+            ("pbi_flags", ctypes.c_uint32),
+            ("pbi_status", ctypes.c_uint32),
+            ("pbi_xstatus", ctypes.c_uint32),
+            ("pbi_pid", ctypes.c_uint32),
+            ("pbi_ppid", ctypes.c_uint32),
+            ("pbi_uid", ctypes.c_uint32),
+            ("pbi_gid", ctypes.c_uint32),
+            ("pbi_ruid", ctypes.c_uint32),
+            ("pbi_rgid", ctypes.c_uint32),
+            ("pbi_svuid", ctypes.c_uint32),
+            ("pbi_svgid", ctypes.c_uint32),
+            ("rfu_1", ctypes.c_uint32),
+            ("pbi_comm", ctypes.c_char * 16),
+            ("pbi_name", ctypes.c_char * 32),
+            ("pbi_nfiles", ctypes.c_uint32),
+            ("pbi_pgid", ctypes.c_uint32),
+            ("pbi_pjobc", ctypes.c_uint32),
+            ("e_tdev", ctypes.c_uint32),
+            ("e_tpgid", ctypes.c_uint32),
+            ("pbi_nice", ctypes.c_int32),
+            ("pbi_start_tvsec", ctypes.c_uint64),
+            ("pbi_start_tvusec", ctypes.c_uint64),
+        ]
+
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    info = ProcBsdInfo()
+    size = libproc.proc_pidinfo(
+        pid,
+        3,
+        0,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if size != ctypes.sizeof(info):
+        return None
+    return f"macos-start:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"
+
+
+def windows_process_identity(pid: int) -> str | None:
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    creation = wintypes.FILETIME()
+    exit_time = wintypes.FILETIME()
+    kernel = wintypes.FILETIME()
+    user = wintypes.FILETIME()
+    try:
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return f"windows-created:{ticks}"
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def owned_process_tree_exists(pid: int) -> bool:
+    if os.name == "nt":
+        return process_exists(pid)
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stale_process_matches(pid: int, role: str, cwd: Path, checkout_root: Path) -> bool:
+    if os.name == "nt" or role not in {"backend", "frontend"}:
+        return False
+    expected_cwd = (checkout_root / role).resolve()
+    if cwd.resolve() != expected_cwd or not owned_process_tree_exists(pid):
+        return False
+    expected_commands = ("-m app",) if role == "backend" else ("npm run dev", "vite --host")
+    return any(
+        process_cwd(member_pid) == expected_cwd
+        and any(expected in command for expected in expected_commands)
+        for member_pid, command in process_group_members(pid)
+    )
+
+
+def process_group_members(process_group_id: int) -> list[tuple[int, str]]:
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,pgid=,command="],
+        capture_output=True,
+        text=True,
+    )
+    members = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=2)
+        if len(fields) != 3:
+            continue
+        with contextlib.suppress(ValueError):
+            pid, pgid = int(fields[0]), int(fields[1])
+            if pgid == process_group_id:
+                members.append((pid, fields[2]))
+    return members
+
+
+def process_cwd(pid: int) -> Path | None:
+    proc_cwd = Path("/proc") / str(pid) / "cwd"
+    with contextlib.suppress(OSError):
+        return proc_cwd.resolve(strict=True)
+    result = subprocess.run(
+        ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return Path(line[1:]).resolve()
+    return None
+
+
+def signal_stale_process_group(pid: int) -> None:
+    with suppress_process_errors():
+        os.killpg(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 8
+    while owned_process_tree_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if owned_process_tree_exists(pid):
+        with suppress_process_errors():
+            os.killpg(pid, signal.SIGKILL)
+
+
+@contextlib.contextmanager
+def termination_signal_handler():
+    handled_signals = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        handled_signals.append(signal.SIGHUP)
+    previous_handlers = {
+        signal_number: signal.getsignal(signal_number)
+        for signal_number in handled_signals
+    }
+
+    def request_shutdown(signal_number, frame):
+        raise LauncherTermination(signal_number)
+
+    for signal_number in handled_signals:
+        signal.signal(signal_number, request_shutdown)
+    try:
+        yield
+    finally:
+        for signal_number, previous_handler in previous_handlers.items():
+            signal.signal(signal_number, previous_handler)
 
 
 def child_process_popen_kwargs(*, os_name: str | None = None) -> dict[str, object]:
@@ -707,47 +1215,56 @@ def child_process_popen_kwargs(*, os_name: str | None = None) -> dict[str, objec
     return {"start_new_session": True}
 
 
+def own_process(
+    process: subprocess.Popen[bytes],
+    role: str,
+    cwd: Path,
+) -> OwnedProcess:
+    windows_job_handle = None
+    if os.name == "nt":
+        try:
+            windows_job_handle = create_windows_kill_on_close_job(process)
+        except BaseException:
+            terminate_windows_process_tree(process.pid, force=True)
+            with suppress_process_errors():
+                process.wait(timeout=5)
+            raise
+    return OwnedProcess(process, role, cwd, windows_job_handle)
+
+
 def terminate_processes(
-    processes: list[subprocess.Popen[bytes]],
-    *,
-    except_process: subprocess.Popen[bytes] | None = None,
+    processes: list[OwnedProcess],
 ) -> None:
     with suppress_cleanup_interrupts() as interrupted:
-        for process in processes:
-            if process is except_process:
-                continue
-            signal_process_tree(process, signal.SIGTERM)
+        for owned in processes:
+            signal_process_tree(owned.process, signal.SIGTERM)
 
         wait_for_process_shutdown(
             processes,
-            except_process=except_process,
             deadline=time.monotonic() + 8,
             interrupted=interrupted,
         )
+        for owned in processes:
+            close_windows_job_handle(owned.windows_job_handle)
 
-        for process in processes:
-            if process is except_process:
-                continue
-            kill_process_tree(process)
+        for owned in processes:
+            kill_process_tree(owned.process)
 
         wait_for_process_shutdown(
             processes,
-            except_process=except_process,
             deadline=time.monotonic() + 2,
             interrupted=interrupted,
         )
 
 
 def wait_for_process_shutdown(
-    processes: list[subprocess.Popen[bytes]],
+    processes: list[OwnedProcess],
     *,
-    except_process: subprocess.Popen[bytes] | None,
     deadline: float,
     interrupted: Callable[[], bool],
 ) -> None:
-    for process in processes:
-        if process is except_process:
-            continue
+    for owned in processes:
+        process = owned.process
         while process.poll() is None and time.monotonic() < deadline and not interrupted():
             try:
                 process.wait(timeout=0.1)
@@ -758,7 +1275,7 @@ def wait_for_process_shutdown(
 def signal_process_tree(process: subprocess.Popen[bytes], signal_number: int) -> None:
     with suppress_process_errors():
         if os.name == "nt":
-            process.terminate()
+            terminate_windows_process_tree(process.pid)
         else:
             os.killpg(process.pid, signal_number)
 
@@ -766,9 +1283,87 @@ def signal_process_tree(process: subprocess.Popen[bytes], signal_number: int) ->
 def kill_process_tree(process: subprocess.Popen[bytes]) -> None:
     with suppress_process_errors():
         if os.name == "nt":
-            process.kill()
+            terminate_windows_process_tree(process.pid, force=True)
         else:
             os.killpg(process.pid, signal.SIGKILL)
+
+
+def terminate_windows_process_tree(pid: int, *, force: bool = False) -> None:
+    command = ["taskkill", "/PID", str(pid), "/T"]
+    if force:
+        command.append("/F")
+    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def create_windows_kill_on_close_job(process: subprocess.Popen[bytes]) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimitInformation),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    info = ExtendedLimitInformation()
+    info.BasicLimitInformation.LimitFlags = 0x00002000
+    if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        kernel32.CloseHandle(job)
+        raise ctypes.WinError(ctypes.get_last_error())
+    process_handle = wintypes.HANDLE(getattr(process, "_handle"))
+    if not kernel32.AssignProcessToJobObject(job, process_handle):
+        kernel32.CloseHandle(job)
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(job)
+
+
+def close_windows_job_handle(handle: int | None) -> None:
+    if os.name != "nt" or handle is None:
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle(wintypes.HANDLE(handle))
 
 
 @contextlib.contextmanager

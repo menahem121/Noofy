@@ -2220,6 +2220,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 name = "noofy"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "open",
  "rand 0.8.6",
  "rfd",
@@ -2229,6 +2230,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-single-instance",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
