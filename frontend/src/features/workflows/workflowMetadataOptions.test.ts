@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { WORKFLOW_CATEGORY_OPTIONS, workflowCategoryOption } from "./workflowMetadataOptions";
+import {
+  NATIVE_WORKFLOW_ICON_OPTIONS,
+  WORKFLOW_CATEGORY_OPTIONS,
+  WORKFLOW_ICONS,
+  workflowCategoryOption,
+} from "./workflowMetadataOptions";
 
 describe("workflow metadata category options", () => {
   it("includes modality workflow type categories for discovery filters", () => {
@@ -16,5 +21,12 @@ describe("workflow metadata category options", () => {
       "vid2vid",
     ]));
     expect(workflowCategoryOption("imgTo3D")).toBe("imgTo3D");
+  });
+
+  it("includes a native video workflow icon for video generation workflows", () => {
+    expect(WORKFLOW_ICONS.video).toBeDefined();
+    expect(NATIVE_WORKFLOW_ICON_OPTIONS).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "video", label: "Video" }),
+    ]));
   });
 });

@@ -4,6 +4,7 @@ import {
   PackageOpen,
   SlidersHorizontal,
   Sparkles,
+  Video,
   type LucideIcon,
 } from "lucide-react";
 
@@ -45,6 +46,7 @@ export function workflowCategoryOption(value: string | null | undefined): Workfl
 export const WORKFLOW_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   image: Image,
+  video: Video,
   maximize: Maximize2,
   sliders: SlidersHorizontal,
   package: PackageOpen,
@@ -53,6 +55,7 @@ export const WORKFLOW_ICONS: Record<string, LucideIcon> = {
 export const NATIVE_WORKFLOW_ICON_OPTIONS = [
   { id: "sparkles", label: "Sparkles", Icon: Sparkles },
   { id: "image", label: "Image", Icon: Image },
+  { id: "video", label: "Video", Icon: Video },
   { id: "maximize", label: "Upscale", Icon: Maximize2 },
   { id: "sliders", label: "Controls", Icon: SlidersHorizontal },
   { id: "package", label: "Package", Icon: PackageOpen },
