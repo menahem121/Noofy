@@ -397,6 +397,12 @@ describe("WorkflowsPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
 
+    const categoryFilter = screen.getByRole("combobox", { name: "Filter by category" }) as HTMLSelectElement;
+    expect(Array.from(categoryFilter.options).map((option) => option.value)).toEqual([
+      "all",
+      ...WORKFLOW_CATEGORY_OPTIONS,
+    ]);
+
     const categoryTabs = within(screen.getByRole("tablist", { name: "Filter by workflow category" })).getAllByRole("tab");
     expect(categoryTabs.map((tab) => tab.textContent)).toEqual(["All", "Inpainting", "Txt2img"]);
     expect(screen.queryByRole("tab", { name: "txt2audio" })).not.toBeInTheDocument();

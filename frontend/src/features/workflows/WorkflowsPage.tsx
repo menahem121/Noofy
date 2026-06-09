@@ -523,7 +523,7 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
             </FilterSelect>
             <FilterSelect label="Filter by category" value={categoryFilter} onChange={setCategoryFilter}>
               <option value="all">All categories</option>
-              {uniqueCategories.map((category) => (
+              {WORKFLOW_CATEGORY_OPTIONS.map((category) => (
                 <option key={category} value={category}>
                   {category}
                 </option>

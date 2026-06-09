@@ -73,6 +73,7 @@ def _infer_media_workflow_type_category(package: WorkflowPackage) -> str | None:
             return "img2text"
         if has_audio_input:
             return "audio2txt"
+        return "txt2txt"
     return None
 
 

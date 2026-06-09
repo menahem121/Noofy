@@ -83,6 +83,7 @@ CANONICAL_CATEGORY_OPTIONS = frozenset(
         "img2vid",
         "imgTo3D",
         "txtTo3D",
+        "txt2txt",
         "img2text",
         "audio2txt",
         "vid2vid",
@@ -869,6 +870,7 @@ def infer_suggested_category(
         ("video", "video"): "vid2vid",
         (None, "3d"): "txtTo3D",
         ("image", "3d"): "imgTo3D",
+        (None, "text"): "txt2txt",
         ("image", "text"): "img2text",
         ("audio", "text"): "audio2txt",
     }

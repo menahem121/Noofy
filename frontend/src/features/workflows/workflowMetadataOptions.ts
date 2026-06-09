@@ -17,6 +17,7 @@ export const WORKFLOW_CATEGORY_OPTIONS = [
   "img2vid",
   "imgTo3D",
   "txtTo3D",
+  "txt2txt",
   "img2text",
   "audio2txt",
   "vid2vid",

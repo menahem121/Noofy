@@ -437,6 +437,7 @@ def test_empty_optional_metadata_fields_normalize_without_forcing_category() -> 
 def test_suggested_category_uses_only_confident_media_flow_matches() -> None:
     assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["image"]) == "Txt2img"
     assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["image"]) == "Img2img"
+    assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["text"]) == "txt2txt"
     assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["audio"]) == "txt2audio"
     assert exporter.infer_suggested_category(input_kinds=["audio"], output_kinds=["audio"]) == "audio2audio"
     assert exporter.infer_suggested_category(input_kinds=[], output_kinds=["video"]) == "txt2vid"
@@ -450,6 +451,17 @@ def test_suggested_category_uses_only_confident_media_flow_matches() -> None:
     assert exporter.infer_suggested_category(input_kinds=["image", "audio"], output_kinds=["video"]) is None
     assert exporter.infer_suggested_category(input_kinds=["image"], output_kinds=["image", "video"]) is None
     assert exporter.infer_suggested_category(input_kinds=["file"], output_kinds=["file"]) is None
+
+
+def test_txt2txt_is_preserved_as_canonical_discovery_metadata() -> None:
+    metadata = exporter.normalize_discovery_metadata(
+        package_id="wf",
+        version="0.1.0",
+        workflow_name="Text Workflow",
+        export_metadata={"category": "txt2txt"},
+    )
+
+    assert metadata["category"] == "txt2txt"
 
 
 def test_creator_selected_category_overrides_any_suggestion() -> None:

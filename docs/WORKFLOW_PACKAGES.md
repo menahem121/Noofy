@@ -21,9 +21,9 @@ A package should contain:
 
 `metadata.category` is user-facing discovery metadata. It may describe broad
 workflow types such as `Txt2img`, `Img2img`, `txt2audio`, `audio2audio`,
-`txt2vid`, `img2vid`, `imgTo3D`, `txtTo3D`, `img2text`, `audio2txt`, and
-`vid2vid`, or more task-oriented labels such as inpainting, restoration, or
-control workflows.
+`txt2vid`, `img2vid`, `imgTo3D`, `txtTo3D`, `txt2txt`, `img2text`,
+`audio2txt`, and `vid2vid`, or more task-oriented labels such as inpainting,
+restoration, or control workflows.
 
 Categories are not the workflow execution contract. Execution and rendering
 must continue to come from package inputs, package outputs, dashboard bindings,

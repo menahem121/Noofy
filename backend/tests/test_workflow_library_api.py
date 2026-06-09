@@ -692,6 +692,13 @@ def test_workflow_list_infers_media_workflow_type_categories_from_declared_inter
             [],
         ),
         (
+            "txt2txt",
+            "txt2txt",
+            [{"id": "prompt", "label": "Prompt", "control": "textarea"}],
+            [{"id": "text", "label": "Text", "type": "text", "kind": "text"}],
+            [],
+        ),
+        (
             "img2text",
             "img2text",
             [{"id": "image_in", "label": "Image", "control": "load_image"}],

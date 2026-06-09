@@ -16,11 +16,13 @@ describe("workflow metadata category options", () => {
       "img2vid",
       "imgTo3D",
       "txtTo3D",
+      "txt2txt",
       "img2text",
       "audio2txt",
       "vid2vid",
     ]));
     expect(workflowCategoryOption("imgTo3D")).toBe("imgTo3D");
+    expect(workflowCategoryOption("txt2txt")).toBe("txt2txt");
   });
 
   it("includes a native video workflow icon for video generation workflows", () => {
