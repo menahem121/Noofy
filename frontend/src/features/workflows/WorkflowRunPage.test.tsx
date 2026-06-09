@@ -81,6 +81,18 @@ const engineStartingRuntimeState: Partial<RuntimeHealthState> = {
   } as RuntimeHealthState["runtime"],
 };
 
+const engineBusyRuntimeState: Partial<RuntimeHealthState> = {
+  ...readyRuntimeState,
+  engineStatus: "busy",
+  runtime: {
+    ...readyRuntime,
+    reachable: true,
+    transient_health_failure: true,
+    last_reachable_at: "2026-06-09T10:00:00+00:00",
+    error: "health_check_timeout",
+  } as RuntimeHealthState["runtime"],
+};
+
 const validWorkflow = {
   workflow_id: "text_to_image_v0",
   valid: true,
@@ -3480,6 +3492,17 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.queryByText("Checking Noofy")).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+  });
+
+  it("does not show engine repair guidance for a transient busy runtime status", async () => {
+    mockConfiguredDashboardFetch(fetchMock, engineBusyRuntimeState.runtime);
+
+    renderRunPage({}, engineBusyRuntimeState);
+
+    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
+    expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
+    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
+    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
   });
 
   it("marks the backend offline after a run action fails", async () => {

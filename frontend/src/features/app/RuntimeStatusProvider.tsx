@@ -4,7 +4,7 @@ import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
 import type { AppStatusView } from "./AppLayout";
 
 export type BackendStatus = "unknown" | "reachable" | "unreachable";
-export type EngineStatus = "unknown" | "ready" | "starting" | "offline";
+export type EngineStatus = "unknown" | "ready" | "starting" | "busy" | "offline";
 
 export interface RuntimeHealthState {
   backendStatus: BackendStatus;
@@ -216,6 +216,15 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
     };
   }
 
+  if (state.engineStatus === "busy") {
+    return {
+      label: "Working",
+      description: "The local engine is busy loading models or running a workflow",
+      tone: "info",
+      loading: true,
+    };
+  }
+
   if (state.engineStatus === "offline") {
     return {
       label: "Engine offline",
@@ -261,13 +270,17 @@ function stateFromFailure(current: RuntimeHealthState, error: unknown, silent: b
 }
 
 function engineStatusFromRuntime(runtime: RuntimeStatus): EngineStatus {
+  if (runtime.reachable && runtime.transient_health_failure) return "busy";
   if (runtime.reachable) return "ready";
   if (runtime.sidecar_starting || runtime.managed_process_running) return "starting";
   return "offline";
 }
 
 function runtimePollIntervalMs(state: RuntimeHealthState) {
-  if (state.backendStatus === "reachable" && state.engineStatus === "ready") {
+  if (
+    state.backendStatus === "reachable" &&
+    (state.engineStatus === "ready" || state.engineStatus === "busy")
+  ) {
     return IDLE_RUNTIME_POLL_INTERVAL_MS;
   }
   return ACTIVE_RUNTIME_POLL_INTERVAL_MS;

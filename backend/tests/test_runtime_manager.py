@@ -514,6 +514,96 @@ async def test_passive_status_skips_environment_dependency_checks(
     assert status.environment is None
 
 
+@pytest.mark.anyio
+async def test_passive_status_preserves_recent_reachable_runtime_during_health_timeout(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    checks = 0
+
+    async def health(_: str) -> tuple[bool, str | None]:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            return True, None
+        return False, "health_check_timeout"
+
+    manager = RuntimeManager(
+        mode="external",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        health_check=health,
+        log_store=LogStore(),
+    )
+
+    initial = await manager.status()
+    busy = await manager.status()
+
+    assert initial.reachable
+    assert busy.reachable
+    assert busy.transient_health_failure
+    assert busy.error == "health_check_timeout"
+    assert busy.last_reachable_at is not None
+
+
+@pytest.mark.anyio
+async def test_passive_status_does_not_preserve_first_health_timeout(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+
+    async def health(_: str) -> tuple[bool, str | None]:
+        return False, "health_check_timeout"
+
+    manager = RuntimeManager(
+        mode="external",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        health_check=health,
+        log_store=LogStore(),
+    )
+
+    status = await manager.status()
+
+    assert not status.reachable
+    assert not status.transient_health_failure
+
+
+@pytest.mark.anyio
+async def test_passive_status_does_not_preserve_non_timeout_failure(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    checks = 0
+
+    async def health(_: str) -> tuple[bool, str | None]:
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            return True, None
+        return False, "connection refused"
+
+    manager = RuntimeManager(
+        mode="external",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=sys.executable,
+        health_check=health,
+        log_store=LogStore(),
+    )
+
+    assert (await manager.status()).reachable
+    disconnected = await manager.status()
+
+    assert not disconnected.reachable
+    assert not disconnected.transient_health_failure
+
+
 def _arg_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 

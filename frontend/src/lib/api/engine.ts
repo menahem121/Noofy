@@ -146,6 +146,8 @@ export interface RuntimeStatus {
   sidecar_starting: boolean;
   pid: number | null;
   error: string | null;
+  transient_health_failure?: boolean;
+  last_reachable_at?: string | null;
   environment: RuntimeEnvironmentStatus | null;
   crash_count: number;
   restart_attempt: number;

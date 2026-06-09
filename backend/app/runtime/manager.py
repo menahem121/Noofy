@@ -30,6 +30,15 @@ from app.runtime.comfyui.launch_settings import (
 HealthCheck = Callable[[str], Awaitable[tuple[bool, str | None]]]
 ProcessFactory = Callable[..., Awaitable[Any]]
 OnRestartCallback = Callable[[], None]
+_TRANSIENT_HEALTH_FAILURE_GRACE_SECONDS = 30 * 60
+_TRANSIENT_HEALTH_FAILURE_MARKERS = frozenset(
+    {
+        "health_check_timeout",
+        "timeout",
+        "timed out",
+        "readtimeout",
+    }
+)
 
 
 def select_free_port(host: str = "127.0.0.1") -> int:
@@ -114,6 +123,7 @@ class RuntimeManager:
         self._log_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
         self._last_error: str | None = None
+        self._last_reachable_at: datetime | None = None
         self._sidecar_starting: bool = False
         self._start_lock: asyncio.Lock = asyncio.Lock()
 
@@ -144,16 +154,29 @@ class RuntimeManager:
     async def status(self, *, include_environment: bool = False) -> ComfyUIRuntimeStatus:
         self._record_process_exit_if_needed()
         reachable, reachability_error = await self._health_check(self.base_url)
+        now = datetime.now(timezone.utc)
+        transient_health_failure = False
+        if reachable:
+            self._last_reachable_at = now
+        elif self._should_preserve_transient_health_failure(reachability_error, now):
+            transient_health_failure = True
+            reachable = True
         environment_status = (
             await self.environment.status()
             if include_environment and self.environment is not None
             else None
         )
-        error = None if reachable else self._last_error or reachability_error
+        error = (
+            reachability_error
+            if transient_health_failure
+            else None
+            if reachable
+            else self._last_error or reachability_error
+        )
 
         uptime: float | None = None
         if self._started_at is not None and self._is_managed_process_running():
-            uptime = (datetime.now(timezone.utc) - self._started_at).total_seconds()
+            uptime = (now - self._started_at).total_seconds()
 
         return ComfyUIRuntimeStatus(
             mode=self.mode,
@@ -164,6 +187,12 @@ class RuntimeManager:
             sidecar_starting=self._sidecar_starting,
             pid=self._process.pid if self._is_managed_process_running() else None,
             error=error,
+            transient_health_failure=transient_health_failure,
+            last_reachable_at=(
+                self._last_reachable_at.isoformat()
+                if self._last_reachable_at is not None
+                else None
+            ),
             environment=environment_status,
             crash_count=self._crash_count,
             restart_attempt=self._restart_attempt,
@@ -715,6 +744,20 @@ class RuntimeManager:
                 details={"returncode": returncode},
             )
 
+    def _should_preserve_transient_health_failure(
+        self,
+        reachability_error: str | None,
+        now: datetime,
+    ) -> bool:
+        if self._last_reachable_at is None:
+            return False
+        if self.mode == "managed" and not self._is_managed_process_running():
+            return False
+        if not _is_transient_health_failure(reachability_error):
+            return False
+        elapsed = (now - self._last_reachable_at).total_seconds()
+        return elapsed <= _TRANSIENT_HEALTH_FAILURE_GRACE_SECONDS
+
     def _is_managed_process_running(self) -> bool:
         return (
             self.mode == "managed"
@@ -773,6 +816,8 @@ class RuntimeManager:
             async with httpx.AsyncClient(timeout=2) as client:
                 response = await client.get(f"{base_url}/system_stats")
                 response.raise_for_status()
+        except httpx.TimeoutException:
+            return False, "health_check_timeout"
         except httpx.HTTPError as exc:
             return False, str(exc)
         return True, None
@@ -781,3 +826,13 @@ class RuntimeManager:
         parsed = urlparse(base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
         return urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+
+def _is_transient_health_failure(error: str | None) -> bool:
+    if not error:
+        return False
+    normalized = error.lower().replace(" ", "")
+    return any(
+        marker.replace(" ", "") in normalized
+        for marker in _TRANSIENT_HEALTH_FAILURE_MARKERS
+    )

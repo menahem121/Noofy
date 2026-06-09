@@ -1535,7 +1535,7 @@ export function WorkflowRunPage({
           </div>
         </div>
       ) : null}
-      {runtimeStatus.backendStatus === "reachable" && runtimeStatus.engineStatus !== "ready" ? (
+      {engineKnownUnavailable ? (
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>

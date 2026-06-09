@@ -405,6 +405,8 @@ class ComfyUIRuntimeStatus(BaseModel):
     sidecar_starting: bool = False
     pid: int | None = None
     error: str | None = None
+    transient_health_failure: bool = False
+    last_reachable_at: str | None = None
     environment: RuntimeEnvironmentStatus | None = None
     crash_count: int = 0
     restart_attempt: int = 0

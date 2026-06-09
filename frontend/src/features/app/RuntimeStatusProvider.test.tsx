@@ -33,6 +33,13 @@ const readyRuntime = {
   last_crash_at: null,
 };
 
+const busyRuntime = {
+  ...readyRuntime,
+  transient_health_failure: true,
+  last_reachable_at: "2026-06-09T10:00:00+00:00",
+  error: "health_check_timeout",
+};
+
 const startingRuntime = {
   ...readyRuntime,
   reachable: false,
@@ -243,6 +250,21 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.statusView.label).toBe("Ready");
   });
 
+  it("shows a transient ComfyUI health timeout as working instead of offline", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(busyRuntime));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(readyRuntimeState),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ force: true, silent: true });
+    });
+
+    expect(result.current.backendStatus).toBe("reachable");
+    expect(result.current.engineStatus).toBe("busy");
+    expect(result.current.statusView.label).toBe("Working");
+  });
+
   it("distinguishes backend reachability from engine readiness", () => {
     expect(runtimeStatusView({
       ...readyRuntimeState,
@@ -255,6 +277,17 @@ describe("RuntimeStatusProvider", () => {
       consecutiveSilentFailures: 0,
       hasKnownState: true,
     }).label).toBe("Starting");
+    expect(runtimeStatusView({
+      ...readyRuntimeState,
+      backendStatus: "reachable",
+      engineStatus: "busy",
+      runtime: busyRuntime as RuntimeHealthState["runtime"],
+      refreshing: false,
+      refreshError: null,
+      lastCheckedAt: Date.now(),
+      consecutiveSilentFailures: 0,
+      hasKnownState: true,
+    }).label).toBe("Working");
     expect(runtimeStatusView({
       ...readyRuntimeState,
       backendStatus: "reachable",
