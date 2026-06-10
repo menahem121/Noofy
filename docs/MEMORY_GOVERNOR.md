@@ -195,15 +195,55 @@ baseline and polls RAM/VRAM asynchronously with adaptive intervals until
 release is observed or the configured timeout expires. Isolated runner
 eviction requires a confirmed stopped process plus safe observed memory. Core
 `/free` cleanup requires an actual observed RAM/VRAM increase from the
-pre-cleanup baseline before residency is cleared. The defaults are:
+pre-cleanup baseline before residency is cleared. Free VRAM and free RAM are
+judged independently and either increase counts as an observed release: a
+`/free` may release RAM-cached models without moving VRAM (idle GPU), or
+release VRAM while the Python allocator retains process RSS. The existence of
+VRAM stats never prevents RAM from being checked. The defaults are:
 
 - `NOOFY_MEMORY_RELEASE_TIMEOUT_SECONDS=8`
 - `NOOFY_MEMORY_RELEASE_INITIAL_POLL_INTERVAL_SECONDS=0.1`
 - `NOOFY_MEMORY_RELEASE_MAX_POLL_INTERVAL_SECONDS=1.0`
 
+Every release check records measurement proof in its result and diagnostics:
+the baseline free RAM/VRAM captured before cleanup, the final free RAM/VRAM
+observed before the decision, and — when the check gives up — the named unmet
+constraints (`ram_below_required`, `vram_below_required`,
+`memory_pressure_high`, `no_observed_memory_drop`). A block can never silently
+rest on a single metric.
+
 Core warm residency is cleared only after confirmed release. If observation is
 unavailable or release times out, Noofy preserves attribution, marks the runner
-`release_failed`, and reports `memory_cleanup_failed`.
+`release_failed`, and reports `memory_cleanup_failed` — with one deliberate,
+narrow exception described next.
+
+### Narrow Same-Core Cautious Start (`ACKNOWLEDGED_UNCONFIRMED`)
+
+When the cleanup target is exactly the always-on core runner that will run the
+next workflow in the same process, a strict free-RAM threshold of
+`next_workflow_peak + margin` can be structurally unreachable: the reused
+process keeps its own allocator RSS floor while it stays alive. For this case
+only, an acknowledged `/free` whose release is unobservable resolves to
+`ACKNOWLEDGED_UNCONFIRMED` and the run cautious-starts instead of hard-blocking.
+
+This is an honesty-preserving policy, not a loophole:
+
+- No release is claimed: the eviction reservation is rolled back, residency and
+  attribution stay intact, and the runner is never marked `release_failed`.
+- It applies only when all of the following hold: the evict set is exactly the
+  selected core runner, no peer runner is co-resident, no runner is active, the
+  workflow has no recent trusted local memory failure, and no memory pressure
+  is attributed to external processes. Any disqualifier falls back to strict
+  confirmation and blocks on timeout.
+- ComfyUI remains the final authority: if the cautious-started run truly lacks
+  memory, its failure is recorded as a trusted local memory failure, which
+  disqualifies the narrow path on the next attempt.
+
+Tests covering this policy live in `backend/tests/test_runner_supervisor.py`
+(`test_same_core_unconfirmed_free_*`,
+`test_same_core_cautious_start_rejected_*`,
+`test_non_narrow_cleanup_without_observer_still_blocks`,
+`test_isolated_runner_cleanup_timeout_still_blocks`).
 
 Compatibility responses may retain `EngineJob.status = "blocked_by_memory"`,
 while `memory_status.state` exposes the precise backend condition:

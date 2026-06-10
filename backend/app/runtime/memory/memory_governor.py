@@ -2152,29 +2152,32 @@ def _free_memory_increased(
 
     VRAM and RAM are judged independently and either increase counts: a core
     `/free` may release RAM-cached models without moving VRAM (idle GPU), or
-    release VRAM while the Python allocator retains process RSS. Each metric
+    release VRAM while the Python allocator retains process RSS. The existence
+    of VRAM stats must never prevent RAM from being checked. Each metric
     compares against the pre-cleanup baseline when that baseline value exists,
     otherwise against the previous poll.
     """
-    return any(
-        current is not None and reference is not None and current > reference
-        for current, reference in [
-            (
-                snapshot.free_vram_mb,
-                baseline_snapshot.free_vram_mb
-                if baseline_snapshot is not None
-                and baseline_snapshot.free_vram_mb is not None
-                else previous_free_vram_mb,
-            ),
-            (
-                snapshot.free_ram_mb,
-                baseline_snapshot.free_ram_mb
-                if baseline_snapshot is not None
-                and baseline_snapshot.free_ram_mb is not None
-                else previous_free_ram_mb,
-            ),
-        ]
+    vram_reference = (
+        baseline_snapshot.free_vram_mb
+        if baseline_snapshot is not None and baseline_snapshot.free_vram_mb is not None
+        else previous_free_vram_mb
     )
+    ram_reference = (
+        baseline_snapshot.free_ram_mb
+        if baseline_snapshot is not None and baseline_snapshot.free_ram_mb is not None
+        else previous_free_ram_mb
+    )
+    vram_increased = (
+        snapshot.free_vram_mb is not None
+        and vram_reference is not None
+        and snapshot.free_vram_mb > vram_reference
+    )
+    ram_increased = (
+        snapshot.free_ram_mb is not None
+        and ram_reference is not None
+        and snapshot.free_ram_mb > ram_reference
+    )
+    return vram_increased or ram_increased
 
 
 def memory_release_satisfied(

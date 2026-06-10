@@ -2301,6 +2301,103 @@ async def test_same_core_unconfirmed_free_keeps_residency_and_does_not_report_re
     assert core_after.observed_execution_peak_vram_mb == 6000
 
 
+async def _same_core_unconfirmed_release(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    recent_memory_error: bool = False,
+    pressure_reasons: list[str] | None = None,
+) -> tuple[Any, Any]:
+    """Run the same-core `/free` scenario from the residency test above with a
+    narrow-path disqualifier applied, returning (release_check, supervisor)."""
+    adapter = RecordingAdapter()
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    core_before = supervisor.core_runner()
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="unknown_memory_class_denies_co_residence",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=5000,
+            estimated_peak_ram_mb=11000,
+            recent_memory_error=recent_memory_error,
+        ),
+        machine_snapshot=MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=500,
+            memory_pressure=MemoryPressureLevel.LOW,
+            pressure_reasons=pressure_reasons or [],
+        ),
+        runner_snapshots=[RunnerMemorySnapshot.from_descriptor(core_before)],
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="same_core_guard_test",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    assert cleaned_up is True
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision,
+        selected_runner_id=CORE_RUNNER_ID,
+    )
+    return release, supervisor
+
+
+@pytest.mark.anyio
+async def test_same_core_cautious_start_rejected_after_recent_memory_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A workflow with a recent trusted memory failure must not cautious-start
+    # on an unconfirmed `/free`: the narrow path would hide a real OOM risk.
+    release, supervisor = await _same_core_unconfirmed_release(
+        monkeypatch,
+        recent_memory_error=True,
+    )
+
+    assert release.status is MemoryReleaseStatus.TIMEOUT
+    assert release.status is not MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
+
+
+@pytest.mark.anyio
+async def test_same_core_cautious_start_rejected_under_external_process_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Memory pressure attributed to processes outside Noofy disqualifies the
+    # narrow cautious-start: an unconfirmed `/free` cannot answer for memory
+    # held by other applications, so strict confirmation must block.
+    release, supervisor = await _same_core_unconfirmed_release(
+        monkeypatch,
+        pressure_reasons=["external_process_rss_dominant"],
+    )
+
+    assert release.status is MemoryReleaseStatus.TIMEOUT
+    assert release.status is not MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
+
+
 @pytest.mark.anyio
 async def test_isolated_runner_cleanup_timeout_still_blocks(
     monkeypatch: pytest.MonkeyPatch,
