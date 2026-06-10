@@ -1206,6 +1206,17 @@ _MEMORY_ESTIMATE_SOURCE_RANK = {
     RunnerMemoryEstimateSource.UNKNOWN: 0,
 }
 
+# Raw class strength (heavier is stronger). Used to keep same-source evidence
+# from downgrading a runner to a lighter class. Note this is the raw class, not
+# `_effective_memory_class`, so MEDIUM and HEAVY remain distinguishable.
+_MEMORY_CLASS_STRENGTH = {
+    RunnerMemoryClass.GPU_HEAVY: 4,
+    RunnerMemoryClass.GPU_MEDIUM: 3,
+    RunnerMemoryClass.GPU_LIGHT: 2,
+    RunnerMemoryClass.CPU_ONLY: 1,
+    RunnerMemoryClass.UNKNOWN: 0,
+}
+
 
 def _runner_memory_classification_update(
     descriptor: RunnerDescriptor,
@@ -1217,10 +1228,18 @@ def _runner_memory_classification_update(
     """Return descriptor updates that set the runner's memory classification
     without downgrading stronger evidence with weaker evidence.
 
-    Local-observed beats creator-observed beats declared beats heuristic beats
-    unknown. An UNKNOWN runner is replaced by any useful admitted estimate; a
-    runner already classified by stronger evidence keeps that class when a weaker
-    estimate (e.g. a smaller creator observation for the next workflow) arrives.
+    Rules:
+
+    * UNKNOWN is replaced by any useful class, but a useful class is never
+      replaced by UNKNOWN.
+    * Stronger source evidence (local-observed > creator-observed > declared >
+      heuristic > unknown) replaces weaker source evidence.
+    * Weaker source evidence never overwrites stronger source evidence.
+    * Equal-source evidence may update confidence and a same/heavier class, but
+      must not downgrade the class to a lighter one (e.g. local-observed heavy
+      stays heavy when a later smaller run is observed). The supported way to
+      legitimately re-classify lighter is to clear residency first, which resets
+      the class to UNKNOWN (see `confirm_runner_memory_released`).
     """
     if memory_class is None or source is None:
         return {}
@@ -1234,6 +1253,14 @@ def _runner_memory_classification_update(
     incoming_rank = _MEMORY_ESTIMATE_SOURCE_RANK.get(source, 0)
     existing_rank = _MEMORY_ESTIMATE_SOURCE_RANK.get(descriptor.memory_estimate_source, 0)
     if incoming_rank < existing_rank:
+        return {}
+    if (
+        incoming_rank == existing_rank
+        and descriptor.memory_class is not RunnerMemoryClass.UNKNOWN
+        and _MEMORY_CLASS_STRENGTH.get(memory_class, 0)
+        < _MEMORY_CLASS_STRENGTH.get(descriptor.memory_class, 0)
+    ):
+        # Same-strength evidence must not downgrade to a lighter class.
         return {}
     return {
         "memory_class": memory_class,

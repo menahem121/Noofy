@@ -2374,6 +2374,128 @@ async def test_isolated_runner_cleanup_timeout_still_blocks(
     assert release.status is not MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
 
 
+@pytest.mark.anyio
+async def test_same_core_unconfirmed_free_without_observer_cautious_starts() -> None:
+    # memory_observer is None in the narrow same-core case: `/free` was
+    # acknowledged, so cautious-start honestly (ACKNOWLEDGED_UNCONFIRMED) and
+    # preserve residency rather than blocking or claiming a confirmed release.
+    adapter = RecordingAdapter()
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    service.memory_observer = None
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+    )
+    core_before = supervisor.core_runner()
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="unknown_memory_class_denies_co_residence",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=5000,
+        ),
+        runner_snapshots=[RunnerMemorySnapshot.from_descriptor(core_before)],
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="same_core_no_observer",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision,
+        selected_runner_id=CORE_RUNNER_ID,
+    )
+
+    assert cleaned_up is True
+    assert adapter.release_memory_calls == 1
+    assert release.status is MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+    assert release.reason_code == "cleanup_acknowledged_unconfirmed"
+    core_after = supervisor.core_runner()
+    assert core_after.status is not RunnerStatus.RELEASE_FAILED
+    assert core_after.last_workflow_id == "workflow-a"
+    assert core_after.observed_execution_peak_vram_mb == 6000
+
+
+@pytest.mark.anyio
+async def test_non_narrow_cleanup_without_observer_still_blocks() -> None:
+    # memory_observer is None but a peer runner is present, so this is not the
+    # narrow same-core case: strict behavior must block (UNAVAILABLE / failed).
+    adapter = RecordingAdapter()
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    service.memory_observer = None
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+    )
+    core_before = supervisor.core_runner()
+    peer_snapshot = RunnerMemorySnapshot(
+        runner_id="peer-runner",
+        kind=RunnerKind.ISOLATED_COMFYUI,
+    )
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="insufficient_vram_margin",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=5000,
+        ),
+        runner_snapshots=[
+            RunnerMemorySnapshot.from_descriptor(core_before),
+            peer_snapshot,
+        ],
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="non_narrow_no_observer",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision,
+        selected_runner_id=CORE_RUNNER_ID,
+    )
+
+    assert cleaned_up is True
+    assert release.status is MemoryReleaseStatus.UNAVAILABLE
+    assert release.status is not MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
+
+
 def test_runner_memory_classification_update_does_not_downgrade_stronger_evidence() -> None:
     heavy_local = _core_descriptor().model_copy(
         update={
@@ -2401,6 +2523,30 @@ def test_runner_memory_classification_update_does_not_downgrade_stronger_evidenc
             confidence=RunnerMemoryEstimateConfidence.HIGH,
         )
         == {}
+    )
+    # Equal-rank (local-observed) evidence must not downgrade heavy to medium
+    # just because a later smaller run was observed.
+    assert (
+        _runner_memory_classification_update(
+            heavy_local,
+            memory_class=RunnerMemoryClass.GPU_MEDIUM,
+            source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+        )
+        == {}
+    )
+    # Equal-rank evidence with a same/heavier class is allowed (and may update
+    # confidence).
+    same_or_heavier = _runner_memory_classification_update(
+        heavy_local,
+        memory_class=RunnerMemoryClass.GPU_HEAVY,
+        source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+        confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+    )
+    assert same_or_heavier["memory_class"] is RunnerMemoryClass.GPU_HEAVY
+    assert (
+        same_or_heavier["memory_estimate_confidence"]
+        is RunnerMemoryEstimateConfidence.MEDIUM
     )
 
     unknown_runner = _core_descriptor()
@@ -2459,6 +2605,16 @@ def test_confirm_release_clears_residency_and_stale_execution_peaks() -> None:
     assert core.observed_execution_peak_ram_mb is None
     assert core.memory_class is RunnerMemoryClass.UNKNOWN
     assert core.memory_estimate_source is RunnerMemoryEstimateSource.UNKNOWN
+
+    # After residency is cleared, a new useful estimate can classify the runner
+    # again (even a lighter one), because the stale heavy class was reset.
+    reclassified = _runner_memory_classification_update(
+        core,
+        memory_class=RunnerMemoryClass.GPU_MEDIUM,
+        source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+        confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+    )
+    assert reclassified["memory_class"] is RunnerMemoryClass.GPU_MEDIUM
 
 
 @pytest.mark.anyio

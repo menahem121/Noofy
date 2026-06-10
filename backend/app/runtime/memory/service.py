@@ -526,21 +526,6 @@ class MemoryGovernorService:
             _PendingMemoryRelease(),
         )
         reservation_tokens = pending_release.reservation_tokens
-        if self.memory_observer is None:
-            release_check = MemoryReleaseCheckResult(
-                status=MemoryReleaseStatus.UNAVAILABLE,
-                reason_code="memory_observer_unavailable",
-                timeline=[{"state": "observer_unavailable"}],
-            )
-            self._finalize_release_reservations(reservation_tokens, released=False)
-            return release_check
-        if decision.workflow_estimate is None:
-            self._finalize_release_reservations(reservation_tokens, released=False)
-            return MemoryReleaseCheckResult(
-                status=MemoryReleaseStatus.UNAVAILABLE,
-                reason_code="memory_estimate_unavailable",
-                timeline=[{"state": "observer_unavailable", "error": "memory_estimate_unavailable"}],
-            )
 
         # Narrow same-process core `/free` path: the always-on core process is
         # being cleaned and then reused by this same workflow. It can never reach
@@ -552,7 +537,20 @@ class MemoryGovernorService:
         narrow_same_core = pending_release.same_process_free_only and (
             self._narrow_same_core_cautious_start_ok(decision, selected_runner_id)
         )
+
         if narrow_same_core:
+            if self.memory_observer is None:
+                # No observer to confirm with, but `/free` was acknowledged in the
+                # narrow same-core case. Cautious-start honestly: do not claim a
+                # release and do not clear residency.
+                self._release_reservations_keep_residency(reservation_tokens)
+                release_check = MemoryReleaseCheckResult(
+                    status=MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED,
+                    reason_code="cleanup_acknowledged_unconfirmed",
+                    timeline=[{"state": "observer_unavailable"}],
+                )
+                self._log_release_check(decision, release_check, narrow_same_core=True)
+                return release_check
             release_check = await wait_for_memory_release_async(
                 self.memory_observer,
                 required_free_vram_mb=None,
@@ -580,6 +578,24 @@ class MemoryGovernorService:
                 )
             self._log_release_check(decision, release_check, narrow_same_core=True)
             return release_check
+
+        # Non-narrow cleanup keeps strict confirmation: an absent observer or
+        # estimate must not let the run proceed.
+        if self.memory_observer is None:
+            release_check = MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.UNAVAILABLE,
+                reason_code="memory_observer_unavailable",
+                timeline=[{"state": "observer_unavailable"}],
+            )
+            self._finalize_release_reservations(reservation_tokens, released=False)
+            return release_check
+        if decision.workflow_estimate is None:
+            self._finalize_release_reservations(reservation_tokens, released=False)
+            return MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.UNAVAILABLE,
+                reason_code="memory_estimate_unavailable",
+                timeline=[{"state": "observer_unavailable", "error": "memory_estimate_unavailable"}],
+            )
 
         required_free_vram_mb = _required_free_after_cleanup(
             _estimated_vram_after_cleanup(decision),
