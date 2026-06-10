@@ -26,7 +26,12 @@ from app.runtime.dependencies.isolation import (
     TrustLevel,
 )
 from app.runtime.manager import RuntimeManager
-from app.runtime.comfyui.launch_settings import comfyui_preview_args
+from app.runtime.comfyui.launch_settings import (
+    comfyui_attention_args,
+    comfyui_precision_args,
+    comfyui_preview_args,
+    comfyui_vram_args,
+)
 from app.runtime.memory.memory_governor import (
     MemoryDecisionAction,
     MemoryReleaseStatus,
@@ -902,7 +907,7 @@ class WorkflowRunnerLifecycleService:
                 "Prepared runtime smoke test has not passed: "
                 f"{install_state.smoke_test_status.value}"
             )
-        return _workflow_runner_launch_spec(
+        spec = _workflow_runner_launch_spec(
             capsule_lock,
             dependency_env_path=dependency_env_path,
             runner_workspace_path=runner_workspace_path,
@@ -910,6 +915,14 @@ class WorkflowRunnerLifecycleService:
             runner_workspace_fingerprint=runner_workspace_fingerprint,
             runtime_manager=self.runtime_manager,
         )
+        self.log_store.add(
+            "info",
+            "Effective workflow runner launch configuration",
+            "workflow.runtime",
+            workflow_id=capsule_lock.workflow.package_id,
+            details=_effective_launch_diagnostics(capsule_lock, spec),
+        )
+        return spec
 
     def _install_payload(
         self,
@@ -1031,6 +1044,11 @@ def _workflow_runner_launch_spec(
             capsule_lock.runtime.preview_size,
         )
     )
+    extra_args.extend(comfyui_vram_args(capsule_lock.runtime.vram_mode))
+    extra_args.extend(comfyui_attention_args(capsule_lock.runtime.attention_backend))
+    extra_args.extend(comfyui_precision_args(capsule_lock.runtime.precision_policy))
+    if capsule_lock.runtime.gpu_backend.lower() == "cpu" and "--cpu" not in extra_args:
+        extra_args.append("--cpu")
     if not capsule_lock.custom_nodes:
         extra_args.append("--disable-all-custom-nodes")
     return RunnerLaunchSpec(
@@ -1054,12 +1072,47 @@ def _workflow_runner_launch_spec(
         extra_args=extra_args,
         memory_telemetry_path=telemetry_path,
         env={
+            # Profile-authored environment first; Noofy identity keys win.
+            **capsule_lock.runtime.noofy_environment,
             "NOOFY_CAPSULE_FINGERPRINT": capsule_lock.runtime.capsule_fingerprint,
             "NOOFY_DEPENDENCY_ENV_PATH": str(dependency_env_path),
             "NOOFY_RUNNER_WORKSPACE_PATH": str(runner_workspace_path),
             "NOOFY_WORKFLOW_ID": capsule_lock.workflow.package_id,
         },
     )
+
+
+def _effective_launch_diagnostics(
+    capsule_lock: CapsuleLock,
+    spec: RunnerLaunchSpec,
+) -> dict[str, object]:
+    """Developer diagnostics for debugging speed, output, and dependency issues."""
+    runtime = capsule_lock.runtime
+    return {
+        "runner_id": spec.runner_id,
+        "runtime_profile_id": runtime.runtime_profile_id,
+        "runtime_profile_variant_id": runtime.runtime_profile_variant_id,
+        "runtime_profile_manifest_hash": runtime.runtime_profile_manifest_hash,
+        "comfyui_version": capsule_lock.engine.comfyui_version,
+        "comfyui_core_source_hash": capsule_lock.engine.core_source_hash,
+        "python_version": runtime.python_version,
+        "python_build_id": runtime.python_build_id,
+        "gpu_backend": runtime.gpu_backend,
+        # Torch version/build are pinned per profile variant; the dependency
+        # env fingerprint covers the exact torch wheel build tag.
+        "dependency_env_fingerprint": runtime.dependency_env_fingerprint,
+        "launch_args": list(spec.extra_args),
+        "attention_backend": runtime.attention_backend,
+        "effective_attention": (
+            "comfyui_auto"
+            if runtime.attention_backend == "auto"
+            else runtime.attention_backend
+        ),
+        "vram_mode": runtime.vram_mode,
+        "precision_policy": runtime.precision_policy,
+        "noofy_environment": dict(runtime.noofy_environment),
+        "memory_class": spec.memory_class.value,
+    }
 
 
 def _runtime_python_executable(runtime_manager: RuntimeManager) -> str:

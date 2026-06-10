@@ -5,10 +5,18 @@ import pytest
 from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.comfyui.launch_settings import (
+    LAUNCH_DEFAULT_EMITTED_AS_ARGS,
+    LAUNCH_DEFAULT_EMITTED_AS_ENV,
+    LAUNCH_DEFAULT_FINGERPRINT_ONLY,
+    RUNTIME_LAUNCH_DEFAULTS_FIELD_BEHAVIOR,
     ComfyUILaunchSettings,
     ComfyUILaunchSettingsStore,
+    comfyui_attention_args,
+    comfyui_precision_args,
     comfyui_preview_args,
+    comfyui_vram_args,
 )
+from app.runtime.profiles.profiles import RuntimeLaunchDefaults
 
 
 class FakeRuntimeManager:
@@ -86,6 +94,50 @@ def test_comfyui_preview_args_default_to_auto_512() -> None:
 
     with pytest.raises(ValueError, match="Unsupported ComfyUI preview size"):
         comfyui_preview_args("auto", 0)
+
+
+def test_comfyui_attention_args_map_profile_backends_to_flags() -> None:
+    assert comfyui_attention_args() == []
+    assert comfyui_attention_args("auto") == []
+    assert comfyui_attention_args("pytorch_sdpa") == ["--use-pytorch-cross-attention"]
+
+    with pytest.raises(ValueError, match="Unsupported ComfyUI attention backend"):
+        comfyui_attention_args("flash_attn_direct")
+
+
+def test_comfyui_precision_args_allow_only_quality_neutral_auto() -> None:
+    assert comfyui_precision_args() == []
+    assert comfyui_precision_args("auto") == []
+
+    with pytest.raises(ValueError, match="Unsupported ComfyUI precision policy"):
+        comfyui_precision_args("force_fp16")
+
+
+def test_comfyui_vram_args_accept_profile_auto_as_no_flag() -> None:
+    assert comfyui_vram_args("auto") == []
+    assert comfyui_vram_args("cpu") == ["--cpu"]
+
+    with pytest.raises(ValueError, match="Unsupported ComfyUI VRAM mode"):
+        comfyui_vram_args("turbo")
+
+
+def test_every_runtime_launch_default_field_is_emitted_or_fingerprint_only() -> None:
+    """No RuntimeLaunchDefaults field may silently become fingerprint-only."""
+    registered = set(RUNTIME_LAUNCH_DEFAULTS_FIELD_BEHAVIOR)
+    model_fields = set(RuntimeLaunchDefaults.model_fields)
+
+    assert registered == model_fields, (
+        "RuntimeLaunchDefaults fields and RUNTIME_LAUNCH_DEFAULTS_FIELD_BEHAVIOR "
+        "are out of sync. Register new fields as emitted launch args/env, or "
+        f"explicitly mark them fingerprint-only. Unregistered: {model_fields - registered}; "
+        f"stale: {registered - model_fields}."
+    )
+    allowed = {
+        LAUNCH_DEFAULT_EMITTED_AS_ARGS,
+        LAUNCH_DEFAULT_EMITTED_AS_ENV,
+        LAUNCH_DEFAULT_FINGERPRINT_ONLY,
+    }
+    assert set(RUNTIME_LAUNCH_DEFAULTS_FIELD_BEHAVIOR.values()) <= allowed
 
 
 @pytest.mark.anyio

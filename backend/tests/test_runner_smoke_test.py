@@ -982,6 +982,36 @@ async def test_dependency_import_smoke_reports_import_failure(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
+async def test_dependency_import_smoke_reports_unsupported_accelerator_friendly(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_workspace(tmp_path)
+    python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("# fake python\n", encoding="utf-8")
+    (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
+        json.dumps({"wheels": [{"name": "needs-accel", "relationship": "direct"}]}),
+        encoding="utf-8",
+    )
+
+    async def command_runner(command: list[str], prepared_workspace):
+        return 1, (
+            "Traceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'xformers.ops'"
+        )
+
+    result = await _check_dependency_imports_with_runner(
+        prepared, command_runner=command_runner
+    )
+
+    assert result.status is SmokeStageStatus.FAILED
+    assert "accelerator package 'xformers'" in result.message
+    assert "not supported by Noofy's stable runtime" in result.message
+    assert result.details["unsupported_accelerator"] == "xformers"
+    assert "ModuleNotFoundError" in result.details["output"]
+
+
+@pytest.mark.anyio
 async def test_runner_smoke_tester_does_not_start_runner_when_dependency_smoke_fails(
     tmp_path: Path,
 ) -> None:

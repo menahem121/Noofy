@@ -425,3 +425,140 @@ def _capsule_data(dependency_lock_hash: str) -> dict:
         "models": [],
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }
+
+
+def _quarantined_source_policy() -> SourcePolicy:
+    return SourcePolicy(
+        trust_level="quarantined_community",
+        source_policy="explicit_opt_in_and_isolated_capsule_required",
+        package_source_type="noofy_archive_import",
+        automatic_preparation_allowed=True,
+        allowed_source_origins=["explicit-metadata"],
+        model_source_trust="hashed",
+        community_preparation_opt_in_required=True,
+        community_preparation_opted_in=True,
+    )
+
+
+def _resolution_request(tmp_path: Path) -> DependencyResolutionRequest:
+    return DependencyResolutionRequest(
+        source_dirs=custom_node_dependency_source_dirs(tmp_path / "source-files"),
+        runtime_profile_id="noofy-comfyui-v1-default",
+        runtime_profile_variant_id="darwin-arm64-mps",
+        runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+        install_policy_version=DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
+        python_version="3.13",
+        python_platform="aarch64-apple-darwin",
+        workflow_id="workflow",
+        source_policy=_quarantined_source_policy(),
+    )
+
+
+def test_uv_resolver_strips_unsupported_accelerators_and_core_packages(
+    tmp_path: Path,
+) -> None:
+    wheel_bytes = b"wheel bytes"
+    digest = hashlib.sha256(wheel_bytes).hexdigest()
+    custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
+    custom_node.mkdir(parents=True)
+    (custom_node / "requirements.txt").write_text(
+        "xformers>=0.0.20\ntorch==2.0.1\ndemo>=1\n", encoding="utf-8"
+    )
+    compiled_inputs: list[str] = []
+
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        if command == ["uv", "--version"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="uv 0.9.0\n", stderr=""
+            )
+        assert command[:3] == ["uv", "pip", "compile"]
+        compiled_inputs.append(Path(command[3]).read_text(encoding="utf-8"))
+        output_path = Path(command[command.index("--output-file") + 1])
+        # uv resolves demo plus a transitive torch pulled in by demo.
+        output_path.write_text(
+            f"demo==1.0.0 \\\n    --hash=sha256:{digest}\n"
+            f"torch==2.6.0 \\\n    --hash=sha256:{digest}\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    log_store = LogStore()
+    resolver = UvDependencyLockResolver(
+        wheel_cache_dir=tmp_path / "wheel-cache",
+        work_dir=tmp_path / "transactions",
+        package_index_client=_FakePackageIndexClient(wheel_bytes),
+        command_runner=runner,
+        log_store=log_store,
+    )
+
+    lock = resolver.resolve(_resolution_request(tmp_path))
+
+    assert [wheel.name for wheel in lock.wheels] == ["demo"]
+    assert compiled_inputs == ["demo>=1\n"]
+
+    events = [
+        event
+        for event in log_store.list_events(limit=50).events
+        if "Skipped custom-node dependencies" in event.message
+    ]
+    assert len(events) == 1
+    ignored = events[0].details["ignored_dependencies"]
+    by_name_reason = {(entry["name"], entry["reason"]) for entry in ignored}
+    assert ("xformers", "unsupported_accelerator") in by_name_reason
+    assert ("torch", "provided_by_core_runtime") in by_name_reason
+    direct_torch = [
+        entry
+        for entry in ignored
+        if entry["name"] == "torch" and entry["source_file"] is not None
+    ]
+    transitive_torch = [
+        entry
+        for entry in ignored
+        if entry["name"] == "torch" and entry["source_file"] is None
+    ]
+    assert direct_torch and transitive_torch
+
+
+def test_uv_resolver_skips_uv_when_only_unsupported_dependencies(
+    tmp_path: Path,
+) -> None:
+    custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
+    custom_node.mkdir(parents=True)
+    (custom_node / "requirements.txt").write_text(
+        "xformers\nflash_attn>=2\nsageattention\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command == ["uv", "--version"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="uv 0.9.0\n", stderr=""
+            )
+        raise AssertionError("uv pip compile must not run for fully ignored input")
+
+    log_store = LogStore()
+    resolver = UvDependencyLockResolver(
+        wheel_cache_dir=tmp_path / "wheel-cache",
+        work_dir=tmp_path / "transactions",
+        package_index_client=_FakePackageIndexClient(b"wheel bytes"),
+        command_runner=runner,
+        log_store=log_store,
+    )
+
+    lock = resolver.resolve(_resolution_request(tmp_path))
+
+    assert lock.wheels == []
+    assert commands == [["uv", "--version"]]
+    events = [
+        event
+        for event in log_store.list_events(limit=50).events
+        if "Skipped custom-node dependencies" in event.message
+    ]
+    assert len(events) == 1
+    names = {entry["name"] for entry in events[0].details["ignored_dependencies"]}
+    assert names == {"xformers", "flash-attn", "sageattention"}

@@ -1,6 +1,6 @@
 # Runtime Isolation Architecture
 
-Date: 2026-04-30 (initial), updated 2026-05-04 to reflect the implemented state.
+Date: 2026-04-30 (initial), updated 2026-05-04 to reflect the implemented state, updated 2026-06-10 for launch defaults and the custom-node accelerator dependency policy.
 
 Status: Accepted and implemented for the locked/bundled, registry-resolved, and trust/policy scope. Operational distribution of production trust roots and a full in-app marketplace UI remain future product work.
 
@@ -58,6 +58,8 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Runtime profile catalog | [backend/app/runtime/profiles/profiles.py](../backend/app/runtime/profiles/profiles.py), [backend/app/runtime/profiles/profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) |
 | Pinned core-node manifest | [backend/app/runtime/core_node_manifest.json](../backend/app/runtime/core_node_manifest.json) |
 | Dependency lock + `uv` resolver, wheel cache | [backend/app/runtime/dependencies/dependency_lock.py](../backend/app/runtime/dependencies/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependencies/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependencies/dependency_env.py) |
+| Accelerator / core-package policy for custom-node dependencies | [backend/app/runtime/dependencies/accelerator_policy.py](../backend/app/runtime/dependencies/accelerator_policy.py) |
+| Runner launch-default → launch-arg mapping | [backend/app/runtime/comfyui/launch_settings.py](../backend/app/runtime/comfyui/launch_settings.py) |
 | Custom-node node-registry / non-bundled source resolution | [backend/app/runtime/node_registry.py](../backend/app/runtime/node_registry.py), [backend/app/runtime/dependencies/custom_nodes.py](../backend/app/runtime/dependencies/custom_nodes.py) |
 | Workspace materialization (custom nodes, model view) | [backend/app/runtime/storage/workspace_preparer.py](../backend/app/runtime/storage/workspace_preparer.py), [backend/app/runtime/storage/workspace_store.py](../backend/app/runtime/storage/workspace_store.py) |
 | Shared model store + runner-visible model views | [backend/app/runtime/models/model_store.py](../backend/app/runtime/models/model_store.py) |
@@ -92,12 +94,33 @@ A profile pins, at minimum:
 
 - ComfyUI core version + source hash + frontend version
 - Noofy-managed Python build ID
-- Torch version + wheel build tag, and GPU backend (`cuda`, `mps`, `cpu`, `directml`, …)
+- Torch version + wheel build tag, and GPU backend (`cuda`, `mps`, `cpu` today; `rocm`/`xpu` are candidate future variants — DirectML is deliberately not a target: `torch-directml` is capped at an old PyTorch and ComfyUI itself warns against it)
 - Core dependency lock hash (resolved transitive, with hashes)
 - Allowlisted launch-config surface (preview method, VRAM mode, attention backend, precision, enabled-nodes set, extra-paths mode, Noofy-controlled env vars)
 - Supported OS/architecture/backend matrix and install policy version
 
 Multiple profile families and variants are first-class in the schema, but **v1 ships exactly one profile family** with explicit platform/backend variants. Product profile generation requires a clean reproducible ComfyUI source artifact materialized under `runtime-store/core-engines/...`; generation directly from `third_party/comfyui/` is rejected for product use and only allowed as a development/package input. Definitions live in [profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) and [profiles.py](../backend/app/runtime/profiles/profiles.py).
+
+### Launch Defaults
+
+Variant `launch_defaults` are not metadata-only: they are copied into the capsule lock at import/refresh time and emitted as real ComfyUI launch arguments and process environment when an isolated runner starts ([launch_settings.py](../backend/app/runtime/comfyui/launch_settings.py), `_workflow_runner_launch_spec` in [lifecycle_service.py](../backend/app/runtime/runners/lifecycle_service.py)). The smoke launch uses the same spec builder, so validation always exercises the exact flags production runs.
+
+| Field | Behavior |
+|---|---|
+| `preview_method`, `preview_size` | `--preview-method` / `--preview-size` |
+| `vram_mode` | `auto` → no flag (ComfyUI decides); other modes map to ComfyUI VRAM flags |
+| `attention_backend` | `auto` → no flag (ComfyUI auto-selects); `pytorch_sdpa` → `--use-pytorch-cross-attention` |
+| `precision_policy` | `auto` only; any other value fails validation. ComfyUI precision flags (fp16/fp8 forcing) are quality-risk levers and are intentionally not mappable in the stable runtime |
+| `noofy_environment` | merged into the runner process env; Noofy identity keys always win |
+| `extra_model_paths_mode` | fingerprint-only: applied during workspace preparation, not at process launch |
+
+A registry in `launch_settings.py` plus a test (`test_every_runtime_launch_default_field_is_emitted_or_fingerprint_only`) force every `RuntimeLaunchDefaults` field to be either emitted or explicitly marked fingerprint-only, so a field can never silently become metadata-only again.
+
+Independent of `vram_mode`, variants with `gpu_backend_profile == "cpu"` always launch with `--cpu`. This matters on Apple Silicon, where the default macOS torch wheel includes MPS and ComfyUI would otherwise auto-select MPS even for the CPU fallback variant.
+
+**macOS MPS attention**: ComfyUI does not auto-enable PyTorch scaled-dot-product attention on MPS (its default there is sub-quadratic attention), so the `darwin-arm64-mps` variant pins `attention_backend: pytorch_sdpa`. Forcing an attention backend can change same-seed outputs, so any such change must ship as a profile-version change: it alters the profile manifest hash, capsule locks re-pin against the new catalog (imported workflows via `refresh_capsule_lock`), and runners re-prepare and re-smoke before activation. Never flip attention behavior outside the profile system.
+
+Every isolated runner launch records an "Effective workflow runner launch configuration" developer-diagnostics event with the profile identity, ComfyUI version/source hash, Python and GPU backend, the full launch args, and the attention/vram/precision values, for debugging speed and output changes.
 
 ## Layered Fingerprints
 
@@ -145,7 +168,7 @@ For verified or registry-resolved packages the resolver:
 1. Opens an install transaction.
 2. Verifies trust evidence (signature/registry metadata) and source policy before any download.
 3. Verifies every non-core node resolves to a pinned package + content hash.
-4. Resolves dependencies under the active policy and installs them with `uv` into a staged dependency env for the selected runtime-profile Python ABI.
+4. Resolves dependencies under the active policy and installs them with `uv` into a staged dependency env for the selected runtime-profile Python ABI. Unsupported accelerator packages and core-runtime packages are stripped from custom-node requirements before resolution (see "Custom-Node Accelerator And Core-Package Policy").
 5. Materializes bundled or cached custom-node sources into a staged runner workspace.
 6. Materializes a per-view model tree from the shared model store (hardlink → symlink → copy fallback).
 7. Runs the split smoke suite (dependency import, custom-node import, runner health, workflow execution).
@@ -153,6 +176,15 @@ For verified or registry-resolved packages the resolver:
 9. Quarantines failed staging directories with a bounded retention window; never mutates ready artifacts.
 
 Backend startup runs an idempotent sweep that quarantines stale transactions, kills orphan runner processes from a prior crash, removes stale PID/temp files, and expires old quarantines.
+
+## Custom-Node Accelerator And Core-Package Policy
+
+Community custom nodes may request packages that would change or break the validated runtime. The resolver applies a fixed policy ([accelerator_policy.py](../backend/app/runtime/dependencies/accelerator_policy.py)) to both direct requirements and transitively resolved packages:
+
+- **Unsupported accelerators** (`xformers`, `flash-attn`, `sageattention`, `sageattn3`, `triton`) are never installed from custom-node requirements in the stable runtime. ComfyUI auto-prefers these when present, so installing them would silently change the attention path — and therefore same-seed outputs — behind the user's back. A `DependencyResolutionRequest.allowed_accelerator_packages` hook exists for a future trusted profile that explicitly pins and validates one; nothing populates it today.
+- **Core runtime packages** (`torch`, `torchvision`, `torchaudio`, `numpy`) are provided by the managed runtime and are treated as already satisfied. A custom-node pin can never install a second torch into the dependency-env overlay where it could shadow the validated CUDA/MPS build.
+
+Stripping is silent for users: preparation continues, each ignored requirement is recorded only as a developer-diagnostics event ("Skipped custom-node dependencies that are not installable in the stable runtime", with package, requirement, source file, and reason), and the dependency-import / custom-node-registration / workflow smoke stages decide whether the workflow still works. If the custom node works without the package, the user sees nothing. If it truly requires it, smoke fails with a beginner-friendly unsupported-runtime message rather than a raw dependency error.
 
 ## Smoke Stages (gating `ready`)
 
@@ -164,6 +196,10 @@ Install state records a split `smoke_test_report`. A workflow becomes `ready` on
 4. **workflow execution** — when a fixture is declared, a real graph runs end-to-end and custom-node packages must exercise at least one declared custom-node type.
 
 For imported community workflows, absence of an execution smoke fixture is allowed only after all runtime inputs are fully resolved and the dependency-env, custom-node import, and runner-health stages pass inside the isolated runner. Workflows with unresolved runtime inputs (e.g. creator-local `LoadImage`) cannot reach `ready`; they stop at `prepared_needs_input_setup`.
+
+Failure messages from these stages are user-facing. When the dependency-env stage fails because an installed wheel imports a stripped accelerator package, the message names the accelerator and explains it is not supported by the stable runtime. When custom-node registration fails (missing node types in `/object_info`), the message stays beginner-friendly and generic — that stage sees only node metadata, so the precise cause (for example a custom node hard-importing a stripped accelerator) lives in developer diagnostics: the resolver's skipped-dependencies event plus ComfyUI startup logs.
+
+**Validation limit**: smoke proves the prepared runner boots, registers nodes, and executes a fixture. It does not prove numerical health on this machine's backend (no NaN / black-image guarantee), because that requires real models and real sampling, which cannot be assumed present at install time. Output-sanity checks are opportunistic, not gating.
 
 Real-hardware staged smoke is run with the Makefile validation target on the Linux validation host. Unit tests use lightweight/fake runner adapters.
 

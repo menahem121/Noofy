@@ -15,19 +15,19 @@
   "runtime": {
     "runtime_profile_id": "noofy-comfyui-v1-default",
     "runtime_profile_variant_id": "linux-x64-cuda130",
-    "runtime_profile_manifest_hash": "sha256:fc21f3c8d79afe72eee2788926b288aec1940514f7c4fd76ce6ec88bd6417c61",
+    "runtime_profile_manifest_hash": "sha256:e87b7e451e2466853d554717df5434509621671220082f01f50deb140c7e2a28",
     "runtime_profile_catalog_version": "0.1.0",
     "fingerprint_schema_version": "0.1.0",
-    "dependency_env_fingerprint": "sha256:4327158db7e3877a5206217c808bee9d1b8fc2131ef6d81974cf5daee154721f",
-    "runner_fingerprint": "sha256:ad8dfb53590684780e1b0a484e4d407b2506dfecb499dd16dc3ac6bb274fe465",
-    "capsule_fingerprint": "sha256:35dba56e043ffd0b01dd8057d5a20a78fe9b4ba93159675956761e8459f7bdc8",
+    "dependency_env_fingerprint": "sha256:028400895695061ed51c0dbd18866c15df734b2a280d86dd10137d000b542026",
+    "runner_fingerprint": "sha256:fd053fd203449f0d2ae75cb68dd4204d67e319a39a3a0fd40fc25eb67cdab7f6",
+    "capsule_fingerprint": "sha256:aad5e8a92966d9bedc205630cee745d958964944698bd012f96e7c8e3c4bfcfe",
     "os": "linux",
     "architecture": "x64",
     "python_version": "3.13",
     "python_build_id": "cpython-3.13-noofy-v1",
     "gpu_backend": "cuda",
     "dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
-    "runner_workspace_hash": "sha256:ad8dfb53590684780e1b0a484e4d407b2506dfecb499dd16dc3ac6bb274fe465"
+    "runner_workspace_hash": "sha256:fd053fd203449f0d2ae75cb68dd4204d67e319a39a3a0fd40fc25eb67cdab7f6"
   },
   "custom_nodes": [],
   "dependencies": {

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.accelerator_policy import ignored_dependency_reason
 from app.runtime.dependencies.dependency_lock import (
     DependencyDeclaration,
     DependencyPolicyError,
@@ -81,6 +82,10 @@ class DependencyResolutionRequest:
     python_platform: str | None
     workflow_id: str
     source_policy: SourcePolicy | None = None
+    # Normalized accelerator package names a trusted runtime profile explicitly
+    # pins and allows. Nothing populates this today; it exists so a future
+    # validated profile can opt in without changing the stripping policy.
+    allowed_accelerator_packages: tuple[str, ...] = ()
 
 
 class PackageIndexClient(Protocol):
@@ -124,7 +129,12 @@ class UvDependencyLockResolver:
         self.log_store = log_store
 
     def resolve(self, request: DependencyResolutionRequest) -> ResolvedDependencyLock:
+        allowed_accelerators = frozenset(request.allowed_accelerator_packages)
         declarations = self._discover_declarations(request.source_dirs)
+        declarations, ignored = _partition_supported_declarations(
+            declarations,
+            allowed_accelerator_packages=allowed_accelerators,
+        )
         direct_names = {
             _requirement_name(declaration.requirement) for declaration in declarations
         }
@@ -143,15 +153,24 @@ class UvDependencyLockResolver:
                 encoding="utf-8",
             )
             resolver = self._resolver_metadata(transaction_dir)
-            self._compile_requirements(
-                input_path,
-                compiled_path,
-                request=request,
-                cwd=transaction_dir,
+            if declarations:
+                self._compile_requirements(
+                    input_path,
+                    compiled_path,
+                    request=request,
+                    cwd=transaction_dir,
+                )
+                requirements = parse_uv_compiled_requirements(
+                    compiled_path.read_text(encoding="utf-8")
+                )
+            else:
+                requirements = []
+            requirements, transitive_ignored = _partition_supported_requirements(
+                requirements,
+                allowed_accelerator_packages=allowed_accelerators,
             )
-            requirements = parse_uv_compiled_requirements(
-                compiled_path.read_text(encoding="utf-8")
-            )
+            ignored.extend(transitive_ignored)
+            self._record_ignored_dependencies(request, ignored)
             wheels = [
                 self._wheel_from_requirement(
                     replace(
@@ -181,6 +200,25 @@ class UvDependencyLockResolver:
             return lock
         finally:
             shutil.rmtree(transaction_dir, ignore_errors=True)
+
+    def _record_ignored_dependencies(
+        self,
+        request: DependencyResolutionRequest,
+        ignored: list[dict[str, str | None]],
+    ) -> None:
+        if not ignored:
+            return
+        self.log_store.add(
+            "info",
+            "Skipped custom-node dependencies that are not installable in the stable runtime",
+            "runtime.dependency_resolver",
+            workflow_id=request.workflow_id,
+            details={
+                "runtime_profile_id": request.runtime_profile_id,
+                "runtime_profile_variant_id": request.runtime_profile_variant_id,
+                "ignored_dependencies": ignored,
+            },
+        )
 
     def _discover_declarations(
         self, source_dirs: list[Path]
@@ -422,6 +460,64 @@ def _requirement_name(requirement: str) -> str | None:
     if match is None:
         return None
     return normalize_package_name(match.group(1))
+
+
+def _partition_supported_declarations(
+    declarations: list[DependencyDeclaration],
+    *,
+    allowed_accelerator_packages: frozenset[str],
+) -> tuple[list[DependencyDeclaration], list[dict[str, str | None]]]:
+    """Split direct declarations into supported ones and ignored-policy records."""
+    supported: list[DependencyDeclaration] = []
+    ignored: list[dict[str, str | None]] = []
+    for declaration in declarations:
+        name = _requirement_name(declaration.requirement)
+        reason = (
+            ignored_dependency_reason(
+                name, allowed_accelerator_packages=allowed_accelerator_packages
+            )
+            if name is not None
+            else None
+        )
+        if reason is None:
+            supported.append(declaration)
+            continue
+        ignored.append(
+            {
+                "name": name,
+                "requirement": declaration.requirement,
+                "source_file": declaration.source_file,
+                "reason": reason,
+            }
+        )
+    return supported, ignored
+
+
+def _partition_supported_requirements(
+    requirements: list[ResolvedRequirement],
+    *,
+    allowed_accelerator_packages: frozenset[str],
+) -> tuple[list[ResolvedRequirement], list[dict[str, str | None]]]:
+    """Drop transitively resolved packages the stable runtime must not install."""
+    supported: list[ResolvedRequirement] = []
+    ignored: list[dict[str, str | None]] = []
+    for requirement in requirements:
+        name = normalize_package_name(requirement.name)
+        reason = ignored_dependency_reason(
+            name, allowed_accelerator_packages=allowed_accelerator_packages
+        )
+        if reason is None:
+            supported.append(requirement)
+            continue
+        ignored.append(
+            {
+                "name": name,
+                "requirement": f"{requirement.name}=={requirement.version}",
+                "source_file": None,
+                "reason": reason,
+            }
+        )
+    return supported, ignored
 
 
 def _platform_tags_from_wheel(filename: str) -> list[str]:

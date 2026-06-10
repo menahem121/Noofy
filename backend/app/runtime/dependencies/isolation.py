@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.runtime.comfyui.launch_settings import (
+    DEFAULT_COMFYUI_ATTENTION_BACKEND,
+    DEFAULT_COMFYUI_PRECISION_POLICY,
     DEFAULT_COMFYUI_PREVIEW_METHOD,
     DEFAULT_COMFYUI_PREVIEW_SIZE,
 )
@@ -111,6 +113,10 @@ class RuntimeIdentity(BaseModel):
     capsule_fingerprint: str = Field(min_length=1)
     preview_method: str = DEFAULT_COMFYUI_PREVIEW_METHOD
     preview_size: int = DEFAULT_COMFYUI_PREVIEW_SIZE
+    vram_mode: str = "auto"
+    attention_backend: str = DEFAULT_COMFYUI_ATTENTION_BACKEND
+    precision_policy: str = DEFAULT_COMFYUI_PRECISION_POLICY
+    noofy_environment: dict[str, str] = Field(default_factory=dict)
     os: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
     python_version: str = Field(min_length=1)

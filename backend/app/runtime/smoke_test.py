@@ -20,6 +20,10 @@ from uuid import uuid4
 import httpx
 
 from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.accelerator_policy import (
+    unsupported_accelerator_message,
+    unsupported_accelerator_module,
+)
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
     SmokeStageResult,
@@ -364,7 +368,11 @@ def _custom_node_import_stage(
     if missing:
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
-            message="Custom node types are missing from runner metadata.",
+            message=(
+                "This workflow needs an add-on that could not be loaded on this "
+                "computer's runtime. Developer diagnostics record why the add-on "
+                "did not register."
+            ),
             details={"missing_node_types": missing},
         )
     return SmokeStageResult(
@@ -594,6 +602,17 @@ async def _check_dependency_imports_with_runner(
         [str(python_path), "-c", script], prepared_workspace
     )
     if returncode != 0:
+        accelerator_module = unsupported_accelerator_module(output)
+        if accelerator_module is not None:
+            return SmokeStageResult(
+                status=SmokeStageStatus.FAILED,
+                message=unsupported_accelerator_message(accelerator_module),
+                details={
+                    "unsupported_accelerator": accelerator_module,
+                    "import_targets": import_targets,
+                    "output": output[-2000:],
+                },
+            )
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
             message="Dependency environment import smoke failed.",

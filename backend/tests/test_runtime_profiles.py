@@ -356,3 +356,26 @@ def _fake_clean_comfyui_source(source_dir: Path) -> Path:
     (source_dir / "comfy" / "__init__.py").write_text("", encoding="utf-8")
     (source_dir / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
     return source_dir
+
+
+def test_duplicate_runtime_data_files_stay_in_sync() -> None:
+    """Both copies of app-owned runtime data files must stay byte-identical.
+
+    Production loads app/runtime/profiles/profile_catalog.json and
+    app/runtime/dependencies/core_node_manifest.json; the app/runtime/ copies
+    are referenced by validation tooling and tests. A drift between copies
+    would make tooling validate a different runtime than the product ships.
+    """
+    for canonical, copy in (
+        (
+            Path("app/runtime/profiles/profile_catalog.json"),
+            Path("app/runtime/profile_catalog.json"),
+        ),
+        (
+            Path("app/runtime/dependencies/core_node_manifest.json"),
+            Path("app/runtime/core_node_manifest.json"),
+        ),
+    ):
+        assert json.loads(canonical.read_text(encoding="utf-8")) == json.loads(
+            copy.read_text(encoding="utf-8")
+        ), f"{canonical} and {copy} have drifted apart"

@@ -6,6 +6,7 @@ Isolated dependency environments for community workflows: custom nodes, lock fil
 
 | File | Owns |
 |------|------|
+| `accelerator_policy.py` | Which accelerator/core packages custom nodes may not install in the stable runtime |
 | `custom_nodes.py` | Custom node registry, node compatibility checks (`core_node_manifest.json`) |
 | `dependency_env.py` | Dependency environment setup and activation |
 | `dependency_lock.py` | `ResolvedDependencyLock` data model and hashing |
