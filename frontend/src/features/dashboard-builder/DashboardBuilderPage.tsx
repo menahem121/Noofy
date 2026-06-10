@@ -65,6 +65,8 @@ import {
   type WorkflowNode,
   type WorkflowNodeValue,
 } from "./dashboardBuilderContent";
+import { DEFAULT_SEED_MODE, SEED_MODES, SEED_MODE_LABELS, type SeedMode } from "../../lib/seedControl";
+import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
 interface DashboardBuilderPageProps {
   workflowId?: string;
@@ -1683,6 +1685,7 @@ function WidgetBehaviorFields({
   const allowedTypes = widgetTypesForKind(value.valueKind);
   const showSliderSettings = widget.widgetType === "slider";
   const showNumberRange = widget.widgetType === "int_field";
+  const showSeedSettings = widget.widgetType === "seed_widget";
   const showOptions = widget.widgetType === "select" || widget.widgetType === "lora_loader";
   const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
   const showFileOptions = widget.widgetType === "load_file";
@@ -1795,6 +1798,25 @@ function WidgetBehaviorFields({
             />
           </FieldRow>
         </div>
+      ) : null}
+
+      {showSeedSettings ? (
+        <FieldRow
+          label="After each generation"
+          hint="Controls how the seed changes after every run when people use this dashboard."
+        >
+          <select
+            className="builder-input"
+            value={widget.seedMode ?? DEFAULT_SEED_MODE}
+            onChange={(event) => onPatch({ seedMode: event.target.value as SeedMode })}
+          >
+            {SEED_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {SEED_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </FieldRow>
       ) : null}
 
       {showOptions ? (
@@ -2645,11 +2667,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
   }
 
   if (widget.widgetType === "int_field" || widget.widgetType === "seed_widget") {
+    const seedMode = widget.seedMode ?? DEFAULT_SEED_MODE;
+    const SeedModeIcon = SEED_MODE_ICONS[seedMode];
     return (
       <div className="preview-int">
         <input className="preview-input" readOnly type="text" value={String(widget.defaultValue ?? 0)} />
         {widget.widgetType === "seed_widget" ? (
-          <span className="preview-int__hint">Click to randomize</span>
+          <span className="preview-int__seed-mode" title={`After each run: ${SEED_MODE_LABELS[seedMode]}`}>
+            <SeedModeIcon size={14} aria-hidden="true" />
+          </span>
         ) : null}
       </div>
     );

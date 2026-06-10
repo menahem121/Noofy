@@ -117,6 +117,7 @@ import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel
 import { requiredModelTypeLabel } from "./requiredModelLabels";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
+import { nextSeedValue, seedModeFromValidation, type SeedMode } from "../../lib/seedControl";
 import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 
@@ -406,6 +407,27 @@ export function WorkflowRunPage({
     actionBarPositionOverride,
     setActionBarPositionOverride,
   } = useWorkflowUserState(workflowId, packageDefaults, dashboardVersion, inputIndex, dashboardLayoutIds, dashboardControlIds);
+
+  // Seed "control after generate" behavior. The default per seed input comes
+  // from the saved dashboard (validation.seed_mode); the runner can override it
+  // for the session via the dropdown on the seed control.
+  const seedDefaultModes = useMemo<Record<string, SeedMode>>(() => {
+    const modes: Record<string, SeedMode> = {};
+    for (const input of inputIndex.values()) {
+      if (input.control === "seed_widget") {
+        modes[input.id] = seedModeFromValidation(input.validation);
+      }
+    }
+    return modes;
+  }, [inputIndex]);
+  const [seedModeOverrides, setSeedModeOverrides] = useState<Record<string, SeedMode>>({});
+  const seedModes = useMemo(
+    () => ({ ...seedDefaultModes, ...seedModeOverrides }),
+    [seedDefaultModes, seedModeOverrides],
+  );
+  function handleSeedModeChange(inputId: string, mode: SeedMode) {
+    setSeedModeOverrides((current) => ({ ...current, [inputId]: mode }));
+  }
 
   const submittedInputValues = useMemo(
     () => normalizedLoraInputValues(state.packageData, inputValues),
@@ -701,6 +723,16 @@ export function WorkflowRunPage({
     let stopPreparationPolling: (() => void) | null = null;
     const runCount = clampBatchCount(batchCount);
     const submittedValuesSnapshot = { ...submittedInputValues };
+    // Seeds whose value should advance after each queued generation.
+    const runInputs: Record<string, unknown> = { ...submittedValuesSnapshot };
+    const advanceableSeedIds = Object.keys(seedDefaultModes).filter(
+      (id) => seedModes[id] !== "fixed" && typeof runInputs[id] === "number",
+    );
+    const persistAdvancedSeeds = () => {
+      for (const id of advanceableSeedIds) {
+        setInputValue(id, runInputs[id]);
+      }
+    };
     const outputPreferencesSnapshot = getOutputPreferencesSnapshot();
     const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
       state.packageData,
@@ -728,7 +760,7 @@ export function WorkflowRunPage({
     try {
       for (let index = 0; index < runCount; index += 1) {
         const response = await runWorkflow(workflowId, {
-          inputs: submittedValuesSnapshot,
+          inputs: { ...runInputs },
           options: {},
           output_preferences_snapshot: outputPreferencesSnapshot,
         });
@@ -755,20 +787,27 @@ export function WorkflowRunPage({
         }
 
         setSubmittedJob(response);
+        // A generation was queued — advance the seed(s) for the next one.
+        for (const id of advanceableSeedIds) {
+          runInputs[id] = nextSeedValue(runInputs[id], seedModes[id], inputIndex.get(id)?.validation);
+        }
         if (isTrackableJob(response)) {
           addTrackedRun(trackedRunFromJob(response));
         } else {
           stopPreparationPolling?.();
           finishRunSubmission();
           setRunPreparationDialog(null);
+          persistAdvancedSeeds();
           return;
         }
       }
       stopPreparationPolling?.();
       finishRunSubmission();
       setRunPreparationDialog(null);
+      persistAdvancedSeeds();
       void pollTrackedRunsDue(true);
     } catch (error) {
+      persistAdvancedSeeds();
       stopPreparationPolling?.();
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
@@ -1733,6 +1772,8 @@ export function WorkflowRunPage({
           livePreview={activeLivePreview}
           comparisonBeforeImageUrl={comparisonInputImageUrl}
           inputValues={inputValues}
+          seedModes={seedModes}
+          onSeedModeChange={handleSeedModeChange}
           outputPreferences={outputPreferences}
           gallerySaveByControlId={gallerySaveByControlId}
           layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
@@ -1830,6 +1871,8 @@ export function WorkflowRunPage({
               items={inputTopLevelItems}
               inputIndex={inputIndex}
               inputValues={inputValues}
+              seedModes={seedModes}
+              onSeedModeChange={handleSeedModeChange}
               onChange={(id, value) => setInputValue(id, value)}
               onImageUpload={handleImageUpload}
               onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
@@ -2356,6 +2399,8 @@ function DashboardInputControls({
   items,
   inputIndex,
   inputValues,
+  seedModes,
+  onSeedModeChange,
   onChange,
   onImageUpload,
   onGalleryImageMaskPrepare,
@@ -2369,6 +2414,8 @@ function DashboardInputControls({
   items: DashboardTopLevelControlItem[];
   inputIndex: Map<string, WorkflowInputDef>;
   inputValues: Record<string, unknown>;
+  seedModes: Record<string, SeedMode>;
+  onSeedModeChange: (inputId: string, mode: SeedMode) => void;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
   onGalleryImageMaskPrepare: (inputId: string, galleryItemId: string) => Promise<string>;
@@ -2394,6 +2441,8 @@ function DashboardInputControls({
                     control={control}
                     inputIndex={inputIndex}
                     inputValues={inputValues}
+                    seedModes={seedModes}
+                    onSeedModeChange={onSeedModeChange}
                     grouped
                     onChange={onChange}
                     onImageUpload={onImageUpload}
@@ -2416,6 +2465,8 @@ function DashboardInputControls({
             control={item.control}
             inputIndex={inputIndex}
             inputValues={inputValues}
+            seedModes={seedModes}
+            onSeedModeChange={onSeedModeChange}
             onChange={onChange}
             onImageUpload={onImageUpload}
             onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
@@ -2436,6 +2487,8 @@ function ClassicDashboardInputControl({
   control,
   inputIndex,
   inputValues,
+  seedModes,
+  onSeedModeChange,
   grouped = false,
   onChange,
   onImageUpload,
@@ -2450,6 +2503,8 @@ function ClassicDashboardInputControl({
   control: DashboardControlDef;
   inputIndex: Map<string, WorkflowInputDef>;
   inputValues: Record<string, unknown>;
+  seedModes: Record<string, SeedMode>;
+  onSeedModeChange: (inputId: string, mode: SeedMode) => void;
   grouped?: boolean;
   onChange: (id: string, value: unknown) => void;
   onImageUpload: (inputId: string, file: File) => Promise<void>;
@@ -2483,6 +2538,8 @@ function ClassicDashboardInputControl({
             value={value}
             hideLabel={grouped}
             loraBrowser={loraBrowserFor?.(control, input)}
+            seedMode={seedModes[input.id]}
+            onSeedModeChange={(mode) => onSeedModeChange(input.id, mode)}
             onChange={(v) => onChange(input.id, v)}
             onImageUpload={(file) => onImageUpload(input.id, file)}
             onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}

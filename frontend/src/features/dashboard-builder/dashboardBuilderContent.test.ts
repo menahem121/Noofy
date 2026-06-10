@@ -110,6 +110,60 @@ describe("toBackendPayload", () => {
     });
   });
 
+  it("writes the seed behavior mode into input validation", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-seed",
+          valueId: "node-7-seed",
+          binding: { nodeId: "7", inputName: "seed" },
+          widgetType: "seed_widget",
+          title: "Seed",
+          description: "",
+          defaultValue: 123,
+          seedMode: "increment",
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs[0]).toMatchObject({
+      id: "ctrl-seed",
+      control: "seed_widget",
+      default: 123,
+      validation: { seed_mode: "increment" },
+    });
+  });
+
+  it("defaults the seed behavior mode to randomize when unset", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-seed",
+          valueId: "node-7-seed",
+          binding: { nodeId: "7", inputName: "seed" },
+          widgetType: "seed_widget",
+          title: "Seed",
+          description: "",
+          defaultValue: 0,
+        },
+      ],
+    };
+
+    expect(toBackendPayload(schema).inputs[0].validation).toMatchObject({ seed_mode: "randomize" });
+  });
+
   it("preserves an intentional executable binding on an imported note", () => {
     const schema: DashboardSchema = {
       version: 1,

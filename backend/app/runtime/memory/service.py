@@ -32,6 +32,7 @@ from app.runtime.memory.memory_governor import (
     MemoryCleanupMode,
     MemoryReleaseCheckResult,
     MemoryReleaseStatus,
+    _runner_snapshot_is_active,
     ProcessTreeMemoryObserver,
     RunnerMemorySnapshot,
     RunnerMemoryTelemetryReader,
@@ -144,6 +145,10 @@ class _PendingMemoryRelease:
     reservation_tokens: list[str] = field(default_factory=list)
     baseline_snapshot: MachineMemorySnapshot | None = None
     require_observed_drop: bool = False
+    # True when every cleanup in this decision was a same-process core `/free`
+    # (no isolated runner was torn down). Only then can an unobserved release
+    # become a narrow cautious-start instead of a hard cleanup failure.
+    same_process_free_only: bool = False
 
 
 class MemoryGovernorService:
@@ -444,10 +449,32 @@ class MemoryGovernorService:
                 ),
             )
         )
+        bound_isolated_runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        cleanup_targets = set(decision.evict_runner_ids)
         developer_details = decision.developer_details
         developer_details = {
             **developer_details,
             "memory_signatures": memory_signatures.diagnostic_details(),
+            "runner_selection": {
+                # The runner this workflow will actually run on. For unknown /
+                # unbound workflows this is the always-on core fallback.
+                "selected_runner_id": runner.runner_id,
+                "selected_runner_kind": runner.kind.value,
+                # The isolated runner explicitly bound to this workflow, if any.
+                # None means there is no dedicated runner and core is the fallback.
+                "bound_isolated_runner_id": (
+                    bound_isolated_runner.runner_id
+                    if bound_isolated_runner is not None
+                    else None
+                ),
+                "selected_runner_is_cleanup_target": runner.runner_id in cleanup_targets,
+                # True peers: resident runners other than the one we run on.
+                "co_resident_runner_ids": [
+                    resident.runner_id
+                    for resident in resident_runners
+                    if resident.runner_id != runner.runner_id
+                ],
+            },
         }
         if not estimate_features.empty:
             developer_details = {
@@ -491,6 +518,8 @@ class MemoryGovernorService:
     async def wait_for_memory_release_after_cleanup(
         self,
         decision: MemoryGovernorDecision,
+        *,
+        selected_runner_id: str | None = None,
     ):
         pending_release = self._pending_memory_releases.pop(
             decision.decision_id,
@@ -512,6 +541,46 @@ class MemoryGovernorService:
                 reason_code="memory_estimate_unavailable",
                 timeline=[{"state": "observer_unavailable", "error": "memory_estimate_unavailable"}],
             )
+
+        # Narrow same-process core `/free` path: the always-on core process is
+        # being cleaned and then reused by this same workflow. It can never reach
+        # `next_workflow_peak + margin` free RAM while alive, so we confirm only
+        # on an observed drop and, if that is unobservable, cautious-start without
+        # claiming release or clearing residency. Everything else (different-runner
+        # eviction, mixed cleanup, core `/free` cleaning a peer for another runner)
+        # keeps strict confirmation.
+        narrow_same_core = pending_release.same_process_free_only and (
+            self._narrow_same_core_cautious_start_ok(decision, selected_runner_id)
+        )
+        if narrow_same_core:
+            release_check = await wait_for_memory_release_async(
+                self.memory_observer,
+                required_free_vram_mb=None,
+                required_free_ram_mb=None,
+                baseline_snapshot=pending_release.baseline_snapshot,
+                require_observed_drop=True,
+                confirm_on_drop_only=True,
+                timeout_seconds=settings.memory_release_timeout_seconds,
+                initial_poll_interval_seconds=settings.memory_release_initial_poll_interval_seconds,
+                max_poll_interval_seconds=settings.memory_release_max_poll_interval_seconds,
+            )
+            if release_check.status is MemoryReleaseStatus.RELEASED:
+                # Observed drop: cleanup is confirmed, residency may be cleared.
+                self._finalize_release_reservations(reservation_tokens, released=True)
+            else:
+                # `/free` acknowledged but no drop observed (or observer briefly
+                # unavailable). Do NOT claim release and do NOT clear residency:
+                # keep the runner honest and cautious-start the reused process.
+                self._release_reservations_keep_residency(reservation_tokens)
+                release_check = release_check.model_copy(
+                    update={
+                        "status": MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED,
+                        "reason_code": "cleanup_acknowledged_unconfirmed",
+                    }
+                )
+            self._log_release_check(decision, release_check, narrow_same_core=True)
+            return release_check
+
         required_free_vram_mb = _required_free_after_cleanup(
             _estimated_vram_after_cleanup(decision),
             decision.required_vram_margin_mb,
@@ -534,9 +603,29 @@ class MemoryGovernorService:
             reservation_tokens,
             released=release_check.status is MemoryReleaseStatus.RELEASED,
         )
+        self._log_release_check(decision, release_check, narrow_same_core=False)
+        return release_check
+
+    def _log_release_check(
+        self,
+        decision: MemoryGovernorDecision,
+        release_check: MemoryReleaseCheckResult,
+        *,
+        narrow_same_core: bool,
+    ) -> None:
+        proceeding = release_check.status in {
+            MemoryReleaseStatus.RELEASED,
+            MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED,
+        }
+        message = (
+            "Cautious-starting reused core runner: same-process /free was "
+            "acknowledged but release was not observable"
+            if release_check.status is MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+            else "Memory release check completed"
+        )
         self.log_store.add(
-            "info" if release_check.status is MemoryReleaseStatus.RELEASED else "warning",
-            "Memory release check completed",
+            "info" if proceeding else "warning",
+            message,
             "memory_governor",
             workflow_id=decision.workflow_id,
             details={
@@ -546,9 +635,49 @@ class MemoryGovernorService:
                 "required_free_vram_mb": release_check.required_free_vram_mb,
                 "required_free_ram_mb": release_check.required_free_ram_mb,
                 "checks": len(release_check.snapshots),
+                "narrow_same_core_cautious_start": narrow_same_core,
             },
         )
-        return release_check
+
+    def _narrow_same_core_cautious_start_ok(
+        self,
+        decision: MemoryGovernorDecision,
+        selected_runner_id: str | None,
+    ) -> bool:
+        """Whether an unconfirmed same-process `/free` may cautious-start.
+
+        Allowed only when the cleanup target is exactly the selected always-on
+        core runner that will run this workflow, with no co-resident peer
+        runner, no active job, no recent trusted local memory failure, and no
+        attributed external-process pressure.
+        """
+        if selected_runner_id is None:
+            return False
+        if list(decision.evict_runner_ids) != [selected_runner_id]:
+            return False
+        try:
+            runner = self.runner_supervisor.get_runner(selected_runner_id)
+        except Exception:
+            return False
+        if runner.kind is not RunnerKind.CORE_COMFYUI:
+            return False
+        peers = [
+            snapshot
+            for snapshot in decision.runner_snapshots
+            if snapshot.runner_id != selected_runner_id
+        ]
+        if peers:
+            return False
+        if any(_runner_snapshot_is_active(snapshot) for snapshot in decision.runner_snapshots):
+            return False
+        if decision.workflow_estimate is not None and decision.workflow_estimate.recent_memory_error:
+            return False
+        if decision.machine_snapshot is not None and any(
+            reason.startswith("external_process")
+            for reason in decision.machine_snapshot.pressure_reasons
+        ):
+            return False
+        return True
 
     def _finalize_release_reservations(self, reservation_tokens: list[str], *, released: bool) -> None:
         for token in reservation_tokens:
@@ -557,9 +686,21 @@ class MemoryGovernorService:
             else:
                 self.runner_supervisor.fail_runner_memory_release(token)
 
+    def _release_reservations_keep_residency(self, reservation_tokens: list[str]) -> None:
+        """Release the eviction reservation while preserving model residency.
+
+        Used when same-process `/free` was acknowledged but no drop was
+        observed: the runner returns to a usable state without being marked
+        clean, so the Memory Governor is not told a release succeeded.
+        """
+        for token in reservation_tokens:
+            self.runner_supervisor.rollback_runner_reservation(token)
+
     async def evict_idle_runners_for_workflow_run(
         self,
         decision: MemoryGovernorDecision,
+        *,
+        selected_runner_id: str | None = None,
     ) -> EngineJob | None:
         cleaned_up = await self.cleanup_idle_runners_for_memory_decision(
             decision,
@@ -573,8 +714,17 @@ class MemoryGovernorService:
                 decision,
                 reason_code="memory_cleanup_unavailable",
             )
-        release_check = await self.wait_for_memory_release_after_cleanup(decision)
+        release_check = await self.wait_for_memory_release_after_cleanup(
+            decision,
+            selected_runner_id=selected_runner_id,
+        )
         if release_check.status is MemoryReleaseStatus.RELEASED:
+            return None
+        if release_check.status is MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED:
+            # Same-process core `/free` was acknowledged but unobservable; the
+            # narrow cautious-start path lets the reused process try without
+            # claiming a confirmed release.
+            self.record_metric("workflow_run_cleanup_acknowledged_unconfirmed")
             return None
         self.record_metric("workflow_run_memory_cleanup_failed")
         return _memory_cleanup_failed_job(
@@ -600,6 +750,7 @@ class MemoryGovernorService:
             else None
         )
         require_observed_drop = False
+        teardown_occurred = False
         cleanup_runner_ids = list(
             runner_ids if runner_ids is not None else decision.evict_runner_ids
         )
@@ -751,6 +902,7 @@ class MemoryGovernorService:
                 self.runner_supervisor.mark_runner_waiting_for_memory_release(reservation.token)
                 cleanup_status = stopped.status.value
                 cleanup_mode = MemoryCleanupMode.ISOLATED_EVICTION.value
+                teardown_occurred = True
             reservation_tokens.append(reservation.token)
             self.record_metric(metric_name)
             self.log_store.add(
@@ -771,6 +923,7 @@ class MemoryGovernorService:
             reservation_tokens=reservation_tokens,
             baseline_snapshot=baseline_snapshot,
             require_observed_drop=require_observed_drop,
+            same_process_free_only=bool(reservation_tokens) and not teardown_occurred,
         )
         return True
 

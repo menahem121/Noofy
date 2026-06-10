@@ -25,6 +25,7 @@ from app.runtime.memory.memory_governor import (
     MemoryReleaseStatus,
     MemorySampleWindow,
     ProcessTreeMemorySample,
+    RunnerMemorySnapshot,
     WorkflowMemoryEstimate,
 )
 from app.runtime.runners.supervisor import (
@@ -44,6 +45,7 @@ from app.runtime.runners.supervisor import (
     RunnerSelectionAction,
     RunnerStatus,
     RunnerSupervisor,
+    _runner_memory_classification_update,
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.package import (
@@ -2097,7 +2099,7 @@ async def test_workflow_run_releases_incompatible_warm_core_memory_then_submits(
 
 
 @pytest.mark.anyio
-async def test_core_residency_is_retained_when_cleanup_observer_becomes_unavailable() -> None:
+async def test_same_core_unconfirmed_free_cautious_starts_in_narrow_case() -> None:
     adapter = RecordingAdapter(
         models=[
             ModelInfo(
@@ -2133,14 +2135,15 @@ async def test_core_residency_is_retained_when_cleanup_observer_becomes_unavaila
 
     job = await service.run_workflow("text_to_image_v0", inputs={}, options={})
 
+    # Narrow same-core case: `/free` was acknowledged but release was not
+    # observable (observer became unavailable). Noofy must NOT hard-block; it
+    # cautious-starts the reused core process instead of reporting a confirmed
+    # release. The run proceeds and is not marked memory_cleanup_failed.
     assert isinstance(job, EngineJob)
-    assert job.status == "blocked_by_memory"
-    assert job.memory_status is not None
-    assert job.memory_status["state"] == "memory_cleanup_failed"
+    assert job.status != "blocked_by_memory"
     assert adapter.release_memory_calls == 1
-    assert adapter.run_calls == []
-    assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
-    assert supervisor.core_runner().last_workflow_id == "workflow-a"
+    assert len(adapter.run_calls) == 1
+    assert supervisor.core_runner().status is not RunnerStatus.RELEASE_FAILED
 
 
 @pytest.mark.anyio
@@ -2222,6 +2225,240 @@ async def test_mixed_cleanup_refreshes_core_baseline_after_isolated_release(
     assert release.status is MemoryReleaseStatus.TIMEOUT
     assert release.timeline[0]["baseline_free_vram_mb"] == 8_000
     assert supervisor.core_runner().status is RunnerStatus.RELEASE_FAILED
+
+
+@pytest.mark.anyio
+async def test_same_core_unconfirmed_free_keeps_residency_and_does_not_report_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same-process core `/free` that is acknowledged but shows no observable
+    # drop must resolve to ACKNOWLEDGED_UNCONFIRMED (not RELEASED), keep the
+    # runner's residency intact, and not mark it RELEASE_FAILED.
+    adapter = RecordingAdapter()
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+    )
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+    )
+    core_before = supervisor.core_runner()
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="unknown_memory_class_denies_co_residence",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=5000,
+            estimated_peak_ram_mb=11000,
+        ),
+        machine_snapshot=MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=500,
+            memory_pressure=MemoryPressureLevel.LOW,
+        ),
+        runner_snapshots=[RunnerMemorySnapshot.from_descriptor(core_before)],
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="same_core_test",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision,
+        selected_runner_id=CORE_RUNNER_ID,
+    )
+
+    assert cleaned_up is True
+    assert adapter.release_memory_calls == 1
+    assert release.status is MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+    assert release.reason_code == "cleanup_acknowledged_unconfirmed"
+    core_after = supervisor.core_runner()
+    assert core_after.status is not RunnerStatus.RELEASE_FAILED
+    # Residency is honest: nothing was cleared because release was not observed.
+    assert core_after.last_workflow_id == "workflow-a"
+    assert core_after.observed_execution_peak_vram_mb == 6000
+
+
+@pytest.mark.anyio
+async def test_isolated_runner_cleanup_timeout_still_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Different-runner (isolated) eviction keeps strict release confirmation:
+    # a timeout with no observed drop is a real failure, never an unconfirmed
+    # cautious-start.
+    adapter = RecordingAdapter()
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingStopCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingStopCoordinator(supervisor)
+        return coordinator
+
+    service, supervisor = _build_service(
+        adapter,
+        runner_process_coordinator_factory=coordinator_factory,
+        memory_observer=SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    total_vram_mb=12_000,
+                    free_vram_mb=500,
+                    memory_pressure=MemoryPressureLevel.HIGH,
+                ),
+            ]
+        ),
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(runner_id="idle-heavy", status=RunnerStatus.IDLE_WARM),
+        RecordingAdapter(),
+    )
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="insufficient_vram_margin",
+        workflow_id="workflow-b",
+        evict_runner_ids=["idle-heavy"],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=9000,
+            estimated_peak_ram_mb=100,
+        ),
+        machine_snapshot=MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=500,
+            memory_pressure=MemoryPressureLevel.HIGH,
+        ),
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="isolated_cleanup_test",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision,
+        selected_runner_id=CORE_RUNNER_ID,
+    )
+
+    assert cleaned_up is True
+    assert coordinator is not None and coordinator.stopped_runner_ids == ["idle-heavy"]
+    assert release.status is MemoryReleaseStatus.TIMEOUT
+    assert release.status is not MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED
+
+
+def test_runner_memory_classification_update_does_not_downgrade_stronger_evidence() -> None:
+    heavy_local = _core_descriptor().model_copy(
+        update={
+            "memory_class": RunnerMemoryClass.GPU_HEAVY,
+            "memory_estimate_source": RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            "memory_estimate_confidence": RunnerMemoryEstimateConfidence.HIGH,
+        }
+    )
+    # Weaker creator-observed evidence must not downgrade a stronger local-observed class.
+    assert (
+        _runner_memory_classification_update(
+            heavy_local,
+            memory_class=RunnerMemoryClass.GPU_MEDIUM,
+            source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+            confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+        )
+        == {}
+    )
+    # A useful class must not be replaced by UNKNOWN.
+    assert (
+        _runner_memory_classification_update(
+            heavy_local,
+            memory_class=RunnerMemoryClass.UNKNOWN,
+            source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            confidence=RunnerMemoryEstimateConfidence.HIGH,
+        )
+        == {}
+    )
+
+    unknown_runner = _core_descriptor()
+    # UNKNOWN is replaced by any useful admitted estimate.
+    update = _runner_memory_classification_update(
+        unknown_runner,
+        memory_class=RunnerMemoryClass.GPU_MEDIUM,
+        source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+        confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+    )
+    assert update["memory_class"] is RunnerMemoryClass.GPU_MEDIUM
+    assert update["memory_estimate_source"] is RunnerMemoryEstimateSource.CREATOR_OBSERVED
+
+    creator_medium = _core_descriptor().model_copy(
+        update={
+            "memory_class": RunnerMemoryClass.GPU_MEDIUM,
+            "memory_estimate_source": RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+        }
+    )
+    # Stronger local-observed evidence beats creator-observed.
+    upgraded = _runner_memory_classification_update(
+        creator_medium,
+        memory_class=RunnerMemoryClass.GPU_HEAVY,
+        source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+        confidence=RunnerMemoryEstimateConfidence.HIGH,
+    )
+    assert upgraded["memory_class"] is RunnerMemoryClass.GPU_HEAVY
+    assert upgraded["memory_estimate_source"] is RunnerMemoryEstimateSource.LOCAL_OBSERVED
+
+
+def test_confirm_release_clears_residency_and_stale_execution_peaks() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "old-job", workflow_id="workflow-a")
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+        observed_memory_class=RunnerMemoryClass.GPU_HEAVY,
+        observed_source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+        observed_confidence=RunnerMemoryEstimateConfidence.HIGH,
+    )
+    assert supervisor.core_runner().memory_class is RunnerMemoryClass.GPU_HEAVY
+
+    reservation = supervisor.reserve_runner_for_eviction(CORE_RUNNER_ID)
+    assert reservation is not None
+    supervisor.mark_runner_waiting_for_memory_release(reservation.token)
+    supervisor.confirm_runner_memory_released(reservation.token)
+
+    core = supervisor.core_runner()
+    # Residency cleared, and stale execution peaks must not be readable as
+    # current loaded-model memory, and the runner is no longer classified.
+    assert core.last_workflow_id is None
+    assert core.model_residency_signature is None
+    assert core.observed_execution_peak_vram_mb is None
+    assert core.observed_execution_peak_ram_mb is None
+    assert core.memory_class is RunnerMemoryClass.UNKNOWN
+    assert core.memory_estimate_source is RunnerMemoryEstimateSource.UNKNOWN
 
 
 @pytest.mark.anyio

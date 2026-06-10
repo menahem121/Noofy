@@ -134,6 +134,10 @@ class MemoryObservationOutcome(StrEnum):
 
 class MemoryReleaseStatus(StrEnum):
     RELEASED = "released"
+    # `/free` was acknowledged but no RAM/VRAM drop could be observed. This is
+    # NOT a proven release: it is only used to allow a narrow same-process
+    # cautious-start, and the runner's residency must stay intact.
+    ACKNOWLEDGED_UNCONFIRMED = "acknowledged_unconfirmed"
     TIMEOUT = "timeout"
     UNAVAILABLE = "unavailable"
 
@@ -1786,7 +1790,17 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
             reason_code="gpu_estimate_uncertain",
         )
 
-    compatibility = _co_residence_compatibility(estimate, runners, machine)
+    # Co-residence is about whether the new workflow can run *beside* other warm
+    # runners. The selected runner is the one the workflow will run on (reuse /
+    # replace / same-process swap), not a peer it co-resides with, so it must be
+    # excluded from the peer-compatibility check. It stays in `runners` for
+    # cleanup-plan eligibility and ownership accounting.
+    co_resident_runners = [
+        runner
+        for runner in runners
+        if selected_runner is None or runner.runner_id != selected_runner.runner_id
+    ]
+    compatibility = _co_residence_compatibility(estimate, co_resident_runners, machine)
     if compatibility is not None:
         reason_code, risk_level = compatibility
         return _memory_shortfall_decision(
@@ -1905,11 +1919,19 @@ async def wait_for_memory_release_async(
     required_free_ram_mb: int | None = None,
     baseline_snapshot: MachineMemorySnapshot | None = None,
     require_observed_drop: bool = False,
+    confirm_on_drop_only: bool = False,
     timeout_seconds: float = 8,
     initial_poll_interval_seconds: float = 0.1,
     max_poll_interval_seconds: float = 1.0,
 ) -> MemoryReleaseCheckResult:
-    """Adaptively poll after cleanup acknowledgment without blocking the loop."""
+    """Adaptively poll after cleanup acknowledgment without blocking the loop.
+
+    When ``confirm_on_drop_only`` is set, success requires only an observed
+    memory drop from the baseline (proof that `/free` released something) and
+    ignores absolute free-memory thresholds and pressure. This is for
+    same-process core `/free`, where the reused process keeps its own RAM floor
+    and could never reach ``next_workflow_peak + margin`` free RAM.
+    """
     snapshots: list[MachineMemorySnapshot] = []
     timeline: list[dict[str, Any]] = [
         {
@@ -1968,9 +1990,13 @@ async def wait_for_memory_release_async(
             required_free_vram_mb=required_free_vram_mb,
             required_free_ram_mb=required_free_ram_mb,
         )
-        if safe_memory_observed and (
-            not require_observed_drop or memory_drop_observed
-        ):
+        if confirm_on_drop_only:
+            release_confirmed = memory_drop_observed
+        else:
+            release_confirmed = safe_memory_observed and (
+                not require_observed_drop or memory_drop_observed
+            )
+        if release_confirmed:
             timeline.append(
                 {
                     "state": "observed_memory_drop"

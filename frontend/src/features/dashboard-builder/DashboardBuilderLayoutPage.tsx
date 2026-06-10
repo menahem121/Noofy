@@ -68,6 +68,8 @@ import {
   type MockWorkflow,
   type WidgetType,
 } from "./dashboardBuilderContent";
+import { DEFAULT_SEED_MODE, SEED_MODE_LABELS } from "../../lib/seedControl";
+import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
 interface DashboardBuilderLayoutPageProps {
   workflowId?: string;
@@ -1009,12 +1011,18 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   }
 
   if (widget.widgetType === "int_field" || widget.widgetType === "seed_widget") {
+    const seedMode = widget.seedMode ?? DEFAULT_SEED_MODE;
+    const SeedModeIcon = SEED_MODE_ICONS[seedMode];
     return (
       <div className="layout-preview-seed">
         <div className="layout-preview-input" role="textbox" aria-readonly="true">
           {String(widget.defaultValue ?? 0)}
         </div>
-        {widget.widgetType === "seed_widget" ? <span className="layout-preview-button">Random</span> : null}
+        {widget.widgetType === "seed_widget" ? (
+          <span className="layout-preview-seed-mode" title={`After each run: ${SEED_MODE_LABELS[seedMode]}`}>
+            <SeedModeIcon size={15} aria-hidden="true" />
+          </span>
+        ) : null}
       </div>
     );
   }

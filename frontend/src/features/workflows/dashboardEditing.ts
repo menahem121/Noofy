@@ -15,6 +15,7 @@ import {
   withCurrentWidgetGroupMinimum,
   withCurrentWidgetMinimum,
 } from "../../lib/widgetSizes";
+import { seedModeFromValidation } from "../../lib/seedControl";
 
 export function buildDashboardSchemaForEditing(packageData: WorkflowPackageResponse): DashboardSchema {
   const inputIndex = new Map<string, WorkflowInputDef>();
@@ -75,6 +76,7 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           options: stringArrayValidation(input.validation.options),
           acceptedExtensions: stringArrayValidation(input.validation.accepted_extensions),
           acceptedMimeTypes: stringArrayValidation(input.validation.accepted_mime_types),
+          ...(control.type === "seed_widget" ? { seedMode: seedModeFromValidation(input.validation) } : {}),
           layout,
         });
       } else if (control.output_id) {
@@ -133,6 +135,7 @@ function hiddenWidgetForInput(input: WorkflowInputDef): DashboardWidget | null {
     options: stringArrayValidation(input.validation.options),
     acceptedExtensions: stringArrayValidation(input.validation.accepted_extensions),
     acceptedMimeTypes: stringArrayValidation(input.validation.accepted_mime_types),
+    ...(widgetType === "seed_widget" ? { seedMode: seedModeFromValidation(input.validation) } : {}),
   };
   if (widget.widgetType === "note") widget.hasExecutableBinding = true;
   return canPreserveWidgetAsHiddenInput(widget) ? widget : null;

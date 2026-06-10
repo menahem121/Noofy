@@ -21,12 +21,15 @@ from app.runtime.memory.memory_governor import (
     MemorySampleWindow,
     ProcessTreeMemoryObserver,
     RunnerMemoryTelemetryReader,
+    _estimate_memory_class,
     likely_memory_error,
 )
 from app.runtime.memory.input_features import extract_model_selection_features
 from app.runtime.runners.supervisor import (
     JobRunnerNotFoundError,
     RunnerMemoryClass,
+    RunnerMemoryEstimateConfidence,
+    RunnerMemoryEstimateSource,
     RunnerSupervisor,
 )
 
@@ -224,10 +227,24 @@ class MemoryObservationCoordinator:
             "sample_windows_observed": sample_windows_observed,
         }
         if runner is not None:
+            # Refine the runner's classification from this local observation.
+            # Only a concrete (non-UNKNOWN) class is forwarded so a missing VRAM
+            # peak cannot clobber a known class; the supervisor still applies the
+            # evidence-rank guard (local-observed never downgraded by weaker data).
+            observed_memory_class = _estimate_memory_class(
+                RunnerMemoryClass.UNKNOWN, peak_vram_mb
+            )
             self.runner_supervisor.fill_runner_memory_observation(
                 runner.runner_id,
                 observed_execution_peak_vram_mb=peak_vram_mb,
                 observed_execution_peak_ram_mb=peak_ram_mb,
+                observed_memory_class=(
+                    observed_memory_class
+                    if observed_memory_class is not RunnerMemoryClass.UNKNOWN
+                    else None
+                ),
+                observed_source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+                observed_confidence=RunnerMemoryEstimateConfidence.MEDIUM,
             )
         self.log_store.add(
             "info",

@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -77,8 +79,9 @@ import {
   resizeLayoutFromPointerDelta,
   sameGridLayout,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
-import { DashboardInputControl } from "./DashboardInputControl";
+import { DashboardInputControl, SeedModeToggleButton } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
+import { DEFAULT_SEED_MODE, type SeedMode } from "../../lib/seedControl";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
@@ -123,6 +126,8 @@ interface CanvasDashboardViewProps {
   livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
+  seedModes: Record<string, SeedMode>;
+  onSeedModeChange: (inputId: string, mode: SeedMode) => void;
   outputPreferences: OutputPreferences;
   gallerySaveByControlId?: Record<string, GallerySaveRequest>;
   layoutOverrides: Record<string, GridItemLayout>;
@@ -159,6 +164,11 @@ interface CanvasDashboardViewProps {
   onActionBarPositionChange: (position: CanvasActionBarPosition) => void;
 }
 
+const SeedModeContext = createContext<{
+  seedModes: Record<string, SeedMode>;
+  onSeedModeChange: (inputId: string, mode: SeedMode) => void;
+}>({ seedModes: {}, onSeedModeChange: () => undefined });
+
 export function CanvasDashboardView({
   controls,
   groups,
@@ -173,6 +183,8 @@ export function CanvasDashboardView({
   livePreview,
   comparisonBeforeImageUrl,
   inputValues,
+  seedModes,
+  onSeedModeChange,
   outputPreferences,
   gallerySaveByControlId,
   layoutOverrides,
@@ -546,6 +558,7 @@ export function CanvasDashboardView({
     : undefined;
 
   return (
+    <SeedModeContext.Provider value={{ seedModes, onSeedModeChange }}>
     <div className="canvas-dashboard">
       <DashboardCanvasFrame ref={frameRef} className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
         <div
@@ -780,6 +793,7 @@ export function CanvasDashboardView({
         />
       ) : null}
     </div>
+    </SeedModeContext.Provider>
   );
 }
 
@@ -884,9 +898,12 @@ function CanvasWidgetCell({
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
+  const { seedModes, onSeedModeChange } = useContext(SeedModeContext);
   const isGroup = item.kind === "group";
   const control = item.kind === "control" ? item.control : null;
   const isOutput = control ? isOutputControlType(control.type) : false;
+  const isSeed = control?.type === "seed_widget";
+  const seedInputId = isSeed ? control!.input_id ?? control!.id : null;
   const supportsGallery = control ? isGalleryOutputControlType(control.type) : false;
   const Icon = isGroup ? LayoutGrid : iconForControlType(control!.type);
   const title = isGroup ? item.group.title : control!.label;
@@ -933,8 +950,15 @@ function CanvasWidgetCell({
             {description ? <p>{description}</p> : null}
           </div>
         </div>
-        {control && (supportsGallery || textOutputs.length > 0) ? (
+        {control && (supportsGallery || textOutputs.length > 0 || isSeed) ? (
           <div className="layout-canvas-widget__header-actions">
+            {isSeed && seedInputId ? (
+              <SeedModeToggleButton
+                mode={seedModes[seedInputId] ?? DEFAULT_SEED_MODE}
+                disabled={isEditingLayout}
+                onChange={(mode) => onSeedModeChange(seedInputId, mode)}
+              />
+            ) : null}
             {textOutputs.length > 0 ? (
               <button
                 className="widget-output-text__copy"
@@ -1121,7 +1145,7 @@ function GroupedCanvasControls({
               <DashboardNoteBody title={control.label} body={control.description} />
             ) : isOutput ? (
               <>
-                <GroupedCanvasControlHeader control={control} />
+                <GroupedCanvasControlHeader control={control} disabled={disabled} />
                 <OutputWidgetContent
                   control={control}
                   outputIndex={outputIndex}
@@ -1162,7 +1186,7 @@ function GroupedCanvasControls({
               </>
             ) : (
               <>
-                <GroupedCanvasControlHeader control={control} />
+                <GroupedCanvasControlHeader control={control} disabled={disabled} />
                 <InputWidgetContent
                   control={control}
                   inputIndex={inputIndex}
@@ -1187,11 +1211,22 @@ function GroupedCanvasControls({
   );
 }
 
-function GroupedCanvasControlHeader({ control }: { control: DashboardControlDef }) {
+function GroupedCanvasControlHeader({ control, disabled }: { control: DashboardControlDef; disabled: boolean }) {
+  const { seedModes, onSeedModeChange } = useContext(SeedModeContext);
+  const seedInputId = control.type === "seed_widget" ? control.input_id ?? control.id : null;
   return (
     <div className="canvas-widget-group__control-header">
-      <h4>{control.label}</h4>
-      {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
+      <div className="canvas-widget-group__control-heading">
+        <h4>{control.label}</h4>
+        {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
+      </div>
+      {seedInputId ? (
+        <SeedModeToggleButton
+          mode={seedModes[seedInputId] ?? DEFAULT_SEED_MODE}
+          disabled={disabled}
+          onChange={(mode) => onSeedModeChange(seedInputId, mode)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1938,6 +1973,7 @@ function InputWidgetContent({
   onThreeDUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
   loraBrowserFor?: (control: DashboardControlDef, input: WorkflowInputDef) => LoraBrowserControlProps | undefined;
 }) {
+  const { seedModes, onSeedModeChange } = useContext(SeedModeContext);
   const inputId = control.input_id ?? control.id;
   const input = control.type === "api_credential"
     ? credentialInputForControl(control)
@@ -1952,6 +1988,8 @@ function InputWidgetContent({
       disabled={disabled}
       variant="canvas"
       loraBrowser={loraBrowserFor?.(control, input)}
+      seedMode={seedModes[input.id]}
+      onSeedModeChange={(mode) => onSeedModeChange(input.id, mode)}
       onChange={(value) => onChange(input.id, value)}
       onImageUpload={(file) => onImageUpload(input.id, file)}
       onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}

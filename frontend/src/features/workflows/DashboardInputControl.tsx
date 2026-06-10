@@ -27,8 +27,52 @@ import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
 import { audioMetadataLabel, fileMetadataLabel, formatMediaDuration, isGalleryMediaReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { GalleryPickerModal } from "./GalleryPickerModal";
+import {
+  SEED_MODE_LABELS,
+  nextSeedMode,
+  seedModeFromValidation,
+  type SeedMode,
+} from "../../lib/seedControl";
+import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
 type DashboardInputControlVariant = "classic" | "canvas";
+
+/**
+ * Compact single-button seed behaviour control. It shows the icon for the
+ * current mode and cycles randomize → fixed → increment on each click. It is
+ * rendered in the seed widget's header corner on the canvas, and inline next to
+ * the value in the classic list view.
+ */
+export function SeedModeToggleButton({
+  mode,
+  disabled = false,
+  className,
+  onChange,
+}: {
+  mode: SeedMode;
+  disabled?: boolean;
+  className?: string;
+  onChange: (mode: SeedMode) => void;
+}) {
+  const Icon = SEED_MODE_ICONS[mode];
+  return (
+    <button
+      type="button"
+      className={`seed-mode-toggle${className ? ` ${className}` : ""}`}
+      data-seed-mode={mode}
+      disabled={disabled}
+      title={`After each run: ${SEED_MODE_LABELS[mode]}`}
+      aria-label={`Seed behavior: ${SEED_MODE_LABELS[mode]}. Click to change.`}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onChange(nextSeedMode(mode));
+      }}
+    >
+      <Icon size={15} aria-hidden="true" />
+    </button>
+  );
+}
 
 export interface LoraBrowserControlProps {
   enabled: boolean;
@@ -45,6 +89,8 @@ interface DashboardInputControlProps {
   variant?: DashboardInputControlVariant;
   hideLabel?: boolean;
   loraBrowser?: LoraBrowserControlProps;
+  seedMode?: SeedMode;
+  onSeedModeChange?: (mode: SeedMode) => void;
   onChange: (value: unknown) => void;
   onImageUpload: (file: File) => Promise<void>;
   onGalleryImageMaskPrepare?: (inputId: string, galleryItemId: string) => Promise<string>;
@@ -63,6 +109,8 @@ export function DashboardInputControl({
   variant = "classic",
   hideLabel = false,
   loraBrowser,
+  seedMode,
+  onSeedModeChange,
   onChange,
   onImageUpload,
   onGalleryImageMaskPrepare,
@@ -81,7 +129,7 @@ export function DashboardInputControl({
       return (
         <label className={`field-group field-group--grouped-child${control.type === "toggle" ? " field-group--inline" : ""}`} data-dashboard-control-id={control.id}>
           {description ? <small>{description}</small> : null}
-          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+          {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser, seedMode, onSeedModeChange)}
         </label>
       );
     }
@@ -90,7 +138,7 @@ export function DashboardInputControl({
       <label className={`field-group${control.type === "toggle" ? " field-group--inline" : ""}`} data-dashboard-control-id={control.id}>
         {control.type === "toggle" ? (
           <>
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser, seedMode, onSeedModeChange)}
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
           </>
@@ -98,14 +146,14 @@ export function DashboardInputControl({
           <>
             <span>{label}</span>
             {description ? <small>{description}</small> : null}
-            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}
+            {renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser, seedMode, onSeedModeChange)}
           </>
         )}
       </label>
     );
   }
 
-  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser)}</>;
+  return <>{renderControl(control, input, value, validation, disabled, variant, onChange, onImageUpload, onGalleryImageMaskPrepare, onImageMaskApply, onAudioUpload, onVideoUpload, onFileUpload, onThreeDUpload, loraBrowser, seedMode, onSeedModeChange)}</>;
 }
 
 function renderControl(
@@ -124,6 +172,8 @@ function renderControl(
   onFileUpload: (inputId: string, file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>,
   loraBrowser?: LoraBrowserControlProps,
+  seedMode?: SeedMode,
+  onSeedModeChange?: (mode: SeedMode) => void,
 ) {
   const inputClass = variant === "canvas" ? "canvas-widget-input" : undefined;
   const textareaClass = variant === "canvas" ? "canvas-widget-textarea" : undefined;
@@ -166,17 +216,33 @@ function renderControl(
         />
       );
 
-    case "seed_widget":
-      return (
+    case "seed_widget": {
+      const seedInput = (
         <input
           className={inputClass}
           type="number"
-          min={0}
+          min={typeof validation.min === "number" ? validation.min : 0}
+          max={typeof validation.max === "number" ? validation.max : undefined}
           value={typeof value === "number" ? value : 0}
           disabled={disabled}
           onChange={(event) => onChange(Number(event.target.value))}
         />
       );
+      // On the canvas the mode toggle lives in the widget header corner. In the
+      // classic list view there is no widget chrome, so it sits inline next to
+      // the value.
+      if (variant === "canvas") return seedInput;
+      return (
+        <div className="seed-control">
+          {seedInput}
+          <SeedModeToggleButton
+            mode={seedMode ?? seedModeFromValidation(validation)}
+            disabled={disabled || !onSeedModeChange}
+            onChange={(mode) => onSeedModeChange?.(mode)}
+          />
+        </div>
+      );
+    }
 
     case "slider":
       return (

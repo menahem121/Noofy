@@ -483,11 +483,14 @@ class RunnerSupervisor:
         *,
         observed_execution_peak_vram_mb: int | None = None,
         observed_execution_peak_ram_mb: int | None = None,
+        observed_memory_class: RunnerMemoryClass | None = None,
+        observed_source: RunnerMemoryEstimateSource | None = None,
+        observed_confidence: RunnerMemoryEstimateConfidence | None = None,
     ) -> RunnerDescriptor:
         """Fill missing best-effort memory observations without replacing stronger data."""
         with self._lock:
             descriptor = self._descriptor_locked(runner_id)
-            updates: dict[str, int] = {}
+            updates: dict[str, object] = {}
             if observed_execution_peak_vram_mb is not None:
                 updates["observed_execution_peak_vram_mb"] = max(
                     descriptor.observed_execution_peak_vram_mb or 0,
@@ -498,6 +501,16 @@ class RunnerSupervisor:
                     descriptor.observed_execution_peak_ram_mb or 0,
                     observed_execution_peak_ram_mb,
                 )
+            # Refine the runner's classification from local observed evidence,
+            # but never downgrade stronger evidence with weaker evidence.
+            updates.update(
+                _runner_memory_classification_update(
+                    descriptor,
+                    memory_class=observed_memory_class,
+                    source=observed_source,
+                    confidence=observed_confidence,
+                )
+            )
             if not updates:
                 return descriptor
             updated = descriptor.model_copy(update=updates)
@@ -631,6 +644,9 @@ class RunnerSupervisor:
         model_residency_payload: dict[str, object] | None = None,
         execution_profile_signature: str | None = None,
         memory_signatures_known: bool = False,
+        memory_class: RunnerMemoryClass | None = None,
+        memory_estimate_source: RunnerMemoryEstimateSource | None = None,
+        memory_estimate_confidence: RunnerMemoryEstimateConfidence | None = None,
     ) -> RunnerDescriptor:
         with self._lock:
             reservation = self._reservations.pop(token, None)
@@ -650,6 +666,14 @@ class RunnerSupervisor:
                 updates["model_residency_signature"] = model_residency_signature
                 updates["model_residency_payload"] = dict(model_residency_payload or {})
                 updates["execution_profile_signature"] = execution_profile_signature
+            updates.update(
+                _runner_memory_classification_update(
+                    descriptor,
+                    memory_class=memory_class,
+                    source=memory_estimate_source,
+                    confidence=memory_estimate_confidence,
+                )
+            )
             updated = descriptor.model_copy(update=updates)
             self._descriptors[reservation.runner_id] = updated
         self._registry.register(job_id, reservation.runner_id)
@@ -675,6 +699,15 @@ class RunnerSupervisor:
                     "execution_profile_signature": None,
                     "observed_idle_vram_mb": None,
                     "observed_idle_ram_mb": None,
+                    # Residency is cleared, so stale execution-peak observations
+                    # must not keep being read as current loaded-model memory by
+                    # the resident-memory helpers, and the runner is no longer
+                    # classified by the workload it just released.
+                    "observed_execution_peak_vram_mb": None,
+                    "observed_execution_peak_ram_mb": None,
+                    "memory_class": RunnerMemoryClass.UNKNOWN,
+                    "memory_estimate_source": RunnerMemoryEstimateSource.UNKNOWN,
+                    "memory_estimate_confidence": RunnerMemoryEstimateConfidence.UNKNOWN,
                     "last_used_at": _iso(self._now()),
                     "reservation_token": None,
                     "reservation_kind": None,
@@ -1163,6 +1196,54 @@ def _effective_memory_class(memory_class: RunnerMemoryClass) -> RunnerMemoryClas
     if memory_class in {RunnerMemoryClass.UNKNOWN, RunnerMemoryClass.GPU_MEDIUM}:
         return RunnerMemoryClass.GPU_HEAVY
     return memory_class
+
+
+_MEMORY_ESTIMATE_SOURCE_RANK = {
+    RunnerMemoryEstimateSource.LOCAL_OBSERVED: 4,
+    RunnerMemoryEstimateSource.CREATOR_OBSERVED: 3,
+    RunnerMemoryEstimateSource.DECLARED: 2,
+    RunnerMemoryEstimateSource.HEURISTIC: 1,
+    RunnerMemoryEstimateSource.UNKNOWN: 0,
+}
+
+
+def _runner_memory_classification_update(
+    descriptor: RunnerDescriptor,
+    *,
+    memory_class: RunnerMemoryClass | None,
+    source: RunnerMemoryEstimateSource | None,
+    confidence: RunnerMemoryEstimateConfidence | None,
+) -> dict[str, object]:
+    """Return descriptor updates that set the runner's memory classification
+    without downgrading stronger evidence with weaker evidence.
+
+    Local-observed beats creator-observed beats declared beats heuristic beats
+    unknown. An UNKNOWN runner is replaced by any useful admitted estimate; a
+    runner already classified by stronger evidence keeps that class when a weaker
+    estimate (e.g. a smaller creator observation for the next workflow) arrives.
+    """
+    if memory_class is None or source is None:
+        return {}
+    # Never replace a useful class with UNKNOWN (unknown is replaced by useful
+    # estimates, not the other way around).
+    if (
+        memory_class is RunnerMemoryClass.UNKNOWN
+        and descriptor.memory_class is not RunnerMemoryClass.UNKNOWN
+    ):
+        return {}
+    incoming_rank = _MEMORY_ESTIMATE_SOURCE_RANK.get(source, 0)
+    existing_rank = _MEMORY_ESTIMATE_SOURCE_RANK.get(descriptor.memory_estimate_source, 0)
+    if incoming_rank < existing_rank:
+        return {}
+    return {
+        "memory_class": memory_class,
+        "memory_estimate_source": source,
+        "memory_estimate_confidence": (
+            confidence
+            if confidence is not None
+            else descriptor.memory_estimate_confidence
+        ),
+    }
 
 
 def _runner_is_resident(runner: RunnerDescriptor) -> bool:

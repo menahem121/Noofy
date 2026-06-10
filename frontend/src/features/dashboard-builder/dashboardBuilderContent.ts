@@ -21,6 +21,7 @@ import {
   withCurrentWidgetGroupMinimum,
   withCurrentWidgetMinimum,
 } from "../../lib/widgetSizes";
+import { DEFAULT_SEED_MODE, isSeedMode, type SeedMode } from "../../lib/seedControl";
 
 export type WidgetType =
   | "slider"
@@ -136,6 +137,7 @@ export interface DashboardWidget {
   acceptedExtensions?: string[];
   acceptedMimeTypes?: string[];
   drawMask?: boolean;
+  seedMode?: SeedMode;
   defaultPinned?: boolean;
   hasExecutableBinding?: boolean;
   layout?: DashboardWidgetLayout;
@@ -496,6 +498,7 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
     max: numericRange?.max,
     step: numericRange?.step,
     drawMask: widgetType === "load_image_mask" ? true : undefined,
+    seedMode: widgetType === "seed_widget" ? DEFAULT_SEED_MODE : undefined,
   };
 }
 
@@ -869,6 +872,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
         ...(w.min !== undefined && { min: w.min }),
         ...(w.max !== undefined && { max: w.max }),
         ...(w.step !== undefined && { step: w.step }),
+        ...(w.widgetType === "seed_widget" && { seed_mode: w.seedMode ?? DEFAULT_SEED_MODE }),
         ...(w.options && w.options.length > 0 && { options: w.options }),
         ...(w.widgetType === "load_file" && {
           accepted_extensions:
@@ -1400,8 +1404,17 @@ function widgetBindingKey(widget: DashboardWidget): string {
   return `${widget.binding.nodeId}:${widget.binding.inputName}`;
 }
 
+function withNormalizedSeedMode(widget: DashboardWidget): DashboardWidget {
+  if (widget.widgetType !== "seed_widget") {
+    return widget.seedMode === undefined ? widget : { ...widget, seedMode: undefined };
+  }
+  const seedMode = isSeedMode(widget.seedMode) ? widget.seedMode : DEFAULT_SEED_MODE;
+  return seedMode === widget.seedMode ? widget : { ...widget, seedMode };
+}
+
 export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSchema {
   const widgets = dedupeWidgets(Array.isArray(schema.widgets) ? schema.widgets : [])
+    .map(withNormalizedSeedMode)
     .map((widget) => widget.layout
       ? { ...widget, layout: withCurrentWidgetMinimum(widget.layout, widget.widgetType) }
       : widget);
@@ -1410,6 +1423,7 @@ export function normalizeDashboardSchema(schema: DashboardSchema): DashboardSche
   const hiddenWidgets = dedupeWidgets(Array.isArray(schema.hiddenWidgets) ? schema.hiddenWidgets : [])
     .filter(canPreserveWidgetAsHiddenInput)
     .filter((widget) => !visibleIds.has(widget.id) && !visibleBindings.has(widgetBindingKey(widget)))
+    .map(withNormalizedSeedMode)
     .map((widget) => widget.layout
       ? { ...widget, layout: withCurrentWidgetMinimum(widget.layout, widget.widgetType) }
       : widget);

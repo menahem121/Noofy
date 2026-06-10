@@ -2364,7 +2364,7 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => expect(cancelCalls).toBe(1));
   });
 
-  it("submits Batch Count runs with identical captured payloads and no seed mutation", async () => {
+  it("submits Batch Count runs with identical captured payloads when the seed is fixed", async () => {
     const seededPackageData = {
       ...configuredPackageData,
       inputs: [
@@ -2375,7 +2375,7 @@ describe("WorkflowRunPage", () => {
           control: "seed_widget",
           binding: { node_id: "7", input_name: "seed" },
           default: 123,
-          validation: {},
+          validation: { seed_mode: "fixed" },
         },
       ],
       dashboard: {
@@ -2448,6 +2448,78 @@ describe("WorkflowRunPage", () => {
       firstBody.output_preferences_snapshot,
       firstBody.output_preferences_snapshot,
     ]);
+  });
+
+  it("advances the seed after each generation when the seed mode is increment", async () => {
+    const seededPackageData = {
+      ...configuredPackageData,
+      inputs: [
+        ...configuredPackageData.inputs,
+        {
+          id: "seed",
+          label: "Seed",
+          control: "seed_widget",
+          binding: { node_id: "7", input_name: "seed" },
+          default: 123,
+          validation: { seed_mode: "increment" },
+        },
+      ],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: configuredPackageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls: [
+            ...section.controls,
+            {
+              id: "seed",
+              type: "seed_widget",
+              label: "Seed",
+              input_id: "seed",
+              layout: { x: 16, y: 8, w: 8, h: 4 },
+            },
+          ],
+        })),
+      },
+    };
+    const runBodies: Array<{ inputs: Record<string, unknown> }> = [];
+    let runIndex = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      seededPackageData,
+      (init?: RequestInit) => {
+        runIndex += 1;
+        runBodies.push(JSON.parse(String(init?.body)));
+        return {
+          job_id: `job-seed-${runIndex}`,
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        const match = url.match(/\/api\/jobs\/(job-seed-\d+)\/progress$/);
+        if (!match) return undefined;
+        return jsonResponse({
+          job_id: match[1],
+          status: "queued",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Queued.",
+        });
+      },
+    );
+
+    renderRunPage();
+
+    const textboxes = await screen.findAllByRole("textbox");
+    fireEvent.change(textboxes[0], { target: { value: "batch prompt" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Batch count" }), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    await waitFor(() => expect(runBodies).toHaveLength(4));
+    expect(runBodies.map((body) => body.inputs.seed)).toEqual([123, 124, 125, 126]);
   });
 
   it("keeps initial polling bounded for large batches", async () => {

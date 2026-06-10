@@ -1484,6 +1484,41 @@ def test_memory_admission_allows_heavy_light_with_margin() -> None:
     assert decision.required_vram_margin_mb == 3600
 
 
+def test_selected_core_runner_excluded_from_co_residence_peers() -> None:
+    # core ran workflow-a (UNKNOWN class, never classified) and now runs a
+    # different workflow with no useful overlap. The selected core runner is the
+    # one the workflow will run on (reuse/replace), not a co-resident peer, so
+    # its UNKNOWN class must not trigger unknown_memory_class_denies_co_residence.
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=_estimate(
+                "workflow-b",
+                RunnerMemoryClass.GPU_MEDIUM,
+                5_000,
+                confidence=RunnerMemoryEstimateConfidence.MEDIUM,
+                source=RunnerMemoryEstimateSource.CREATOR_OBSERVED,
+                model_payload=_model_payload(models=[("checkpoint", "anima.safetensors")]),
+            ),
+            machine_snapshot=_machine(total_vram_mb=24_000, free_vram_mb=16_000),
+            selected_runner=_runner(
+                "core",
+                RunnerMemoryClass.UNKNOWN,
+                kind=RunnerKind.CORE_COMFYUI,
+                confidence=RunnerMemoryEstimateConfidence.UNKNOWN,
+                source=RunnerMemoryEstimateSource.UNKNOWN,
+                status=RunnerStatus.IDLE_WARM,
+                idle_vram_mb=6_000,
+                model_payload=_model_payload(models=[("checkpoint", "chroma.safetensors")]),
+            ),
+            resident_runners=[],
+        )
+    )
+
+    assert decision.reason_code != "unknown_memory_class_denies_co_residence"
+    assert decision.action is not MemoryDecisionAction.BLOCKED_BY_MEMORY
+    assert decision.action is MemoryDecisionAction.START_CO_RESIDENT
+
+
 def test_memory_admission_denies_unknown_memory_class() -> None:
     decision = decide_memory_admission(
         MemoryAdmissionRequest(

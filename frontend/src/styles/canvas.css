@@ -377,9 +377,17 @@
 }
 
 .canvas-widget-group__control-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.canvas-widget-group__control-heading {
   display: grid;
   gap: 3px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .canvas-widget-group__control-header h4 {
@@ -1170,6 +1178,61 @@
   font: inherit;
   font-size: 13px;
   outline: none;
+}
+
+/* seed widget: compact single-button "after each run" behaviour toggle */
+
+.seed-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* The seed control always has a live mode, so the icon itself reads as
+     active in brand purple. */
+  color: var(--primary-hover);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.seed-mode-toggle:hover:not(:disabled),
+.seed-mode-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--primary-hover);
+  outline: none;
+}
+
+.seed-mode-toggle:disabled {
+  color: var(--text-muted);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* classic list view: value input + inline mode toggle */
+.seed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seed-control > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.seed-control .seed-mode-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
 }
 
 /* secondary-button small variant */

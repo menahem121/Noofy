@@ -251,6 +251,43 @@ describe("DashboardInputControl", () => {
     expect(onChange).toHaveBeenCalledWith(false);
   });
 
+  it("renders the seed control with a single toggle button that cycles the mode", () => {
+    const onChange = vi.fn();
+    const onSeedModeChange = vi.fn();
+    render(
+      <DashboardInputControl
+        control={{ id: "seed", type: "seed_widget", label: "Seed", input_id: "seed" }}
+        input={{
+          id: "seed",
+          label: "Seed",
+          control: "seed_widget",
+          binding: { node_id: "7", input_name: "seed" },
+          default: 123,
+          validation: { seed_mode: "increment" },
+        }}
+        value={123}
+        seedMode="increment"
+        onSeedModeChange={onSeedModeChange}
+        onChange={onChange}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    // The value remains directly editable.
+    const valueInput = screen.getByRole("spinbutton") as HTMLInputElement;
+    expect(valueInput.value).toBe("123");
+
+    // A single button reflects the current mode and advances to the next one.
+    const toggle = screen.getByRole("button", { name: /seed behavior/i });
+    expect(toggle).toHaveAttribute("data-seed-mode", "increment");
+
+    fireEvent.click(toggle);
+    expect(onSeedModeChange).toHaveBeenCalledWith("randomize");
+
+    // There is no dropdown anymore.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
   it("renders decimal sliders with configured step size", () => {
     const onChange = vi.fn();
 

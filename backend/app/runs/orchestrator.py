@@ -55,7 +55,7 @@ UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
 EnsureWorkflowRunner = Callable[[WorkflowPackage], Awaitable[str | dict[str, Any] | None]]
 WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
-EvictIdleRunners = Callable[[MemoryGovernorDecision], Awaitable[EngineJob | None]]
+EvictIdleRunners = Callable[..., Awaitable[EngineJob | None]]
 MemoryStatusPayload = Callable[..., dict[str, Any]]
 RecordMemoryMetric = Callable[[str], None]
 StartMemorySampling = Callable[..., None]
@@ -592,7 +592,10 @@ class RunOrchestrator:
                 reservation_token,
                 notify_state_change=False,
             )
-            return await self.evict_idle_runners(memory_decision)
+            return await self.evict_idle_runners(
+                memory_decision,
+                selected_runner_id=runner.runner_id,
+            )
         return None
 
     def _record_run_blocked(self, package: WorkflowPackage, reason: str) -> None:
@@ -733,6 +736,9 @@ class RunOrchestrator:
             and isinstance(memory_signatures.get("execution_profile_signature"), str)
             else None
         )
+        admitted_estimate = (
+            memory_decision.workflow_estimate if memory_decision is not None else None
+        )
         self.runner_supervisor.commit_runner_submission(
             reservation_token,
             job_id=job.job_id,
@@ -741,6 +747,15 @@ class RunOrchestrator:
             model_residency_payload=model_residency_payload,
             execution_profile_signature=execution_profile_signature,
             memory_signatures_known=isinstance(memory_signatures, dict),
+            memory_class=admitted_estimate.memory_class
+            if admitted_estimate is not None
+            else None,
+            memory_estimate_source=admitted_estimate.effective_source
+            if admitted_estimate is not None
+            else None,
+            memory_estimate_confidence=admitted_estimate.confidence
+            if admitted_estimate is not None
+            else None,
         )
         if queue_id is not None:
             self.workflow_run_queue_service.mark_submitted(queue_id, job_id=job.job_id)

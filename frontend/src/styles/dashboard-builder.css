@@ -1496,9 +1496,16 @@
   flex: 0 0 100px;
 }
 
-.preview-int__hint {
-  color: var(--text-muted);
-  font-size: 11px;
+.preview-int__seed-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--primary-hover);
 }
 
 .preview-toggle {
@@ -2491,6 +2498,19 @@
 
 .layout-preview-seed .layout-preview-button {
   padding: 0 12px;
+}
+
+.layout-preview-seed-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  align-self: stretch;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--primary-hover);
 }
 
 .layout-preview-toggle {
