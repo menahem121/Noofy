@@ -14,6 +14,13 @@ from app.workflows.store_paths import safe_store_segment
 
 LOCAL_MODEL_IDENTITY_SCHEMA_VERSION = 1
 
+# Workflow status polling looks the same models up over and over. Cache-hit
+# events are logged once per path per process so repeated hits cannot flood the
+# bounded diagnostics store and push out load-bearing events, and the
+# last_used_at column is only rewritten when it is older than this window.
+_CACHE_HIT_LOG_DEDUPE_LIMIT = 1024
+_TOUCH_REFRESH_INTERVAL_SECONDS = 3600
+
 ModelRootType = Literal["noofy_models", "external_comfyui_models"]
 
 
@@ -34,6 +41,7 @@ class LocalModelIdentityStore:
         self.db_path = db_path
         self.log_store = log_store
         self._lock = threading.RLock()
+        self._logged_cache_hits: set[str] = set()
         self._ensure_ready()
 
     def get_valid_hash(
@@ -55,13 +63,11 @@ class LocalModelIdentityStore:
                 ).fetchone()
                 if row is not None:
                     if _strict_metadata_matches(row, stat):
-                        self._touch(conn, int(row["id"]), now)
-                        self._record_cache_event(
-                            "debug",
-                            "Local model hash cache hit",
+                        self._touch_if_stale(conn, row, now)
+                        self._record_cache_hit(
                             context,
                             path,
-                            details={"lookup": "resolved_path"},
+                            lookup="resolved_path",
                         )
                         return str(row["sha256"])
                     self._delete_row(conn, int(row["id"]))
@@ -99,12 +105,10 @@ class LocalModelIdentityStore:
                         stat=stat,
                         now=now,
                     )
-                    self._record_cache_event(
-                        "debug",
-                        "Local model hash cache hit",
+                    self._record_cache_hit(
                         context,
                         path,
-                        details={"lookup": "root_relative_path"},
+                        lookup="root_relative_path",
                     )
                     return sha256
         except sqlite3.DatabaseError as exc:
@@ -263,6 +267,47 @@ class LocalModelIdentityStore:
             (now, row_id),
         )
         conn.commit()
+
+    def _touch_if_stale(self, conn: sqlite3.Connection, row: sqlite3.Row, now: str) -> None:
+        """Refresh last_used_at only when it has aged past the refresh window.
+
+        last_used_at exists to order fallback lookups by recency; rewriting it
+        on every cache hit turns each workflow-status poll into a write
+        transaction per model for no recency benefit.
+        """
+        last_used_raw = row["last_used_at"]
+        if isinstance(last_used_raw, str):
+            try:
+                last_used = datetime.fromisoformat(last_used_raw)
+                current = datetime.fromisoformat(now)
+            except ValueError:
+                pass
+            else:
+                age = (current - last_used).total_seconds()
+                if 0 <= age < _TOUCH_REFRESH_INTERVAL_SECONDS:
+                    return
+        self._touch(conn, int(row["id"]), now)
+
+    def _record_cache_hit(
+        self,
+        context: LocalModelIdentityContext,
+        path: Path,
+        *,
+        lookup: str,
+    ) -> None:
+        dedupe_key = f"{lookup}:{path}"
+        if dedupe_key in self._logged_cache_hits:
+            return
+        if len(self._logged_cache_hits) >= _CACHE_HIT_LOG_DEDUPE_LIMIT:
+            self._logged_cache_hits.clear()
+        self._logged_cache_hits.add(dedupe_key)
+        self._record_cache_event(
+            "debug",
+            "Local model hash cache hit",
+            context,
+            path,
+            details={"lookup": lookup},
+        )
 
     def _delete_row(self, conn: sqlite3.Connection, row_id: int) -> None:
         conn.execute("DELETE FROM local_model_identities WHERE id = ?", (row_id,))

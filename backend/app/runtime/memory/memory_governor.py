@@ -511,6 +511,16 @@ class MemoryReleaseCheckResult(BaseModel):
     snapshots: list[MachineMemorySnapshot] = Field(default_factory=list)
     timeline: list[dict[str, Any]] = Field(default_factory=list)
     reason_code: str
+    # Measurement proof: free RAM and VRAM before cleanup (baseline), and the
+    # last values observed before the release decision. Both metrics are
+    # always recorded so a block can never silently rest on one of them.
+    baseline_free_vram_mb: int | None = None
+    baseline_free_ram_mb: int | None = None
+    final_free_vram_mb: int | None = None
+    final_free_ram_mb: int | None = None
+    # Which requirements were still unmet when the check gave up. Empty for a
+    # confirmed release.
+    blocking_constraints: list[str] = Field(default_factory=list)
 
 
 class MemoryUserStatus(BaseModel):
@@ -1866,6 +1876,31 @@ def decide_memory_admission(request: MemoryAdmissionRequest) -> MemoryGovernorDe
     )
 
 
+def memory_release_blocking_constraints(
+    snapshot: MachineMemorySnapshot,
+    *,
+    required_free_vram_mb: int | None = None,
+    required_free_ram_mb: int | None = None,
+    require_observed_drop: bool = False,
+    memory_drop_observed: bool = False,
+) -> list[str]:
+    """Name the requirements that were still unmet when a release check ended."""
+    constraints: list[str] = []
+    if snapshot.memory_pressure is MemoryPressureLevel.HIGH:
+        constraints.append("memory_pressure_high")
+    if required_free_vram_mb is not None and (
+        snapshot.free_vram_mb is None or snapshot.free_vram_mb < required_free_vram_mb
+    ):
+        constraints.append("vram_below_required")
+    if required_free_ram_mb is not None and (
+        snapshot.free_ram_mb is None or snapshot.free_ram_mb < required_free_ram_mb
+    ):
+        constraints.append("ram_below_required")
+    if require_observed_drop and not memory_drop_observed:
+        constraints.append("no_observed_memory_drop")
+    return constraints
+
+
 def wait_for_memory_release(
     observer: MachineMemoryObserver,
     *,
@@ -1878,6 +1913,7 @@ def wait_for_memory_release(
     """Poll memory snapshots until required free memory appears or timeout."""
     sleeper = sleeper or time.sleep
     snapshots: list[MachineMemorySnapshot] = []
+    snapshot: MachineMemorySnapshot | None = None
     for index in range(max(1, max_checks)):
         snapshot = observer.snapshot()
         snapshots.append(snapshot)
@@ -1900,6 +1936,8 @@ def wait_for_memory_release(
                 required_free_ram_mb=required_free_ram_mb,
                 snapshots=snapshots,
                 reason_code="memory_released",
+                final_free_vram_mb=snapshot.free_vram_mb,
+                final_free_ram_mb=snapshot.free_ram_mb,
             )
         if index < max_checks - 1:
             sleeper(interval_seconds)
@@ -1909,6 +1947,15 @@ def wait_for_memory_release(
         required_free_ram_mb=required_free_ram_mb,
         snapshots=snapshots,
         reason_code="memory_release_timeout",
+        final_free_vram_mb=snapshot.free_vram_mb if snapshot is not None else None,
+        final_free_ram_mb=snapshot.free_ram_mb if snapshot is not None else None,
+        blocking_constraints=memory_release_blocking_constraints(
+            snapshot,
+            required_free_vram_mb=required_free_vram_mb,
+            required_free_ram_mb=required_free_ram_mb,
+        )
+        if snapshot is not None
+        else [],
     )
 
 
@@ -1961,6 +2008,12 @@ async def wait_for_memory_release_async(
             snapshots=snapshots,
             timeline=timeline,
             reason_code="memory_release_baseline_unavailable",
+            baseline_free_vram_mb=baseline_snapshot.free_vram_mb
+            if baseline_snapshot is not None
+            else None,
+            baseline_free_ram_mb=baseline_snapshot.free_ram_mb
+            if baseline_snapshot is not None
+            else None,
         )
     started = time.monotonic()
     interval = max(0.001, initial_poll_interval_seconds)
@@ -1978,6 +2031,12 @@ async def wait_for_memory_release_async(
                 snapshots=snapshots,
                 timeline=timeline,
                 reason_code="memory_snapshot_unavailable",
+                baseline_free_vram_mb=baseline_snapshot.free_vram_mb
+                if baseline_snapshot is not None
+                else None,
+                baseline_free_ram_mb=baseline_snapshot.free_ram_mb
+                if baseline_snapshot is not None
+                else None,
             )
         memory_drop_observed = _free_memory_increased(
             snapshot,
@@ -2013,14 +2072,34 @@ async def wait_for_memory_release_async(
                 snapshots=snapshots,
                 timeline=timeline,
                 reason_code="memory_released",
+                baseline_free_vram_mb=baseline_snapshot.free_vram_mb
+                if baseline_snapshot is not None
+                else None,
+                baseline_free_ram_mb=baseline_snapshot.free_ram_mb
+                if baseline_snapshot is not None
+                else None,
+                final_free_vram_mb=snapshot.free_vram_mb,
+                final_free_ram_mb=snapshot.free_ram_mb,
             )
         elapsed = time.monotonic() - started
         if elapsed >= max(0, timeout_seconds):
+            blocking_constraints = memory_release_blocking_constraints(
+                snapshot,
+                required_free_vram_mb=required_free_vram_mb
+                if not confirm_on_drop_only
+                else None,
+                required_free_ram_mb=required_free_ram_mb
+                if not confirm_on_drop_only
+                else None,
+                require_observed_drop=require_observed_drop or confirm_on_drop_only,
+                memory_drop_observed=memory_drop_observed,
+            )
             timeline.append(
                 {
                     "state": "timeout",
                     "free_vram_mb": snapshot.free_vram_mb,
                     "free_ram_mb": snapshot.free_ram_mb,
+                    "blocking_constraints": blocking_constraints,
                 }
             )
             return MemoryReleaseCheckResult(
@@ -2030,6 +2109,15 @@ async def wait_for_memory_release_async(
                 snapshots=snapshots,
                 timeline=timeline,
                 reason_code="memory_release_timeout",
+                baseline_free_vram_mb=baseline_snapshot.free_vram_mb
+                if baseline_snapshot is not None
+                else None,
+                baseline_free_ram_mb=baseline_snapshot.free_ram_mb
+                if baseline_snapshot is not None
+                else None,
+                final_free_vram_mb=snapshot.free_vram_mb,
+                final_free_ram_mb=snapshot.free_ram_mb,
+                blocking_constraints=blocking_constraints,
             )
         timeline.append(
             {
@@ -2060,12 +2148,14 @@ def _free_memory_increased(
     previous_free_vram_mb: int | None,
     previous_free_ram_mb: int | None,
 ) -> bool:
-    if (
-        baseline_snapshot is not None
-        and baseline_snapshot.free_vram_mb is not None
-        and snapshot.free_vram_mb is not None
-    ):
-        return snapshot.free_vram_mb > baseline_snapshot.free_vram_mb
+    """True when free VRAM or free RAM rose above its reference value.
+
+    VRAM and RAM are judged independently and either increase counts: a core
+    `/free` may release RAM-cached models without moving VRAM (idle GPU), or
+    release VRAM while the Python allocator retains process RSS. Each metric
+    compares against the pre-cleanup baseline when that baseline value exists,
+    otherwise against the previous poll.
+    """
     return any(
         current is not None and reference is not None and current > reference
         for current, reference in [
@@ -2073,12 +2163,14 @@ def _free_memory_increased(
                 snapshot.free_vram_mb,
                 baseline_snapshot.free_vram_mb
                 if baseline_snapshot is not None
+                and baseline_snapshot.free_vram_mb is not None
                 else previous_free_vram_mb,
             ),
             (
                 snapshot.free_ram_mb,
                 baseline_snapshot.free_ram_mb
                 if baseline_snapshot is not None
+                and baseline_snapshot.free_ram_mb is not None
                 else previous_free_ram_mb,
             ),
         ]

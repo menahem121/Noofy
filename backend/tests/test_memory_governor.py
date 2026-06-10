@@ -42,6 +42,7 @@ from app.runtime.memory.memory_governor import (
     eviction_candidates,
     estimate_evidence_rank,
     likely_memory_error,
+    memory_release_blocking_constraints,
     memory_release_satisfied,
     memory_pressure_from_free_ratio,
     preferred_memory_estimate,
@@ -851,6 +852,156 @@ async def test_wait_for_memory_release_async_requires_observed_drop_when_request
         event["state"] == "observed_memory_drop"
         for event in result.timeline
     )
+
+
+@pytest.mark.anyio
+async def test_wait_for_memory_release_async_counts_ram_only_drop_as_observed() -> None:
+    """A core `/free` that releases RAM-cached models must confirm even when
+    VRAM never moves. Before the fix, the observed-drop check short-circuited
+    to VRAM whenever VRAM stats existed, so a RAM-only release timed out with
+    memory_cleanup_failed despite both free-memory thresholds being satisfied.
+    """
+    baseline = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=8_000,
+        free_ram_mb=2_000,
+        memory_pressure=MemoryPressureLevel.LOW,
+    )
+    after_cleanup = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=8_000,  # unchanged: nothing was resident on the GPU
+        free_ram_mb=9_000,  # RAM-cached models were released
+        memory_pressure=MemoryPressureLevel.LOW,
+    )
+
+    result = await wait_for_memory_release_async(
+        _SequenceMemoryObserver([after_cleanup]),
+        required_free_vram_mb=6_000,
+        required_free_ram_mb=8_000,
+        baseline_snapshot=baseline,
+        require_observed_drop=True,
+        timeout_seconds=0.1,
+        initial_poll_interval_seconds=0.001,
+    )
+
+    assert result.status is MemoryReleaseStatus.RELEASED
+    assert result.baseline_free_vram_mb == 8_000
+    assert result.baseline_free_ram_mb == 2_000
+    assert result.final_free_vram_mb == 8_000
+    assert result.final_free_ram_mb == 9_000
+    assert result.blocking_constraints == []
+
+
+@pytest.mark.anyio
+async def test_wait_for_memory_release_async_confirms_drop_only_on_ram_release() -> None:
+    """Narrow same-core `/free` confirmation accepts a RAM-only drop."""
+    baseline = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=8_000,
+        free_ram_mb=2_000,
+        memory_pressure=MemoryPressureLevel.LOW,
+    )
+    after_cleanup = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=8_000,
+        free_ram_mb=3_500,
+        memory_pressure=MemoryPressureLevel.LOW,
+    )
+
+    result = await wait_for_memory_release_async(
+        _SequenceMemoryObserver([after_cleanup]),
+        baseline_snapshot=baseline,
+        require_observed_drop=True,
+        confirm_on_drop_only=True,
+        timeout_seconds=0.1,
+        initial_poll_interval_seconds=0.001,
+    )
+
+    assert result.status is MemoryReleaseStatus.RELEASED
+
+
+@pytest.mark.anyio
+async def test_wait_for_memory_release_async_records_ram_and_vram_proof_on_block() -> None:
+    """Before a run is blocked, the release check must prove both RAM and VRAM
+    were measured before cleanup (baseline), after cleanup (snapshots), and at
+    the blocking decision (finals + named unmet constraints).
+    """
+    baseline = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=2_000,
+        free_ram_mb=2_000,
+        memory_pressure=MemoryPressureLevel.MEDIUM,
+    )
+    after_cleanup = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        free_vram_mb=7_000,  # VRAM released and above its requirement
+        free_ram_mb=2_500,  # RAM retained by the process: below requirement
+        memory_pressure=MemoryPressureLevel.MEDIUM,
+    )
+
+    result = await wait_for_memory_release_async(
+        _SequenceMemoryObserver([after_cleanup]),
+        required_free_vram_mb=6_000,
+        required_free_ram_mb=8_000,
+        baseline_snapshot=baseline,
+        require_observed_drop=True,
+        timeout_seconds=0,
+    )
+
+    assert result.status is MemoryReleaseStatus.TIMEOUT
+    assert result.baseline_free_vram_mb == 2_000
+    assert result.baseline_free_ram_mb == 2_000
+    assert result.final_free_vram_mb == 7_000
+    assert result.final_free_ram_mb == 2_500
+    assert result.blocking_constraints == ["ram_below_required"]
+    assert result.timeline[-1]["blocking_constraints"] == ["ram_below_required"]
+
+
+def test_sync_wait_for_memory_release_records_finals_and_constraints() -> None:
+    result = wait_for_memory_release(
+        _SequenceMemoryObserver(
+            [
+                MachineMemorySnapshot(
+                    backend=MemoryBackend.CUDA,
+                    free_vram_mb=1_000,
+                    free_ram_mb=9_000,
+                    memory_pressure=MemoryPressureLevel.LOW,
+                ),
+            ]
+        ),
+        required_free_vram_mb=6_000,
+        required_free_ram_mb=4_000,
+        max_checks=2,
+        interval_seconds=0,
+        sleeper=lambda _: None,
+    )
+
+    assert result.status is MemoryReleaseStatus.TIMEOUT
+    assert result.final_free_vram_mb == 1_000
+    assert result.final_free_ram_mb == 9_000
+    assert result.blocking_constraints == ["vram_below_required"]
+
+
+def test_memory_release_blocking_constraints_names_every_unmet_requirement() -> None:
+    constraints = memory_release_blocking_constraints(
+        MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            free_vram_mb=1_000,
+            free_ram_mb=1_000,
+            memory_pressure=MemoryPressureLevel.HIGH,
+        ),
+        required_free_vram_mb=6_000,
+        required_free_ram_mb=8_000,
+        require_observed_drop=True,
+        memory_drop_observed=False,
+    )
+
+    assert constraints == [
+        "memory_pressure_high",
+        "vram_below_required",
+        "ram_below_required",
+        "no_observed_memory_drop",
+    ]
 
 
 def test_memory_release_satisfied_requires_margin_and_low_pressure() -> None:

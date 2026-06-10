@@ -109,3 +109,58 @@ def test_store_quarantines_corrupt_database_without_blocking_verification(tmp_pa
     assert store.get_valid_hash(path, _context()) == "c" * 64
     assert list(db_path.parent.glob("cache.db.corrupt.*"))
     assert log_store.list_events(level="warning").events
+
+
+def test_cache_hit_events_are_logged_once_per_path(tmp_path: Path) -> None:
+    """Repeated availability polls must not flood the bounded diagnostics
+    store with one cache-hit event per model per poll."""
+    path = tmp_path / "models" / "checkpoints" / "demo.safetensors"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"model")
+    log_store = LogStore()
+    store = LocalModelIdentityStore(tmp_path / "identity" / "cache.db", log_store=log_store)
+    store.remember_hash(path, _context(), "a" * 64)
+
+    for _ in range(5):
+        assert store.get_valid_hash(path, _context()) == "a" * 64
+
+    hit_events = [
+        event
+        for event in log_store.list_events(limit=100).events
+        if event.message == "Local model hash cache hit"
+    ]
+    assert len(hit_events) == 1
+
+
+def test_cache_hit_touch_writes_are_throttled(tmp_path: Path) -> None:
+    """last_used_at is refreshed only after the refresh window, not per hit."""
+    import sqlite3
+    from datetime import UTC, datetime, timedelta
+
+    path = tmp_path / "models" / "checkpoints" / "demo.safetensors"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"model")
+    db_path = tmp_path / "identity" / "cache.db"
+    store = LocalModelIdentityStore(db_path)
+    store.remember_hash(path, _context(), "a" * 64)
+
+    def read_last_used() -> str:
+        with sqlite3.connect(db_path) as conn:
+            return conn.execute(
+                "SELECT last_used_at FROM local_model_identities"
+            ).fetchone()[0]
+
+    def write_last_used(value: str) -> None:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE local_model_identities SET last_used_at = ?", (value,))
+            conn.commit()
+
+    fresh = datetime.now(UTC).isoformat()
+    write_last_used(fresh)
+    assert store.get_valid_hash(path, _context()) == "a" * 64
+    assert read_last_used() == fresh  # fresh timestamp: no write
+
+    stale = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    write_last_used(stale)
+    assert store.get_valid_hash(path, _context()) == "a" * 64
+    assert read_last_used() != stale  # aged past the window: refreshed

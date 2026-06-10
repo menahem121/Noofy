@@ -661,6 +661,11 @@ class WorkflowRunnerLifecycleService:
                                     "reason": release_check.reason_code,
                                     "required_free_vram_mb": release_check.required_free_vram_mb,
                                     "required_free_ram_mb": release_check.required_free_ram_mb,
+                                    "baseline_free_vram_mb": release_check.baseline_free_vram_mb,
+                                    "baseline_free_ram_mb": release_check.baseline_free_ram_mb,
+                                    "final_free_vram_mb": release_check.final_free_vram_mb,
+                                    "final_free_ram_mb": release_check.final_free_ram_mb,
+                                    "blocking_constraints": list(release_check.blocking_constraints),
                                 },
                             )
                             return {
