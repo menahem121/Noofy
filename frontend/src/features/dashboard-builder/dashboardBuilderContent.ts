@@ -428,7 +428,7 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
     height: "Height",
     seed: "Variation ID",
     denoise: "Transformation level",
-    steps: "Detail passes",
+    steps: "Refinement Level",
     cfg: "Prompt strength",
     strength: "Strength",
     image: "Input image",
