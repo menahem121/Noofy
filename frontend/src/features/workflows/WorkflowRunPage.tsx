@@ -238,6 +238,9 @@ const preparationBlockedStatuses = new Set([
   "unsupported",
   "unsupported_runtime_profile",
 ]);
+// Install states where preparation has not actually started; they must not
+// open the preparation dialog (the run path may never prepare these at all).
+const passivePreparationStatuses = new Set(["pending", "imported"]);
 const comparisonImageInputControlTypes = new Set(["load_image", "load_image_mask"]);
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
@@ -1426,7 +1429,12 @@ export function WorkflowRunPage({
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
   const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
   const showMemoryLoadedPill = Boolean(memoryStatus && isWarmReusableMemoryState(memoryStatus.state));
-  const showUserFacingMemoryNotice = Boolean(memoryNotice && !showMemoryLoadedPill && memoryNotice.title !== "Memory status");
+  const showUserFacingMemoryNotice = Boolean(
+    memoryNotice
+      && !showMemoryLoadedPill
+      && memoryNotice.title !== "Memory status"
+      && !(memoryStatus && isSilentQueuedMemoryState(memoryStatus.state)),
+  );
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
     !isRunning &&
@@ -1475,6 +1483,7 @@ export function WorkflowRunPage({
   const cancelTooltip = remainingTrackedRunCount > 1
     ? "Cancel current run and all queued runs for this workflow"
     : "Cancel current run";
+  const previewProgressMessage = progressMessage(displayedProgress, state.result, memoryStatus);
   const topBarProgress = isRunning ? {
     percent: progressPercent,
     remainingCount: remainingTrackedRunCount || undefined,
@@ -1970,7 +1979,7 @@ export function WorkflowRunPage({
           <div className="panel-heading">
             <div>
               <h2>Preview</h2>
-              <p>{progressMessage(displayedProgress, state.result, memoryStatus)}</p>
+              {previewProgressMessage ? <p>{previewProgressMessage}</p> : null}
             </div>
             {state.validation?.valid ? (
               <span className="mini-status">
@@ -2868,9 +2877,15 @@ function progressFromSubmittedJob(job: EngineJob): JobProgress {
   };
 }
 
+function installRequiresPreparation(workflowStatus: WorkflowStatusResponse | null) {
+  return (workflowStatus?.install ?? {})["requires_preparation"] !== false;
+}
+
 function shouldShowRunPreparationDialog(workflowStatus: WorkflowStatusResponse | null) {
   const installStatus = workflowInstallStatus(workflowStatus);
-  return Boolean(installStatus && installStatus !== "ready");
+  return Boolean(
+    installRequiresPreparation(workflowStatus) && installStatus && installStatus !== "ready",
+  );
 }
 
 function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse | null): RunPreparationDialogState | null {
@@ -2880,6 +2895,10 @@ function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse |
   if (!shouldShowRunPreparationDialog(workflowStatus)) return null;
   const install = workflowStatus?.install ?? {};
   const installStatus = workflowInstallStatus(workflowStatus);
+  // Passive statuses mean preparation has not actually started yet. Keep the
+  // dialog closed until polling sees active preparation (or a failure), so
+  // runs that never prepare don't flash "Preparing workflow".
+  if (installStatus && passivePreparationStatuses.has(installStatus)) return null;
   const lastError = installString(install, "last_error");
   const userMessage = installString(install, "user_facing_message");
   const failed = Boolean(installStatus && preparationFailureStatuses.has(installStatus));
@@ -3052,7 +3071,10 @@ function preparationPhaseStatusLabel(status: PreparationPhaseStatus) {
 }
 
 function progressMessage(progress: JobProgress | null, result: JobResult | null, memoryStatus: MemoryStatus | null = null) {
-  if (memoryStatus) return memoryStatusDisplay(memoryStatus).message;
+  if (memoryStatus) {
+    if (!isSilentQueuedMemoryState(memoryStatus.state)) return memoryStatusDisplay(memoryStatus).message;
+    if (progress?.status === "queued_pending_memory") return null;
+  }
   if (progress?.status === "running") return progress.message ?? "Generating image...";
   if (progress?.status === "queued") return progress.message ?? "Preparing workflow...";
   if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for memory.";
@@ -3211,6 +3233,13 @@ function isWarmReusableMemoryState(state: string) {
   return state === "ready_warm_co_resident" || state === "ready_reusing_runner";
 }
 
+// Queueing another run behind this workflow's own active run is expected
+// background behavior: the top-bar progress and queue count are the only
+// feedback, never a notice/banner.
+function isSilentQueuedMemoryState(state: string) {
+  return state === "queued_behind_active_run";
+}
+
 function isBlockingMemoryState(state: string) {
   return state === "blocked_by_memory" || state === "memory_cleanup_failed" || state.startsWith("blocked_");
 }
@@ -3239,6 +3268,13 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
     return {
       title: "Waiting for the GPU",
       message: "Noofy will start this run when the GPU is available.",
+    };
+  }
+  if (state === "queued_behind_active_run") {
+    // Defensive display metadata only; user-facing callers suppress this state.
+    return {
+      title: "Run queued",
+      message: "This run will start when the current run finishes.",
     };
   }
   if (state === "waiting_for_active_workflow") {

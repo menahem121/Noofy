@@ -717,6 +717,9 @@ class EngineService:
             getattr(capsule_lock.runtime, "runner_process_compatibility_key", None)
             or getattr(capsule_lock.runtime, "runner_fingerprint", None)
         )
+        # Busy statuses count as available here: the run orchestrator's
+        # submission reservation queues the run behind the bound runner, so a
+        # second Run press must not be rejected as "runner not ready".
         if (
             runner is not None
             and (
@@ -728,6 +731,11 @@ class EngineService:
                 RunnerStatus.READY,
                 RunnerStatus.IDLE,
                 RunnerStatus.IDLE_WARM,
+                RunnerStatus.CO_RESIDENT,
+                RunnerStatus.RUNNING,
+                RunnerStatus.RESERVING,
+                RunnerStatus.SUBMITTING,
+                RunnerStatus.LOADING_MODEL,
             }
         ):
             return None

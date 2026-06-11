@@ -614,7 +614,12 @@ class WorkflowRunnerLifecycleService:
         if capsule_lock is None:
             return self._unsupported_install_payload(workflow_id)
         state = self.capsule_installer.get_state(capsule_lock)
-        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
+        return self._install_payload(
+            workflow_id,
+            state,
+            capsule_lock=capsule_lock,
+            requires_preparation=bool(capsule_lock.custom_nodes),
+        )
 
     def get_install_state_developer_details(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
@@ -1277,12 +1282,24 @@ class WorkflowRunnerLifecycleService:
         state: InstallState,
         *,
         capsule_lock: CapsuleLock | None = None,
+        requires_preparation: bool = True,
     ) -> dict[str, object]:
+        # Workflows with nothing to prepare (no custom nodes, so they run on
+        # the core runner) would otherwise sit in "pending" forever because the
+        # run path never prepares them. Report them as ready so the UI does not
+        # keep offering or announcing a preparation that will never happen.
+        status = state.status
+        if not requires_preparation and status in {
+            InstallStatus.PENDING,
+            InstallStatus.IMPORTED,
+        }:
+            status = InstallStatus.READY
         return sanitize({
             "workflow_id": workflow_id,
             "capsule_fingerprint": state.capsule_fingerprint,
-            "status": state.status.value,
-            "user_facing_message": user_facing_install_message(state.status),
+            "status": status.value,
+            "user_facing_message": user_facing_install_message(status),
+            "requires_preparation": requires_preparation,
             "installed_at": state.installed_at,
             "last_used_at": state.last_used_at,
             "dependency_env_path": state.dependency_env_path,
@@ -1302,6 +1319,7 @@ class WorkflowRunnerLifecycleService:
             "capsule_fingerprint": None,
             "status": InstallStatus.UNSUPPORTED.value,
             "user_facing_message": user_facing_install_message(InstallStatus.UNSUPPORTED),
+            "requires_preparation": True,
             "installed_at": None,
             "last_used_at": None,
             "dependency_env_path": None,

@@ -846,12 +846,25 @@ class RunOrchestrator:
             reason="runner_submission_reservation_unavailable",
             queue_id=queue_id,
         )
+        # Queueing another run of the workflow that is already occupying the
+        # runner is normal background behavior, not a warning state: the
+        # frontend keeps this state silent and relies on the queue indicator.
+        if self.runner_supervisor.runner_busy_with_workflow(runner.runner_id, workflow_id):
+            state = "queued_behind_active_run"
+            message = "This run is queued and will start when the current run finishes."
+        else:
+            state = "waiting_for_active_workflow"
+            message = "Noofy will start this workflow after the active run finishes."
         self.log_store.add(
             "info",
             "Workflow run queued because runner submission reservation is busy",
             "runs.orchestrator",
             workflow_id=workflow_id,
-            details={"queue_id": queued.queue_id, "runner_id": runner.runner_id},
+            details={
+                "queue_id": queued.queue_id,
+                "runner_id": runner.runner_id,
+                "queue_state": state,
+            },
         )
         if self.request_run_dispatch is not None and queue_id is None:
             self.request_run_dispatch("submission_reservation_busy")
@@ -861,10 +874,10 @@ class RunOrchestrator:
             workflow_id=workflow_id,
             engine="noofy",
             status="queued_pending_memory",
-            message="This workflow is waiting for the current runner handoff to finish.",
+            message=message,
             memory_status={
-                "state": "waiting_for_active_workflow",
-                "message": "This workflow is waiting for the current runner handoff to finish.",
+                "state": state,
+                "message": message,
             },
         )
 

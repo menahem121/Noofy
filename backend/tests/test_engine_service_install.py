@@ -12,6 +12,7 @@ import pytest
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
+from app.engine.models import EngineJob, JobProgress
 from app.engine.service import EngineService, _smoke_execution_fixture_for_capsule
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
@@ -66,6 +67,31 @@ class StubAdapter:
 
     async def release_memory(self) -> None:
         self.release_memory_calls += 1
+
+
+class RunCapableAdapter(StubAdapter):
+    """StubAdapter that can also accept run submissions."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_calls: list[dict] = []
+
+    async def run_workflow(self, workflow_package, graph, inputs, options) -> EngineJob:
+        del graph, options
+        self.run_calls.append(dict(inputs))
+        return EngineJob(
+            job_id=f"job-{len(self.run_calls)}",
+            workflow_id=workflow_package.metadata.id,
+            engine="comfyui",
+            status="queued",
+        )
+
+    async def get_progress(self, job_id: str, since_preview_sequence: int | None = None) -> JobProgress:
+        del since_preview_sequence
+        return JobProgress(job_id=job_id, status="running")
+
+    async def cancel_job(self, job_id: str) -> JobProgress:
+        return JobProgress(job_id=job_id, status="canceled")
 
 
 class StubMemoryObserver:
@@ -326,14 +352,38 @@ class RecordingSidecarService:
         self.shutdown_called = True
 
 
-def test_get_install_state_for_bundled_workflow_starts_pending(tmp_path: Path) -> None:
+def test_get_install_state_reports_no_custom_node_workflow_as_ready(tmp_path: Path) -> None:
+    """Core-runner workflows have nothing to prepare, so they never sit in a
+    fake "pending" state that makes the UI announce preparation forever."""
     service = _build_service(tmp_path)
 
     payload = service.get_install_state("text_to_image_v0")
 
     assert payload["workflow_id"] == "text_to_image_v0"
+    assert payload["status"] == InstallStatus.READY.value
+    assert payload["user_facing_message"] == "Ready"
+    assert payload["requires_preparation"] is False
+
+
+def test_get_install_state_for_custom_node_workflow_starts_pending(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload()
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+
+    payload = service.get_install_state("runner_workflow")
+
     assert payload["status"] == InstallStatus.PENDING.value
     assert payload["user_facing_message"] == "Not started"
+    assert payload["requires_preparation"] is True
 
 
 def test_get_install_state_for_unknown_workflow_returns_unsupported(tmp_path: Path) -> None:
@@ -527,12 +577,8 @@ async def test_start_workflow_runner_requires_ready_install_state(tmp_path: Path
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }
     _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
-    coordinator = None
-
     def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
-        nonlocal coordinator
-        coordinator = RecordingRunnerCoordinator(supervisor)
-        return coordinator
+        return RecordingRunnerCoordinator(supervisor)
 
     service = _build_service(
         tmp_path,
@@ -755,6 +801,66 @@ async def test_start_workflow_runner_queues_pending_switch_when_incompatible_run
     assert result["pid"] == 9200
     assert coordinator.started_specs == []
     assert service.runner_supervisor.get_queued_runner_start(result["queue_id"]).workflow_id == "runner_workflow"
+
+
+@pytest.mark.anyio
+async def test_second_run_for_busy_isolated_runner_queues_behind_active_run(tmp_path: Path) -> None:
+    """A second Run press while the workflow's own isolated runner is busy
+    queues the run instead of failing with "runner is not ready: running"."""
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="c")
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    shutil.copy(
+        _bundled_packages_dir() / "text_to_image_v0" / "dashboard.json",
+        packages_dir / "runner_workflow" / "dashboard.json",
+    )
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    started = await service.start_workflow_runner("runner_workflow")
+    assert started["status"] == RunnerStatus.READY.value
+    runner_id = started["runner"]["runner_id"]
+    adapter = RunCapableAdapter()
+    service.runner_supervisor.upsert_runner(
+        service.runner_supervisor.get_runner(runner_id), adapter
+    )
+    service.runner_supervisor.mark_runner_job_started(
+        runner_id, "job-active", workflow_id="runner_workflow"
+    )
+
+    queued = await service.run_workflow(
+        "runner_workflow", inputs={"prompt": "a lake"}, options={}
+    )
+
+    assert isinstance(queued, EngineJob)
+    assert queued.status == "queued_pending_memory"
+    assert queued.memory_status is not None
+    assert queued.memory_status["state"] == "queued_behind_active_run"
+    assert "handoff" not in (queued.message or "")
+    assert adapter.run_calls == []
+
+    # The queued run is handed off automatically once the active run finishes.
+    service.runner_supervisor.mark_runner_job_finished(runner_id, "job-active")
+    await asyncio.sleep(0.05)
+    assert len(adapter.run_calls) == 1
 
 
 @pytest.mark.anyio

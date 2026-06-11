@@ -1821,6 +1821,136 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("never shows the preparation dialog for workflows that do not require preparation", async () => {
+    const runRequest = deferred<Response>();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...workflowStatus,
+            // Even if a passive install state lingers, requires_preparation
+            // false means no preparation will ever run for this workflow.
+            install: { status: "pending", user_facing_message: "Not started", requires_preparation: false },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") return runRequest.promise;
+      if (url.endsWith("/api/jobs/job-warm/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-warm",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-warm/result")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-warm", status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-warm",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the preparation dialog closed for passive install states until preparation actually starts", async () => {
+    const runRequest = deferred<Response>();
+    const pendingStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: { status: "pending", user_facing_message: "Not started", requires_preparation: true },
+    };
+    const preparingStatus = {
+      ...pendingStatus,
+      install: {
+        status: "resolving_dependencies",
+        user_facing_message: "Resolving custom-node dependencies.",
+        requires_preparation: true,
+      },
+    };
+    let statusCalls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return Promise.resolve(jsonResponse(statusCalls > 2 ? preparingStatus : pendingStatus));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") return runRequest.promise;
+      if (url.endsWith("/api/jobs/job-passive/progress")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-passive",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-passive/result")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-passive", status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    // The passive "pending" state means preparation has not started: no dialog.
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+
+    // Once the backend reports active preparation, the dialog opens.
+    expect(await screen.findByRole("dialog", { name: "Preparing workflow" }, { timeout: 3000 })).toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-passive",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    });
+  });
+
   it("does not re-open the preparation dialog on the next run after preparation completed", async () => {
     const firstRunRequest = deferred<Response>();
     const preparingStatus = {
@@ -2162,7 +2292,10 @@ describe("WorkflowRunPage", () => {
     });
 
     render(
-      <RuntimeStatusProvider initialRuntimeState={engineStartingRuntimeState}>
+      // lastCheckedAt must be fresh at render time (the fixture captures
+      // Date.now() at module load): a stale timestamp lets the page's silent
+      // mount refresh through, which would consume the "starting" response.
+      <RuntimeStatusProvider initialRuntimeState={{ ...engineStartingRuntimeState, lastCheckedAt: Date.now() }}>
         <WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />
       </RuntimeStatusProvider>,
     );
@@ -2519,6 +2652,100 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
     },
   );
+
+  it("queues a second run of the same workflow silently, without any warning copy", async () => {
+    let runCalls = 0;
+    let firstProgressCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, () => {
+      runCalls += 1;
+      if (runCalls === 1) {
+        return {
+          job_id: "job-first",
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "running",
+          message: "Runner is ready.",
+          memory_status: {
+            state: "ready_reusing_runner",
+            message: "Runner is ready.",
+            risk_level: "low",
+            queue_id: null,
+            can_cancel: true,
+            can_retry_after_cleanup: false,
+          },
+        };
+      }
+      return {
+        job_id: "queue-second",
+        queue_id: "queue-second",
+        workflow_id: "text_to_image_v0",
+        engine: "noofy",
+        status: "queued_pending_memory",
+        message: "This run is queued and will start when the current run finishes.",
+        memory_status: {
+          state: "queued_behind_active_run",
+          message: "This run is queued and will start when the current run finishes.",
+        },
+      };
+    }, (url) => {
+      if (url.endsWith("/api/jobs/job-first/progress")) {
+        firstProgressCalls += 1;
+        return jsonResponse({
+          job_id: "job-first",
+          status: firstProgressCalls > 1 ? "completed" : "running",
+          value: firstProgressCalls > 1 ? 4 : 1,
+          max: 4,
+          current_node: null,
+          message: firstProgressCalls > 1 ? "Execution completed" : "Generating image...",
+        });
+      }
+      if (url.endsWith("/api/jobs/job-first/result")) {
+        return jsonResponse({ job_id: "job-first", status: "completed", outputs: [], error: null });
+      }
+      if (url.endsWith("/api/jobs/queue-second/progress")) {
+        return jsonResponse({
+          job_id: "queue-second",
+          queue_id: "queue-second",
+          status: "queued_pending_memory",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "This run is queued and will start when the current run finishes.",
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    // The warm-runner run keeps Run enabled, allowing a second click.
+    expect(await screen.findByText("Models loaded")).toBeInTheDocument();
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runCalls).toBe(2));
+
+    // Queueing behind the workflow's own active run is silent: only the
+    // progress/queue indicators communicate it, never a warning.
+    expect(await screen.findByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
+    expect(screen.queryByText("Waiting for another run")).not.toBeInTheDocument();
+    expect(screen.queryByText(/handoff/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Run queued")).not.toBeInTheDocument();
+    expect(screen.queryByText("Developer details")).not.toBeInTheDocument();
+    expect(screen.queryByText("This run is queued and will start when the current run finishes.")).not.toBeInTheDocument();
+
+    // The queue state remains silent after the first run finishes and the
+    // queued run becomes the current tracked handle.
+    await waitFor(() => expect(firstProgressCalls).toBeGreaterThan(1), { timeout: 3000 });
+    await waitFor(() => {
+      expect(document.querySelector(".preview-panel .panel-heading p")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("This run is queued and will start when the current run finishes.")).not.toBeInTheDocument();
+  });
 
   it("clears queued memory copy after cancellation", async () => {
     mockConfiguredDashboardFetch(

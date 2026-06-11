@@ -600,6 +600,19 @@ class RunnerSupervisor:
             reserved_status=RunnerStatus.RESERVING,
         )
 
+    def runner_busy_with_workflow(self, runner_id: str, workflow_id: str) -> bool:
+        """Whether the runner is running or handing off a submission for `workflow_id`."""
+        with self._lock:
+            descriptor = self._descriptors.get(runner_id)
+            if descriptor is None:
+                return False
+            if descriptor.current_workflow_id == workflow_id:
+                return True
+            if descriptor.reservation_token is None:
+                return False
+            reservation = self._reservations.get(descriptor.reservation_token)
+            return reservation is not None and reservation.workflow_id == workflow_id
+
     def mark_runner_submitting(self, token: str) -> RunnerDescriptor | None:
         return self._transition_reserved_runner(token, RunnerStatus.SUBMITTING)
 

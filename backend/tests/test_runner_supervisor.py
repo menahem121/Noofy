@@ -1075,6 +1075,66 @@ def test_existing_workflow_queue_wait_does_not_request_immediate_redispatch() ->
     assert reasons == []
 
 
+def test_runner_busy_with_workflow_covers_submission_reservation_handoff() -> None:
+    _, supervisor = _build_service(RecordingAdapter())
+
+    reservation = supervisor.reserve_runner_for_submission(
+        CORE_RUNNER_ID,
+        workflow_id="text_to_image_v0",
+    )
+
+    assert reservation is not None
+    assert supervisor.runner_busy_with_workflow(CORE_RUNNER_ID, "text_to_image_v0") is True
+    assert supervisor.runner_busy_with_workflow(CORE_RUNNER_ID, "other_workflow") is False
+    supervisor.rollback_runner_reservation(reservation.token)
+
+
+@pytest.mark.anyio
+async def test_second_run_of_same_workflow_queues_silently_behind_active_run() -> None:
+    """Queueing behind the workflow's own active run is normal background
+    behavior: it must use the silent queued state, never handoff wording."""
+    adapter = RecordingAdapter(
+        models=[ModelInfo(folder="checkpoints", filename="v1-5-pruned-emaonly-fp16.safetensors")],
+        next_job_id="job-second",
+    )
+    service, supervisor = _build_service(adapter)
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "job-active", workflow_id="text_to_image_v0")
+
+    queued = await service.run_workflow("text_to_image_v0", inputs={"prompt": "a lake"}, options={})
+
+    assert isinstance(queued, EngineJob)
+    assert queued.status == "queued_pending_memory"
+    assert queued.memory_status is not None
+    assert queued.memory_status["state"] == "queued_behind_active_run"
+    assert "handoff" not in (queued.message or "")
+    assert "handoff" not in str(queued.memory_status.get("message", ""))
+    assert adapter.run_calls == []
+
+    # Once the active run finishes, the queued run is handed off automatically.
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "job-active")
+    await asyncio.sleep(0.05)
+    assert [job_id for job_id, _ in adapter.run_calls] == ["job-second"]
+
+
+@pytest.mark.anyio
+async def test_second_run_behind_another_workflow_keeps_visible_waiting_state() -> None:
+    """Waiting on a different workflow's run still surfaces user-facing context."""
+    adapter = RecordingAdapter(
+        models=[ModelInfo(folder="checkpoints", filename="v1-5-pruned-emaonly-fp16.safetensors")],
+    )
+    service, supervisor = _build_service(adapter)
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "job-active", workflow_id="other_workflow")
+
+    queued = await service.run_workflow("text_to_image_v0", inputs={"prompt": "a lake"}, options={})
+
+    assert isinstance(queued, EngineJob)
+    assert queued.status == "queued_pending_memory"
+    assert queued.memory_status is not None
+    assert queued.memory_status["state"] == "waiting_for_active_workflow"
+    assert queued.memory_status["message"] == "Noofy will start this workflow after the active run finishes."
+    assert "handoff" not in (queued.message or "")
+
+
 def test_memory_input_profile_ignores_prompt_and_seed_but_keeps_memory_changing_inputs() -> None:
     package = WorkflowPackageLoader(PACKAGE_DIR).get_package("text_to_image_v0")
 
