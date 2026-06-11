@@ -155,6 +155,7 @@ interface CanvasDashboardViewProps {
   onRun: () => void;
   onBatchCountChange: (value: number) => void;
   onCancel: () => void;
+  onSwitchView: () => void;
   onDisabledRunAction?: () => void;
   onRestoreDefaults: () => void;
   onEnterEditLayout: () => void;
@@ -212,6 +213,7 @@ export function CanvasDashboardView({
   onRun,
   onBatchCountChange,
   onCancel,
+  onSwitchView,
   onDisabledRunAction,
   onRestoreDefaults,
   onEnterEditLayout,
@@ -631,6 +633,17 @@ export function CanvasDashboardView({
 
                 {optionsOpen ? (
                   <div className="canvas-options-menu__content" role="menu" aria-label="Workflow options">
+                    <button
+                      className="canvas-options-menu__item"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setOptionsOpen(false);
+                        onSwitchView();
+                      }}
+                    >
+                      Switch to Classic view
+                    </button>
                     <button
                       className="canvas-options-menu__item"
                       role="menuitem"

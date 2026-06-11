@@ -4498,7 +4498,30 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
+  });
+
+  it("switches immediately between Canvas and Classic views and persists the preference", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    const canvasOptionsButton = await screen.findByRole("button", { name: /workflow options/i });
+    fireEvent.click(canvasOptionsButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Switch to Classic view" }));
+
+    expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("noofy.prefs") ?? "{}")).toMatchObject({
+      viewMode: "classic",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Switch to Canvas view" }));
+
+    expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("noofy.prefs") ?? "{}")).toMatchObject({
+      viewMode: "canvas",
+    });
   });
 
   it("renders dashboard-only notes as read-only cards in classic mode", async () => {

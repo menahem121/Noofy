@@ -302,7 +302,7 @@ export function WorkflowRunPage({
     livePreviewRef.current = livePreview;
   }, [livePreview]);
 
-  const { viewMode } = useAppPreferences();
+  const { viewMode, setViewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
   const workflowTabs = useOptionalWorkflowTabs();
   const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
@@ -1978,6 +1978,7 @@ export function WorkflowRunPage({
             onRun={() => void handleRun()}
             onBatchCountChange={setBatchCount}
             onCancel={() => void handleCancel()}
+            onSwitchView={() => setViewMode("classic")}
             onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
             onRestoreDefaults={() => void handleRestoreDefaults()}
             onEnterEditLayout={handleEnterEditLayout}
@@ -2071,6 +2072,7 @@ export function WorkflowRunPage({
               <Square size={16} aria-hidden="true" />
               Cancel
             </button>
+            <ClassicWorkflowOptionsMenu onSwitchView={() => setViewMode("canvas")} />
           </div>
         </form>
 
@@ -2177,6 +2179,63 @@ export function WorkflowRunPage({
       {exportDialogElement}
       {requiredModelsModalElement}
     </AppLayout>
+  );
+}
+
+function ClassicWorkflowOptionsMenu({ onSwitchView }: { onSwitchView: () => void }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const optionsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!optionsOpen) return;
+
+    function handlePointerDown(event: globalThis.PointerEvent) {
+      const target = event.target;
+      if (target instanceof Node && optionsRef.current?.contains(target)) return;
+      setOptionsOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOptionsOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [optionsOpen]);
+
+  return (
+    <div className="canvas-options-menu" ref={optionsRef}>
+      <button
+        className="icon-button canvas-options-menu__trigger"
+        type="button"
+        aria-label="Workflow options"
+        aria-haspopup="menu"
+        aria-expanded={optionsOpen}
+        title="Workflow options"
+        onClick={() => setOptionsOpen((open) => !open)}
+      >
+        <SlidersHorizontal size={16} aria-hidden="true" />
+      </button>
+      {optionsOpen ? (
+        <div className="canvas-options-menu__content" role="menu" aria-label="Workflow options">
+          <button
+            className="canvas-options-menu__item"
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOptionsOpen(false);
+              onSwitchView();
+            }}
+          >
+            Switch to Canvas view
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
