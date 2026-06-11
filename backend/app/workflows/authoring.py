@@ -199,6 +199,11 @@ class DashboardAuthoringService:
         # Atomic write: write to a temp file in the same dir, then rename.
         dashboard_file = package_dir / "dashboard.json"
         _atomic_write_json(dashboard_file, on_disk)
+        removed_default_asset_files = self._cleanup_unreferenced_packaged_defaults(
+            parsed_inputs,
+            package_dir=package_dir,
+            workflow_id=workflow_id,
+        )
 
         self.log_store.add(
             "info",
@@ -208,6 +213,7 @@ class DashboardAuthoringService:
                 "workflow_id": workflow_id,
                 "input_count": len(parsed_inputs),
                 "persistence": persistence,
+                "removed_default_asset_files": removed_default_asset_files,
             },
         )
 
@@ -349,6 +355,57 @@ class DashboardAuthoringService:
                 details={"converted_count": converted_count},
             )
         return converted
+
+    def _cleanup_unreferenced_packaged_defaults(
+        self,
+        inputs: list[WorkflowInput],
+        *,
+        package_dir: Path,
+        workflow_id: str,
+    ) -> int:
+        referenced_asset_ids = {
+            str(workflow_input.default["asset_id"])
+            for workflow_input in inputs
+            if is_package_asset_value(workflow_input.default)
+        }
+        assets_dir = package_dir / "assets"
+        defaults_dir = assets_dir / "input-defaults"
+        if not defaults_dir.exists():
+            return 0
+
+        removed_count = 0
+        try:
+            for candidate in defaults_dir.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                relative = candidate.relative_to(assets_dir).as_posix()
+                referenced_id = (
+                    relative.removesuffix(".meta.json")
+                    if relative.endswith(".meta.json")
+                    else relative
+                )
+                if referenced_id in referenced_asset_ids:
+                    continue
+                candidate.unlink()
+                removed_count += 1
+            for directory in sorted(
+                (path for path in defaults_dir.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            ):
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+            if not any(defaults_dir.iterdir()):
+                defaults_dir.rmdir()
+        except OSError as exc:
+            self.log_store.add(
+                "warning",
+                "Could not remove superseded packaged dashboard defaults",
+                "workflow.authoring",
+                workflow_id=workflow_id,
+                details={"error": str(exc), "removed_file_count": removed_count},
+            )
+        return removed_count
 
     def _log_architecture_filter_events(
         self,

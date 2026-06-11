@@ -117,7 +117,11 @@ import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
-import { DashboardInputControl, type LoraBrowserControlProps } from "./DashboardInputControl";
+import {
+  DashboardInputControl,
+  WorkflowDefaultAssetProvider,
+  type LoraBrowserControlProps,
+} from "./DashboardInputControl";
 import { nextSeedValue, seedModeFromValidation, type SeedMode } from "../../lib/seedControl";
 import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
@@ -1829,79 +1833,81 @@ export function WorkflowRunPage({
         contentClassName="workspace-content--canvas-run"
         progress={topBarProgress}
       >
-        <CanvasDashboardView
-          controls={allControls}
-          groups={allGroups}
-          inputIndex={inputIndex}
-          outputIndex={outputIndex}
-          outputImagesByNodeId={outputImagesByNodeId}
-          outputAudiosByNodeId={outputAudiosByNodeId}
-          outputTextsByNodeId={outputTextsByNodeId}
-          outputVideosByNodeId={outputVideosByNodeId}
-          outputFilesByNodeId={outputFilesByNodeId}
-          outputThreeDsByNodeId={outputThreeDsByNodeId}
-          livePreview={activeLivePreview}
-          comparisonBeforeImageUrl={comparisonInputImageUrl}
-          inputValues={inputValues}
-          seedModes={seedModes}
-          onSeedModeChange={handleSeedModeChange}
-          outputPreferences={outputPreferences}
-          gallerySaveByControlId={gallerySaveByControlId}
-          layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
-          actionBarPosition={canvasActionBarPosition}
-          isEditingLayout={isEditingLayout}
-          runState={{
-            isRunning,
-            canRun,
-            canCancel,
-            memoryLoaded: showMemoryLoadedPill,
-            cancelLabel: remainingTrackedRunCount > 1 ? "Cancel Runs" : "Cancel Run",
-            cancelTitle: cancelTooltip,
-            showStatusNotice: showUserFacingMemoryNotice,
-            statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
-            statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
-            disabledReason: runDisabledReason,
-            disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
-            developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
-          }}
-          batchCount={batchCount}
-          exportNoofyUrl={exportWorkflowUrl(workflowId)}
-          exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
-          exportWorkflowName={workflowDisplayTitle}
-          exportReview={exportReview}
-          onChange={(inputId, value) => setInputValue(inputId, value)}
-          onImageUpload={handleImageUpload}
-          onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
-          onImageMaskApply={handleImageMaskApply}
-          onAudioUpload={handleAudioUpload}
-          onVideoUpload={handleVideoUpload}
-          onFileUpload={handleFileUpload}
-          onThreeDUpload={handleThreeDUpload}
-          loraBrowserFor={loraBrowserFor}
-          onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
-          onSaveOutputToGallery={state.result?.status === "completed" ? (controlId) => void handleSaveOutputToGallery(controlId) : undefined}
-          onCancelOutputGallerySave={state.result?.status === "completed" ? (controlId) => void handleCancelOutputGallerySave(controlId) : undefined}
-          onRun={() => void handleRun()}
-          onBatchCountChange={setBatchCount}
-          onCancel={() => void handleCancel()}
-          onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
-          onRestoreDefaults={() => void handleRestoreDefaults()}
-          onEnterEditLayout={handleEnterEditLayout}
-          onSaveLayout={() => void handleSaveLayout()}
-          onCancelLayoutEdit={handleCancelLayoutEdit}
-          onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
-          onLayoutOverride={(controlId: string, layout: GridItemLayout) =>
-            setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
-          }
-          onActionBarPositionChange={(position) => {
-            if (isEditingLayout) {
-              setDraftActionBarPosition(position);
-              setDraftActionBarTouched(true);
-              return;
+        <WorkflowDefaultAssetProvider workflowId={workflowId}>
+          <CanvasDashboardView
+            controls={allControls}
+            groups={allGroups}
+            inputIndex={inputIndex}
+            outputIndex={outputIndex}
+            outputImagesByNodeId={outputImagesByNodeId}
+            outputAudiosByNodeId={outputAudiosByNodeId}
+            outputTextsByNodeId={outputTextsByNodeId}
+            outputVideosByNodeId={outputVideosByNodeId}
+            outputFilesByNodeId={outputFilesByNodeId}
+            outputThreeDsByNodeId={outputThreeDsByNodeId}
+            livePreview={activeLivePreview}
+            comparisonBeforeImageUrl={comparisonInputImageUrl}
+            inputValues={inputValues}
+            seedModes={seedModes}
+            onSeedModeChange={handleSeedModeChange}
+            outputPreferences={outputPreferences}
+            gallerySaveByControlId={gallerySaveByControlId}
+            layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
+            actionBarPosition={canvasActionBarPosition}
+            isEditingLayout={isEditingLayout}
+            runState={{
+              isRunning,
+              canRun,
+              canCancel,
+              memoryLoaded: showMemoryLoadedPill,
+              cancelLabel: remainingTrackedRunCount > 1 ? "Cancel Runs" : "Cancel Run",
+              cancelTitle: cancelTooltip,
+              showStatusNotice: showUserFacingMemoryNotice,
+              statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
+              statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
+              disabledReason: runDisabledReason,
+              disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
+              developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
+            }}
+            batchCount={batchCount}
+            exportNoofyUrl={exportWorkflowUrl(workflowId)}
+            exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
+            exportWorkflowName={workflowDisplayTitle}
+            exportReview={exportReview}
+            onChange={(inputId, value) => setInputValue(inputId, value)}
+            onImageUpload={handleImageUpload}
+            onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
+            onImageMaskApply={handleImageMaskApply}
+            onAudioUpload={handleAudioUpload}
+            onVideoUpload={handleVideoUpload}
+            onFileUpload={handleFileUpload}
+            onThreeDUpload={handleThreeDUpload}
+            loraBrowserFor={loraBrowserFor}
+            onOutputPreferenceChange={(controlId, autoSave) => setOutputPreference(controlId, { auto_save: autoSave })}
+            onSaveOutputToGallery={state.result?.status === "completed" ? (controlId) => void handleSaveOutputToGallery(controlId) : undefined}
+            onCancelOutputGallerySave={state.result?.status === "completed" ? (controlId) => void handleCancelOutputGallerySave(controlId) : undefined}
+            onRun={() => void handleRun()}
+            onBatchCountChange={setBatchCount}
+            onCancel={() => void handleCancel()}
+            onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
+            onRestoreDefaults={() => void handleRestoreDefaults()}
+            onEnterEditLayout={handleEnterEditLayout}
+            onSaveLayout={() => void handleSaveLayout()}
+            onCancelLayoutEdit={handleCancelLayoutEdit}
+            onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
+            onLayoutOverride={(controlId: string, layout: GridItemLayout) =>
+              setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
             }
-            void setActionBarPositionOverride(position);
-          }}
-        />
+            onActionBarPositionChange={(position) => {
+              if (isEditingLayout) {
+                setDraftActionBarPosition(position);
+                setDraftActionBarTouched(true);
+                return;
+              }
+              void setActionBarPositionOverride(position);
+            }}
+          />
+        </WorkflowDefaultAssetProvider>
         {failedRunSummaryElement ? (
           <div className="canvas-run-floating-notices">
             {failedRunSummaryElement}
@@ -1938,22 +1944,24 @@ export function WorkflowRunPage({
           </div>
 
           {hasDashboard ? (
-            <DashboardInputControls
-              items={inputTopLevelItems}
-              inputIndex={inputIndex}
-              inputValues={inputValues}
-              seedModes={seedModes}
-              onSeedModeChange={handleSeedModeChange}
-              onChange={(id, value) => setInputValue(id, value)}
-              onImageUpload={handleImageUpload}
-              onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
-              onImageMaskApply={handleImageMaskApply}
-              onAudioUpload={handleAudioUpload}
-              onVideoUpload={handleVideoUpload}
-              onFileUpload={handleFileUpload}
-              onThreeDUpload={handleThreeDUpload}
-              loraBrowserFor={loraBrowserFor}
-            />
+            <WorkflowDefaultAssetProvider workflowId={workflowId}>
+              <DashboardInputControls
+                items={inputTopLevelItems}
+                inputIndex={inputIndex}
+                inputValues={inputValues}
+                seedModes={seedModes}
+                onSeedModeChange={handleSeedModeChange}
+                onChange={(id, value) => setInputValue(id, value)}
+                onImageUpload={handleImageUpload}
+                onGalleryImageMaskPrepare={handleGalleryImageMaskPrepare}
+                onImageMaskApply={handleImageMaskApply}
+                onAudioUpload={handleAudioUpload}
+                onVideoUpload={handleVideoUpload}
+                onFileUpload={handleFileUpload}
+                onThreeDUpload={handleThreeDUpload}
+                loraBrowserFor={loraBrowserFor}
+              />
+            </WorkflowDefaultAssetProvider>
           ) : (
             <FallbackInputs
               inputValues={inputValues}

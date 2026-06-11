@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DashboardInputControl } from "./DashboardInputControl";
+import {
+  DashboardInputControl,
+  WorkflowDefaultAssetProvider,
+} from "./DashboardInputControl";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -389,6 +392,41 @@ describe("DashboardInputControl", () => {
       expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("dashboard-image-input__preview-action");
       expect(screen.queryByText("Replace image")).not.toBeInTheDocument();
     });
+  });
+
+  it("shows a packaged default image through the workflow-owned asset endpoint", () => {
+    render(
+      <WorkflowDefaultAssetProvider workflowId="wf-imported">
+        <DashboardInputControl
+          control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+          input={{
+            id: "image",
+            label: "Input image",
+            control: "load_image",
+            binding: { node_id: "10", input_name: "image" },
+            default: null,
+            validation: {},
+          }}
+          value={{
+            source: "package_asset",
+            asset_id: "input-defaults/default.png",
+            kind: "image",
+            filename: "starter.png",
+            content_type: "image/png",
+            size_bytes: 123,
+          }}
+          onChange={vi.fn()}
+          onImageUpload={vi.fn()}
+        />
+      </WorkflowDefaultAssetProvider>,
+    );
+
+    expect(screen.getByAltText("Selected image: starter.png")).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-imported/inputs/image/default-asset?asset_id=input-defaults%2Fdefault.png",
+    );
+    expect(screen.getByRole("group", { name: "Selected image actions" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it.each(["load_image", "load_image_mask"] as const)("shows Mask for editable %s assets", async (controlType) => {
@@ -947,6 +985,110 @@ describe("DashboardInputControl", () => {
     expect(createObjectUrlMock).not.toHaveBeenCalled();
   });
 
+  it("renders packaged default audio without treating it as an empty input", () => {
+    render(
+      <WorkflowDefaultAssetProvider workflowId="wf-imported">
+        <DashboardInputControl
+          control={{ id: "audio", type: "load_audio", label: "Input audio", input_id: "audio" }}
+          input={{
+            id: "audio",
+            label: "Input audio",
+            control: "load_audio",
+            binding: { node_id: "10", input_name: "audio_path" },
+            default: null,
+            validation: {},
+          }}
+          value={{
+            source: "package_asset",
+            asset_id: "input-defaults/voice.wav",
+            kind: "audio",
+            filename: "voice.wav",
+            content_type: "audio/wav",
+            size_bytes: 2048,
+          }}
+          onChange={vi.fn()}
+          onImageUpload={vi.fn()}
+        />
+      </WorkflowDefaultAssetProvider>,
+    );
+
+    expect(screen.getByText("voice.wav")).toBeInTheDocument();
+    expect(screen.getByText("WAV · 2 KB")).toBeInTheDocument();
+    expect(document.querySelector("audio")).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-imported/inputs/audio/default-asset?asset_id=input-defaults%2Fvoice.wav",
+    );
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+  });
+
+  it("renders packaged default video and file inputs with backend-owned URLs", () => {
+    const { rerender } = render(
+      <WorkflowDefaultAssetProvider workflowId="wf-imported">
+        <DashboardInputControl
+          control={{ id: "video", type: "load_video", label: "Input video", input_id: "video" }}
+          input={{
+            id: "video",
+            label: "Input video",
+            control: "load_video",
+            binding: { node_id: "10", input_name: "video_path" },
+            default: null,
+            validation: {},
+          }}
+          value={{
+            source: "package_asset",
+            asset_id: "input-defaults/clip.mp4",
+            kind: "video",
+            filename: "clip.mp4",
+            content_type: "video/mp4",
+            size_bytes: 4096,
+          }}
+          onChange={vi.fn()}
+          onImageUpload={vi.fn()}
+          onVideoUpload={vi.fn()}
+        />
+      </WorkflowDefaultAssetProvider>,
+    );
+
+    expect(document.querySelector("video")).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-imported/inputs/video/default-asset?asset_id=input-defaults%2Fclip.mp4",
+    );
+    expect(screen.getByText("MP4 · 4 KB")).toBeInTheDocument();
+
+    rerender(
+      <WorkflowDefaultAssetProvider workflowId="wf-imported">
+        <DashboardInputControl
+          control={{ id: "file", type: "load_file", label: "Source file", input_id: "file" }}
+          input={{
+            id: "file",
+            label: "Source file",
+            control: "load_file",
+            binding: { node_id: "10", input_name: "file_path" },
+            default: null,
+            validation: {},
+          }}
+          value={{
+            source: "package_asset",
+            asset_id: "input-defaults/settings.json",
+            kind: "file",
+            filename: "settings.json",
+            content_type: "application/json",
+            size_bytes: 128,
+          }}
+          onChange={vi.fn()}
+          onImageUpload={vi.fn()}
+          onFileUpload={vi.fn()}
+        />
+      </WorkflowDefaultAssetProvider>,
+    );
+
+    expect(screen.getByText("settings.json")).toBeInTheDocument();
+    expect(screen.getByText("JSON · 128 B")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("renders selected 3D assets through the guarded shared viewer", async () => {
     const onChange = vi.fn();
     fetchMock.mockResolvedValue(jsonResponse({
@@ -980,6 +1122,44 @@ describe("DashboardInputControl", () => {
     expect(screen.getByRole("button", { name: "Preview 3D model" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it("renders a packaged default 3D model through the workflow-owned asset endpoint", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    render(
+      <WorkflowDefaultAssetProvider workflowId="wf-imported">
+        <DashboardInputControl
+          control={{ id: "model", type: "load_3d", label: "Input model", input_id: "model" }}
+          input={{
+            id: "model",
+            label: "Input model",
+            control: "load_3d",
+            binding: { node_id: "10", input_name: "model_file" },
+            default: null,
+            validation: {},
+          }}
+          value={{
+            source: "package_asset",
+            asset_id: "input-defaults/mesh.glb",
+            kind: "3d",
+            filename: "mesh.glb",
+            content_type: "model/gltf-binary",
+          }}
+          onChange={vi.fn()}
+          onImageUpload={vi.fn()}
+          onThreeDUpload={vi.fn()}
+        />
+      </WorkflowDefaultAssetProvider>,
+    );
+
+    expect(screen.getByText("mesh.glb")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/workflows/wf-imported/inputs/model/default-asset?asset_id=input-defaults%2Fmesh.glb",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("allows a long audio upload to be canceled", async () => {

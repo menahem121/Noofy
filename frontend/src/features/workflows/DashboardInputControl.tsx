@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -18,13 +20,14 @@ import {
   fetchAssetMetadata,
   galleryContentUrlById,
   updateExternalApiKey,
+  workflowDefaultAssetMediaUrl,
   type DashboardControlDef,
   type DashboardAssetMetadata,
   type WorkflowInputDef,
   type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
-import { audioMetadataLabel, fileMetadataLabel, formatMediaDuration, isGalleryMediaReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
+import { audioMetadataLabel, fileMetadataLabel, formatMediaDuration, isGalleryMediaReference, isPackageAssetReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { GalleryPickerModal } from "./GalleryPickerModal";
 import {
@@ -36,6 +39,22 @@ import {
 import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
 type DashboardInputControlVariant = "classic" | "canvas";
+
+const WorkflowDefaultAssetContext = createContext<string | null>(null);
+
+export function WorkflowDefaultAssetProvider({
+  workflowId,
+  children,
+}: {
+  workflowId: string;
+  children: ReactNode;
+}) {
+  return (
+    <WorkflowDefaultAssetContext.Provider value={workflowId}>
+      {children}
+    </WorkflowDefaultAssetContext.Provider>
+  );
+}
 
 /**
  * Compact single-button seed behaviour control. It shows the icon for the
@@ -323,6 +342,7 @@ function renderControl(
     case "load_audio":
       return (
         <AssetAudioInput
+          inputId={input.id}
           value={value}
           disabled={disabled}
           variant={variant}
@@ -335,6 +355,7 @@ function renderControl(
     case "load_video":
       return (
         <AssetVideoInput
+          inputId={input.id}
           value={value}
           disabled={disabled}
           variant={variant}
@@ -358,7 +379,7 @@ function renderControl(
       );
 
     case "load_3d":
-      return <AssetThreeDInput value={value} validation={validation} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
+      return <AssetThreeDInput inputId={input.id} value={value} validation={validation} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
 
     case "select":
       return (
@@ -864,6 +885,7 @@ function AssetImageInput({
   onGalleryImageMaskPrepare?: (inputId: string, galleryItemId: string) => Promise<string>;
   onImageMaskApply?: (sourceAssetId: string, mask: Blob) => Promise<string>;
 }) {
+  const workflowId = useContext(WorkflowDefaultAssetContext);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
@@ -876,7 +898,11 @@ function AssetImageInput({
   const [missing, setMissing] = useState(false);
   const assetId = isUploadedAssetValue(value) ? value : null;
   const galleryReference = isGalleryMediaReference(value) && value.kind === "image" ? value : null;
-  const hasSelection = Boolean(assetId || galleryReference);
+  const packageReference = isPackageAssetReference(value) && value.kind === "image" ? value : null;
+  const packageImageUrl = workflowId && packageReference
+    ? workflowDefaultAssetMediaUrl(workflowId, inputId, packageReference.asset_id)
+    : null;
+  const hasSelection = Boolean(assetId || galleryReference || packageReference);
 
   function closeMaskEditor() {
     setMaskEditor(null);
@@ -895,7 +921,7 @@ function AssetImageInput({
       return null;
     });
 
-    if (galleryReference) {
+    if (galleryReference || packageReference) {
       setMissing(false);
       return undefined;
     }
@@ -924,7 +950,7 @@ function AssetImageInput({
       canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [assetId]);
+  }, [assetId, galleryReference, packageReference]);
 
   useEffect(() => {
     if (!assetId) {
@@ -1051,13 +1077,13 @@ function AssetImageInput({
 
   const stateClass = missing
     ? "dashboard-image-input--missing"
-    : blobUrl || galleryReference
+    : blobUrl || galleryReference || packageImageUrl
       ? "dashboard-image-input--preview"
       : hasSelection
         ? "dashboard-image-input--loading"
         : "dashboard-image-input--empty";
   const galleryImageUrl = galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
-  const selectedFilename = galleryReference?.filename ?? assetMetadata?.original_filename ?? assetId;
+  const selectedFilename = galleryReference?.filename ?? packageReference?.filename ?? assetMetadata?.original_filename ?? assetId;
   const assetMaskAvailable = Boolean(assetId && !missing && (blobUrl || assetMetadata));
   const galleryMaskAvailable = Boolean(galleryReference && onGalleryImageMaskPrepare);
   const maskAvailable = Boolean(onImageMaskApply && (assetMaskAvailable || galleryMaskAvailable));
@@ -1086,7 +1112,7 @@ function AssetImageInput({
           }}
         />
       ) : null}
-      {blobUrl || galleryImageUrl || missing || hasSelection ? (
+      {blobUrl || galleryImageUrl || packageImageUrl || missing || hasSelection ? (
         <div className="dashboard-image-input__preview-frame">
           <button
             className="dashboard-image-input__surface"
@@ -1096,9 +1122,7 @@ function AssetImageInput({
             onKeyDown={handleKeyDown}
             aria-label={selectedFilename ? `Replace selected image ${selectedFilename}` : "Replace selected image"}
           >
-            {blobUrl || galleryImageUrl ? (
-              <img src={blobUrl ?? galleryImageUrl ?? ""} alt={selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image"} className="dashboard-image-input__preview" />
-            ) : missing ? (
+            {missing ? (
               <>
                 <span className="dashboard-image-input__icon" aria-hidden="true">
                   <ImagePlus size={24} />
@@ -1106,6 +1130,13 @@ function AssetImageInput({
                 <span className="dashboard-image-input__title">Image could not be loaded</span>
                 <span className="dashboard-image-input__hint">Upload from computer</span>
               </>
+            ) : blobUrl || galleryImageUrl || packageImageUrl ? (
+              <img
+                src={blobUrl ?? galleryImageUrl ?? packageImageUrl ?? ""}
+                alt={selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image"}
+                className="dashboard-image-input__preview"
+                onError={() => setMissing(true)}
+              />
             ) : hasSelection ? (
               <>
                 <span className="dashboard-image-input__icon" aria-hidden="true">
@@ -1532,6 +1563,7 @@ function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 function AssetAudioInput({
+  inputId,
   value,
   disabled,
   variant,
@@ -1539,6 +1571,7 @@ function AssetAudioInput({
   onChange,
   onAudioUpload,
 }: {
+  inputId: string;
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
@@ -1546,6 +1579,7 @@ function AssetAudioInput({
   onChange: (value: unknown) => void;
   onAudioUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
+  const workflowId = useContext(WorkflowDefaultAssetContext);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -1557,8 +1591,15 @@ function AssetAudioInput({
   const [uploading, setUploading] = useState(false);
   const assetId = isUploadedAssetValue(value) ? value : null;
   const galleryReference = isGalleryMediaReference(value) && value.kind === "audio" ? value : null;
-  const hasSelection = Boolean(assetId || galleryReference);
-  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
+  const packageReference = isPackageAssetReference(value) && value.kind === "audio" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference || packageReference);
+  const mediaUrl = assetId
+    ? dashboardAssetMediaUrl(assetId)
+    : galleryReference
+      ? galleryContentUrlById(galleryReference.gallery_item_id)
+      : workflowId && packageReference
+        ? workflowDefaultAssetMediaUrl(workflowId, inputId, packageReference.asset_id)
+        : null;
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
@@ -1570,6 +1611,7 @@ function AssetAudioInput({
       setDuration(galleryReference.duration_seconds ?? null);
       return;
     }
+    if (packageReference) return;
     if (!assetId) {
       return;
     }
@@ -1589,7 +1631,7 @@ function AssetAudioInput({
     return () => {
       canceled = true;
     };
-  }, [assetId, galleryReference]);
+  }, [assetId, galleryReference, packageReference]);
 
   function openFilePicker() {
     if (!disabled && !uploading) {
@@ -1627,10 +1669,10 @@ function AssetAudioInput({
     setReplaceChoiceOpen(false);
   }
 
-  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "Audio file";
+  const filename = galleryReference?.filename ?? packageReference?.filename ?? metadata?.original_filename ?? assetId ?? "Audio file";
   const extension = galleryReference?.extension ?? metadata?.format ?? extensionFromFilename(filename);
-  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
-  const size = galleryReference?.size_bytes ?? metadata?.size;
+  const mimeType = galleryReference?.mime_type ?? packageReference?.content_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? packageReference?.size_bytes ?? metadata?.size;
   const durationLabel = typeof duration === "number" ? formatMediaDuration(duration) : null;
   const detailsLabel = audioMetadataLabel(extension, mimeType, size, null, "Audio file");
 
@@ -1730,6 +1772,7 @@ function AssetAudioInput({
 }
 
 function AssetVideoInput({
+  inputId,
   value,
   disabled,
   variant,
@@ -1737,6 +1780,7 @@ function AssetVideoInput({
   onChange,
   onVideoUpload,
 }: {
+  inputId: string;
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
@@ -1744,6 +1788,7 @@ function AssetVideoInput({
   onChange: (value: unknown) => void;
   onVideoUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
+  const workflowId = useContext(WorkflowDefaultAssetContext);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -1757,8 +1802,15 @@ function AssetVideoInput({
   const [uploading, setUploading] = useState(false);
   const assetId = isUploadedAssetValue(value) ? value : null;
   const galleryReference = isGalleryMediaReference(value) && value.kind === "video" ? value : null;
-  const hasSelection = Boolean(assetId || galleryReference);
-  const mediaUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
+  const packageReference = isPackageAssetReference(value) && value.kind === "video" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference || packageReference);
+  const mediaUrl = assetId
+    ? dashboardAssetMediaUrl(assetId)
+    : galleryReference
+      ? galleryContentUrlById(galleryReference.gallery_item_id)
+      : workflowId && packageReference
+        ? workflowDefaultAssetMediaUrl(workflowId, inputId, packageReference.asset_id)
+        : null;
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
@@ -1774,6 +1826,7 @@ function AssetVideoInput({
       setHeight(galleryReference.height ?? null);
       return;
     }
+    if (packageReference) return;
     if (!assetId) return;
 
     let canceled = false;
@@ -1792,7 +1845,7 @@ function AssetVideoInput({
     return () => {
       canceled = true;
     };
-  }, [assetId, galleryReference]);
+  }, [assetId, galleryReference, packageReference]);
 
   function openFilePicker() {
     if (!disabled && !uploading) {
@@ -1832,10 +1885,10 @@ function AssetVideoInput({
     setReplaceChoiceOpen(false);
   }
 
-  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "Video file";
+  const filename = galleryReference?.filename ?? packageReference?.filename ?? metadata?.original_filename ?? assetId ?? "Video file";
   const extension = galleryReference?.extension ?? metadata?.format ?? extensionFromFilename(filename);
-  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
-  const size = galleryReference?.size_bytes ?? metadata?.size;
+  const mimeType = galleryReference?.mime_type ?? packageReference?.content_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? packageReference?.size_bytes ?? metadata?.size;
   const fps = galleryReference?.fps ?? metadata?.fps;
 
   return (
@@ -1947,6 +2000,8 @@ function AssetFileInput({
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const assetId = typeof value === "string" ? value : null;
+  const packageReference = isPackageAssetReference(value) && value.kind === "file" ? value : null;
+  const hasSelection = Boolean(assetId || packageReference);
   const accept = fileAcceptString(validation);
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
@@ -1954,7 +2009,7 @@ function AssetFileInput({
   useEffect(() => {
     setMetadata(null);
     setError(null);
-    if (!assetId) return;
+    if (packageReference || !assetId) return;
 
     let canceled = false;
     fetchAssetMetadata(assetId)
@@ -1968,7 +2023,7 @@ function AssetFileInput({
     return () => {
       canceled = true;
     };
-  }, [assetId]);
+  }, [assetId, packageReference]);
 
   function openFilePicker() {
     if (!disabled && !uploading) inputRef.current?.click();
@@ -2001,10 +2056,13 @@ function AssetFileInput({
     setError(null);
   }
 
-  const extension = metadata?.extension ?? extensionFromFilename(metadata?.original_filename ?? assetId ?? "");
+  const filename = packageReference?.filename ?? metadata?.original_filename ?? assetId ?? "File";
+  const extension = metadata?.extension ?? extensionFromFilename(filename);
+  const mimeType = packageReference?.content_type ?? metadata?.content_type;
+  const size = packageReference?.size_bytes ?? metadata?.size;
 
   return (
-    <div className={`dashboard-file-input dashboard-file-input--${variant}${assetId ? " dashboard-file-input--selected" : ""}`}>
+    <div className={`dashboard-file-input dashboard-file-input--${variant}${hasSelection ? " dashboard-file-input--selected" : ""}`}>
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -2015,12 +2073,12 @@ function AssetFileInput({
         aria-hidden="true"
         onChange={(event) => void handleFileChange(event)}
       />
-      {assetId ? (
+      {hasSelection ? (
         <div className="dashboard-file-input__selected">
           <FileIcon size={24} aria-hidden="true" />
           <div className="dashboard-file-input__meta">
-            <strong>{metadata?.original_filename ?? assetId}</strong>
-            <span>{fileMetadataLabel(extension, metadata?.content_type, metadata?.size, "File")}</span>
+            <strong>{filename}</strong>
+            <span>{fileMetadataLabel(extension, mimeType, size, "File")}</span>
           </div>
           <div className="dashboard-file-input__actions">
             <button className="secondary-button secondary-button--small" type="button" disabled={disabled || uploading} onClick={openFilePicker}>
@@ -2067,18 +2125,21 @@ function fileAcceptString(validation: Record<string, unknown>): string {
 }
 
 function AssetThreeDInput({
+  inputId,
   value,
   validation,
   disabled,
   onChange,
   onThreeDUpload,
 }: {
+  inputId: string;
   value: unknown;
   validation: Record<string, unknown>;
   disabled: boolean;
   onChange: (value: unknown) => void;
   onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
+  const workflowId = useContext(WorkflowDefaultAssetContext);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -2088,21 +2149,28 @@ function AssetThreeDInput({
   const [error, setError] = useState<string | null>(null);
   const assetId = isUploadedAssetValue(value) ? value : null;
   const galleryReference = isGalleryMediaReference(value) && value.kind === "3d" ? value : null;
-  const hasSelection = Boolean(assetId || galleryReference);
-  const modelUrl = assetId ? dashboardAssetMediaUrl(assetId) : galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
+  const packageReference = isPackageAssetReference(value) && value.kind === "3d" ? value : null;
+  const hasSelection = Boolean(assetId || galleryReference || packageReference);
+  const modelUrl = assetId
+    ? dashboardAssetMediaUrl(assetId)
+    : galleryReference
+      ? galleryContentUrlById(galleryReference.gallery_item_id)
+      : workflowId && packageReference
+        ? workflowDefaultAssetMediaUrl(workflowId, inputId, packageReference.asset_id)
+        : null;
 
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     setMetadata(null);
     setError(null);
-    if (galleryReference) return;
+    if (galleryReference || packageReference) return;
     if (!assetId) return;
     let canceled = false;
     fetchAssetMetadata(assetId).then((result) => { if (!canceled) setMetadata(result); }).catch(() => {
       if (!canceled) setError("3D model metadata could not be loaded.");
     });
     return () => { canceled = true; };
-  }, [assetId, galleryReference]);
+  }, [assetId, galleryReference, packageReference]);
 
   async function choose(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2137,10 +2205,10 @@ function AssetThreeDInput({
     setReplaceChoiceOpen(false);
   }
 
-  const filename = galleryReference?.filename ?? metadata?.original_filename ?? assetId ?? "3D model";
-  const extension = galleryReference?.extension ?? metadata?.extension;
-  const mimeType = galleryReference?.mime_type ?? metadata?.content_type;
-  const size = galleryReference?.size_bytes ?? metadata?.size;
+  const filename = galleryReference?.filename ?? packageReference?.filename ?? metadata?.original_filename ?? assetId ?? "3D model";
+  const extension = galleryReference?.extension ?? metadata?.extension ?? extensionFromFilename(filename);
+  const mimeType = galleryReference?.mime_type ?? packageReference?.content_type ?? metadata?.content_type;
+  const size = galleryReference?.size_bytes ?? packageReference?.size_bytes ?? metadata?.size;
   return (
     <div className="dashboard-three-d-input">
       <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />

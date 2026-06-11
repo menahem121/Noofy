@@ -113,26 +113,22 @@ class WorkflowPackageLoader:
         return sorted(by_id.values(), key=lambda record: record[0].metadata.id)
 
     def get_package(self, workflow_id: str) -> WorkflowPackage:
-        for package in self.list_packages():
-            if package.metadata.id == workflow_id:
-                return package
-        raise KeyError(f"Unknown workflow package: {workflow_id}")
+        package, _package_dir = self.get_package_with_dir(workflow_id)
+        return package
+
+    def package_dir(self, workflow_id: str) -> Path:
+        _package, package_dir = self.get_package_with_dir(workflow_id)
+        return package_dir
+
+    def get_package_with_dir(self, workflow_id: str) -> tuple[WorkflowPackage, Path]:
+        record = self._load_package_records_by_id().get(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow package: {workflow_id}")
+        return record[0], record[2]
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-
-    def _load_from(self, directory: Path) -> list[WorkflowPackage]:
-        packages: list[WorkflowPackage] = []
-        if not directory.exists():
-            return packages
-        package_files = {
-            *directory.glob("*/package.json"),
-            *directory.glob("*/*/*/package.json"),
-        }
-        for package_file in sorted(package_files):
-            packages.append(self._load_file(package_file))
-        return packages
 
     def _user_search_dirs(self) -> list[Path]:
         directories: list[Path] = []
@@ -143,11 +139,20 @@ class WorkflowPackageLoader:
         return directories
 
     def _load_packages_by_id(self) -> dict[str, tuple[WorkflowPackage, WorkflowPackageSource]]:
-        by_id: dict[str, tuple[WorkflowPackage, WorkflowPackageSource]] = {}
+        return {
+            workflow_id: (package, source)
+            for workflow_id, (package, source, _package_dir) in self._load_package_records_by_id().items()
+        }
+
+    def _load_package_records_by_id(
+        self,
+    ) -> dict[str, tuple[WorkflowPackage, WorkflowPackageSource, Path]]:
+        by_id: dict[str, tuple[WorkflowPackage, WorkflowPackageSource, Path]] = {}
 
         # Bundled (lower priority)
-        for package in self._load_from(self.packages_dir):
-            by_id[package.metadata.id] = (package, "bundled")
+        for package_file in self._package_files(self.packages_dir):
+            package = self._load_file(package_file)
+            by_id[package.metadata.id] = (package, "bundled", package_file.parent)
 
         # User packages cannot shadow bundled packages unless a development
         # caller opts into that behavior explicitly.
@@ -157,12 +162,24 @@ class WorkflowPackageLoader:
                 if self.imported_packages_dir is not None and user_dir == self.imported_packages_dir
                 else "user"
             )
-            for package in self._load_from(user_dir):
+            for package_file in self._package_files(user_dir):
+                package = self._load_file(package_file)
                 if package.metadata.id in by_id and not self.allow_user_overrides:
                     continue
-                by_id[package.metadata.id] = (package, source)
+                by_id[package.metadata.id] = (package, source, package_file.parent)
 
         return by_id
+
+    @staticmethod
+    def _package_files(directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        return sorted(
+            {
+                *directory.glob("*/package.json"),
+                *directory.glob("*/*/*/package.json"),
+            }
+        )
 
     def _load_file(self, package_file: Path) -> WorkflowPackage:
         with package_file.open("r", encoding="utf-8") as file:

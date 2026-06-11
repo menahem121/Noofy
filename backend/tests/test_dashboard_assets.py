@@ -23,6 +23,8 @@ class FakeEngineService:
         self.workflow_library_service = self
         self.workflow_loader = self
         self.package = package
+        self.default_asset: tuple[Path, dict[str, object]] | None = None
+        self.default_asset_error: Exception | None = None
 
     def list_workflows(self):
         return []
@@ -31,6 +33,17 @@ class FakeEngineService:
         if self.package is not None and self.package.metadata.id == workflow_id:
             return self.package
         raise KeyError(f"Workflow '{workflow_id}' was not found.")
+
+    def workflow_default_asset(
+        self,
+        workflow_id: str,
+        input_id: str,
+    ) -> tuple[Path, dict[str, object]]:
+        if self.default_asset_error is not None:
+            raise self.default_asset_error
+        if self.default_asset is None:
+            raise KeyError(f"Workflow input '{input_id}' was not found.")
+        return self.default_asset
 
     async def shutdown(self) -> None:
         return None
@@ -610,6 +623,88 @@ def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -
     body = response.json()
     assert body["asset_id"].endswith(".png")
     assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
+def test_workflow_default_asset_route_serves_packaged_media(tmp_path: Path) -> None:
+    source = tmp_path / "starter.png"
+    source.write_bytes(PNG_BYTES)
+    engine_service = FakeEngineService()
+    engine_service.default_asset = (
+        source,
+        {
+            "source": "package_asset",
+            "asset_id": "input-defaults/starter.png",
+            "kind": "image",
+            "filename": "starter.png",
+            "content_type": "image/png",
+            "size_bytes": len(PNG_BYTES),
+        },
+    )
+
+    with TestClient(create_app(engine_service=engine_service)) as client:
+        response = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/starter.png"},
+        )
+        range_response = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/starter.png"},
+            headers={"Range": "bytes=0-3"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == PNG_BYTES
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["content-disposition"] == 'inline; filename="starter.png"'
+    assert response.headers["cache-control"] == "private, max-age=31536000, immutable"
+    assert range_response.status_code == 206
+    assert range_response.content == PNG_BYTES[:4]
+    assert range_response.headers["content-range"] == f"bytes 0-3/{len(PNG_BYTES)}"
+
+
+def test_workflow_default_asset_route_rejects_stale_asset_version(tmp_path: Path) -> None:
+    source = tmp_path / "starter.png"
+    source.write_bytes(PNG_BYTES)
+    engine_service = FakeEngineService()
+    engine_service.default_asset = (
+        source,
+        {
+            "source": "package_asset",
+            "asset_id": "input-defaults/current.png",
+            "kind": "image",
+        },
+    )
+
+    with TestClient(create_app(engine_service=engine_service)) as client:
+        response = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/old.png"},
+        )
+
+    assert response.status_code == 404
+
+
+def test_workflow_default_asset_route_reports_invalid_reference() -> None:
+    engine_service = FakeEngineService()
+    engine_service.default_asset_error = ValueError("Invalid packaged default.")
+
+    with TestClient(create_app(engine_service=engine_service)) as client:
+        response = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/default.png"},
+        )
+
+    assert response.status_code == 422
+
+
+def test_workflow_default_asset_route_rejects_unknown_input() -> None:
+    with TestClient(create_app(engine_service=FakeEngineService())) as client:
+        response = client.get(
+            "/api/workflows/wf/inputs/missing/default-asset",
+            params={"asset_id": "input-defaults/default.png"},
+        )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize("control", ["load_image", "load_image_mask"])

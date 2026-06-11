@@ -50,6 +50,16 @@ export interface GalleryMediaReference {
   fps?: number | null;
 }
 
+export interface PackageAssetReference {
+  source: "package_asset";
+  asset_id: string;
+  kind: "image" | "audio" | "video" | "3d" | "file";
+  filename?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  sha256?: string | null;
+}
+
 const uploadedAssetPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9_-]+)+$/i;
 
 export function isUploadedAssetValue(value: unknown): value is string {
@@ -68,6 +78,23 @@ export function isGalleryMediaReference(value: unknown): value is GalleryMediaRe
   );
 }
 
+export function isPackageAssetReference(value: unknown): value is PackageAssetReference {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.source === "package_asset" &&
+    typeof record.asset_id === "string" &&
+    record.asset_id.trim().length > 0 &&
+    (
+      record.kind === "image" ||
+      record.kind === "audio" ||
+      record.kind === "video" ||
+      record.kind === "3d" ||
+      record.kind === "file"
+    )
+  );
+}
+
 export function audioMetadataLabel(
   format: string | null | undefined,
   mimeType: string | null | undefined,
@@ -76,7 +103,7 @@ export function audioMetadataLabel(
   fallback: string,
 ): string {
   const parts = [
-    format?.toUpperCase() ?? audioFormatFromMime(mimeType),
+    mediaFormatLabel(format) ?? audioFormatFromMime(mimeType),
     typeof size === "number" ? formatMediaBytes(size) : null,
     typeof durationSeconds === "number" ? formatMediaDuration(durationSeconds) : null,
   ].filter((part): part is string => Boolean(part));
@@ -94,7 +121,7 @@ export function videoMetadataLabel(
   fallback: string,
 ): string {
   const parts = [
-    format?.toUpperCase() ?? videoFormatFromMime(mimeType),
+    mediaFormatLabel(format) ?? videoFormatFromMime(mimeType),
     typeof width === "number" && typeof height === "number" ? `${width} × ${height}` : null,
     typeof fps === "number" && Number.isFinite(fps) ? `${Number.isInteger(fps) ? fps : fps.toFixed(2)} fps` : null,
     typeof size === "number" ? formatMediaBytes(size) : null,
@@ -114,6 +141,10 @@ export function fileMetadataLabel(
     typeof size === "number" ? formatMediaBytes(size) : null,
   ].filter((part): part is string => Boolean(part));
   return parts.length > 0 ? parts.join(" · ") : fallback;
+}
+
+function mediaFormatLabel(format: string | null | undefined): string | null {
+  return format ? format.replace(/^\./, "").toUpperCase() : null;
 }
 
 function audioFormatFromMime(mimeType: string | null | undefined): string | null {

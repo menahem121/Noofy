@@ -2,6 +2,7 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
@@ -67,6 +68,32 @@ async def get_workflow_package(workflow_id: str, library: WorkflowLibraryService
         return library.workflow_package_payload(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/inputs/{input_id}/default-asset")
+async def get_workflow_default_asset(
+    workflow_id: str,
+    input_id: str,
+    library: WorkflowLibraryServiceDep,
+    asset_id: str,
+):
+    try:
+        path, reference = library.workflow_default_asset(workflow_id, input_id)
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if reference["asset_id"] != asset_id:
+        raise HTTPException(status_code=404, detail="Workflow default asset version was not found.")
+    filename = reference.get("filename")
+    headers = {"Cache-Control": "private, max-age=31536000, immutable"}
+    return FileResponse(
+        path,
+        media_type=reference.get("content_type") or "application/octet-stream",
+        headers=headers,
+        filename=filename if isinstance(filename, str) and filename else None,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/workflows/{workflow_id}/details")

@@ -5272,6 +5272,47 @@ describe("WorkflowRunPage", () => {
     );
   });
 
+  it("shows and submits a packaged default image until the user replaces it", async () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+      content_type: "image/png",
+      size_bytes: 123,
+      sha256: `sha256:${"a".repeat(64)}`,
+    };
+    const packageData = {
+      ...imageInputPackageData,
+      inputs: imageInputPackageData.inputs.map((input) => ({
+        ...input,
+        default: packagedDefault,
+        default_pinned: true,
+      })),
+    };
+    let runBody: { inputs?: Record<string, unknown> } | null = null;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      packageData,
+      (init?: RequestInit) => {
+        runBody = JSON.parse(String(init?.body ?? "{}"));
+        return validWorkflow;
+      },
+    );
+
+    renderRunPage();
+
+    expect(await screen.findByAltText("Selected image: starter.png")).toHaveAttribute(
+      "src",
+      "/api/workflows/text_to_image_v0/inputs/source_image/default-asset?asset_id=input-defaults%2Fstarter.png",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+    await waitFor(() => {
+      expect(runBody?.inputs?.source_image).toEqual(packagedDefault);
+    });
+  });
+
   it("renders each canvas output widget from its bound result node", async () => {
     const createObjectUrl = vi.fn(() => "blob:noofy-output");
     const revokeObjectUrl = vi.fn();

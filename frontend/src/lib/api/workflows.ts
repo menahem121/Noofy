@@ -1103,6 +1103,13 @@ export function dashboardAssetMediaUrl(assetId: string): string {
   return resolveBackendUrl(`/assets/${encodeURIComponent(assetId)}`, { includeToken: true });
 }
 
+export function workflowDefaultAssetMediaUrl(workflowId: string, inputId: string, assetId: string): string {
+  return resolveBackendUrl(
+    `/workflows/${encodeURIComponent(workflowId)}/inputs/${encodeURIComponent(inputId)}/default-asset?asset_id=${encodeURIComponent(assetId)}`,
+    { includeToken: true },
+  );
+}
+
 export async function uploadWorkflowImage(workflowId: string, file: File): Promise<{ filename: string }> {
   const formData = new FormData();
   formData.append("image", file);

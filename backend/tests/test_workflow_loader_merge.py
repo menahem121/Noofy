@@ -67,6 +67,20 @@ def test_user_workflow_does_not_silently_override_bundled_by_id(tmp_path: Path) 
     assert package.metadata.name == "Bundled A"
 
 
+def test_loader_returns_package_with_selected_source_directory(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    user = tmp_path / "user"
+    bundled_package_file = _write_package(bundled, "wf_a", name="Bundled A")
+    _write_package(user, "wf_a", name="User Override A")
+
+    loader = WorkflowPackageLoader(bundled, user_packages_dir=user)
+
+    package, package_dir = loader.get_package_with_dir("wf_a")
+
+    assert package.metadata.name == "Bundled A"
+    assert package_dir == bundled_package_file.parent
+
+
 def test_dashboard_override_customizes_bundled_package_without_shadowing_metadata(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled"
     overrides = tmp_path / "overrides"

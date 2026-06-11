@@ -10,9 +10,10 @@ Verifies:
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import zipfile
-import io
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from app.workflows.authoring import (
     _classify_graph_inputs,
 )
 from app.workflows.importer import ImportedWorkflowPackageStore
+from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -36,6 +38,7 @@ from app.workflows.validator import WorkflowPackageValidator
 def _make_minimal_archive(
     graph: dict[str, Any] | None = None,
     dashboard: dict[str, Any] | None = None,
+    extra_files: dict[str, bytes] | None = None,
 ) -> bytes:
     """Build a minimal .noofy archive suitable for import."""
     if graph is None:
@@ -100,6 +103,8 @@ def _make_minimal_archive(
         zf.writestr("capsule.lock.json", json.dumps(capsule_data))
         zf.writestr("export-report.json", json.dumps(export_report))
         zf.writestr("dashboard.json", json.dumps(stub_dashboard))
+        for filename, data in (extra_files or {}).items():
+            zf.writestr(filename, data)
     return buf.getvalue()
 
 
@@ -225,6 +230,181 @@ def test_save_dashboard_transitions_status(tmp_path: Path) -> None:
     )
     pkg_after = loader.get_package(workflow_id)
     assert pkg_after.dashboard.status == "configured"
+
+
+def test_uploaded_builder_default_is_packaged_and_resolvable_after_reload(
+    tmp_path: Path,
+) -> None:
+    graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "creator-default.png"},
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["1", 0], "filename_prefix": "out"},
+        },
+    }
+    service, workflow_id = _import_and_setup(
+        tmp_path,
+        _make_minimal_archive(graph=graph),
+    )
+    dashboard_assets_dir = tmp_path / "dashboard-assets"
+    dashboard_assets_dir.mkdir()
+    uploaded_asset_id = "12345678-1234-1234-1234-123456789abc.png"
+    uploaded_bytes = b"\x89PNG\r\n\x1a\nbuilder-default"
+    (dashboard_assets_dir / uploaded_asset_id).write_bytes(uploaded_bytes)
+    (dashboard_assets_dir / f"{uploaded_asset_id}.meta.json").write_text(
+        json.dumps(
+            {
+                "asset_id": uploaded_asset_id,
+                "kind": "image",
+                "content_type": "image/png",
+                "original_filename": "starter.png",
+                "size": len(uploaded_bytes),
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.dashboard_assets_dir = dashboard_assets_dir
+
+    inputs_payload = [
+        {
+            "id": "image",
+            "label": "Input image",
+            "control": "load_image",
+            "binding": {"node_id": "1", "input_name": "image"},
+            "default": uploaded_asset_id,
+            "default_pinned": True,
+            "validation": {},
+        }
+    ]
+    dashboard_payload = {
+        "version": "0.1.0",
+        "status": "configured",
+        "outputs": [
+            {"id": "image_out", "label": "Image", "node_id": "9", "type": "image"}
+        ],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "image-control",
+                        "type": "load_image",
+                        "label": "Input image",
+                        "input_id": "image",
+                    }
+                ],
+            }
+        ],
+    }
+    service.save_dashboard(
+        workflow_id,
+        inputs_payload,
+        dashboard_payload,
+    )
+
+    reloaded = service.workflow_loader.get_package(workflow_id)
+    default = reloaded.inputs[0].default
+    assert default["source"] == "package_asset"
+    assert default["filename"] == "starter.png"
+    assert default["kind"] == "image"
+
+    library = WorkflowLibraryService(
+        workflow_loader=service.workflow_loader,
+        model_availability_service=object(),  # type: ignore[arg-type]
+        log_store=LogStore(),
+    )
+    resolved_path, reference = library.workflow_default_asset(workflow_id, "image")
+    assert reference == default
+    assert resolved_path.read_bytes() == uploaded_bytes
+
+    inputs_payload[0]["default"] = None
+    inputs_payload[0]["default_pinned"] = False
+    service.save_dashboard(workflow_id, inputs_payload, dashboard_payload)
+
+    assert not resolved_path.exists()
+    assert not resolved_path.with_name(f"{resolved_path.name}.meta.json").exists()
+
+
+def test_imported_packaged_default_is_resolvable_from_archived_source_files(
+    tmp_path: Path,
+) -> None:
+    asset_bytes = b"\x89PNG\r\n\x1a\nimported-default"
+    digest = hashlib.sha256(asset_bytes).hexdigest()
+    asset_id = f"input-defaults/{digest[:16]}-starter.png"
+    reference = {
+        "source": "package_asset",
+        "asset_id": asset_id,
+        "kind": "image",
+        "filename": "starter.png",
+        "content_type": "image/png",
+        "size_bytes": len(asset_bytes),
+        "sha256": f"sha256:{digest}",
+    }
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "1", "input_name": "image"},
+                "default": reference,
+                "default_pinned": True,
+                "validation": {},
+            }
+        ],
+        "outputs": [
+            {"id": "image_out", "label": "Image", "node_id": "9", "type": "image"}
+        ],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "id": "image-control",
+                        "type": "load_image",
+                        "label": "Input image",
+                        "input_id": "image",
+                    }
+                ],
+            }
+        ],
+    }
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "starter.png"}},
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["1", 0], "filename_prefix": "out"},
+        },
+    }
+    service, workflow_id = _import_and_setup(
+        tmp_path,
+        _make_minimal_archive(
+            graph=graph,
+            dashboard=dashboard,
+            extra_files={f"assets/{asset_id}": asset_bytes},
+        ),
+    )
+    library = WorkflowLibraryService(
+        workflow_loader=service.workflow_loader,
+        model_availability_service=object(),  # type: ignore[arg-type]
+        log_store=LogStore(),
+    )
+
+    resolved_path, resolved_reference = library.workflow_default_asset(
+        workflow_id,
+        "image",
+    )
+
+    assert "source-files/assets/input-defaults" in resolved_path.as_posix()
+    assert resolved_path.read_bytes() == asset_bytes
+    assert resolved_reference == reference
 
 
 def test_save_dashboard_persists_action_bar_presentation(tmp_path: Path) -> None:

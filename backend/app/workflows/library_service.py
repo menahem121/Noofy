@@ -49,6 +49,11 @@ from app.workflows.model_architecture import (
     filter_workflow_inputs_for_architecture,
 )
 from app.workflows.package import RequiredModel, WorkflowPackage
+from app.workflows.package_assets import (
+    PackageAssetError,
+    package_asset_source_candidates,
+    validate_package_asset_reference,
+)
 from app.workflows.verification_dispatch import (
     log_verification_concurrency,
     log_verification_metrics,
@@ -236,6 +241,76 @@ class WorkflowLibraryService:
             for key in ("description", "author", "website", "category", "tags", "icon"):
                 package_metadata[key] = metadata[key]
         return payload
+
+    def workflow_default_asset(
+        self,
+        workflow_id: str,
+        input_id: str,
+    ) -> tuple[Path, dict[str, Any]]:
+        package, package_dir = self.workflow_loader.get_package_with_dir(workflow_id)
+        workflow_input = next(
+            (candidate for candidate in package.inputs if candidate.id == input_id),
+            None,
+        )
+        if workflow_input is None:
+            raise KeyError(f"Unknown workflow input: {input_id}")
+        try:
+            reference = validate_package_asset_reference(
+                workflow_input.default,
+                workflow_input=workflow_input,
+            )
+        except PackageAssetError as exc:
+            raise ValueError(
+                f"Workflow input '{input_id}' does not have a valid packaged default asset."
+            ) from exc
+
+        package_dirs: list[Path] = []
+        if self.workflow_loader.dashboard_overrides_dir is not None:
+            override_dir = (
+                self.workflow_loader.dashboard_overrides_dir
+                / safe_store_segment(workflow_id)
+            )
+            if override_dir.exists():
+                package_dirs.append(override_dir)
+        package_dirs.append(package_dir)
+
+        for package_dir in package_dirs:
+            for candidate in package_asset_source_candidates(
+                package_dir,
+                reference["asset_id"],
+            ):
+                if not candidate.is_file():
+                    continue
+                try:
+                    # Full sha256 verification stays in run staging. Preview
+                    # requests can be repeated for media ranges, so avoid
+                    # re-reading large assets on every request.
+                    expected_size = reference.get("size_bytes")
+                    if isinstance(expected_size, int) and candidate.stat().st_size != expected_size:
+                        raise OSError("Package asset size does not match its reference metadata.")
+                except OSError as exc:
+                    self.log_store.add(
+                        "warning",
+                        "Packaged workflow default asset failed preview validation",
+                        "workflow.library",
+                        workflow_id=workflow_id,
+                        details={"input_id": input_id, "asset_id": reference["asset_id"]},
+                    )
+                    raise ValueError(
+                        f"Workflow input '{input_id}' has a packaged default asset that could not be read."
+                    ) from exc
+                return candidate, reference
+
+        self.log_store.add(
+            "warning",
+            "Packaged workflow default asset was not found",
+            "workflow.library",
+            workflow_id=workflow_id,
+            details={"input_id": input_id, "asset_id": reference["asset_id"]},
+        )
+        raise FileNotFoundError(
+            f"Workflow input '{input_id}' packaged default asset could not be found."
+        )
 
     def _log_architecture_filter_events(
         self,
