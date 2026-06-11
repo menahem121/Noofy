@@ -2515,12 +2515,6 @@ describe("WorkflowRunPage", () => {
       message: "Noofy will start this workflow after the active run finishes.",
     },
     {
-      state: "freeing_previous_models",
-      status: "queued_pending_memory",
-      title: "Freeing previous models",
-      message: "Noofy is unloading idle models so this workflow has enough room to start.",
-    },
-    {
       state: "unloading_previous_workflow",
       status: "queued_pending_memory",
       title: "Unloading previous workflow",
@@ -2801,7 +2795,10 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => expect(runButton).toBeEnabled());
     fireEvent.click(runButton);
 
-    expect(await screen.findByText("Freeing previous models")).toBeInTheDocument();
+    expect(await screen.findByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
+    expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy is freeing memory before starting this workflow.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy is unloading idle models so this workflow has enough room to start.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /cancel run/i }));
 
     await waitFor(() => expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument());

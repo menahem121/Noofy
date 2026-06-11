@@ -3241,11 +3241,11 @@ function isWarmReusableMemoryState(state: string) {
   return state === "ready_warm_co_resident" || state === "ready_reusing_runner";
 }
 
-// Queueing another run behind this workflow's own active run is expected
-// background behavior: the top-bar progress and queue count are the only
-// feedback, never a notice/banner.
+// Routine queueing and core-model cleanup are expected background behavior:
+// progress controls communicate that the run is still active without showing
+// a warning notice.
 function isSilentQueuedMemoryState(state: string) {
-  return state === "queued_behind_active_run";
+  return state === "queued_behind_active_run" || state === "freeing_previous_models";
 }
 
 function isBlockingMemoryState(state: string) {
