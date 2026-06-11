@@ -1084,6 +1084,106 @@ describe("DashboardBuilderPage", () => {
     );
   });
 
+  it("accepts decimal slider steps without losing the denoise default during incomplete edits", async () => {
+    const onContinue = vi.fn();
+
+    render(
+      <DashboardBuilderPage
+        initialSchema={invalidSliderSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const defaultValueInput = await screen.findByLabelText("Default value");
+    const stepInput = screen.getByLabelText("Step size");
+
+    fireEvent.change(defaultValueInput, { target: { value: "" } });
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId)) ?? "{}")).toMatchObject({
+        widgets: [expect.objectContaining({ defaultValue: 0.3 })],
+      });
+    });
+    fireEvent.blur(defaultValueInput);
+    expect(defaultValueInput).toHaveValue("0.3");
+
+    fireEvent.change(stepInput, { target: { value: "0" } });
+    expect(screen.getByText("Step size must be positive. Decimals such as 0.01 are allowed.")).toBeInTheDocument();
+    fireEvent.change(stepInput, { target: { value: "0." } });
+    expect(stepInput).toHaveValue("0.");
+    fireEvent.change(stepInput, { target: { value: "0.01" } });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Step size must be positive. Decimals such as 0.01 are allowed.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Default value must match the step size from the minimum value.")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: expect.arrayContaining([
+          expect.objectContaining({ defaultValue: 0.3, min: 0, max: 1, step: 0.01 }),
+        ]),
+      }),
+    );
+  });
+
+  it("preselects a refinement slider with the beginner defaults for detected steps values", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-refinement",
+      workflowName: "Refinement workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-refinement/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-refinement"
+        workflowName="Refinement workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const valuesPanel = await screen.findByLabelText("Workflow values");
+    fireEvent.click(within(valuesPanel).getByRole("button", { name: /KSampler/i }));
+    fireEvent.click(within(valuesPanel).getByRole("button", { name: /^steps/i }));
+
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Refinement Level");
+    expect(screen.getByLabelText(/widget type/i)).toHaveValue("slider");
+    expect(screen.getByLabelText("Default value")).toHaveValue("20");
+    expect(screen.getByLabelText("Minimum value")).toHaveValue("1");
+    expect(screen.getByLabelText("Maximum value")).toHaveValue("100");
+    expect(screen.getByLabelText("Step size")).toHaveValue("1");
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Refinement Level",
+          control: "slider",
+          default: 20,
+          validation: { min: 1, max: 100, step: 1 },
+        }),
+      ]),
+    );
+  });
+
   it("opens existing saved widgets in the editor after loading live workflow values", async () => {
     const savedSchema: DashboardSchema = {
       version: 1,

@@ -1113,6 +1113,82 @@ describe("workflowFromBindableInputs", () => {
     });
   });
 
+  it("suggests a refinement slider with beginner-friendly defaults for steps inputs", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "3",
+        node_type: "KSampler",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "steps",
+            current_value: 20,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+    ]);
+
+    workflow.nodes[0].values[0].numberRange = { min: 1, max: 60, step: 1 };
+    const widget = createDashboardWidgetForValue(workflow.nodes[0].values[0], workflow.nodes[0]);
+
+    expect(widget).toMatchObject({
+      widgetType: "slider",
+      title: "Refinement Level",
+      defaultValue: 20,
+      min: 1,
+      max: 100,
+      step: 1,
+    });
+
+    expect(
+      toBackendPayload({
+        version: 1,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+        groups: [],
+        widgets: [widget],
+      }).inputs[0],
+    ).toMatchObject({
+      control: "slider",
+      default: 20,
+      validation: { min: 1, max: 100, step: 1 },
+    });
+  });
+
+  it("recognizes common refinement aliases and keeps generated defaults within the slider range", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "3",
+        node_type: "CustomSampler",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "num_inference_steps",
+            current_value: 140,
+            kind: "number",
+            suggested_widget_type: "int_field",
+            widget_types: ["int_field", "slider"],
+          },
+        ],
+      },
+    ]);
+
+    expect(createDashboardWidgetForValue(workflow.nodes[0].values[0], workflow.nodes[0])).toMatchObject({
+      widgetType: "slider",
+      title: "Refinement Level",
+      defaultValue: 100,
+      min: 1,
+      max: 100,
+      step: 1,
+    });
+  });
+
   it("turns option-enriched ComfyUI inputs into selectable workflow values", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

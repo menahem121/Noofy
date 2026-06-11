@@ -3,6 +3,49 @@ import { describe, expect, it } from "vitest";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 
 describe("buildDashboardSchemaForEditing", () => {
+  it("round-trips decimal slider defaults and validation when reopening the builder", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-slider", name: "Slider workflow", version: "1.0.0", description: "" },
+      inputs: [
+        {
+          id: "denoise",
+          label: "Transformation level",
+          control: "slider",
+          binding: { node_id: "3", input_name: "denoise" },
+          default: 0.3,
+          validation: { min: 0, max: 1, step: 0.01 },
+        },
+      ],
+      outputs: [],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "denoise",
+                type: "slider",
+                label: "Transformation level",
+                input_id: "denoise",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(schema.widgets[0]).toMatchObject({
+      widgetType: "slider",
+      defaultValue: 0.3,
+      min: 0,
+      max: 1,
+      step: 0.01,
+    });
+  });
+
   it("keeps loaded note dimensions and replaces incoming minimums with current policy", () => {
     const schema = buildDashboardSchemaForEditing({
       metadata: { id: "wf-1", name: "Workflow", version: "1.0.0", description: "" },

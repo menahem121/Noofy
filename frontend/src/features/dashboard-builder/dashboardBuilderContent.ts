@@ -369,7 +369,7 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   if (value.valueKind === "select") return "select";
 
   if (value.valueKind === "number") {
-    return value.numberRange || isImageDimensionValue(value) ? "slider" : "int_field";
+    return isRefinementLevelValue(value) || value.numberRange || isImageDimensionValue(value) ? "slider" : "int_field";
   }
 
   if (value.valueKind === "string") {
@@ -382,8 +382,22 @@ export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
   return "string_field";
 }
 
+const REFINEMENT_LEVEL_RANGE = { min: 1, max: 100, step: 1 } as const;
+const REFINEMENT_LEVEL_NAMES = new Set([
+  "steps",
+  "sampling steps",
+  "inference steps",
+  "num steps",
+  "num inference steps",
+  "number of steps",
+  "refinement level",
+]);
+
 export function defaultNumericRangeForValue(value: WorkflowNodeValue): { min: number; max: number; step: number } | undefined {
   if (value.valueKind !== "number" && value.valueKind !== "seed") return undefined;
+  if (isRefinementLevelValue(value)) {
+    return { ...REFINEMENT_LEVEL_RANGE };
+  }
   if (value.numberRange) {
     return { min: value.numberRange.min, max: value.numberRange.max, step: value.numberRange.step ?? 1 };
   }
@@ -418,9 +432,20 @@ function isImageDimensionValue(value: Pick<WorkflowNodeValue, "inputName" | "lab
   return /\b(width|height)\b/.test(identity);
 }
 
+function isRefinementLevelValue(value: Pick<WorkflowNodeValue, "inputName" | "label">): boolean {
+  const names = [value.inputName, value.label].map((name) => name.trim().toLowerCase().replace(/[-_]+/g, " "));
+  return names.some((name) => REFINEMENT_LEVEL_NAMES.has(name));
+}
+
+function refinementLevelDefaultValue(value: unknown): number {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : REFINEMENT_LEVEL_RANGE.min;
+  return Math.min(REFINEMENT_LEVEL_RANGE.max, Math.max(REFINEMENT_LEVEL_RANGE.min, Math.round(numeric)));
+}
+
 export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): string {
   if (value.valueKind === "note") return nodeTitle || "Note";
   if (value.valueKind === "three_d_input" || value.valueKind === "three_d_output") return "3D model";
+  if (isRefinementLevelValue(value)) return "Refinement Level";
 
   const labelMap: Record<string, string> = {
     text: nodeTitle.toLowerCase().includes("negative") ? "Negative prompt" : "Prompt",
@@ -430,7 +455,6 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
     height: "Height",
     seed: "Variation ID",
     denoise: "Transformation level",
-    steps: "Refinement Level",
     cfg: "Prompt strength",
     strength: "Strength",
     image: "Input image",
@@ -484,6 +508,10 @@ export function suggestDescription(value: WorkflowNodeValue): string {
 export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
   const widgetType = suggestWidgetType(value);
   const numericRange = widgetType === "slider" ? defaultNumericRangeForValue(value) : value.numberRange;
+  const defaultValue =
+    widgetType === "slider" && isRefinementLevelValue(value)
+      ? refinementLevelDefaultValue(value.rawValue)
+      : value.rawValue;
   return {
     id: `ctrl-${value.id}`,
     valueId: value.id,
@@ -491,7 +519,7 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
     widgetType,
     title: suggestTitle(value, node.title),
     description: suggestDescription(value),
-    defaultValue: value.rawValue,
+    defaultValue,
     options: value.options,
     acceptedExtensions: widgetType === "load_file" ? DEFAULT_FILE_ACCEPTED_EXTENSIONS : undefined,
     min: numericRange?.min,

@@ -1434,7 +1434,7 @@ function validateSliderWidget(widget: DashboardWidget): SliderValidationError[] 
   if (step === null) {
     errors.push({ field: "step", message: "Enter a step size." });
   } else if (step <= 0) {
-    errors.push({ field: "step", message: "Step size must be greater than 0." });
+    errors.push({ field: "step", message: "Step size must be positive. Decimals such as 0.01 are allowed." });
   }
 
   if (min !== null && max !== null && max <= min) {
@@ -1474,12 +1474,20 @@ function numericInputValue(value: unknown): number | "" {
   return numeric ?? "";
 }
 
-function parseNumberInput(value: string): number {
-  return value.trim() === "" ? Number.NaN : Number(value);
-}
-
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseFiniteDecimal(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return null;
+  return finiteNumber(Number(trimmed));
+}
+
+function parseFiniteDecimalOnBlur(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return null;
+  return finiteNumber(Number(trimmed));
 }
 
 function positiveFiniteNumber(value: unknown): number | null {
@@ -1490,6 +1498,53 @@ function positiveFiniteNumber(value: unknown): number | null {
 function alignsWithStep(value: number, min: number, step: number): boolean {
   const stepIndex = (value - min) / step;
   return Math.abs(stepIndex - Math.round(stepIndex)) < 1e-7;
+}
+
+function SliderNumberInput({
+  label,
+  value,
+  ariaInvalid,
+  onChange,
+}: {
+  label: string;
+  value: unknown;
+  ariaInvalid: boolean;
+  onChange: (value: number) => void;
+}) {
+  const externalValue = numericInputValue(value);
+  const [draft, setDraft] = useState(() => (externalValue === "" ? "" : String(externalValue)));
+
+  useEffect(() => {
+    setDraft((current) => {
+      const parsedCurrent = parseFiniteDecimal(current);
+      if (externalValue !== "" && parsedCurrent === externalValue) return current;
+      if (externalValue === "" && current === "") return current;
+      return externalValue === "" ? "" : String(externalValue);
+    });
+  }, [externalValue]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      spellCheck={false}
+      className="builder-input"
+      value={draft}
+      aria-label={label}
+      aria-invalid={ariaInvalid}
+      onChange={(event) => {
+        const nextDraft = event.target.value;
+        setDraft(nextDraft);
+        const nextValue = parseFiniteDecimal(nextDraft);
+        if (nextValue !== null) onChange(nextValue);
+      }}
+      onBlur={() => {
+        const parsedDraft = parseFiniteDecimalOnBlur(draft);
+        setDraft(parsedDraft === null ? (externalValue === "" ? "" : String(externalValue)) : String(parsedDraft));
+      }}
+    />
+  );
 }
 
 function WidgetEditor({
@@ -1691,7 +1746,6 @@ function WidgetBehaviorFields({
   const showFileOptions = widget.widgetType === "load_file";
   const sliderErrors = validateSliderWidget(widget);
   const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
-  const defaultRange = defaultNumericRangeForValue(value);
 
   return (
     <>
@@ -1721,33 +1775,27 @@ function WidgetBehaviorFields({
       {showSliderSettings ? (
         <div className="builder-config__grid">
           <FieldRow label="Default value" error={sliderErrorFor("defaultValue")}>
-            <input
-              type="number"
-              className="builder-input"
-              value={numericInputValue(widget.defaultValue)}
-              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-              aria-invalid={Boolean(sliderErrorFor("defaultValue"))}
-              onChange={(event) => onPatch({ defaultValue: parseNumberInput(event.target.value) })}
+            <SliderNumberInput
+              label="Default value"
+              value={widget.defaultValue}
+              ariaInvalid={Boolean(sliderErrorFor("defaultValue"))}
+              onChange={(defaultValue) => onPatch({ defaultValue })}
             />
           </FieldRow>
           <FieldRow label="Minimum value" error={sliderErrorFor("min")}>
-            <input
-              type="number"
-              className="builder-input"
-              value={numericInputValue(widget.min)}
-              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-              aria-invalid={Boolean(sliderErrorFor("min"))}
-              onChange={(event) => onPatch({ min: parseNumberInput(event.target.value) })}
+            <SliderNumberInput
+              label="Minimum value"
+              value={widget.min}
+              ariaInvalid={Boolean(sliderErrorFor("min"))}
+              onChange={(min) => onPatch({ min })}
             />
           </FieldRow>
           <FieldRow label="Maximum value" error={sliderErrorFor("max")}>
-            <input
-              type="number"
-              className="builder-input"
-              value={numericInputValue(widget.max)}
-              step={positiveFiniteNumber(widget.step) ?? defaultRange?.step ?? 1}
-              aria-invalid={Boolean(sliderErrorFor("max"))}
-              onChange={(event) => onPatch({ max: parseNumberInput(event.target.value) })}
+            <SliderNumberInput
+              label="Maximum value"
+              value={widget.max}
+              ariaInvalid={Boolean(sliderErrorFor("max"))}
+              onChange={(max) => onPatch({ max })}
             />
           </FieldRow>
           <FieldRow
@@ -1755,14 +1803,11 @@ function WidgetBehaviorFields({
             hint="Controls how much the value changes each time the slider moves."
             error={sliderErrorFor("step")}
           >
-            <input
-              type="number"
-              className="builder-input"
-              value={numericInputValue(widget.step)}
-              min={0}
-              step="any"
-              aria-invalid={Boolean(sliderErrorFor("step"))}
-              onChange={(event) => onPatch({ step: parseNumberInput(event.target.value) })}
+            <SliderNumberInput
+              label="Step size"
+              value={widget.step}
+              ariaInvalid={Boolean(sliderErrorFor("step"))}
+              onChange={(step) => onPatch({ step })}
             />
           </FieldRow>
         </div>

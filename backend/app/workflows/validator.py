@@ -1,5 +1,12 @@
+import math
+
 from app.engine.models import MissingModel, WorkflowValidationResult
-from app.workflows.package import DASHBOARD_CONTROL_TYPES, WORKFLOW_OUTPUT_KINDS, WorkflowPackage
+from app.workflows.package import (
+    DASHBOARD_CONTROL_TYPES,
+    WORKFLOW_OUTPUT_KINDS,
+    WorkflowInput,
+    WorkflowPackage,
+)
 
 _GRID_COLUMNS = 32
 
@@ -10,6 +17,65 @@ def _layouts_overlap(a: dict, b: dict) -> bool:
     bx1, by1 = b["x"], b["y"]
     bx2, by2 = bx1 + b["w"], by1 + b["h"]
     return ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
+
+
+def _validate_slider_input(workflow_input: WorkflowInput, errors: list[str]) -> None:
+    validation = workflow_input.validation
+    constrained = any(field in validation for field in ("min", "max", "step"))
+    if not constrained:
+        return
+
+    values: dict[str, float] = {}
+    for field in ("min", "max", "step"):
+        if field not in validation:
+            continue
+        numeric = _finite_number(validation[field])
+        if numeric is None:
+            errors.append(
+                f"Slider input '{workflow_input.id}' has a non-numeric validation.{field}."
+            )
+        else:
+            values[field] = numeric
+
+    default = _finite_number(workflow_input.default)
+    if default is None:
+        errors.append(f"Slider input '{workflow_input.id}' must have a numeric default.")
+
+    step = values.get("step")
+    if step is not None and step <= 0:
+        errors.append(f"Slider input '{workflow_input.id}' must have validation.step greater than 0.")
+
+    minimum = values.get("min")
+    maximum = values.get("max")
+    if minimum is not None and maximum is not None and maximum <= minimum:
+        errors.append(
+            f"Slider input '{workflow_input.id}' must have validation.max greater than validation.min."
+        )
+        return
+
+    if default is not None:
+        if minimum is not None and default < minimum:
+            errors.append(f"Slider input '{workflow_input.id}' has a default below validation.min.")
+        if maximum is not None and default > maximum:
+            errors.append(f"Slider input '{workflow_input.id}' has a default above validation.max.")
+
+    if minimum is None or step is None or step <= 0:
+        return
+    for field, numeric in (("max", maximum), ("default", default)):
+        if numeric is None:
+            continue
+        step_index = (numeric - minimum) / step
+        if not math.isclose(step_index, round(step_index), rel_tol=0.0, abs_tol=1e-7):
+            errors.append(
+                f"Slider input '{workflow_input.id}' has a {field} that does not align with validation.step from validation.min."
+            )
 
 
 class WorkflowPackageValidator:
@@ -50,6 +116,8 @@ class WorkflowPackageValidator:
                     errors.append(
                         f"Input '{workflow_input.id}' is control 'load_file' but has no accepted_extensions or accepted_mime_types validation."
                     )
+            if workflow_input.control == "slider":
+                _validate_slider_input(workflow_input, errors)
 
         for workflow_output in package.outputs:
             if workflow_output.node_id not in graph_node_ids:

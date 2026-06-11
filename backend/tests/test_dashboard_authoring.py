@@ -500,6 +500,79 @@ def test_validate_dashboard_does_not_persist(tmp_path: Path) -> None:
     ), "validate_dashboard must not write any files"
 
 
+def test_validate_dashboard_accepts_decimal_slider_steps(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    inputs.append(
+        {
+            "id": "denoise",
+            "label": "Transformation level",
+            "control": "slider",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": 0.3,
+            "validation": {"min": 0, "max": 1, "step": 0.01},
+        }
+    )
+    dashboard["sections"][0]["controls"].append(
+        {
+            "id": "denoise",
+            "type": "slider",
+            "label": "Transformation level",
+            "input_id": "denoise",
+        }
+    )
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("validation", "default", "message"),
+    [
+        ({"min": 0, "max": 1, "step": 0}, 0.3, "validation.step greater than 0"),
+        ({"min": 1, "max": 1, "step": 1}, 1, "validation.max greater than validation.min"),
+        ({"min": 0, "max": 1, "step": 0.1}, 2, "default above validation.max"),
+        ({"min": 0, "max": 1, "step": 0.25}, 0.3, "default that does not align"),
+    ],
+)
+def test_validate_dashboard_rejects_invalid_slider_constraints(
+    tmp_path: Path,
+    validation: dict[str, int | float],
+    default: int | float,
+    message: str,
+) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    inputs.append(
+        {
+            "id": "denoise",
+            "label": "Transformation level",
+            "control": "slider",
+            "binding": {"node_id": "1", "input_name": "text"},
+            "default": default,
+            "validation": validation,
+        }
+    )
+    dashboard["sections"][0]["controls"].append(
+        {
+            "id": "denoise",
+            "type": "slider",
+            "label": "Transformation level",
+            "input_id": "denoise",
+        }
+    )
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is False
+    assert any(message in error for error in result["errors"])
+    with pytest.raises(DashboardAuthoringError, match=message):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
 def test_save_dashboard_persists_visual_control_groups(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)
