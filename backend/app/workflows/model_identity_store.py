@@ -21,7 +21,14 @@ LOCAL_MODEL_IDENTITY_SCHEMA_VERSION = 1
 _CACHE_HIT_LOG_DEDUPE_LIMIT = 1024
 _TOUCH_REFRESH_INTERVAL_SECONDS = 3600
 
-ModelRootType = Literal["noofy_models", "external_comfyui_models"]
+ModelRootType = Literal[
+    "noofy_models",
+    "external_comfyui_models",
+    # Copied (non-linked) files materialized by the runtime ModelStore into
+    # model views. Linked files never need cache entries because their inode
+    # identity already proves they are the verified blob.
+    "model_store_materialized",
+]
 
 
 @dataclass(frozen=True)

@@ -1575,6 +1575,106 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("does not re-open the preparation dialog on the next run after preparation completed", async () => {
+    const firstRunRequest = deferred<Response>();
+    const preparingStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: {
+        status: "materializing_model_view",
+        user_facing_message: "Preparing model access.",
+      },
+    };
+    const readyStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: { status: "ready", user_facing_message: "Ready" },
+    };
+    // Preparation completes while the first run request is in flight, but the
+    // request resolves before another preparation poll can observe "ready".
+    let backendReady = false;
+    let statusCalls = 0;
+    let runCalls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return Promise.resolve(jsonResponse(backendReady ? readyStatus : preparingStatus));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        runCalls += 1;
+        if (runCalls === 1) return firstRunRequest.promise;
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "job-second",
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-first/progress") || url.endsWith("/api/jobs/job-second/progress")) {
+        const jobId = url.includes("job-first") ? "job-first" : "job-second";
+        return Promise.resolve(
+          jsonResponse({
+            job_id: jobId,
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          }),
+        );
+      }
+      if (url.endsWith("/api/jobs/job-first/result") || url.endsWith("/api/jobs/job-second/result")) {
+        const jobId = url.includes("job-first") ? "job-first" : "job-second";
+        return Promise.resolve(jsonResponse({ job_id: jobId, status: "completed", outputs: [], error: null }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    // First run: preparation is genuinely in progress, so the dialog shows.
+    expect(await screen.findByRole("dialog", { name: "Preparing workflow" })).toBeInTheDocument();
+
+    backendReady = true;
+    const statusCallsBeforeResolve = statusCalls;
+    firstRunRequest.resolve(
+      jsonResponse({
+        job_id: "job-first",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    });
+    // The page must re-read workflow status after the run so the stored
+    // install state lands on the backend's final "ready".
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(statusCallsBeforeResolve));
+
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    // Second run: the backend already reports ready, so the preparation
+    // dialog must not re-open from the earlier non-ready snapshot.
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+  });
+
   it("shows the root preparation blocker when Run returns a validation failure", async () => {
     const rootCause = "Node package dependency could not be resolved.";
     fetchMock.mockImplementation((input: RequestInfo | URL) => {

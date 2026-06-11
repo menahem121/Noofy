@@ -422,6 +422,28 @@ def test_large_model_blob_requires_confirmation_before_deletion(tmp_path: Path) 
     )
 
 
+def test_model_blob_deletion_removes_verification_record_and_directory(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    blob = _write_model_blob(roots, "c" * 64, b"blob-bytes")
+    record = blob.with_name("verified.json")
+    record.write_text("{}", encoding="utf-8")
+
+    RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        config=RuntimeStorageGcConfig(),
+        log_store=LogStore(),
+    ).collect_garbage(confirm_large_model_deletion=True)
+
+    # The content-addressed directory is the deletion unit: the verification
+    # record must not survive the blob it describes.
+    assert not blob.exists()
+    assert not record.exists()
+    assert not blob.parent.exists()
+
+
 def test_reference_index_tracks_cache_and_package_archive_metadata(
     tmp_path: Path,
 ) -> None:

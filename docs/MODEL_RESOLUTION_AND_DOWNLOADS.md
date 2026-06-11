@@ -231,6 +231,35 @@ Diagnostics (source `workflow.models`):
   `downgrade_reason` (`none`, `single_model`, `config_override`, `network_fs`,
   `rotational`).
 
+### Runtime ModelStore Verification (capsule prepare)
+
+The runtime `ModelStore` (`backend/app/runtime/models/model_store.py`) applies the
+same "hash fully once, then trust the stat key" policy when capsule prepare
+materializes model views:
+
+- Every blob is fully hashed at download commit. That verification is recorded in a
+  `verified.json` sidecar next to the blob (size, `mtime_ns`, device/inode, expected
+  SHA, schema version). Later prepares trust an unchanged blob via this record
+  instead of re-reading multi-GB files; a missing, corrupt, schema-mismatched, or
+  stale record forces a full re-hash, and a hash mismatch fails closed and removes
+  the record.
+- Hardlinked/symlinked model-view targets are confirmed by inode identity
+  (`os.path.samefile`) against the just-verified blob instead of hashing the same
+  physical bytes a second time. Independent copies are still hashed before being
+  trusted, then cached in the shared local model identity store
+  (`root_type: model_store_materialized`) so unchanged copies are reused without
+  re-copying or re-hashing.
+- User-local candidates (both `filename_size` reuse and exact-SHA scans) read and
+  write the same stat-keyed local model identity store the availability layer uses,
+  so a file verified during import is a cache hit at first prepare and vice versa.
+- All remaining full-file hashing in async prepare paths runs off the event loop
+  via `asyncio.to_thread`.
+
+Diagnostics (source `model.store`): `Model view verification completed` is emitted
+once per view materialization with `duration_ms`, model counts, `stat_cache_hits`,
+`full_hashes`, `bytes_hashed`, and `link_identity_reuses`; cache hits do not log
+per file. A fully cached re-prepare reports `bytes_hashed: 0`.
+
 ## Provider Resolver
 
 When a required model has no usable `source_urls` from the package, Noofy can

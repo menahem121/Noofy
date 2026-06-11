@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from app.runtime.models.model_store import (
     probe_symlink_capability,
 )
 from app.source_policy import SourcePolicy
+from app.workflows.model_identity_store import LocalModelIdentityStore
 
 
 def _model_store_paths(root: Path) -> dict[str, Path]:
@@ -782,3 +784,462 @@ async def test_sweep_orphan_materialized_links_removes_view_file_when_blob_missi
 
     assert removed == 1
     assert not materialized.exists()
+
+
+# ---------------------------------------------------------------------------
+# Verification caching: a model is fully hashed at least once, then trusted
+# via its stat key until the file changes.
+# ---------------------------------------------------------------------------
+
+
+class _HashCounter:
+    """Counts full-file SHA-256 computations and the thread they ran on."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.calls: list[tuple[Path, int]] = []
+        original = model_store_module._sha256_file
+
+        def counting(path: Path, chunk_size: int = 1 << 20) -> str:
+            self.calls.append((Path(path), threading.get_ident()))
+            return original(path, chunk_size)
+
+        monkeypatch.setattr(model_store_module, "_sha256_file", counting)
+
+    @property
+    def count(self) -> int:
+        return len(self.calls)
+
+    def reset(self) -> None:
+        self.calls.clear()
+
+
+def _identity_store(tmp_path: Path) -> LocalModelIdentityStore:
+    return LocalModelIdentityStore(tmp_path / "identity" / "identities.db")
+
+
+def _blob_verification_record_path(tmp_path: Path, lock: ModelLock) -> Path:
+    return tmp_path / "blobs" / lock.sha256 / "verified.json"
+
+
+@pytest.mark.anyio
+async def test_existing_verified_blob_skips_full_hash_on_stat_cache_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"cached-blob-payload" * 16
+    lock = _model_lock(payload)
+    store, log_store = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+
+    first = await store.materialize(lock)
+    assert counter.count == 1  # the mandatory post-download hash
+    assert _blob_verification_record_path(tmp_path, lock).exists()
+
+    counter.reset()
+    second = await store.materialize(lock)
+
+    assert second.reused_existing_blob is True
+    assert counter.count == 0
+    assert first.blob_path == second.blob_path
+    reused_events = [
+        event
+        for event in log_store.list_events().events
+        if event.message == "Model already present in store"
+    ]
+    assert reused_events
+    assert reused_events[-1].details["stat_cache_hits"] == 1
+    assert reused_events[-1].details["bytes_hashed"] == 0
+
+
+@pytest.mark.anyio
+async def test_missing_verification_record_forces_one_rehash_then_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"missing-record-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    await store.materialize(lock)
+    record_path = _blob_verification_record_path(tmp_path, lock)
+    record_path.unlink()
+
+    counter.reset()
+    await store.materialize(lock)
+    assert counter.count == 1
+    assert record_path.exists()
+
+    counter.reset()
+    await store.materialize(lock)
+    assert counter.count == 0
+
+
+@pytest.mark.anyio
+async def test_changed_blob_mtime_forces_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"mtime-changed-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    result = await store.materialize(lock)
+
+    model_store_module.os.utime(result.blob_path, ns=(1, 1))
+
+    counter.reset()
+    await store.materialize(lock)
+    assert counter.count == 1  # stale stat key, content still intact
+
+    counter.reset()
+    await store.materialize(lock)
+    assert counter.count == 0  # record refreshed after the rehash
+
+
+@pytest.mark.anyio
+async def test_blob_size_change_fails_closed_without_trusting_cache(
+    tmp_path: Path,
+) -> None:
+    payload = b"size-changed-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    result = await store.materialize(lock)
+
+    result.blob_path.write_bytes(payload + b"-grown")
+
+    with pytest.raises(ModelDownloadError, match="does not match lock"):
+        await store.materialize(lock)
+
+
+@pytest.mark.anyio
+async def test_corrupt_blob_with_stale_record_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"corrupt-blob-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    result = await store.materialize(lock)
+
+    # Same size, different bytes: the stat key changes (mtime), so the cache
+    # must not be trusted and the full re-hash must fail closed.
+    result.blob_path.write_bytes(b"X" * len(payload))
+
+    counter.reset()
+    with pytest.raises(ModelDownloadError, match="is corrupt"):
+        await store.materialize(lock)
+    assert counter.count == 1
+    assert not _blob_verification_record_path(tmp_path, lock).exists()
+
+
+@pytest.mark.anyio
+async def test_verification_record_sha_mismatch_forces_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"record-sha-mismatch"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    await store.materialize(lock)
+    record_path = _blob_verification_record_path(tmp_path, lock)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["sha256"] = "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    counter.reset()
+    await store.materialize(lock)
+
+    assert counter.count == 1  # intact blob passes the re-hash
+    refreshed = json.loads(record_path.read_text(encoding="utf-8"))
+    assert refreshed["sha256"] == lock.sha256
+
+
+@pytest.mark.anyio
+async def test_verification_record_schema_mismatch_forces_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"record-schema-mismatch"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    await store.materialize(lock)
+    record_path = _blob_verification_record_path(tmp_path, lock)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["schema_version"] = 999
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    counter.reset()
+    await store.materialize(lock)
+    assert counter.count == 1
+
+
+@pytest.mark.anyio
+async def test_model_view_link_materialization_skips_second_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"view-link-payload" * 8
+    lock = _model_lock(payload)
+    store, log_store = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    # Exactly one hash: the mandatory post-download verification. The linked
+    # view target shares the blob's inode and must not be hashed again.
+    assert counter.count == 1
+    assert view.model_references[0].materialization_strategy in {"hardlink", "symlink"}
+    assert view.model_references[0].materialized_file_verified is True
+
+    counter.reset()
+    repeat = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert counter.count == 0
+    assert repeat.model_references[0].materialized_file_verified is True
+    completed = [
+        event
+        for event in log_store.list_events().events
+        if event.message == "Model view verification completed"
+    ]
+    assert completed
+    assert completed[-1].details["bytes_hashed"] == 0
+
+
+@pytest.mark.anyio
+async def test_model_view_copy_fallback_still_hashes_the_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"copy-verify-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    # Download hash + independent verification of the copied bytes.
+    assert view.model_references[0].materialization_strategy == "copy"
+    assert counter.count == 2
+
+
+@pytest.mark.anyio
+async def test_model_view_corrupted_copy_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"corrupted-copy-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    def corrupt_copy(source: Path, target: Path) -> None:
+        Path(target).write_bytes(b"Y" * len(payload))
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+    monkeypatch.setattr(model_store_module.shutil, "copy2", corrupt_copy)
+
+    with pytest.raises(ModelDownloadError, match="failed verification"):
+        await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+
+@pytest.mark.anyio
+async def test_unchanged_copy_target_reused_via_stat_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"copy-reuse-payload"
+    lock = _model_lock(payload)
+    log_store = LogStore()
+    store = ModelStore(
+        **_model_store_paths(tmp_path),
+        log_store=log_store,
+        downloader=_make_downloader({lock.source_urls[0]: payload}),
+        local_model_identity_store=_identity_store(tmp_path),
+    )
+    counter = _HashCounter(monkeypatch)
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+
+    first = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    assert first.model_references[0].materialization_strategy == "copy"
+    assert counter.count == 2  # download + copy verification
+
+    counter.reset()
+    repeat = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    # The unchanged copy passes via the strict stat-key cache: no re-copy,
+    # no re-hash.
+    assert repeat.model_references[0].materialization_strategy == "copy"
+    assert repeat.model_references[0].materialized_file_verified is True
+    assert counter.count == 0
+    assert Path(repeat.model_references[0].materialized_path).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_user_local_candidate_first_sight_hashes_then_cache_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"local-filename-size-model"
+    local_root = tmp_path / "external-models"
+    local_file = local_root / "checkpoints" / "local.safetensors"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(payload)
+    requirement = LocalModelRequirement(
+        requirement_id="local-1",
+        comfyui_folder="checkpoints",
+        filename="local.safetensors",
+        size_bytes=len(payload),
+    )
+    log_store = LogStore()
+    store = ModelStore(
+        **_model_store_paths(tmp_path),
+        log_store=log_store,
+        downloader=_make_downloader({}),
+        local_model_roots=[local_root],
+        local_model_identity_store=_identity_store(tmp_path),
+    )
+    counter = _HashCounter(monkeypatch)
+
+    first = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[],
+        local_model_requirements=[requirement],
+    )
+    assert counter.count == 1  # first sight pays the full hash
+
+    counter.reset()
+    repeat = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[],
+        local_model_requirements=[requirement],
+    )
+
+    assert counter.count == 0  # unchanged file is a stat-key cache hit
+    assert (
+        first.model_references[0].sha256 == repeat.model_references[0].sha256
+    )
+
+    # A modified file must not be trusted from the cache.
+    local_file.write_bytes(payload[::-1])
+    counter.reset()
+    await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[],
+        local_model_requirements=[requirement],
+    )
+    assert counter.count >= 1
+
+
+@pytest.mark.anyio
+async def test_hash_verified_local_candidate_cache_hits_after_first_sight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"local-hash-verified-model"
+    lock = _model_lock(payload, filename="exact.safetensors")
+    local_root = tmp_path / "external-models"
+    local_file = local_root / "checkpoints" / "exact.safetensors"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(payload)
+    log_store = LogStore()
+    store = ModelStore(
+        **_model_store_paths(tmp_path),
+        log_store=log_store,
+        downloader=_make_downloader({}),
+        local_model_roots=[local_root],
+        local_model_identity_store=_identity_store(tmp_path),
+    )
+    counter = _HashCounter(monkeypatch)
+    policy = _source_policy(
+        model_source_trust="mixed",
+        allowed_model_origins=["hashed-download", "user-local"],
+    )
+
+    first = await store.materialize_model_view(
+        view_id="capsule-fp", model_locks=[lock], source_policy=policy
+    )
+    assert first.model_references[0].asset_ownership is AssetOwnership.USER_LOCAL
+    assert counter.count == 1  # candidate verified by full hash once
+
+    counter.reset()
+    await store.materialize_model_view(
+        view_id="capsule-fp", model_locks=[lock], source_policy=policy
+    )
+    assert counter.count == 0
+
+
+@pytest.mark.anyio
+async def test_full_hashes_run_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"event-loop-safety"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    await store.materialize(lock)
+    # Drop the record so the next materialize must re-hash the blob.
+    _blob_verification_record_path(tmp_path, lock).unlink()
+    loop_thread = threading.get_ident()
+
+    counter.reset()
+    await store.materialize(lock)
+
+    assert counter.count == 1
+    assert all(thread_id != loop_thread for _, thread_id in counter.calls)
+
+
+@pytest.mark.anyio
+async def test_staged_prepare_of_unchanged_models_hashes_zero_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run-startup regression: a re-prepare of an unchanged, previously
+    verified capsule (staged flow, like the capsule installer uses) must not
+    re-read model bytes."""
+    payload = b"staged-reprepare-payload" * 32
+    lock = _model_lock(payload)
+    store, log_store = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    counter = _HashCounter(monkeypatch)
+    staged_views = tmp_path / "txn" / "model-views"
+    staged_blobs = tmp_path / "txn" / "model-blobs"
+
+    first = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[lock],
+        staged_views_dir=staged_views,
+        staged_blobs_dir=staged_blobs,
+    )
+    store.promote_model_view(first)
+    assert counter.count == 1  # download verification only
+
+    counter.reset()
+    second = await store.materialize_model_view(
+        view_id="capsule-fp",
+        model_locks=[lock],
+        staged_views_dir=staged_views,
+        staged_blobs_dir=staged_blobs,
+    )
+    store.promote_model_view(second)
+
+    assert counter.count == 0
+    assert second.model_references[0].materialized_file_verified is True
+    completed = [
+        event
+        for event in log_store.list_events().events
+        if event.message == "Model view verification completed"
+    ]
+    assert completed[-1].details["bytes_hashed"] == 0
+    assert completed[-1].details["stat_cache_hits"] >= 1

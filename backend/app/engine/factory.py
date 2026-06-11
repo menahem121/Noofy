@@ -374,6 +374,19 @@ def create_default_engine_service() -> EngineService:
         ),
         log_store=log_store,
     )
+    try:
+        model_identity_store = LocalModelIdentityStore(
+            paths.model_store_dir / "identity" / "local-model-identities.db",
+            log_store=log_store,
+        )
+    except Exception as exc:
+        model_identity_store = None
+        log_store.add(
+            "warning",
+            "Local model hash cache could not be opened; model verification will continue without cache",
+            "workflow.models.cache",
+            details={"error": str(exc)},
+        )
     model_store = ModelStore(
         blobs_dir=paths.model_blobs_dir,
         refs_dir=paths.model_refs_dir,
@@ -387,6 +400,7 @@ def create_default_engine_service() -> EngineService:
         ),
         local_model_roots=model_roots,
         owned_model_root=noofy_models_dir,
+        local_model_identity_store=model_identity_store,
     )
     orphan_model_links_removed = model_store.sweep_orphan_materialized_links()
     if orphan_model_links_removed:
@@ -560,19 +574,6 @@ def create_default_engine_service() -> EngineService:
         workflow_loader=loader,
         log_store=log_store,
     )
-    try:
-        model_identity_store = LocalModelIdentityStore(
-            paths.model_store_dir / "identity" / "local-model-identities.db",
-            log_store=log_store,
-        )
-    except Exception as exc:
-        model_identity_store = None
-        log_store.add(
-            "warning",
-            "Local model hash cache could not be opened; model verification will continue without cache",
-            "workflow.models.cache",
-            details={"error": str(exc)},
-        )
     model_availability_service = ModelAvailabilityService(
         model_roots=model_roots,
         noofy_models_dir=noofy_models_dir,

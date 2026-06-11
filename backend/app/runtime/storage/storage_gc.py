@@ -602,6 +602,11 @@ class RuntimeStorageGarbageCollector:
         size = decision.size_bytes
         if dry_run:
             return 0
+        if decision.artifact_kind is RuntimeStorageArtifactKind.MODEL_BLOB:
+            # The content-addressed directory is the unit: it also holds the
+            # blob's verification record, which must not outlive the blob.
+            _delete_path(decision.path.parent)
+            return size
         _delete_path(decision.path)
         return size
 

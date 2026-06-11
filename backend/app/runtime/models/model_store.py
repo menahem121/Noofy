@@ -27,9 +27,14 @@ from app.diagnostics import DiagnosticsSink
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.dependencies.isolation import InstalledModelReference, ModelLock
 from app.source_policy import ModelSourceTrust, SourcePolicy
+from app.workflows.model_identity_store import (
+    LocalModelIdentityContext,
+    LocalModelIdentityStore,
+)
 
 REF_SCHEMA_VERSION = "0.1.0"
 MODEL_VIEW_SCHEMA_VERSION = "0.1.0"
+BLOB_VERIFICATION_SCHEMA_VERSION = 1
 WINDOWS_MAX_MATERIALIZED_PATH_CHARS = 240
 
 
@@ -153,6 +158,84 @@ def _normalize_sha256(value: str) -> str:
     return value
 
 
+@dataclass
+class StoreVerificationMetrics:
+    """Verification work done by one store operation.
+
+    Verification must stay observable when the caches make it silent: a
+    single completion diagnostic carries these counters instead of one log
+    line per file, and "the cache worked" shows up as zero bytes hashed.
+    """
+
+    stat_cache_hits: int = 0
+    full_hashes: int = 0
+    bytes_hashed: int = 0
+    link_identity_reuses: int = 0
+
+    def record_stat_cache_hit(self) -> None:
+        self.stat_cache_hits += 1
+
+    def record_full_hash(self, size_bytes: int) -> None:
+        self.full_hashes += 1
+        self.bytes_hashed += max(0, size_bytes)
+
+    def record_link_identity_reuse(self) -> None:
+        self.link_identity_reuses += 1
+
+    def as_details(self) -> dict[str, int]:
+        return {
+            "stat_cache_hits": self.stat_cache_hits,
+            "full_hashes": self.full_hashes,
+            "bytes_hashed": self.bytes_hashed,
+            "link_identity_reuses": self.link_identity_reuses,
+        }
+
+
+def _stat_mtime_ns(stat: os.stat_result) -> int:
+    return int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+
+
+def _stat_device_id(stat: os.stat_result) -> int | None:
+    value = getattr(stat, "st_dev", None)
+    return int(value) if isinstance(value, int) else None
+
+
+def _stat_inode(stat: os.stat_result) -> int | None:
+    value = getattr(stat, "st_ino", None)
+    return int(value) if isinstance(value, int) else None
+
+
+def _blob_verification_matches(
+    record: dict[str, object], stat: os.stat_result, sha256: str
+) -> bool:
+    """Strict stat-key check mirroring LocalModelIdentityStore semantics:
+    size and mtime_ns must match exactly; device/inode must match when both
+    the record and the platform provide them."""
+    if record.get("sha256") != sha256:
+        return False
+    if record.get("size_bytes") != stat.st_size:
+        return False
+    if record.get("mtime_ns") != _stat_mtime_ns(stat):
+        return False
+    recorded_device = record.get("device_id")
+    current_device = _stat_device_id(stat)
+    if (
+        isinstance(recorded_device, int)
+        and current_device is not None
+        and recorded_device != current_device
+    ):
+        return False
+    recorded_inode = record.get("inode")
+    current_inode = _stat_inode(stat)
+    if (
+        isinstance(recorded_inode, int)
+        and current_inode is not None
+        and recorded_inode != current_inode
+    ):
+        return False
+    return True
+
+
 def _safe_relative_parts(value: str, *, field_name: str) -> tuple[str, ...]:
     if "\\" in value:
         raise ModelDownloadError(f"Unsafe {field_name}: path traversal is not allowed")
@@ -191,6 +274,7 @@ class ModelStore:
         local_model_roots: list[Path] | None = None,
         owned_model_root: Path | None = None,
         symlink_capability: bool | None = None,
+        local_model_identity_store: LocalModelIdentityStore | None = None,
     ) -> None:
         self.blobs_dir = blobs_dir
         self.refs_dir = refs_dir
@@ -202,6 +286,7 @@ class ModelStore:
         self.local_model_roots = local_model_roots or []
         self.owned_model_root = owned_model_root
         self._symlink_capability = symlink_capability
+        self.local_model_identity_store = local_model_identity_store
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -221,15 +306,24 @@ class ModelStore:
         )  # Validate lock-derived output path before IO.
 
         if blob_path.exists():
-            self._verify_existing_blob(model_lock, blob_path, sha256)
+            metrics = StoreVerificationMetrics()
+            await asyncio.to_thread(
+                self._verify_existing_blob, model_lock, blob_path, sha256, metrics
+            )
             self._write_ref(model_lock, sha256, blob_path)
-            self._materialize_owned_model(model_lock, blob_path)
-            materialized, strategy = self._materialize(model_lock, blob_path)
+            await asyncio.to_thread(self._materialize_owned_model, model_lock, blob_path)
+            materialized, strategy = await asyncio.to_thread(
+                self._materialize, model_lock, blob_path, metrics
+            )
             self.log_store.add(
                 "info",
                 "Model already present in store",
                 "model.store",
-                details={"model_id": model_lock.id, "sha256": sha256},
+                details={
+                    "model_id": model_lock.id,
+                    "sha256": sha256,
+                    **metrics.as_details(),
+                },
             )
             return ModelMaterialization(
                 model_id=model_lock.id,
@@ -265,10 +359,12 @@ class ModelStore:
                     f"expected {sha256}, got {actual_sha256}"
                 )
 
-            self._commit_blob(download_target, blob_path)
+            self._commit_blob(download_target, blob_path, sha256)
             self._write_ref(model_lock, sha256, blob_path)
-            self._materialize_owned_model(model_lock, blob_path)
-            materialized, strategy = self._materialize(model_lock, blob_path)
+            await asyncio.to_thread(self._materialize_owned_model, model_lock, blob_path)
+            materialized, strategy = await asyncio.to_thread(
+                self._materialize, model_lock, blob_path
+            )
         except BaseException as exc:
             self.log_store.add(
                 "error",
@@ -315,13 +411,17 @@ class ModelStore:
         source_policy: SourcePolicy | None = None,
     ) -> ModelViewMaterialization:
         """Create a per-view ComfyUI model tree from content-addressed blobs."""
+        started_at = time.monotonic()
+        metrics = StoreVerificationMetrics()
         self._validate_model_source_policy(
             source_policy,
             model_locks=model_locks,
             local_model_requirements=local_model_requirements or [],
         )
-        resolved_local_models = self._resolve_local_models(
-            local_model_requirements or []
+        resolved_local_models = await asyncio.to_thread(
+            self._resolve_local_models,
+            local_model_requirements or [],
+            metrics,
         )
         view_fingerprint = model_view_fingerprint(
             view_id=view_id,
@@ -372,13 +472,19 @@ class ModelStore:
                 and _source_policy_allows_exact_local_reuse(source_policy)
             ):
                 local_source = await asyncio.to_thread(
-                    self._find_exact_local_candidate, model_lock
+                    self._find_exact_local_candidate, model_lock, metrics
                 )
             if local_source is not None:
                 target = self._model_view_path(view_path, model_lock)
-                strategy = self._materialize_link_or_copy(local_source, target)
-                verified = self._verify_materialized_file(
-                    target, sha256, model_lock.size_bytes
+                strategy, verified = await asyncio.to_thread(
+                    self._materialize_verified_target,
+                    local_source,
+                    target,
+                    sha256,
+                    model_lock.size_bytes,
+                    model_lock.comfyui_folder,
+                    model_lock.filename,
+                    metrics,
                 )
                 if not verified:
                     raise ModelDownloadError(
@@ -420,12 +526,21 @@ class ModelStore:
             blob_path, sha256, reused_existing_blob = await self._ensure_blob(
                 model_lock,
                 transactions_dir=staged_blobs_dir,
+                metrics=metrics,
             )
-            owned_model_path = self._materialize_owned_model(model_lock, blob_path)
+            owned_model_path = await asyncio.to_thread(
+                self._materialize_owned_model, model_lock, blob_path
+            )
             target = self._model_view_path(view_path, model_lock)
-            strategy = self._materialize_link_or_copy(blob_path, target)
-            verified = self._verify_materialized_file(
-                target, sha256, model_lock.size_bytes
+            strategy, verified = await asyncio.to_thread(
+                self._materialize_verified_target,
+                blob_path,
+                target,
+                sha256,
+                model_lock.size_bytes,
+                model_lock.comfyui_folder,
+                model_lock.filename,
+                metrics,
             )
             if not verified:
                 raise ModelDownloadError(
@@ -470,9 +585,15 @@ class ModelStore:
                 comfyui_folder=requirement.comfyui_folder,
                 filename=requirement.filename,
             )
-            strategy = self._materialize_link_or_copy(local_model.source_path, target)
-            verified = self._verify_materialized_file(
-                target, local_model.sha256, requirement.size_bytes
+            strategy, verified = await asyncio.to_thread(
+                self._materialize_verified_target,
+                local_model.source_path,
+                target,
+                local_model.sha256,
+                requirement.size_bytes,
+                requirement.comfyui_folder,
+                requirement.filename,
+                metrics,
             )
             if not verified:
                 raise ModelDownloadError(
@@ -510,6 +631,18 @@ class ModelStore:
             )
 
         self._write_model_view_manifest(view_path, view_fingerprint, refs)
+        self.log_store.add(
+            "info",
+            "Model view verification completed",
+            "model.store",
+            details={
+                "view_fingerprint": view_fingerprint,
+                "model_count": len(model_locks),
+                "local_model_count": len(resolved_local_models),
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                **metrics.as_details(),
+            },
+        )
         return ModelViewMaterialization(
             view_fingerprint=view_fingerprint,
             view_path=view_path,
@@ -652,26 +785,100 @@ class ModelStore:
         if txn_dir.exists():
             shutil.rmtree(txn_dir, ignore_errors=True)
 
-    def _commit_blob(self, source: Path, blob_path: Path) -> None:
+    def _commit_blob(self, source: Path, blob_path: Path, sha256: str) -> None:
         blob_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             os.replace(source, blob_path)
+        # The committed bytes were fully hashed just before this call; record
+        # that verification so later prepares can trust the blob via its stat
+        # key instead of re-reading multi-GB files.
+        self._write_blob_verification(blob_path, sha256)
 
     def _verify_existing_blob(
-        self, model_lock: ModelLock, blob_path: Path, sha256: str
+        self,
+        model_lock: ModelLock,
+        blob_path: Path,
+        sha256: str,
+        metrics: StoreVerificationMetrics | None = None,
     ) -> None:
-        size = blob_path.stat().st_size
-        if model_lock.size_bytes > 0 and size != model_lock.size_bytes:
+        """Confirm an existing blob still matches its content address.
+
+        Every blob is fully hashed at least once (at download commit, or here
+        on the first verification without a record). After that, a strict
+        stat-key record (size + mtime_ns + device/inode + expected sha) lets
+        unchanged blobs pass without re-reading their bytes. Any missing,
+        corrupt, schema-mismatched, or stale record falls back to a full
+        re-hash, and a hash mismatch fails closed.
+        """
+        stat = blob_path.stat()
+        if model_lock.size_bytes > 0 and stat.st_size != model_lock.size_bytes:
             raise ModelDownloadError(
                 f"Stored blob size for {model_lock.id} does not match lock "
-                f"(expected {model_lock.size_bytes}, got {size})"
+                f"(expected {model_lock.size_bytes}, got {stat.st_size})"
             )
+        record = self._read_blob_verification(blob_path)
+        if record is not None and _blob_verification_matches(record, stat, sha256):
+            if metrics is not None:
+                metrics.record_stat_cache_hit()
+            return
         actual = _sha256_file(blob_path)
+        if metrics is not None:
+            metrics.record_full_hash(stat.st_size)
         if actual != sha256:
+            self._discard_blob_verification(blob_path)
             raise ModelDownloadError(
                 f"Stored blob for {model_lock.id} is corrupt "
                 f"(expected sha256 {sha256}, got {actual})"
             )
+        self._write_blob_verification(blob_path, sha256)
+
+    def _blob_verification_path(self, blob_path: Path) -> Path:
+        return blob_path.with_name("verified.json")
+
+    def _read_blob_verification(self, blob_path: Path) -> dict[str, object] | None:
+        try:
+            data = json.loads(
+                self._blob_verification_path(blob_path).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        if data.get("schema_version") != BLOB_VERIFICATION_SCHEMA_VERSION:
+            return None
+        return data
+
+    def _write_blob_verification(self, blob_path: Path, sha256: str) -> None:
+        record_path = self._blob_verification_path(blob_path)
+        try:
+            stat = blob_path.stat()
+            payload = {
+                "schema_version": BLOB_VERIFICATION_SCHEMA_VERSION,
+                "sha256": sha256,
+                "size_bytes": stat.st_size,
+                "mtime_ns": _stat_mtime_ns(stat),
+                "device_id": _stat_device_id(stat),
+                "inode": _stat_inode(stat),
+                "verified_at": time.time(),
+            }
+            tmp_path = record_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp_path.replace(record_path)
+        except OSError as exc:
+            # Verification still happened; only the cache is lost, so the next
+            # prepare pays one extra full hash.
+            self.log_store.add(
+                "warning",
+                "Could not record model blob verification",
+                "model.store",
+                details={"blob_path": str(blob_path), "error": str(exc)},
+            )
+
+    def _discard_blob_verification(self, blob_path: Path) -> None:
+        try:
+            self._blob_verification_path(blob_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------
     # Internal: download dispatch
@@ -746,11 +953,14 @@ class ModelStore:
         model_lock: ModelLock,
         *,
         transactions_dir: Path | None = None,
+        metrics: StoreVerificationMetrics | None = None,
     ) -> tuple[Path, str, bool]:
         sha256 = _normalize_sha256(model_lock.sha256)
         blob_path = self._blob_path(sha256)
         if blob_path.exists():
-            self._verify_existing_blob(model_lock, blob_path, sha256)
+            await asyncio.to_thread(
+                self._verify_existing_blob, model_lock, blob_path, sha256, metrics
+            )
             self._write_ref(model_lock, sha256, blob_path)
             return blob_path, sha256, True
 
@@ -773,12 +983,14 @@ class ModelStore:
                     f"expected {model_lock.size_bytes}, got {bytes_written}"
                 )
             actual_sha256 = await asyncio.to_thread(_sha256_file, download_target)
+            if metrics is not None:
+                metrics.record_full_hash(bytes_written)
             if actual_sha256 != sha256:
                 raise ModelDownloadError(
                     f"Hash mismatch for {model_lock.id}: "
                     f"expected {sha256}, got {actual_sha256}"
                 )
-            self._commit_blob(download_target, blob_path)
+            self._commit_blob(download_target, blob_path, sha256)
             self._write_ref(model_lock, sha256, blob_path)
             return blob_path, sha256, False
         except BaseException as exc:
@@ -812,8 +1024,24 @@ class ModelStore:
         tmp_path.write_text(json.dumps(ref, indent=2), encoding="utf-8")
         tmp_path.replace(ref_path)
 
-    def _materialize(self, model_lock: ModelLock, blob_path: Path) -> tuple[Path, str]:
+    def _materialize(
+        self,
+        model_lock: ModelLock,
+        blob_path: Path,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> tuple[Path, str]:
         target = self._materialized_path(model_lock)
+        reused = self._reuse_existing_target(
+            blob_path,
+            target,
+            _normalize_sha256(model_lock.sha256),
+            model_lock.size_bytes,
+            comfyui_folder=model_lock.comfyui_folder,
+            filename=model_lock.filename,
+            metrics=metrics,
+        )
+        if reused is not None:
+            return target, reused
         strategy = self._materialize_link_or_copy(blob_path, target)
         return target, strategy
 
@@ -901,20 +1129,178 @@ class ModelStore:
             )
         return self._symlink_capability
 
-    def _verify_materialized_file(
-        self, path: Path, sha256: str, size_bytes: int
+    def _materialize_verified_target(
+        self,
+        source_path: Path,
+        target: Path,
+        sha256: str,
+        size_bytes: int,
+        comfyui_folder: str,
+        filename: str,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> tuple[str, bool]:
+        """Materialize already-verified bytes at `target` and confirm the result.
+
+        An existing target is reused without relinking when it provably holds
+        the verified bytes (same inode as the verified source, or a strict
+        stat-key cache hit for an earlier verified copy). A freshly created
+        link/symlink is confirmed by inode identity instead of re-reading the
+        bytes that were just verified at the source. Only an independent copy
+        still needs its own hash before it is trusted.
+        """
+        reused = self._reuse_existing_target(
+            source_path,
+            target,
+            sha256,
+            size_bytes,
+            comfyui_folder=comfyui_folder,
+            filename=filename,
+            metrics=metrics,
+        )
+        if reused is not None:
+            return reused, True
+        strategy = self._materialize_link_or_copy(source_path, target)
+        verified = self._verify_materialized_target(
+            source_path,
+            target,
+            sha256,
+            size_bytes,
+            comfyui_folder=comfyui_folder,
+            filename=filename,
+            metrics=metrics,
+        )
+        return strategy, verified
+
+    def _reuse_existing_target(
+        self,
+        source_path: Path,
+        target: Path,
+        sha256: str,
+        size_bytes: int,
+        *,
+        comfyui_folder: str,
+        filename: str,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> str | None:
+        """Return the materialization strategy when `target` already provides
+        the verified bytes, or None when it must be (re)materialized.
+
+        A stale or dangling target never matches and falls through to the
+        normal replace-and-verify path, preserving view self-repair.
+        """
+        try:
+            if not (target.exists() or target.is_symlink()):
+                return None
+            if os.path.samefile(source_path, target):
+                if metrics is not None:
+                    metrics.record_link_identity_reuse()
+                return "symlink" if target.is_symlink() else "hardlink"
+            target_stat = target.stat()
+        except OSError:
+            return None
+        if size_bytes > 0 and target_stat.st_size != size_bytes:
+            return None
+        cached = self._cached_target_sha256(
+            target, comfyui_folder=comfyui_folder, filename=filename
+        )
+        if cached is not None and cached == sha256:
+            if metrics is not None:
+                metrics.record_stat_cache_hit()
+            return "copy"
+        return None
+
+    def _verify_materialized_target(
+        self,
+        source_path: Path,
+        target: Path,
+        sha256: str,
+        size_bytes: int,
+        *,
+        comfyui_folder: str,
+        filename: str,
+        metrics: StoreVerificationMetrics | None = None,
     ) -> bool:
-        if size_bytes > 0 and path.stat().st_size != size_bytes:
+        try:
+            if os.path.samefile(source_path, target):
+                # Hard/symlinked targets are the same physical bytes that were
+                # already verified at the source; hashing them again would
+                # read identical data a second time.
+                if metrics is not None:
+                    metrics.record_link_identity_reuse()
+                return True
+        except OSError:
+            pass
+        stat = target.stat()
+        if size_bytes > 0 and stat.st_size != size_bytes:
             return False
-        return _sha256_file(path) == sha256
+        actual = _sha256_file(target)
+        if metrics is not None:
+            metrics.record_full_hash(stat.st_size)
+        if actual != sha256:
+            return False
+        self._remember_target_sha256(
+            target, actual, comfyui_folder=comfyui_folder, filename=filename
+        )
+        return True
+
+    def _target_identity_context(
+        self, target: Path, *, comfyui_folder: str, filename: str
+    ) -> LocalModelIdentityContext:
+        # relative_path intentionally excludes the view directory so a record
+        # written for a staged view survives promotion into the final view
+        # path via the store's stat-keyed fallback lookup.
+        return LocalModelIdentityContext(
+            root_type="model_store_materialized",
+            root_identifier=str(target.expanduser().resolve(strict=False).parent),
+            relative_path=(Path(comfyui_folder) / filename).as_posix(),
+        )
+
+    def _cached_target_sha256(
+        self, target: Path, *, comfyui_folder: str, filename: str
+    ) -> str | None:
+        if self.local_model_identity_store is None:
+            return None
+        context = self._target_identity_context(
+            target, comfyui_folder=comfyui_folder, filename=filename
+        )
+        try:
+            return self.local_model_identity_store.get_valid_hash(target, context)
+        except Exception as exc:
+            self._log_identity_cache_failure("lookup", target, exc)
+            return None
+
+    def _remember_target_sha256(
+        self, target: Path, sha256: str, *, comfyui_folder: str, filename: str
+    ) -> None:
+        if self.local_model_identity_store is None:
+            return
+        context = self._target_identity_context(
+            target, comfyui_folder=comfyui_folder, filename=filename
+        )
+        try:
+            self.local_model_identity_store.remember_hash(target, context, sha256)
+        except Exception as exc:
+            self._log_identity_cache_failure("store", target, exc)
+
+    def _log_identity_cache_failure(
+        self, operation: str, path: Path, exc: Exception
+    ) -> None:
+        self.log_store.add(
+            "warning",
+            "Local model hash cache unavailable for model store",
+            "model.store",
+            details={"operation": operation, "path": str(path), "error": str(exc)},
+        )
 
     def _resolve_local_models(
-        self, requirements: list[LocalModelRequirement]
+        self,
+        requirements: list[LocalModelRequirement],
+        metrics: StoreVerificationMetrics | None = None,
     ) -> list[ResolvedLocalModel]:
         resolved: list[ResolvedLocalModel] = []
         for requirement in requirements:
-            source_path = self._find_local_candidate(requirement)
-            sha256 = _sha256_file(source_path)
+            source_path, root = self._find_local_candidate(requirement)
+            sha256 = self._sha256_local_file(source_path, root, metrics=metrics)
             self.log_store.add(
                 "info",
                 "Reusing local model candidate",
@@ -938,7 +1324,9 @@ class ModelStore:
             )
         return resolved
 
-    def _find_local_candidate(self, requirement: LocalModelRequirement) -> Path:
+    def _find_local_candidate(
+        self, requirement: LocalModelRequirement
+    ) -> tuple[Path, Path]:
         folder_parts = _safe_relative_parts(
             requirement.comfyui_folder, field_name="comfyui_folder"
         )
@@ -957,12 +1345,16 @@ class ModelStore:
                     f"Local model candidate size mismatch for {requirement.requirement_id}: "
                     f"expected {requirement.size_bytes}, got {size}"
                 )
-            return candidate
+            return candidate, root
         raise LocalModelCandidateError(
             f"No local model candidate found for {requirement.requirement_id}; checked {checked}"
         )
 
-    def _find_exact_local_candidate(self, model_lock: ModelLock) -> Path | None:
+    def _find_exact_local_candidate(
+        self,
+        model_lock: ModelLock,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> Path | None:
         folder_parts = _safe_relative_parts(
             model_lock.comfyui_folder, field_name="comfyui_folder"
         )
@@ -974,7 +1366,9 @@ class ModelStore:
         for root in self.local_model_roots:
             candidate = root.joinpath(*folder_parts, *filename_parts)
             expected_paths.add(candidate)
-            if self._local_file_matches_model_lock(candidate, model_lock):
+            if self._local_file_matches_model_lock(
+                candidate, model_lock, root=root, metrics=metrics
+            ):
                 self._log_exact_local_candidate(
                     model_lock, candidate, expected_sha256, matched_by="expected_path"
                 )
@@ -985,22 +1379,93 @@ class ModelStore:
             for candidate in root.rglob("*"):
                 if candidate in expected_paths:
                     continue
-                if self._local_file_matches_model_lock(candidate, model_lock):
+                if self._local_file_matches_model_lock(
+                    candidate, model_lock, root=root, metrics=metrics
+                ):
                     self._log_exact_local_candidate(
                         model_lock, candidate, expected_sha256, matched_by="sha256_scan"
                     )
                     return candidate
         return None
 
-    def _local_file_matches_model_lock(self, candidate: Path, model_lock: ModelLock) -> bool:
+    def _local_file_matches_model_lock(
+        self,
+        candidate: Path,
+        model_lock: ModelLock,
+        *,
+        root: Path,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> bool:
         try:
             if not candidate.is_file():
                 return False
             if candidate.stat().st_size != model_lock.size_bytes:
                 return False
-            return _sha256_file(candidate) == _normalize_sha256(model_lock.sha256)
+            actual = self._sha256_local_file(candidate, root, metrics=metrics)
+            return actual == _normalize_sha256(model_lock.sha256)
         except OSError:
             return False
+
+    def _sha256_local_file(
+        self,
+        path: Path,
+        root: Path,
+        *,
+        metrics: StoreVerificationMetrics | None = None,
+    ) -> str:
+        """SHA-256 of a user-local file, served from the shared identity cache.
+
+        First sight of a file pays the full hash and records it under the same
+        root semantics the availability layer uses, so files verified during
+        import are immediate cache hits here (and vice versa). Any change to
+        the file's stat key invalidates the record and forces a re-hash.
+        """
+        context = self._local_root_context(path, root)
+        if self.local_model_identity_store is not None:
+            try:
+                cached = self.local_model_identity_store.get_valid_hash(path, context)
+            except Exception as exc:
+                self._log_identity_cache_failure("lookup", path, exc)
+                cached = None
+            if cached is not None:
+                if metrics is not None:
+                    metrics.record_stat_cache_hit()
+                return cached
+        sha256 = _sha256_file(path)
+        if metrics is not None:
+            try:
+                metrics.record_full_hash(path.stat().st_size)
+            except OSError:
+                metrics.record_full_hash(0)
+        if self.local_model_identity_store is not None:
+            try:
+                self.local_model_identity_store.remember_hash(path, context, sha256)
+            except Exception as exc:
+                self._log_identity_cache_failure("store", path, exc)
+        return sha256
+
+    def _local_root_context(self, path: Path, root: Path) -> LocalModelIdentityContext:
+        root_resolved = root.expanduser().resolve(strict=False)
+        path_resolved = path.expanduser().resolve(strict=False)
+        try:
+            relative_path = path_resolved.relative_to(root_resolved).as_posix()
+        except ValueError:
+            relative_path = Path(path.name).as_posix()
+        owned_resolved = (
+            self.owned_model_root.expanduser().resolve(strict=False)
+            if self.owned_model_root is not None
+            else None
+        )
+        root_type = (
+            "noofy_models"
+            if owned_resolved is not None and root_resolved == owned_resolved
+            else "external_comfyui_models"
+        )
+        return LocalModelIdentityContext(
+            root_type=root_type,
+            root_identifier=str(root_resolved),
+            relative_path=relative_path,
+        )
 
     def _log_exact_local_candidate(
         self,

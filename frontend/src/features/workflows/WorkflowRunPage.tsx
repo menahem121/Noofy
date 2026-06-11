@@ -694,6 +694,19 @@ export function WorkflowRunPage({
     };
   }
 
+  async function refreshWorkflowStatusAfterRun() {
+    // Preparation polling stops the moment the run request resolves, so the
+    // last poll can miss the final "ready" install state. Without this final
+    // refresh the page would keep a stale intermediate status (preparing,
+    // smoke_testing, ...) and re-open the preparation dialog on the next run.
+    try {
+      const statusResponse = await fetchWorkflowStatus(workflowId);
+      setState((current) => ({ ...current, workflowStatus: statusResponse }));
+    } catch {
+      // Non-fatal: the next run's status polling will self-correct.
+    }
+  }
+
   function beginRunSubmission() {
     runSubmissionInFlightCountRef.current += 1;
     setIsSubmittingRun(true);
@@ -721,6 +734,12 @@ export function WorkflowRunPage({
 
     const shouldTrackPreparation = shouldShowRunPreparationDialog(state.workflowStatus);
     let stopPreparationPolling: (() => void) | null = null;
+    const stopPreparationTracking = () => {
+      if (!stopPreparationPolling) return;
+      stopPreparationPolling();
+      stopPreparationPolling = null;
+      void refreshWorkflowStatusAfterRun();
+    };
     const runCount = clampBatchCount(batchCount);
     const submittedValuesSnapshot = { ...submittedInputValues };
     // Seeds whose value should advance after each queued generation.
@@ -745,7 +764,10 @@ export function WorkflowRunPage({
     setFailureDialog(null);
     setInputErrorDialog(null);
     if (shouldTrackPreparation) {
-      setRunPreparationDialog(runPreparationDialogFromStatus(state.workflowStatus));
+      // The cached status may be stale (e.g. a previous run finished after the
+      // last poll). Let the polling's immediate first fetch decide from fresh
+      // backend state whether the dialog is actually needed, instead of
+      // re-opening it from a stale non-ready snapshot.
       stopPreparationPolling = startRunPreparationStatusPolling();
     } else {
       setRunPreparationDialog(null);
@@ -766,7 +788,7 @@ export function WorkflowRunPage({
         });
 
         if (!isEngineJob(response)) {
-          stopPreparationPolling?.();
+          stopPreparationTracking();
           finishRunSubmission();
           setRunPreparationDialog(null);
           setRunComparisonInputAssetId(null);
@@ -794,21 +816,21 @@ export function WorkflowRunPage({
         if (isTrackableJob(response)) {
           addTrackedRun(trackedRunFromJob(response));
         } else {
-          stopPreparationPolling?.();
+          stopPreparationTracking();
           finishRunSubmission();
           setRunPreparationDialog(null);
           persistAdvancedSeeds();
           return;
         }
       }
-      stopPreparationPolling?.();
+      stopPreparationTracking();
       finishRunSubmission();
       setRunPreparationDialog(null);
       persistAdvancedSeeds();
       void pollTrackedRunsDue(true);
     } catch (error) {
       persistAdvancedSeeds();
-      stopPreparationPolling?.();
+      stopPreparationTracking();
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
@@ -2811,7 +2833,11 @@ function shouldShowRunPreparationDialog(workflowStatus: WorkflowStatusResponse |
   return Boolean(installStatus && installStatus !== "ready");
 }
 
-function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse | null): RunPreparationDialogState {
+function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse | null): RunPreparationDialogState | null {
+  // A ready (or unknown) install state needs no preparation dialog. Returning
+  // null here lets status polling dismiss the dialog as soon as the backend
+  // reports ready, instead of trusting a stale non-ready snapshot.
+  if (!shouldShowRunPreparationDialog(workflowStatus)) return null;
   const install = workflowStatus?.install ?? {};
   const installStatus = workflowInstallStatus(workflowStatus);
   const lastError = installString(install, "last_error");
