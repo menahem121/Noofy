@@ -2025,7 +2025,7 @@ export function WorkflowRunPage({
                 <span>{audioOutputMetaLabel(classicPreviewMedia.media)}</span>
               </div>
             ) : classicPreviewMedia?.kind === "3d" ? (
-              <ThreeDViewer url={classicPreviewMedia.media.url} filename={classicPreviewMedia.media.filename} size={classicPreviewMedia.media.size} />
+              <ThreeDViewer url={classicPreviewMedia.media.url} filename={classicPreviewMedia.media.filename} size={classicPreviewMedia.media.size} autoPreviewUnknownSize />
             ) : classicPreviewMedia?.kind === "file" ? (
               <div className="preview-file-output">
                 <FileIcon size={28} aria-hidden="true" />

@@ -27,6 +27,11 @@ export interface ThreeDSceneController {
   setUpAxis: (axis: ThreeDUpAxis) => void;
 }
 
+interface LoadedThreeDModel {
+  model: THREE.Object3D;
+  replaceBareDefaultMaterials: boolean;
+}
+
 export async function createThreeDScene(
   container: HTMLElement,
   sourceUrl: string,
@@ -62,9 +67,9 @@ export async function createThreeDScene(
   const grid = new THREE.GridHelper(10, 20, 0x64748b, 0x334155);
   scene.add(grid);
 
-  let model: THREE.Object3D;
+  let loaded: LoadedThreeDModel;
   try {
-    model = await loadModel(manager, sourceUrl, filename);
+    loaded = await loadModel(manager, sourceUrl, filename);
   } catch (reason) {
     controls.dispose();
     renderer.dispose();
@@ -72,6 +77,8 @@ export async function createThreeDScene(
     renderer.domElement.remove();
     throw reason;
   }
+  const { model } = loaded;
+  prepareThreeDModelForPreview(model, { replaceBareDefaultMaterials: loaded.replaceBareDefaultMaterials });
   scene.add(model);
   const skeleton = new THREE.SkeletonHelper(model);
   skeleton.visible = false;
@@ -222,18 +229,81 @@ export async function createThreeDScene(
   };
 }
 
-async function loadModel(manager: THREE.LoadingManager, url: string, filename: string): Promise<THREE.Object3D> {
+async function loadModel(manager: THREE.LoadingManager, url: string, filename: string): Promise<LoadedThreeDModel> {
   const extension = filename.split(".").pop()?.toLowerCase();
   if (extension === "glb" || extension === "gltf") {
     const gltf = await new GLTFLoader(manager).loadAsync(url);
     gltf.scene.animations = gltf.animations;
-    return gltf.scene;
+    return {
+      model: gltf.scene,
+      replaceBareDefaultMaterials: !Array.isArray(gltf.parser.json.materials) || gltf.parser.json.materials.length === 0,
+    };
   }
-  if (extension === "obj") return new OBJLoader(manager).loadAsync(url);
-  if (extension === "fbx") return new FBXLoader(manager).loadAsync(url);
-  if (extension === "stl") return meshGroup(await new STLLoader(manager).loadAsync(url));
-  if (extension === "ply") return meshGroup(await new PLYLoader(manager).loadAsync(url));
+  if (extension === "obj") return { model: await new OBJLoader(manager).loadAsync(url), replaceBareDefaultMaterials: false };
+  if (extension === "fbx") return { model: await new FBXLoader(manager).loadAsync(url), replaceBareDefaultMaterials: false };
+  if (extension === "stl") return { model: meshGroup(await new STLLoader(manager).loadAsync(url)), replaceBareDefaultMaterials: false };
+  if (extension === "ply") return { model: meshGroup(await new PLYLoader(manager).loadAsync(url)), replaceBareDefaultMaterials: false };
   throw new Error("Interactive preview is not available for this 3D format. You can still open or download the model.");
+}
+
+export function prepareThreeDModelForPreview(
+  model: THREE.Object3D,
+  { replaceBareDefaultMaterials = false }: { replaceBareDefaultMaterials?: boolean } = {},
+) {
+  const fallbackMaterials = new Map<THREE.Material, THREE.Material>();
+  model.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    if (child.geometry.getAttribute("position") && !child.geometry.getAttribute("normal")) child.geometry.computeVertexNormals();
+    if (replaceBareDefaultMaterials) child.material = prepareMaterialForPreview(child.material, fallbackMaterials);
+  });
+}
+
+function prepareMaterialForPreview(
+  material: THREE.Material | THREE.Material[],
+  fallbackMaterials: Map<THREE.Material, THREE.Material>,
+): THREE.Material | THREE.Material[] {
+  if (!Array.isArray(material)) {
+    if (!isBareGltfDefaultMaterial(material)) return material;
+    const existing = fallbackMaterials.get(material);
+    if (existing) return existing;
+    const fallback = new THREE.MeshStandardMaterial({
+      color: 0x9ca3af,
+      metalness: 0.1,
+      roughness: 0.8,
+      side: THREE.DoubleSide,
+      vertexColors: material.vertexColors,
+    });
+    fallbackMaterials.set(material, fallback);
+    material.dispose();
+    return fallback;
+  }
+
+  const prepared = material.map((item) => prepareMaterialForPreview(item, fallbackMaterials) as THREE.Material);
+  return prepared.some((item, index) => item !== material[index]) ? prepared : material;
+}
+
+function isBareGltfDefaultMaterial(material: THREE.Material): material is THREE.MeshStandardMaterial {
+  if (!(material instanceof THREE.MeshStandardMaterial) || material instanceof THREE.MeshPhysicalMaterial) return false;
+  const textureKeys: (keyof THREE.MeshStandardMaterial)[] = [
+    "map",
+    "lightMap",
+    "aoMap",
+    "emissiveMap",
+    "bumpMap",
+    "normalMap",
+    "displacementMap",
+    "roughnessMap",
+    "metalnessMap",
+    "alphaMap",
+    "envMap",
+  ];
+  return (
+    material.name === ""
+    && material.color.getHex() === 0xffffff
+    && material.metalness === 1
+    && material.roughness === 1
+    && textureKeys.every((key) => !material[key])
+  );
 }
 
 function meshGroup(geometry: THREE.BufferGeometry): THREE.Group {

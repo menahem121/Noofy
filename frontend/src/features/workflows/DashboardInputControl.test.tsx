@@ -1148,7 +1148,10 @@ describe("DashboardInputControl", () => {
   });
 
   it("renders a packaged default 3D model through the workflow-owned asset endpoint", () => {
-    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    let downloadedUrl = "";
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function captureDownload(this: HTMLAnchorElement) {
+      downloadedUrl = this.href;
+    });
     render(
       <WorkflowDefaultAssetProvider workflowId="wf-imported">
         <DashboardInputControl
@@ -1176,12 +1179,10 @@ describe("DashboardInputControl", () => {
     );
 
     expect(screen.getByText("mesh.glb")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(openSpy).toHaveBeenCalledWith(
-      "/api/workflows/wf-imported/inputs/model/default-asset?asset_id=input-defaults%2Fmesh.glb",
-      "_blank",
-      "noopener,noreferrer",
-    );
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(downloadedUrl).toContain("/api/workflows/wf-imported/inputs/model/default-asset?asset_id=input-defaults%2Fmesh.glb");
+    expect(downloadedUrl).toContain("download=true");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

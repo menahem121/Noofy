@@ -8,6 +8,13 @@ import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeSt
 import { WorkflowTabsProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 
+vi.mock("../three-d/threeDScene", () => ({
+  createThreeDScene: vi.fn().mockResolvedValue({
+    animations: [],
+    dispose: vi.fn(),
+  }),
+}));
+
 const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
@@ -3773,6 +3780,66 @@ describe("WorkflowRunPage", () => {
     );
     expect(screen.getByText("MP4 · 1280 × 720 · 24 fps · 4 KB · 0:03")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+  });
+
+  it("renders a generated 3D model in the display_3d result widget", async () => {
+    const threeDPackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "model", label: "3D model", node_id: "30", type: "3d", kind: "3d" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [{
+            id: "result-3d",
+            type: "display_3d",
+            label: "3D result",
+            output_id: "model",
+            layout: { x: 0, y: 0, w: 16, h: 14 },
+          }],
+        }],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, threeDPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-three-d", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
+      }
+      if (url.endsWith("/api/jobs/job-three-d/progress")) {
+        return Promise.resolve(jsonResponse({ job_id: "job-three-d", status: "completed", value: 1, max: 1, message: "Execution completed" }));
+      }
+      if (url.endsWith("/api/jobs/job-three-d/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-three-d",
+          status: "completed",
+          outputs: [{
+            node_id: "30",
+            output: {
+              "3d": [{
+                filename: "preview3d_abc123.glb",
+                kind: "3d",
+                type: "3d",
+                output_type: "output",
+                mime_type: "model/gltf-binary",
+                size: null,
+                url: "/api/jobs/job-three-d/outputs/view?filename=preview3d_abc123.glb&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+    await waitFor(() => expect(document.querySelector(".widget-output-three-d .three-d-viewer")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
   });
 
   it("renders dashboard-only notes as read-only canvas cards", async () => {

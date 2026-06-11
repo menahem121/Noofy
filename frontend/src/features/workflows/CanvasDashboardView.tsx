@@ -1516,7 +1516,7 @@ function OutputWidgetContent({
   }
 
   if (threeDOutputs.length > 0) {
-    return <div className="widget-output-three-d">{threeDOutputs.map((model, index) => <ThreeDViewer key={`${model.url}-${index}`} url={model.url} filename={model.filename} size={model.size} />)}</div>;
+    return <div className="widget-output-three-d">{threeDOutputs.map((model, index) => <ThreeDViewer key={`${model.url}-${index}`} url={model.url} filename={model.filename} size={model.size} autoPreviewUnknownSize />)}</div>;
   }
 
   if (videoOutputs.length > 0) {

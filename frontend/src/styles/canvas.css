@@ -766,6 +766,27 @@
   grid-template-rows: minmax(0, 1fr) auto auto;
 }
 
+.widget-canvas-cell__content > .widget-output-three-d {
+  flex: 1 1 0;
+  min-height: 0;
+  grid-auto-rows: minmax(280px, 1fr);
+  overflow: auto;
+}
+
+.widget-canvas-cell__content > .widget-output-three-d .three-d-viewer {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: minmax(240px, 1fr) auto auto;
+}
+
+.layout-canvas-widget--compact .widget-canvas-cell__content > .widget-output-three-d {
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.layout-canvas-widget--compact .widget-canvas-cell__content > .widget-output-three-d .three-d-viewer {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+}
+
 .widget-output-video__player {
   display: block;
   width: 100%;

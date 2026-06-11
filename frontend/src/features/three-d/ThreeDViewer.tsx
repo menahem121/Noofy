@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Camera, Download, ExternalLink, Grid3X3, Maximize, RotateCcw } from "lucide-react";
+import { Camera, Download, Grid3X3, Maximize, RotateCcw } from "lucide-react";
 
 import type { ThreeDCameraType, ThreeDMaterialMode, ThreeDSceneController, ThreeDUpAxis } from "./threeDScene";
 
@@ -10,26 +10,33 @@ interface ThreeDViewerProps {
   filename: string;
   size?: number | null;
   className?: string;
+  autoPreviewUnknownSize?: boolean;
 }
 
-export function ThreeDViewer({ url, filename, size, className = "" }: ThreeDViewerProps) {
+export function ThreeDViewer({ url, filename, size, className = "", autoPreviewUnknownSize = false }: ThreeDViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ThreeDSceneController | null>(null);
-  const [activated, setActivated] = useState(typeof size === "number" && size <= AUTO_PREVIEW_MAX_BYTES);
+  const sourceKey = JSON.stringify([url, filename]);
+  const [manuallyActivatedSource, setManuallyActivatedSource] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const activated = shouldAutoPreview(size, autoPreviewUnknownSize) || manuallyActivatedSource === sourceKey;
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState("");
   const [animations, setAnimations] = useState<string[]>([]);
   const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    setActivated(typeof size === "number" && size <= AUTO_PREVIEW_MAX_BYTES);
-    setPhase("idle");
-    setPlaying(false);
-  }, [filename, size, url]);
-
-  useEffect(() => {
-    if (!activated || !containerRef.current) return;
+    if (!activated || !containerRef.current) {
+      setPhase("idle");
+      setError("");
+      setAnimations([]);
+      setPlaying(false);
+      return;
+    }
     let canceled = false;
+    setError("");
+    setAnimations([]);
+    setPlaying(false);
     setPhase("loading");
     import("./threeDScene")
       .then(({ createThreeDScene }) => createThreeDScene(containerRef.current!, url, filename))
@@ -49,7 +56,7 @@ export function ThreeDViewer({ url, filename, size, className = "" }: ThreeDView
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };
-  }, [activated, filename, url]);
+  }, [activated, filename, loadAttempt, url]);
 
   function download() {
     const link = document.createElement("a");
@@ -64,20 +71,28 @@ export function ThreeDViewer({ url, filename, size, className = "" }: ThreeDView
     <div className={`three-d-viewer ${className}`}>
       <div className="three-d-viewer__stage">
         <div className="three-d-viewer__canvas" ref={containerRef} />
-        {!activated ? <button className="three-d-viewer__activate primary-button primary-button--compact" type="button" onClick={() => setActivated(true)}>Preview 3D model</button> : null}
+        {!activated ? <button className="three-d-viewer__activate primary-button primary-button--compact" type="button" onClick={() => setManuallyActivatedSource(sourceKey)}>Preview 3D model</button> : null}
         {phase === "loading" ? <div className="three-d-viewer__overlay">Loading 3D model...</div> : null}
-        {phase === "error" ? <div className="three-d-viewer__overlay three-d-viewer__overlay--error">{error}</div> : null}
+        {phase === "error" ? (
+          <div className="three-d-viewer__overlay three-d-viewer__overlay--error">
+            <span>{error}</span>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry preview</button>
+          </div>
+        ) : null}
       </div>
       <div className="three-d-viewer__toolbar">
-        <button type="button" onClick={() => controllerRef.current?.resetCamera()}><RotateCcw size={14} />Reset view</button>
+        <button type="button" disabled={phase !== "ready"} onClick={() => controllerRef.current?.resetCamera()}><RotateCcw size={14} />Reset view</button>
         <button type="button" onClick={() => containerRef.current?.parentElement?.requestFullscreen()}><Maximize size={14} />Fullscreen</button>
-        <button type="button" onClick={() => controllerRef.current?.screenshot()}><Camera size={14} />Screenshot</button>
-        <button type="button" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={14} />Open</button>
+        <button type="button" disabled={phase !== "ready"} onClick={() => controllerRef.current?.screenshot()}><Camera size={14} />Screenshot</button>
         <button type="button" onClick={download}><Download size={14} />Download</button>
       </div>
       {phase === "ready" ? <ThreeDSettings controller={controllerRef.current} animations={animations} playing={playing} onPlaying={setPlaying} /> : null}
     </div>
   );
+}
+
+function shouldAutoPreview(size: number | null | undefined, autoPreviewUnknownSize: boolean) {
+  return typeof size === "number" ? size <= AUTO_PREVIEW_MAX_BYTES : autoPreviewUnknownSize;
 }
 
 function ThreeDSettings({ controller, animations, playing, onPlaying }: { controller: ThreeDSceneController | null; animations: string[]; playing: boolean; onPlaying: (value: boolean) => void }) {

@@ -21,6 +21,7 @@ from app.engine.job_store import JobStore
 from app.diagnostics import DiagnosticsSink, sanitize_text
 from app.media_types import MEDIA_KINDS as _MEDIA_KINDS
 from app.media_types import MEDIA_OUTPUT_BUCKETS as _MEDIA_OUTPUT_BUCKETS
+from app.media_types import THREE_D_EXTENSIONS as _THREE_D_EXTENSIONS
 from app.media_types import classify_media_kind
 from app.engine.models import (
     EngineJob,
@@ -1200,6 +1201,10 @@ class ComfyUIEngineAdapter:
     ) -> dict[str, Any]:
         enriched = dict(node_output)
         declared_kind = self._output_kinds_by_job.get(job_id, {}).get(node_id)
+        if declared_kind == "3d" and not enriched.get("3d"):
+            preview_three_d_items = _native_preview_three_d_items(enriched.get("result"))
+            if preview_three_d_items:
+                enriched["3d"] = preview_three_d_items
         for bucket_name in _MEDIA_OUTPUT_BUCKETS:
             items = enriched.get(bucket_name)
             if not isinstance(items, list):
@@ -1488,3 +1493,20 @@ def _backend_owned_thumbnail_url(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     return value if value.startswith("/api/") else None
+
+
+def _native_preview_three_d_items(result: Any) -> list[dict[str, Any]]:
+    if not isinstance(result, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for value in result:
+        if isinstance(value, str):
+            if Path(value).suffix.lower() in _THREE_D_EXTENSIONS:
+                items.append({"filename": value, "subfolder": "", "type": "output"})
+            continue
+        if not isinstance(value, dict):
+            continue
+        filename = value.get("filename")
+        if isinstance(filename, str) and Path(filename).suffix.lower() in _THREE_D_EXTENSIONS:
+            items.append(value)
+    return items

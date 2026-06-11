@@ -603,6 +603,18 @@ describe("DashboardBuilderLayoutPage", () => {
     );
   });
 
+  it("lets 3D result previews fill resized canvas widgets", () => {
+    expect(canvasCss).toMatch(
+      /\.widget-canvas-cell__content > \.widget-output-three-d\s*{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*0;[^}]*grid-auto-rows:\s*minmax\(280px, 1fr\);/,
+    );
+    expect(canvasCss).toMatch(
+      /\.widget-canvas-cell__content > \.widget-output-three-d \.three-d-viewer\s*{[^}]*height:\s*100%;[^}]*grid-template-rows:\s*minmax\(240px, 1fr\) auto auto;/,
+    );
+    expect(canvasCss).toMatch(
+      /\.layout-canvas-widget--compact \.widget-canvas-cell__content > \.widget-output-three-d \.three-d-viewer\s*{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) auto auto;/,
+    );
+  });
+
   it("keeps compact widget content contained with scrolling and flexible minimum heights", () => {
     expect(builderLayoutCss).toMatch(/\.layout-canvas-widget--compact \.layout-canvas-widget__preview-surface\s*{[^}]*overflow:\s*auto;/);
     expect(builderLayoutCss).toMatch(/\.layout-canvas-widget--compact \.layout-preview-input--textarea,[^}]*min-height:\s*0;/);

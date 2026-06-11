@@ -229,6 +229,64 @@ def test_result_from_history_recognizes_native_three_d_bucket(tmp_path: Path) ->
     assert model["url"].startswith("/api/jobs/job-three-d/outputs/view?")
 
 
+def test_result_from_history_normalizes_native_preview_three_d_result(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+    adapter._output_kinds_by_job["job-three-d-preview"] = {"30": "3d"}
+
+    result = adapter._result_from_history(
+        "job-three-d-preview",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "30": {
+                    "result": ["preview3d_abc123.glb", {"camera": "metadata"}, None]
+                }
+            },
+        },
+    )
+
+    output = result.outputs[0]["output"]
+    assert output["result"] == ["preview3d_abc123.glb", {"camera": "metadata"}, None]
+    assert output["3d"] == [
+        {
+            "filename": "preview3d_abc123.glb",
+            "subfolder": "",
+            "type": "3d",
+            "kind": "3d",
+            "output_type": "output",
+            "url": (
+                "/api/jobs/job-three-d-preview/outputs/view?"
+                "filename=preview3d_abc123.glb&subfolder=&type=output"
+            ),
+            "view_url": (
+                "/api/jobs/job-three-d-preview/outputs/view?"
+                "filename=preview3d_abc123.glb&subfolder=&type=output"
+            ),
+            "mime_type": "model/gltf-binary",
+            "size": None,
+            "extension": ".glb",
+        }
+    ]
+
+
+def test_result_from_history_does_not_normalize_undeclared_three_d_result_strings(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-text-preview",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {"30": {"result": ["unrelated.glb", None]}},
+        },
+    )
+
+    assert result.outputs[0]["output"] == {"result": ["unrelated.glb", None]}
+
+
 @pytest.mark.anyio
 async def test_probe_output_metadata_uses_range_response_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
