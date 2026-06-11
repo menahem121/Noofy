@@ -133,6 +133,8 @@ def _build(
     auto_release_enabled: bool | None = True,
     retry_seconds: float = 10.0,
     real_clock: bool = False,
+    lease_ttl_seconds: float | None = None,
+    lease_sweep_interval_seconds: float | None = None,
 ) -> tuple[WorkflowRunnerLifecycleService, RunnerSupervisor, FakeRunnerCoordinator, _Clock]:
     clock = clock or _Clock()
     supervisor = RunnerSupervisor(
@@ -151,6 +153,8 @@ def _build(
         has_pending_workflow_runs=has_pending_workflow_runs,
         closed_view_auto_release_enabled=auto_release_enabled,
         closed_view_release_retry_seconds=retry_seconds,
+        workflow_lease_ttl_seconds=lease_ttl_seconds,
+        workflow_lease_sweep_interval_seconds=lease_sweep_interval_seconds,
     )
     return service, supervisor, coordinator, clock
 
@@ -618,6 +622,46 @@ async def test_auto_release_disabled_keeps_runner() -> None:
     assert coordinator.stop_calls == []
 
 
+@pytest.mark.anyio
+async def test_workflow_lease_sweeper_expires_missing_heartbeat_and_starts_cooldown() -> None:
+    service, supervisor, _coordinator, _clock = _build(
+        real_clock=True,
+        lease_ttl_seconds=0.01,
+        lease_sweep_interval_seconds=0.01,
+    )
+    supervisor.upsert_runner(_isolated_descriptor(), RecordingAdapter())
+    supervisor.bind_workflow_runner("workflow-a", "isolated-1")
+
+    opened = service.open_workflow_runner_lease("workflow-a")
+    assert opened["lease_id"]
+    assert service._workflow_lease_sweeper_task is not None
+
+    await asyncio.sleep(0.08)
+
+    runner = supervisor.get_runner("isolated-1")
+    assert runner.open_workflow_lease_count == 0
+    assert runner.closed_view_cooldown_expires_at is not None
+    assert any(
+        event.message == "Workflow view lease expired without heartbeat"
+        for event in service.log_store.list_events().events
+    )
+
+    reopened = service.open_workflow_runner_lease("workflow-a")
+    assert reopened["lease_id"]
+    await asyncio.sleep(0.08)
+
+    reopened_runner = supervisor.get_runner("isolated-1")
+    assert reopened_runner.open_workflow_lease_count == 0
+    expiry_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.message == "Workflow view lease expired without heartbeat"
+    ]
+    assert len(expiry_events) == 2
+    await service.shutdown()
+    assert service._workflow_lease_sweeper_task is None
+
+
 # ----------------------------------------------------------------------
 # Supervisor primitives
 # ----------------------------------------------------------------------
@@ -670,3 +714,21 @@ def test_workflow_lease_cannot_be_closed_through_another_workflow() -> None:
     protected = supervisor.get_runner("isolated-1")
     assert protected.open_workflow_lease_count == 1
     assert protected.open_workflow_lease_ids == [lease_id]
+
+
+def test_workflow_lease_heartbeat_service_self_heals_unknown_leases() -> None:
+    service, supervisor, _coordinator, _clock = _build()
+    supervisor.upsert_runner(_isolated_descriptor(), RecordingAdapter())
+    supervisor.bind_workflow_runner("workflow-a", "isolated-1")
+    opened = service.open_workflow_runner_lease("workflow-a")
+
+    active = service.heartbeat_workflow_runner_lease("workflow-a", opened["lease_id"])
+    unknown = service.heartbeat_workflow_runner_lease("workflow-b", opened["lease_id"])
+
+    assert active["status"] == "active"
+    assert unknown == {
+        "workflow_id": "workflow-b",
+        "status": "lease_not_found",
+        "lease_id": opened["lease_id"],
+        "runner": None,
+    }

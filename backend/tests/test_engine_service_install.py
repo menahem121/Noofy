@@ -577,8 +577,12 @@ async def test_start_workflow_runner_requires_ready_install_state(tmp_path: Path
         "trust": {"level": "noofy_verified", "publisher": "Noofy"},
     }
     _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
     def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
-        return RecordingRunnerCoordinator(supervisor)
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
 
     service = _build_service(
         tmp_path,

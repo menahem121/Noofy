@@ -384,6 +384,18 @@ async def close_workflow_runner_lease(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.put("/workflows/{workflow_id}/runner/leases/{lease_id}/heartbeat")
+async def heartbeat_workflow_runner_lease(
+    workflow_id: str,
+    lease_id: str,
+    runner_lifecycle: WorkflowRunnerLifecycleServiceDep,
+):
+    try:
+        return runner_lifecycle.heartbeat_workflow_runner_lease(workflow_id, lease_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 @router.post("/workflows/{workflow_id}/validate")

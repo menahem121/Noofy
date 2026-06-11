@@ -199,6 +199,7 @@ def test_comfyui_status_endpoint_uses_sidecar_service(monkeypatch) -> None:
         )
     ) as client:
         runtime_response = client.get("/api/runtime")
+        second_runtime_response = client.get("/api/runtime")
         comfyui_response = client.get("/api/engine/comfyui/status")
 
     assert runtime_response.status_code == 200
@@ -206,6 +207,9 @@ def test_comfyui_status_endpoint_uses_sidecar_service(monkeypatch) -> None:
     assert runtime_response.headers["pragma"] == "no-cache"
     assert runtime_response.headers["expires"] == "0"
     assert runtime_response.json()["base_url"] == "http://127.0.0.1:9000"
+    assert runtime_response.json()["backend_session_id"].startswith("bs-")
+    assert runtime_response.json()["backend_session_started_at"]
+    assert second_runtime_response.json()["backend_session_id"] == runtime_response.json()["backend_session_id"]
     assert comfyui_response.status_code == 200
     assert comfyui_response.json()["base_url"] == "http://127.0.0.1:9100"
     assert comfyui_response.json()["pid"] == 456

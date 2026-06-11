@@ -85,6 +85,8 @@ describe("RuntimeStatusProvider", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -92,6 +94,8 @@ describe("RuntimeStatusProvider", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("maps an initial unknown state to Checking Noofy", () => {
@@ -263,6 +267,78 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.backendStatus).toBe("reachable");
     expect(result.current.engineStatus).toBe("busy");
     expect(result.current.statusView.label).toBe("Working");
+  });
+
+  it("reloads exactly once when a later runtime response reports a new backend session", async () => {
+    const reloadPage = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ ...readyRuntime, backend_session_id: "bs-first" }))
+      .mockResolvedValueOnce(jsonResponse({ ...readyRuntime, backend_session_id: "bs-second" }))
+      .mockResolvedValueOnce(jsonResponse({ ...readyRuntime, backend_session_id: "bs-third" }));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: ({ children }) => (
+        <RuntimeStatusProvider skipInitialRefresh reloadPage={reloadPage}>
+          {children}
+        </RuntimeStatusProvider>
+      ),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ force: true });
+      await result.current.refreshRuntime({ force: true });
+      await result.current.refreshRuntime({ force: true });
+    });
+
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem("noofy.backendSession.v1")).toBe("bs-second");
+    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-second");
+    expect(JSON.parse(window.sessionStorage.getItem("noofy.sessionRestart.v1") ?? "{}")).toMatchObject({
+      backendSessionId: "bs-second",
+    });
+    expect(result.current.pageRefreshRequired).toBe(true);
+  });
+
+  it("reloads when the first runtime response differs from the session previously observed by this tab", async () => {
+    const reloadPage = vi.fn();
+    window.localStorage.setItem("noofy.backendSession.v1", "bs-current-in-another-tab");
+    window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous-in-this-tab");
+    fetchMock.mockResolvedValue(jsonResponse({ ...readyRuntime, backend_session_id: "bs-current-in-another-tab" }));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: ({ children }) => (
+        <RuntimeStatusProvider skipInitialRefresh reloadPage={reloadPage}>
+          {children}
+        </RuntimeStatusProvider>
+      ),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ force: true });
+    });
+
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+    expect(result.current.pageRefreshRequired).toBe(true);
+    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-current-in-another-tab");
+  });
+
+  it("observes backend sessions adopted through action responses without reloading on the first one", () => {
+    const reloadPage = vi.fn();
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: ({ children }) => (
+        <RuntimeStatusProvider skipInitialRefresh reloadPage={reloadPage}>
+          {children}
+        </RuntimeStatusProvider>
+      ),
+    });
+
+    act(() => {
+      result.current.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-first" } as RuntimeHealthState["runtime"]);
+      result.current.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-first" } as RuntimeHealthState["runtime"]);
+      result.current.setRuntimeFromResponse(readyRuntime as RuntimeHealthState["runtime"]);
+    });
+
+    expect(reloadPage).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-first");
+    expect(result.current.pageRefreshRequired).toBe(false);
   });
 
   it("distinguishes backend reachability from engine readiness", () => {

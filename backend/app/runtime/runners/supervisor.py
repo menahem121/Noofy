@@ -163,6 +163,23 @@ class RunnerDescriptor(BaseModel):
     reservation_kind: RunnerReservationKind | None = None
 
 
+class WorkflowLeaseRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_id: str = Field(min_length=1)
+    runner_id: str = Field(min_length=1)
+    opened_at: datetime
+    last_heartbeat_at: datetime
+
+
+class ExpiredWorkflowLease(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lease_id: str = Field(min_length=1)
+    workflow_id: str = Field(min_length=1)
+    runner: RunnerDescriptor
+
+
 class RunnerSelectionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -264,7 +281,7 @@ class RunnerSupervisor:
         self._adapters: dict[str, EngineAdapter] = {}
         self._core_runner_id: str | None = None
         self._workflow_runners: dict[str, str] = {}
-        self._workflow_leases: dict[str, tuple[str, str]] = {}
+        self._workflow_leases: dict[str, WorkflowLeaseRecord] = {}
         self._queued_runner_starts: dict[str, QueuedRunnerStart] = {}
         self._runtime_activation_in_progress = False
         self._runner_starts_in_progress: dict[str, int] = {}
@@ -843,8 +860,8 @@ class RunnerSupervisor:
             }
             lease_ids = [
                 lease_id
-                for lease_id, (_, lease_runner_id) in self._workflow_leases.items()
-                if lease_runner_id == runner_id
+                for lease_id, lease in self._workflow_leases.items()
+                if lease.runner_id == runner_id
             ]
             for lease_id in lease_ids:
                 self._workflow_leases.pop(lease_id, None)
@@ -1028,12 +1045,14 @@ class RunnerSupervisor:
         lease_id = lease_id or f"lease-{uuid.uuid4().hex}"
         with self._lock:
             descriptor = self._descriptor_locked(runner_id)
-            self._workflow_leases[lease_id] = (workflow_id, runner_id)
-            lease_ids = sorted(
-                existing_lease_id
-                for existing_lease_id, (_, existing_runner_id) in self._workflow_leases.items()
-                if existing_runner_id == runner_id
+            now = self._now()
+            self._workflow_leases[lease_id] = WorkflowLeaseRecord(
+                workflow_id=workflow_id,
+                runner_id=runner_id,
+                opened_at=now,
+                last_heartbeat_at=now,
             )
+            lease_ids = self._workflow_lease_ids_for_runner_locked(runner_id)
             status = (
                 RunnerStatus.IDLE_WARM
                 if descriptor.status in {RunnerStatus.READY, RunnerStatus.IDLE, RunnerStatus.IDLE_WARM}
@@ -1045,11 +1064,31 @@ class RunnerSupervisor:
                     "open_workflow_lease_count": len(lease_ids),
                     "open_workflow_lease_ids": lease_ids,
                     "closed_view_cooldown_expires_at": None,
-                    "last_used_at": _iso(self._now()),
+                    "last_used_at": _iso(now),
                 }
             )
             self._descriptors[runner_id] = updated
         return lease_id
+
+    def heartbeat_workflow_lease(
+        self,
+        lease_id: str,
+        *,
+        workflow_id: str | None = None,
+    ) -> RunnerDescriptor | None:
+        with self._lock:
+            lease = self._workflow_leases.get(lease_id)
+            if lease is None:
+                return None
+            if workflow_id is not None and lease.workflow_id != workflow_id:
+                return None
+            descriptor = self._descriptors.get(lease.runner_id)
+            if descriptor is None:
+                return None
+            self._workflow_leases[lease_id] = lease.model_copy(
+                update={"last_heartbeat_at": self._now()}
+            )
+            return descriptor
 
     def close_workflow_lease(
         self,
@@ -1061,35 +1100,73 @@ class RunnerSupervisor:
             lease = self._workflow_leases.get(lease_id)
             if lease is None:
                 return None
-            lease_workflow_id, runner_id = lease
-            if workflow_id is not None and lease_workflow_id != workflow_id:
+            if workflow_id is not None and lease.workflow_id != workflow_id:
                 return None
-            self._workflow_leases.pop(lease_id, None)
-            descriptor = self._descriptors.get(runner_id)
-            if descriptor is None:
-                return None
-            lease_ids = sorted(
-                existing_lease_id
-                for existing_lease_id, (_, existing_runner_id) in self._workflow_leases.items()
-                if existing_runner_id == runner_id
-            )
-            expires_at = None
-            status = descriptor.status
-            if not lease_ids:
-                expires_at = _iso(self._now() + timedelta(seconds=self.closed_view_cooldown_seconds))
-                if status is RunnerStatus.IDLE_WARM:
-                    status = RunnerStatus.IDLE
-            updated = descriptor.model_copy(
-                update={
-                    "status": status,
-                    "open_workflow_lease_count": len(lease_ids),
-                    "open_workflow_lease_ids": lease_ids,
-                    "closed_view_cooldown_expires_at": expires_at,
-                    "last_used_at": _iso(self._now()),
-                }
-            )
-            self._descriptors[runner_id] = updated
-            return updated
+            return self._close_workflow_lease_locked(lease_id, lease)
+
+    def expire_stale_workflow_leases(
+        self,
+        ttl_seconds: float,
+    ) -> list[ExpiredWorkflowLease]:
+        with self._lock:
+            cutoff = self._now() - timedelta(seconds=max(0.0, ttl_seconds))
+            stale = [
+                (lease_id, lease)
+                for lease_id, lease in self._workflow_leases.items()
+                if lease.last_heartbeat_at < cutoff
+            ]
+            expired: list[ExpiredWorkflowLease] = []
+            for lease_id, lease in stale:
+                updated = self._close_workflow_lease_locked(lease_id, lease)
+                if updated is not None:
+                    expired.append(
+                        ExpiredWorkflowLease(
+                            lease_id=lease_id,
+                            workflow_id=lease.workflow_id,
+                            runner=updated,
+                        )
+                    )
+            return expired
+
+    def has_workflow_leases(self) -> bool:
+        with self._lock:
+            return bool(self._workflow_leases)
+
+    def _close_workflow_lease_locked(
+        self,
+        lease_id: str,
+        lease: WorkflowLeaseRecord,
+    ) -> RunnerDescriptor | None:
+        self._workflow_leases.pop(lease_id, None)
+        descriptor = self._descriptors.get(lease.runner_id)
+        if descriptor is None:
+            return None
+        now = self._now()
+        lease_ids = self._workflow_lease_ids_for_runner_locked(lease.runner_id)
+        expires_at = None
+        status = descriptor.status
+        if not lease_ids:
+            expires_at = _iso(now + timedelta(seconds=self.closed_view_cooldown_seconds))
+            if status is RunnerStatus.IDLE_WARM:
+                status = RunnerStatus.IDLE
+        updated = descriptor.model_copy(
+            update={
+                "status": status,
+                "open_workflow_lease_count": len(lease_ids),
+                "open_workflow_lease_ids": lease_ids,
+                "closed_view_cooldown_expires_at": expires_at,
+                "last_used_at": _iso(now),
+            }
+        )
+        self._descriptors[lease.runner_id] = updated
+        return updated
+
+    def _workflow_lease_ids_for_runner_locked(self, runner_id: str) -> list[str]:
+        return sorted(
+            lease_id
+            for lease_id, lease in self._workflow_leases.items()
+            if lease.runner_id == runner_id
+        )
 
     def enqueue_runner_start(
         self,

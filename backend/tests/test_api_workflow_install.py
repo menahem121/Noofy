@@ -12,6 +12,7 @@ class FakeEngineService:
         self.started_workflow_runners: list[str] = []
         self.stopped_workflow_runners: list[str] = []
         self.opened_runner_leases: list[str] = []
+        self.heartbeat_runner_leases: list[tuple[str, str]] = []
         self.closed_runner_leases: list[tuple[str, str]] = []
         self.canceled_runner_start_queues: list[str] = []
 
@@ -226,6 +227,15 @@ class FakeEngineService:
                 "fingerprint": "runner-fp",
                 "status": "idle",
             },
+        }
+
+    def heartbeat_workflow_runner_lease(self, workflow_id: str, lease_id: str):
+        self.heartbeat_runner_leases.append((workflow_id, lease_id))
+        return {
+            "workflow_id": workflow_id,
+            "status": "active",
+            "lease_id": lease_id,
+            "runner": None,
         }
 
     async def validate_workflow(self, workflow_id: str):
@@ -444,6 +454,21 @@ def test_close_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None
     assert response.json()["status"] == "idle"
     assert response.json()["lease_id"] == "lease-1"
     assert fake_service.closed_runner_leases == [("text_to_image_v0", "lease-1")]
+
+
+def test_heartbeat_workflow_runner_lease_endpoint_calls_service(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeEngineService()
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.put(
+            "/api/workflows/text_to_image_v0/runner/leases/lease-1/heartbeat",
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert fake_service.heartbeat_runner_leases == [("text_to_image_v0", "lease-1")]
 
 
 def test_validate_unknown_workflow_returns_404(monkeypatch) -> None:

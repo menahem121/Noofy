@@ -93,6 +93,8 @@ class WorkflowRunnerLifecycleService:
         has_pending_workflow_runs: Callable[[str], bool] | None = None,
         closed_view_auto_release_enabled: bool | None = None,
         closed_view_release_retry_seconds: float = 10.0,
+        workflow_lease_ttl_seconds: float | None = None,
+        workflow_lease_sweep_interval_seconds: float | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -113,6 +115,19 @@ class WorkflowRunnerLifecycleService:
         self._closed_view_release_last_outcomes: dict[
             str, tuple[str, str, str | None]
         ] = {}
+        self._workflow_lease_ttl_seconds = max(
+            0.01,
+            workflow_lease_ttl_seconds
+            if workflow_lease_ttl_seconds is not None
+            else settings.workflow_lease_ttl_seconds,
+        )
+        self._workflow_lease_sweep_interval_seconds = max(
+            0.01,
+            workflow_lease_sweep_interval_seconds
+            if workflow_lease_sweep_interval_seconds is not None
+            else settings.workflow_lease_sweep_interval_seconds,
+        )
+        self._workflow_lease_sweeper_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
     # Queued start handoff and cancellation (existing)
@@ -221,6 +236,7 @@ class WorkflowRunnerLifecycleService:
             }
 
         lease_id = self.runner_supervisor.open_workflow_lease(workflow_id, runner.runner_id)
+        self._ensure_workflow_lease_sweeper()
         updated = self.runner_supervisor.get_runner(runner.runner_id)
         self.log_store.add(
             "info",
@@ -236,6 +252,27 @@ class WorkflowRunnerLifecycleService:
         return {
             "workflow_id": workflow_id,
             "status": updated.status.value,
+            "lease_id": lease_id,
+            "runner": updated.model_dump(),
+        }
+
+    def heartbeat_workflow_runner_lease(
+        self, workflow_id: str, lease_id: str
+    ) -> dict[str, object]:
+        self.workflow_loader.get_package(workflow_id)
+        updated = self.runner_supervisor.heartbeat_workflow_lease(
+            lease_id, workflow_id=workflow_id
+        )
+        if updated is None:
+            return {
+                "workflow_id": workflow_id,
+                "status": "lease_not_found",
+                "lease_id": lease_id,
+                "runner": None,
+            }
+        return {
+            "workflow_id": workflow_id,
+            "status": "active",
             "lease_id": lease_id,
             "runner": updated.model_dump(),
         }
@@ -279,6 +316,62 @@ class WorkflowRunnerLifecycleService:
             "lease_id": lease_id,
             "runner": updated.model_dump(),
         }
+
+    def _ensure_workflow_lease_sweeper(self) -> None:
+        existing = self._workflow_lease_sweeper_task
+        if existing is not None and not existing.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._sweep_stale_workflow_leases())
+        self._workflow_lease_sweeper_task = task
+
+        def remove_finished_task(done: asyncio.Task[None]) -> None:
+            if self._workflow_lease_sweeper_task is done:
+                self._workflow_lease_sweeper_task = None
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is not None:
+                self.log_store.add(
+                    "warning",
+                    "Workflow view lease sweeper failed",
+                    "runtime.runners.lifecycle_service",
+                    details={
+                        "error": str(error),
+                        "error_type": type(error).__name__,
+                    },
+                )
+
+        task.add_done_callback(remove_finished_task)
+
+    async def _sweep_stale_workflow_leases(self) -> None:
+        # Stay alive once started. Exiting when the lease set becomes empty can
+        # race with a new lease opening while this task is finishing, leaving
+        # the new lease without TTL enforcement.
+        while True:
+            await asyncio.sleep(self._workflow_lease_sweep_interval_seconds)
+            expired = self.runner_supervisor.expire_stale_workflow_leases(
+                self._workflow_lease_ttl_seconds
+            )
+            for item in expired:
+                self.log_store.add(
+                    "info",
+                    "Workflow view lease expired without heartbeat",
+                    "runtime.runners.lifecycle_service",
+                    workflow_id=item.workflow_id,
+                    details={
+                        "runner_id": item.runner.runner_id,
+                        "lease_id": item.lease_id,
+                        "ttl_seconds": self._workflow_lease_ttl_seconds,
+                        "open_workflow_lease_count": item.runner.open_workflow_lease_count,
+                        "closed_view_cooldown_expires_at": item.runner.closed_view_cooldown_expires_at,
+                    },
+                )
+                self._maybe_schedule_closed_view_release(item.runner)
 
     # ------------------------------------------------------------------
     # Closed-view cooldown release for isolated runners
@@ -594,6 +687,12 @@ class WorkflowRunnerLifecycleService:
 
     async def shutdown(self) -> None:
         """Cancel pending closed-view release tasks during backend shutdown."""
+        sweeper = self._workflow_lease_sweeper_task
+        if sweeper is not None:
+            sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sweeper
+            self._workflow_lease_sweeper_task = None
         tasks = list(self._closed_view_release_tasks.values())
         for task in tasks:
             task.cancel()

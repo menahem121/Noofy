@@ -71,6 +71,12 @@ class Settings:
         os.environ.get("NOOFY_CLOSED_VIEW_AUTO_RELEASE_ENABLED", "1").strip().lower()
         not in {"0", "false", "no", "off"}
     )
+    workflow_lease_ttl_seconds: float = float(
+        os.environ.get("NOOFY_WORKFLOW_LEASE_TTL_SECONDS", "120")
+    )
+    workflow_lease_sweep_interval_seconds: float = float(
+        os.environ.get("NOOFY_WORKFLOW_LEASE_SWEEP_INTERVAL_SECONDS", "20")
+    )
     noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
     comfyui_repo_dir_override_active: bool = bool(os.environ.get("COMFYUI_REPO_DIR"))
     comfyui_python_executable_override_active: bool = bool(os.environ.get("COMFYUI_PYTHON_EXECUTABLE"))

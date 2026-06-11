@@ -26,10 +26,13 @@
   top: 14px;
   left: 14px;
   z-index: 34;
+  display: grid;
+  gap: 10px;
   width: min(420px, calc(100% - 28px));
   pointer-events: none;
 }
 
+.canvas-run-floating-notices .notice,
 .canvas-run-floating-notices .batch-failure-summary {
   margin: 0;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);

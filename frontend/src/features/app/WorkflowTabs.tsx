@@ -1,9 +1,22 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 
-import { fetchJobProgress, type JobProgress, type JobStatus } from "../../lib/api/noofyApi";
+import {
+  closeWorkflowRunnerLeaseKeepalive,
+  fetchJobProgress,
+  heartbeatWorkflowRunnerLease,
+  type JobProgress,
+  type JobStatus,
+} from "../../lib/api/noofyApi";
+import {
+  clearBackendSessionRestartMarker,
+  loadRestartRecoveryNotices,
+  storeActiveRunWorkflowIds,
+  vanishedRunRecoveryMessage,
+} from "./sessionRestore";
 
 const STORAGE_KEY = "noofy.workflowTabs.v1";
+const WORKFLOW_LEASE_HEARTBEAT_INTERVAL_MS = 25_000;
 const activeJobStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 
 export type WorkflowRuntimeHandleSource = "job" | "workflow_run_queue" | "runner_start_queue";
@@ -28,11 +41,14 @@ export interface WorkflowTabRuntimeState {
 interface WorkflowTabsContextValue {
   tabs: WorkflowTab[];
   runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>;
+  recoveryNoticeByWorkflowId: Record<string, string>;
   openWorkflowTab: (workflowId: string, workflowName?: string) => void;
   closeWorkflowTab: (workflowId: string) => void;
   updateWorkflowTabName: (workflowId: string, workflowName: string) => void;
   setWorkflowRuntime: (workflowId: string, update: Partial<WorkflowTabRuntimeState>) => void;
   clearWorkflowRuntime: (workflowId: string) => void;
+  setWorkflowRecoveryNotice: (workflowId: string, message: string) => void;
+  dismissWorkflowRecoveryNotice: (workflowId: string) => void;
 }
 
 interface WorkflowTabsRouterContextValue {
@@ -58,6 +74,9 @@ const WorkflowTabsRouterContext = createContext<WorkflowTabsRouterContextValue |
 export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   const [tabs, setTabs] = useState<WorkflowTab[]>(() => loadStoredTabs());
   const [runtimeByWorkflowId, setRuntimeByWorkflowId] = useState<Record<string, WorkflowTabRuntimeState>>({});
+  const [recoveryNoticeByWorkflowId, setRecoveryNoticeByWorkflowId] = useState<Record<string, string>>(
+    () => loadRestartRecoveryNotices(),
+  );
 
   useEffect(() => {
     try {
@@ -66,6 +85,18 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
       // Persistent tabs are a convenience; runtime should not depend on them.
     }
   }, [tabs]);
+
+  useEffect(() => {
+    storeActiveRunWorkflowIds(
+      Object.entries(runtimeByWorkflowId)
+        .filter(([, runtime]) => hasActiveRuntimeHandle(runtime))
+        .map(([workflowId]) => workflowId),
+    );
+  }, [runtimeByWorkflowId]);
+
+  useEffect(() => {
+    clearBackendSessionRestartMarker();
+  }, []);
 
   const openWorkflowTab = useCallback((workflowId: string, workflowName?: string) => {
     const now = Date.now();
@@ -86,6 +117,12 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   const closeWorkflowTab = useCallback((workflowId: string) => {
     setTabs((current) => current.filter((tab) => tab.workflowId !== workflowId));
     setRuntimeByWorkflowId((current) => {
+      if (!(workflowId in current)) return current;
+      const next = { ...current };
+      delete next[workflowId];
+      return next;
+    });
+    setRecoveryNoticeByWorkflowId((current) => {
       if (!(workflowId in current)) return current;
       const next = { ...current };
       delete next[workflowId];
@@ -120,22 +157,45 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  useWorkflowRuntimeProgressPolling(runtimeByWorkflowId, setWorkflowRuntime);
+  const setWorkflowRecoveryNotice = useCallback((workflowId: string, message: string) => {
+    setRecoveryNoticeByWorkflowId((current) => (
+      current[workflowId] === message ? current : { ...current, [workflowId]: message }
+    ));
+  }, []);
+
+  const dismissWorkflowRecoveryNotice = useCallback((workflowId: string) => {
+    setRecoveryNoticeByWorkflowId((current) => {
+      if (!(workflowId in current)) return current;
+      const next = { ...current };
+      delete next[workflowId];
+      return next;
+    });
+  }, []);
+
+  useWorkflowRuntimeProgressPolling(runtimeByWorkflowId, setWorkflowRuntime, setWorkflowRecoveryNotice);
+  useWorkflowLeaseHeartbeat(runtimeByWorkflowId, setWorkflowRuntime);
+  useWorkflowLeasePagehideRelease(runtimeByWorkflowId);
 
   const value = useMemo<WorkflowTabsContextValue>(
     () => ({
       tabs,
       runtimeByWorkflowId,
+      recoveryNoticeByWorkflowId,
       openWorkflowTab,
       closeWorkflowTab,
       updateWorkflowTabName,
       setWorkflowRuntime,
       clearWorkflowRuntime,
+      setWorkflowRecoveryNotice,
+      dismissWorkflowRecoveryNotice,
     }),
     [
       clearWorkflowRuntime,
+      dismissWorkflowRecoveryNotice,
       closeWorkflowTab,
       openWorkflowTab,
+      recoveryNoticeByWorkflowId,
+      setWorkflowRecoveryNotice,
       runtimeByWorkflowId,
       setWorkflowRuntime,
       tabs,
@@ -149,6 +209,7 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
 function useWorkflowRuntimeProgressPolling(
   runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>,
   setWorkflowRuntime: (workflowId: string, update: Partial<WorkflowTabRuntimeState>) => void,
+  setWorkflowRecoveryNotice: (workflowId: string, message: string) => void,
 ) {
   const runtimeRef = useRef(runtimeByWorkflowId);
   runtimeRef.current = runtimeByWorkflowId;
@@ -175,6 +236,9 @@ function useWorkflowRuntimeProgressPolling(
               const currentRuntime = runtimeRef.current[workflowId];
               const currentJobId = currentRuntime?.activeJobId ?? currentRuntime?.queueId;
               if (!stopped && currentJobId === jobId) {
+                if (progress.status === "unknown") {
+                  setWorkflowRecoveryNotice(workflowId, vanishedRunRecoveryMessage());
+                }
                 setWorkflowRuntime(workflowId, workflowRuntimeUpdateFromProgress(progress));
               }
             } catch {
@@ -193,11 +257,96 @@ function useWorkflowRuntimeProgressPolling(
       stopped = true;
       window.clearInterval(interval);
     };
-  }, [hasActiveRuntime, setWorkflowRuntime]);
+  }, [hasActiveRuntime, setWorkflowRecoveryNotice, setWorkflowRuntime]);
+}
+
+function useWorkflowLeaseHeartbeat(
+  runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>,
+  setWorkflowRuntime: (workflowId: string, update: Partial<WorkflowTabRuntimeState>) => void,
+) {
+  const runtimeRef = useRef(runtimeByWorkflowId);
+  runtimeRef.current = runtimeByWorkflowId;
+  const hasHeldLease = Object.values(runtimeByWorkflowId).some((runtime) => Boolean(runtime.runnerLeaseId));
+
+  useEffect(() => {
+    if (!hasHeldLease) return;
+    let stopped = false;
+    let inFlight = false;
+    let heartbeatPending = false;
+
+    async function heartbeatHeldLeases() {
+      if (inFlight) {
+        heartbeatPending = true;
+        return;
+      }
+      const heldLeases = Object.entries(runtimeRef.current)
+        .flatMap(([workflowId, runtime]) => runtime.runnerLeaseId ? [[workflowId, runtime.runnerLeaseId] as const] : []);
+      if (heldLeases.length === 0) return;
+      inFlight = true;
+      try {
+        await Promise.all(heldLeases.map(async ([workflowId, leaseId]) => {
+          try {
+            const response = await heartbeatWorkflowRunnerLease(workflowId, leaseId);
+            const current = runtimeRef.current[workflowId];
+            if (stopped || current?.runnerLeaseId !== leaseId) return;
+            if (response.status === "lease_not_found") {
+              setWorkflowRuntime(workflowId, { runnerLeaseId: null, runnerId: null });
+              return;
+            }
+            const runnerId = typeof response.runner?.runner_id === "string" ? response.runner.runner_id : null;
+            if (runnerId && current.runnerId !== runnerId) {
+              setWorkflowRuntime(workflowId, { runnerId });
+            }
+          } catch {
+            // TTL is authoritative; transient heartbeat failures should not churn UI state.
+          }
+        }));
+      } finally {
+        inFlight = false;
+        if (heartbeatPending && !stopped) {
+          heartbeatPending = false;
+          void heartbeatHeldLeases();
+        }
+      }
+    }
+
+    const heartbeatRestoredPage = (event: PageTransitionEvent) => {
+      if (event.persisted) void heartbeatHeldLeases();
+    };
+    void heartbeatHeldLeases();
+    const interval = window.setInterval(() => void heartbeatHeldLeases(), WORKFLOW_LEASE_HEARTBEAT_INTERVAL_MS);
+    window.addEventListener("pageshow", heartbeatRestoredPage);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      window.removeEventListener("pageshow", heartbeatRestoredPage);
+    };
+  }, [hasHeldLease, setWorkflowRuntime]);
+}
+
+function useWorkflowLeasePagehideRelease(runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>) {
+  const runtimeRef = useRef(runtimeByWorkflowId);
+  runtimeRef.current = runtimeByWorkflowId;
+
+  useEffect(() => {
+    const releaseHeldLeases = () => {
+      for (const [workflowId, runtime] of Object.entries(runtimeRef.current)) {
+        if (runtime.runnerLeaseId) {
+          closeWorkflowRunnerLeaseKeepalive(workflowId, runtime.runnerLeaseId);
+        }
+      }
+    };
+    window.addEventListener("pagehide", releaseHeldLeases);
+    return () => window.removeEventListener("pagehide", releaseHeldLeases);
+  }, []);
 }
 
 function shouldPollWorkflowRuntime(runtime: WorkflowTabRuntimeState) {
   if (runtime.handleSource === "runner_start_queue") return false;
+  return hasActiveRuntimeHandle(runtime);
+}
+
+function hasActiveRuntimeHandle(runtime: WorkflowTabRuntimeState) {
   return Boolean(
     (runtime.activeJobId ?? runtime.queueId) &&
       runtime.activeJobStatus &&
@@ -218,7 +367,7 @@ function workflowRuntimeUpdateFromProgress(progress: JobProgress): Partial<Workf
   return {
     activeJobId: null,
     activeJobStatus: progress.status,
-    activeJobProgress: progress,
+    activeJobProgress: progress.status === "unknown" ? null : progress,
     activeJobUpdatedAt: now,
     handleSource: null,
     queueId: null,

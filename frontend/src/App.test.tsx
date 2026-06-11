@@ -109,6 +109,7 @@ describe("App workflow tabs", () => {
   let activeRunCount = 0;
   let failedCancelCount = 0;
   let leaseAvailable = false;
+  let jobProgressStatus = "running";
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
 
   beforeEach(() => {
@@ -116,8 +117,10 @@ describe("App workflow tabs", () => {
     activeRunCount = 0;
     failedCancelCount = 0;
     leaseAvailable = false;
+    jobProgressStatus = "running";
     workflowListSummary = workflowSummary;
     window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", undefined);
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -216,7 +219,14 @@ describe("App workflow tabs", () => {
         }));
       }
       if (url.endsWith("/api/jobs/job-1/progress")) {
-        return Promise.resolve(jsonResponse({ job_id: "job-1", status: "running", value: 2, max: 10, current_node: null, message: "Generating..." }));
+        return Promise.resolve(jsonResponse({
+          job_id: "job-1",
+          status: jobProgressStatus,
+          value: jobProgressStatus === "running" ? 2 : null,
+          max: jobProgressStatus === "running" ? 10 : null,
+          current_node: null,
+          message: jobProgressStatus === "running" ? "Generating..." : null,
+        }));
       }
       if (url.endsWith("/api/jobs/job-1/cancel") && method === "POST") {
         return Promise.resolve(jsonResponse({ job_id: "job-1", status: "canceled", value: null, max: null, current_node: null, message: "Canceled." }));
@@ -230,6 +240,7 @@ describe("App workflow tabs", () => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     window.localStorage.clear();
+    window.sessionStorage.clear();
     delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
@@ -280,6 +291,7 @@ describe("App workflow tabs", () => {
     expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/open"))).toBe(false);
+    expect(JSON.parse(window.localStorage.getItem("noofy.appRoute.v1") ?? "{}")).toMatchObject({ name: "workflows" });
   });
 
   it("restores tabs as shortcuts only and does not open leases until the tab is viewed", async () => {
@@ -297,6 +309,44 @@ describe("App workflow tabs", () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/runner/leases"))).toBe(true);
     });
+  });
+
+  it("persists and restores the last safe app route", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Workflows" }));
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem("noofy.appRoute.v1") ?? "{}")).toMatchObject({
+        name: "workflows",
+      });
+    });
+
+    cleanup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+  });
+
+  it("restores a workflow route only when its persisted workflow tab still exists", async () => {
+    window.localStorage.setItem(
+      "noofy.workflowTabs.v1",
+      JSON.stringify([{ workflowId: "text_to_image_v0", workflowName: "Text to Image", lastActivatedAt: 1 }]),
+    );
+    window.localStorage.setItem(
+      "noofy.appRoute.v1",
+      JSON.stringify({ name: "workflow", workflowId: "text_to_image_v0" }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeInTheDocument();
+
+    cleanup();
+    window.localStorage.removeItem("noofy.workflowTabs.v1");
+    render(<App />);
+
+    expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
   });
 
   it("keeps workflow progress visible across pages and avoids duplicate bars", async () => {
@@ -327,6 +377,23 @@ describe("App workflow tabs", () => {
     await waitFor(() => {
       expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
     });
+  });
+
+  it("clears an unknown run handle with a calm inline recovery notice", async () => {
+    jobProgressStatus = "unknown";
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/progress"))).toBe(true);
+    });
+    expect(await screen.findByText("This run is no longer active. Run this workflow again when ready.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /workflow failed/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("This run is no longer active. Run this workflow again when ready.")).not.toBeInTheDocument();
   });
 
   it("closing an inactive tab leaves the current workflow route alone", async () => {

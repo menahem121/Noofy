@@ -47,6 +47,10 @@ type AppRoute =
   | { name: "dashboard-builder"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema }
   | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema };
 
+type PersistedAppRoute = Exclude<AppRoute, { name: "dashboard-builder" } | { name: "dashboard-builder-layout" }>;
+
+const APP_ROUTE_STORAGE_KEY = "noofy.appRoute.v1";
+
 export default function App() {
   return (
     <RuntimeStatusProvider>
@@ -62,12 +66,22 @@ export default function App() {
 }
 
 function AppContent() {
-  const [route, setRoute] = useState<AppRoute>({ name: "home" });
+  const workflowLibrary = useWorkflowLibrary();
+  const workflowTabs = useWorkflowTabs();
+  const [route, setRoute] = useState<AppRoute>(() => loadStoredAppRoute(workflowTabs.tabs));
   const [closeDialog, setCloseDialog] = useState<WorkflowCloseDialogState | null>(null);
   const [nativeWorkflowImport, setNativeWorkflowImport] = useState<NativeWorkflowImportRequest | null>(null);
   const nativeWorkflowImportIdRef = useRef(0);
-  const workflowLibrary = useWorkflowLibrary();
-  const workflowTabs = useWorkflowTabs();
+
+  useEffect(() => {
+    const persisted = persistedAppRoute(route);
+    if (!persisted) return;
+    try {
+      window.localStorage.setItem(APP_ROUTE_STORAGE_KEY, JSON.stringify(persisted));
+    } catch {
+      // Route restoration is a convenience; navigation must remain usable without storage.
+    }
+  }, [route]);
 
   useEffect(() => {
     let active = true;
@@ -405,6 +419,42 @@ function AppContent() {
       />
     </WorkflowTabsRouteProvider>
   );
+}
+
+function loadStoredAppRoute(tabs: Array<{ workflowId: string; lastActivatedAt: number }>): AppRoute {
+  try {
+    const raw = window.localStorage.getItem(APP_ROUTE_STORAGE_KEY);
+    if (!raw) return { name: "home" };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return { name: "home" };
+    const route = parsed as Record<string, unknown>;
+    if (route.name === "workflow" && typeof route.workflowId === "string" && route.workflowId.trim()) {
+      if (tabs.some((tab) => tab.workflowId === route.workflowId)) {
+        return { name: "workflow", workflowId: route.workflowId };
+      }
+      const fallback = [...tabs].sort((a, b) => b.lastActivatedAt - a.lastActivatedAt)[0];
+      return fallback ? { name: "workflow", workflowId: fallback.workflowId } : { name: "home" };
+    }
+    if (route.name === "workflows") {
+      return {
+        name: "workflows",
+        search: typeof route.search === "string" ? route.search : undefined,
+      };
+    }
+    if (["home", "gallery", "history", "models", "settings"].includes(String(route.name))) {
+      return { name: route.name } as PersistedAppRoute;
+    }
+  } catch {
+    // Malformed stored routes fall back to Home.
+  }
+  return { name: "home" };
+}
+
+function persistedAppRoute(route: AppRoute): PersistedAppRoute | null {
+  if (route.name === "dashboard-builder" || route.name === "dashboard-builder-layout") {
+    return null;
+  }
+  return route;
 }
 
 function workflowNeedsDashboardSetup(workflow: WorkflowSummary | null | undefined) {

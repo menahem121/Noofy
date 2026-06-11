@@ -108,6 +108,7 @@ import {
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
+import { vanishedRunRecoveryMessage } from "../app/sessionRestore";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { GallerySaveAction } from "./GallerySaveAction";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
@@ -146,6 +147,7 @@ interface RunPageState {
   progress: JobProgress | null;
   result: JobResult | null;
   error: string | null;
+  packageLoadError: string | null;
 }
 
 interface RunFailureDialogState {
@@ -224,6 +226,7 @@ const initialState: RunPageState = {
   progress: null,
   result: null,
   error: null,
+  packageLoadError: null,
 };
 
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
@@ -578,17 +581,31 @@ export function WorkflowRunPage({
   }
 
   async function loadRequirements() {
-    setState((current) => ({ ...current, loading: true, error: null }));
+    setState((current) => ({ ...current, loading: true, error: null, packageLoadError: null }));
     try {
-      const [workflowStatus, packageData, modelSummary, apiKeySettings] = await Promise.all([
+      const [workflowStatus, packageResult, modelSummary, apiKeySettings] = await Promise.all([
         fetchWorkflowStatus(workflowId).catch(() => null),
-        fetchWorkflowPackage(workflowId).catch(() => null),
+        fetchWorkflowPackage(workflowId)
+          .then((packageData) => ({ packageData, error: null }))
+          .catch((error: unknown) => ({
+            packageData: null,
+            error: error instanceof Error ? error.message : String(error),
+          })),
         fetchWorkflowModelSummary(workflowId).catch(() => null),
         fetchApiKeySettings().catch(() => null),
       ]);
 
       const validation = await validateWorkflow(workflowId);
-      setState((current) => ({ ...current, loading: false, workflowStatus, modelSummary, packageData, apiKeySettings, validation }));
+      setState((current) => ({
+        ...current,
+        loading: false,
+        workflowStatus,
+        modelSummary,
+        packageData: packageResult.packageData,
+        apiKeySettings,
+        validation,
+        packageLoadError: packageResult.error,
+      }));
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -599,6 +616,7 @@ export function WorkflowRunPage({
         apiKeySettings: null,
         validation: null,
         error: error instanceof Error ? error.message : String(error),
+        packageLoadError: null,
       }));
     }
   }
@@ -1153,6 +1171,10 @@ export function WorkflowRunPage({
       const progress = await fetchJobProgress(handle, {
         sincePreviewSequence: previousPreview?.handle === handle ? previousPreview.sequence : null,
       });
+      if (progress.status === "unknown") {
+        handleVanishedTrackedRun(run);
+        return;
+      }
       if (shouldDisplayLivePreviewForHandle(handle)) {
         handleProgressLivePreview(handle, progress);
       }
@@ -1218,6 +1240,33 @@ export function WorkflowRunPage({
     if (progress.status === "failed") {
       recordTrackedFailure(trackedRunHandle(nextRun), null, progress.message ?? "Workflow run failed.");
     }
+    pollNextTrackedRunAfterTerminal();
+  }
+
+  function handleVanishedTrackedRun(run: TrackedRun) {
+    const handle = trackedRunHandle(run);
+    const nextRun = trackedRunWithStatus(run, "unknown", null);
+    replaceTrackedRuns(
+      trackedRunsRef.current.map((tracked) => tracked.clientId === run.clientId ? nextRun : tracked),
+    );
+    if (livePreviewRef.current?.handle === handle) {
+      clearLivePreview();
+    }
+    workflowTabs?.setWorkflowRuntime(workflowId, {
+      activeJobId: null,
+      activeJobStatus: "unknown",
+      activeJobProgress: null,
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+    workflowTabs?.setWorkflowRecoveryNotice(workflowId, vanishedRunRecoveryMessage());
+    setState((current) => ({
+      ...current,
+      job: null,
+      progress: null,
+      error: null,
+    }));
     pollNextTrackedRunAfterTerminal();
   }
 
@@ -1639,9 +1688,49 @@ export function WorkflowRunPage({
     </section>
   );
 
+  const recoveryNoticeElement = workflowTabs?.recoveryNoticeByWorkflowId[workflowId] ? (
+    <div className="notice notice--compact" role="status">
+      <RotateCcw size={16} aria-hidden="true" />
+      <div>
+        <strong>Run cleared</strong>
+        <span>{workflowTabs.recoveryNoticeByWorkflowId[workflowId]}</span>
+      </div>
+      <button
+        className="secondary-button secondary-button--small"
+        type="button"
+        onClick={() => workflowTabs.dismissWorkflowRecoveryNotice(workflowId)}
+      >
+        Dismiss
+      </button>
+    </div>
+  ) : null;
+  const workflowRefreshRequired = runtimeStatus.pageRefreshRequired || Boolean(state.packageLoadError);
+  const workflowRefreshNoticeElement = workflowRefreshRequired ? (
+    <div className="notice notice--warning" role="status">
+      <RotateCcw size={18} aria-hidden="true" />
+      <div>
+        <strong>Refresh Noofy to reload this workflow</strong>
+        <span>
+          {runtimeStatus.pageRefreshRequired
+            ? "Noofy restarted, but this page still has data from the previous app session."
+            : "The workflow data did not load. Refresh the page before continuing."}
+        </span>
+      </div>
+      <button
+        className="secondary-button secondary-button--small"
+        type="button"
+        onClick={runtimeStatus.refreshPage}
+      >
+        Refresh Noofy
+      </button>
+    </div>
+  ) : null;
+
   const notices = (
     <>
-      {state.error ? (
+      {recoveryNoticeElement}
+      {workflowRefreshNoticeElement}
+      {!workflowRefreshRequired && state.error ? (
         <div className="notice notice--error" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
@@ -1908,8 +1997,10 @@ export function WorkflowRunPage({
             }}
           />
         </WorkflowDefaultAssetProvider>
-        {failedRunSummaryElement ? (
+        {workflowRefreshNoticeElement || recoveryNoticeElement || failedRunSummaryElement ? (
           <div className="canvas-run-floating-notices">
+            {workflowRefreshNoticeElement}
+            {recoveryNoticeElement}
             {failedRunSummaryElement}
           </div>
         ) : null}

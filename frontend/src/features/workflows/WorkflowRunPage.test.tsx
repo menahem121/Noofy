@@ -908,6 +908,7 @@ describe("WorkflowRunPage", () => {
 
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", undefined);
   });
@@ -917,6 +918,7 @@ describe("WorkflowRunPage", () => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     window.localStorage.clear();
+    window.sessionStorage.clear();
     delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
@@ -1016,6 +1018,61 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => {
       expect(onConfigureDashboard).toHaveBeenCalledWith("text_to_image_v0", "Text to Image");
     });
+  });
+
+  it("asks the user to refresh instead of showing an empty workflow when the package cannot load", async () => {
+    const reloadPage = vi.fn();
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) {
+        return jsonResponse({ detail: "Workflow package is unavailable." }, 503);
+      }
+      return undefined;
+    });
+
+    render(
+      <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh reloadPage={reloadPage}>
+        <WorkflowRunPage
+          workflowId="text_to_image_v0"
+          onBack={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      </RuntimeStatusProvider>,
+    );
+
+    expect(await screen.findByText("Refresh Noofy to reload this workflow")).toBeInTheDocument();
+    expect(screen.getByText("The workflow data did not load. Refresh the page before continuing.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Noofy" }));
+
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the refresh fallback over a canvas workflow when the backend session changed", async () => {
+    const reloadPage = vi.fn();
+    window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous");
+    mockConfiguredDashboardFetch(fetchMock, { ...readyRuntime, backend_session_id: "bs-current" });
+
+    render(
+      <RuntimeStatusProvider
+        initialRuntimeState={{ ...readyRuntimeState, lastCheckedAt: Date.now() - 60_000 }}
+        skipInitialRefresh
+        reloadPage={reloadPage}
+      >
+        <WorkflowRunPage
+          workflowId="text_to_image_v0"
+          onBack={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      </RuntimeStatusProvider>,
+    );
+
+    expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
+    expect(await screen.findByText("Refresh Noofy to reload this workflow")).toBeInTheDocument();
+    expect(screen.getByText("Noofy restarted, but this page still has data from the previous app session.")).toBeInTheDocument();
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+    expect(canvasCss).toMatch(
+      /\.canvas-run-floating-notices \.notice\s*,\s*\.canvas-run-floating-notices \.batch-failure-summary\s*{[^}]*pointer-events:\s*auto;/,
+    );
   });
 
   it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {

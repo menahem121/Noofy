@@ -1,4 +1,4 @@
-import { apiErrorMessage, deleteJson, getApiBaseUrl, getApiToken, getJson, postBytes, postJson, putJson, resolveBackendUrl } from "./client";
+import { apiErrorMessage, apiHeaders, deleteJson, getApiBaseUrl, getApiToken, getJson, postBytes, postJson, putJson, resolveBackendUrl } from "./client";
 import type { EngineJob } from "./jobs";
 
 export interface WorkflowTrustSummary {
@@ -786,6 +786,24 @@ export function closeWorkflowRunnerLease(workflowId: string, leaseId: string) {
   return deleteJson<WorkflowRunnerLeaseResponse>(
     `/workflows/${encodeURIComponent(workflowId)}/runner/leases/${encodeURIComponent(leaseId)}`,
   );
+}
+
+export function heartbeatWorkflowRunnerLease(workflowId: string, leaseId: string) {
+  return putJson<WorkflowRunnerLeaseResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/runner/leases/${encodeURIComponent(leaseId)}/heartbeat`,
+    {},
+  );
+}
+
+export function closeWorkflowRunnerLeaseKeepalive(workflowId: string, leaseId: string) {
+  void fetch(
+    `${getApiBaseUrl()}/workflows/${encodeURIComponent(workflowId)}/runner/leases/${encodeURIComponent(leaseId)}`,
+    {
+      method: "DELETE",
+      headers: apiHeaders(),
+      keepalive: true,
+    },
+  ).catch(() => undefined);
 }
 
 export function cancelQueuedRunnerStart(queueId: string) {

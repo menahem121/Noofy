@@ -138,6 +138,8 @@ export interface MachineResourceSnapshot {
 }
 
 export interface RuntimeStatus {
+  backend_session_id?: string | null;
+  backend_session_started_at?: string | null;
   mode: "external" | "managed";
   reachable: boolean;
   base_url: string;

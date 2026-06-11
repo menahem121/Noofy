@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import {
   useWorkflowTabs,
@@ -39,6 +39,19 @@ function Harness({ activeWorkflowId = "wf-1" }: { activeWorkflowId?: string | nu
       >
         Set runtime
       </button>
+      <button
+        type="button"
+        onClick={() =>
+          tabs.setWorkflowRuntime("wf-1", {
+            runnerLeaseId: "lease-1",
+            runnerId: "runner-1",
+          })
+        }
+      >
+        Set lease
+      </button>
+      <span data-testid="lease-id">{tabs.runtimeByWorkflowId["wf-1"]?.runnerLeaseId ?? "none"}</span>
+      <span data-testid="recovery-notice">{tabs.recoveryNoticeByWorkflowId["wf-1"] ?? "none"}</span>
       <WorkflowTabsTopBar />
     </WorkflowTabsRouteProvider>
   );
@@ -47,10 +60,14 @@ function Harness({ activeWorkflowId = "wf-1" }: { activeWorkflowId?: string | nu
 describe("WorkflowTabs", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("opens tabs, avoids duplicates, and marks the active route tab", () => {
@@ -85,5 +102,109 @@ describe("WorkflowTabs", () => {
     expect(stored).not.toContain("job-1");
     expect(stored).not.toContain("lease-1");
     expect(stored).not.toContain("runner-1");
+    const activeRuns = window.sessionStorage.getItem("noofy.activeRunWorkflows.v1");
+    expect(activeRuns).toContain("wf-1");
+    expect(activeRuns).not.toContain("job-1");
+    expect(activeRuns).not.toContain("lease-1");
+  });
+
+  it("restores only a calm recovery notice for active workflows after a backend restart", () => {
+    window.sessionStorage.setItem(
+      "noofy.sessionRestart.v1",
+      JSON.stringify({ backendSessionId: "bs-new", detectedAt: Date.now() }),
+    );
+    window.sessionStorage.setItem(
+      "noofy.activeRunWorkflows.v1",
+      JSON.stringify({ workflowIds: ["wf-1"], updatedAt: Date.now() }),
+    );
+
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+
+    expect(screen.getByTestId("recovery-notice")).toHaveTextContent(
+      "The app restarted. Run this workflow again when ready.",
+    );
+    expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
+  });
+
+  it("heartbeats a newly held lease immediately and clears a lease the backend no longer knows", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      workflow_id: "wf-1",
+      status: "lease_not_found",
+      lease_id: "lease-1",
+      runner: null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set lease" }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workflows/wf-1/runner/leases/lease-1/heartbeat",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(screen.getByTestId("lease-id")).toHaveTextContent("none");
+  });
+
+  it("rechecks a held lease immediately when a bfcache page is restored", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        workflow_id: "wf-1",
+        status: "active",
+        lease_id: "lease-1",
+        runner: { runner_id: "runner-1" },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        workflow_id: "wf-1",
+        status: "lease_not_found",
+        lease_id: "lease-1",
+        runner: null,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set lease" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    fireEvent(window, new PageTransitionEvent("pageshow", { persisted: true }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("lease-id")).toHaveTextContent("none");
+    });
+  });
+
+  it("attempts keepalive lease close on pagehide", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set lease" }));
+    fireEvent(window, new Event("pagehide"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/wf-1/runner/leases/lease-1",
+        expect.objectContaining({ method: "DELETE", keepalive: true }),
+      );
+    });
   });
 });

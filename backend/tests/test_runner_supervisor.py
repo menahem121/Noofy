@@ -3,7 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -734,6 +734,73 @@ def test_workflow_lease_keeps_runner_warm_until_closed_view_cooldown() -> None:
     assert closed.open_workflow_lease_count == 0
     assert closed.open_workflow_lease_ids == []
     assert closed.closed_view_cooldown_expires_at == "2026-05-03T12:00:30+00:00"
+
+
+def test_workflow_lease_heartbeat_refreshes_ttl_and_stale_leases_expire() -> None:
+    now = datetime(2026, 5, 3, 12, 0, tzinfo=UTC)
+    current = [now]
+    supervisor = RunnerSupervisor(
+        closed_view_cooldown_seconds=30,
+        now=lambda: current[0],
+    )
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+    supervisor.open_workflow_lease(
+        "text_to_image_v0",
+        "isolated-1",
+        lease_id="lease-1",
+    )
+    record = supervisor._workflow_leases["lease-1"]
+    assert record.opened_at == now
+    assert record.last_heartbeat_at == now
+
+    current[0] += timedelta(seconds=90)
+    heartbeat = supervisor.heartbeat_workflow_lease(
+        "lease-1", workflow_id="text_to_image_v0"
+    )
+    assert heartbeat is not None
+    assert supervisor._workflow_leases["lease-1"].last_heartbeat_at == current[0]
+    assert supervisor.expire_stale_workflow_leases(120) == []
+
+    current[0] += timedelta(seconds=121)
+    expired = supervisor.expire_stale_workflow_leases(120)
+    assert [item.lease_id for item in expired] == ["lease-1"]
+    assert expired[0].workflow_id == "text_to_image_v0"
+    assert expired[0].runner.open_workflow_lease_count == 0
+    assert expired[0].runner.closed_view_cooldown_expires_at == "2026-05-03T12:04:01+00:00"
+    assert not supervisor.has_workflow_leases()
+
+
+def test_workflow_lease_heartbeat_rejects_unknown_or_wrong_workflow() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.upsert_runner(_isolated_descriptor(), RecordingAdapter())
+    supervisor.open_workflow_lease("workflow-a", "isolated-1", lease_id="lease-1")
+
+    assert supervisor.heartbeat_workflow_lease("missing") is None
+    assert (
+        supervisor.heartbeat_workflow_lease("lease-1", workflow_id="workflow-b")
+        is None
+    )
+
+
+def test_expiring_one_of_multiple_workflow_leases_preserves_runner_protection() -> None:
+    current = [datetime(2026, 5, 3, 12, 0, tzinfo=UTC)]
+    supervisor = RunnerSupervisor(now=lambda: current[0])
+    supervisor.upsert_runner(_isolated_descriptor(), RecordingAdapter())
+    supervisor.open_workflow_lease("workflow-a", "isolated-1", lease_id="stale")
+    current[0] += timedelta(seconds=60)
+    supervisor.open_workflow_lease("workflow-a", "isolated-1", lease_id="fresh")
+    current[0] += timedelta(seconds=61)
+
+    expired = supervisor.expire_stale_workflow_leases(120)
+
+    assert [item.lease_id for item in expired] == ["stale"]
+    protected = supervisor.get_runner("isolated-1")
+    assert protected.open_workflow_lease_count == 1
+    assert protected.open_workflow_lease_ids == ["fresh"]
+    assert protected.closed_view_cooldown_expires_at is None
 
 
 def test_runner_job_markers_track_active_job_and_warm_status() -> None:

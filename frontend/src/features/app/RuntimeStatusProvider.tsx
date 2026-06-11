@@ -2,6 +2,11 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 
 import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
 import type { AppStatusView } from "./AppLayout";
+import {
+  adoptBackendSessionId,
+  loadObservedBackendSessionId,
+  recordBackendSessionRestart,
+} from "./sessionRestore";
 
 export type BackendStatus = "unknown" | "reachable" | "unreachable";
 export type EngineStatus = "unknown" | "ready" | "starting" | "busy" | "offline";
@@ -19,6 +24,8 @@ export interface RuntimeHealthState {
 
 interface RuntimeStatusContextValue extends RuntimeHealthState {
   statusView: AppStatusView;
+  pageRefreshRequired: boolean;
+  refreshPage: () => void;
   refreshRuntime: (options?: RefreshRuntimeOptions) => Promise<RuntimeStatus | null>;
   setRuntimeFromResponse: (runtime: RuntimeStatus | null) => void;
   markActionFailure: (error: unknown) => void;
@@ -53,30 +60,59 @@ export function RuntimeStatusProvider({
   children,
   initialRuntimeState,
   skipInitialRefresh = false,
+  reloadPage = defaultReloadPage,
 }: {
   children: ReactNode;
   initialRuntimeState?: Partial<RuntimeHealthState>;
   skipInitialRefresh?: boolean;
+  reloadPage?: () => void;
 }) {
   const [state, setState] = useState<RuntimeHealthState>({
     ...initialState,
     ...initialRuntimeState,
   });
+  const [pageRefreshRequired, setPageRefreshRequired] = useState(false);
   const requestSeqRef = useRef(0);
   const latestRequestSeqRef = useRef(0);
   const inFlightRef = useRef<Promise<RuntimeStatus | null> | null>(null);
   const stateRef = useRef(state);
+  const backendSessionIdRef = useRef<string | null>(null);
+  const reloadRequestedRef = useRef(false);
+  const refreshPage = useCallback(() => reloadPage(), [reloadPage]);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
+  const observeBackendSession = useCallback((runtime: RuntimeStatus) => {
+    const backendSessionId = runtime.backend_session_id?.trim();
+    if (!backendSessionId) return;
+    const previous = backendSessionIdRef.current ?? loadObservedBackendSessionId();
+    if (!previous) {
+      backendSessionIdRef.current = backendSessionId;
+      adoptBackendSessionId(backendSessionId);
+      return;
+    }
+    if (previous === backendSessionId) {
+      backendSessionIdRef.current = backendSessionId;
+      adoptBackendSessionId(backendSessionId);
+      return;
+    }
+    if (reloadRequestedRef.current) return;
+    backendSessionIdRef.current = backendSessionId;
+    reloadRequestedRef.current = true;
+    setPageRefreshRequired(true);
+    recordBackendSessionRestart(backendSessionId);
+    refreshPage();
+  }, [refreshPage]);
+
   const setRuntimeFromResponse = useCallback((runtime: RuntimeStatus | null) => {
+    if (runtime) observeBackendSession(runtime);
     setState((current) => {
       if (!runtime) return current;
       return stateFromRuntime(runtime, current);
     });
-  }, []);
+  }, [observeBackendSession]);
 
   const markActionFailure = useCallback((error: unknown) => {
     setState((current) => ({
@@ -114,6 +150,7 @@ export function RuntimeStatusProvider({
       const request = fetchRuntimeStatus({ signal: controller.signal })
         .then((runtime) => {
           if (requestSeq !== latestRequestSeqRef.current) return runtime;
+          observeBackendSession(runtime);
           setState((stateBeforeSuccess) => stateFromRuntime(runtime, stateBeforeSuccess));
           return runtime;
         })
@@ -132,7 +169,7 @@ export function RuntimeStatusProvider({
       inFlightRef.current = request;
       return request;
     },
-    [],
+    [observeBackendSession],
   );
 
   useEffect(() => {
@@ -159,14 +196,20 @@ export function RuntimeStatusProvider({
     () => ({
       ...state,
       statusView: runtimeStatusView(state),
+      pageRefreshRequired,
+      refreshPage,
       refreshRuntime,
       setRuntimeFromResponse,
       markActionFailure,
     }),
-    [markActionFailure, refreshRuntime, setRuntimeFromResponse, state],
+    [markActionFailure, pageRefreshRequired, refreshPage, refreshRuntime, setRuntimeFromResponse, state],
   );
 
   return <RuntimeStatusContext.Provider value={value}>{children}</RuntimeStatusContext.Provider>;
+}
+
+function defaultReloadPage() {
+  window.location.reload();
 }
 
 export function useRuntimeStatus() {

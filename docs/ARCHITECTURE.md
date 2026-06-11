@@ -45,6 +45,8 @@ The frontend owns a session-scoped cache of the last known backend and engine st
 
 "Checking backend" is only for initial startup before any runtime state is known. A single silent refresh failure preserves the last known good state; forced/action-triggered failures, or repeated confirmed silent failures, may mark the backend offline.
 
+`GET /api/runtime` also exposes a process-unique backend session ID. Each browser/source-development tab keeps its last observed ID in tab-scoped session storage: a new tab adopts its first ID, while a restored or still-open tab hard reloads as soon as a successful response reports a different backend process. Reload restores only safe UI state such as open workflow tabs, the last safe route, and persisted workflow user state. Jobs, progress, runner leases, preparation state, and other runtime truth remain memory-only and must be confirmed by the current backend.
+
 Home also uses a shared session workflow-library cache. Workflow cards stay visible during refreshes and refresh failures; errors are shown as non-blocking notices instead of clearing the library.
 
 ## Local API Security
