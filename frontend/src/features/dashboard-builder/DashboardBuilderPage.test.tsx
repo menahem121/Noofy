@@ -1252,6 +1252,80 @@ describe("DashboardBuilderPage", () => {
     );
   });
 
+  it("sets and clears optional minimum and maximum values for number fields", async () => {
+    const savedSchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-number-bounds",
+      workflowName: "Number bounds",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "steps",
+          valueId: "steps",
+          binding: { nodeId: "3", inputName: "steps" },
+          widgetType: "int_field",
+          title: "Steps",
+          description: "",
+          defaultValue: 20,
+        },
+      ],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-number-bounds/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-number-bounds"
+        workflowName="Number bounds"
+        initialSchema={savedSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByLabelText(/widget title/i);
+    fireEvent.click(screen.getByText("Steps").closest("article")!);
+
+    const minimum = screen.getByLabelText("Minimum value");
+    const maximum = screen.getByLabelText("Maximum value");
+    expect(minimum).toHaveValue(null);
+    expect(maximum).toHaveValue(null);
+
+    fireEvent.change(minimum, { target: { value: "1" } });
+    fireEvent.change(maximum, { target: { value: "80" } });
+    const defaultValueInput = screen.getAllByRole("spinbutton")
+      .find((element) => (element as HTMLInputElement).value === "20");
+    expect(defaultValueInput).toHaveAttribute("min", "1");
+    expect(defaultValueInput).toHaveAttribute("max", "80");
+
+    fireEvent.change(maximum, { target: { value: "0" } });
+    expect(screen.getByText("Maximum value must be greater than or equal to minimum value.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^continue$/i })).toBeDisabled();
+
+    fireEvent.change(maximum, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "steps",
+          control: "int_field",
+          validation: { min: 1 },
+        }),
+      ]),
+    );
+  });
+
   it("automatically creates a load image widget for bindable LoadImage inputs", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,

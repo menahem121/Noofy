@@ -196,6 +196,29 @@ describe("DashboardInputControl", () => {
     expect(onChange).toHaveBeenCalledWith(1536);
   });
 
+  it("applies optional number-field bounds to the rendered input", () => {
+    render(
+      <DashboardInputControl
+        control={{ id: "steps", type: "int_field", label: "Steps", input_id: "steps" }}
+        input={{
+          id: "steps",
+          label: "Steps",
+          control: "int_field",
+          binding: { node_id: "3", input_name: "steps" },
+          default: 20,
+          validation: { min: 1, max: 80 },
+        }}
+        value={20}
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("spinbutton");
+    expect(input).toHaveAttribute("min", "1");
+    expect(input).toHaveAttribute("max", "80");
+  });
+
   it("positions canvas sliders from the configured min, max, and value", () => {
     render(
       <DashboardInputControl

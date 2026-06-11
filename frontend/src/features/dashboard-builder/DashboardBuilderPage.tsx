@@ -1408,21 +1408,23 @@ function truncatePreviewText(value: string, maxLength: number): string {
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
-type SliderValidationField = "defaultValue" | "min" | "max" | "step";
+type NumericValidationField = "defaultValue" | "min" | "max" | "step";
 
-interface SliderValidationError {
-  field: SliderValidationField;
+interface NumericValidationError {
+  field: NumericValidationField;
   message: string;
 }
 
-function validateWidgetForSave(widget: DashboardWidget): SliderValidationError[] {
-  return widget.widgetType === "slider" ? validateSliderWidget(widget) : [];
+function validateWidgetForSave(widget: DashboardWidget): NumericValidationError[] {
+  if (widget.widgetType === "slider") return validateSliderWidget(widget);
+  if (widget.widgetType === "int_field") return validateNumberFieldWidget(widget);
+  return [];
 }
 
-function validateSliderWidget(widget: DashboardWidget): SliderValidationError[] {
+function validateSliderWidget(widget: DashboardWidget): NumericValidationError[] {
   if (widget.widgetType !== "slider") return [];
 
-  const errors: SliderValidationError[] = [];
+  const errors: NumericValidationError[] = [];
   const defaultValue = finiteNumber(widget.defaultValue);
   const min = finiteNumber(widget.min);
   const max = finiteNumber(widget.max);
@@ -1457,6 +1459,16 @@ function validateSliderWidget(widget: DashboardWidget): SliderValidationError[] 
   }
 
   return errors;
+}
+
+function validateNumberFieldWidget(widget: DashboardWidget): NumericValidationError[] {
+  if (widget.widgetType !== "int_field") return [];
+  const min = finiteNumber(widget.min);
+  const max = finiteNumber(widget.max);
+  if (min !== null && max !== null && max < min) {
+    return [{ field: "max", message: "Maximum value must be greater than or equal to minimum value." }];
+  }
+  return [];
 }
 
 function sliderDefaultsForValue(value: WorkflowNodeValue, widget: DashboardWidget): Partial<DashboardWidget> {
@@ -1542,6 +1554,39 @@ function SliderNumberInput({
       onBlur={() => {
         const parsedDraft = parseFiniteDecimalOnBlur(draft);
         setDraft(parsedDraft === null ? (externalValue === "" ? "" : String(externalValue)) : String(parsedDraft));
+      }}
+    />
+  );
+}
+
+function OptionalNumberInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: unknown;
+  placeholder: string;
+  onChange: (value: number | undefined) => void;
+}) {
+  const numericValue = numericInputValue(value);
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      className="builder-input"
+      value={numericValue}
+      step="any"
+      placeholder={placeholder}
+      aria-label={label}
+      onChange={(event) => {
+        if (event.target.value === "") {
+          onChange(undefined);
+          return;
+        }
+        const nextValue = Number(event.target.value);
+        if (Number.isFinite(nextValue)) onChange(nextValue);
       }}
     />
   );
@@ -1745,7 +1790,9 @@ function WidgetBehaviorFields({
   const showImageOptions = widget.widgetType === "load_image" || widget.widgetType === "load_image_mask";
   const showFileOptions = widget.widgetType === "load_file";
   const sliderErrors = validateSliderWidget(widget);
-  const sliderErrorFor = (field: SliderValidationField) => sliderErrors.find((error) => error.field === field)?.message;
+  const sliderErrorFor = (field: NumericValidationField) => sliderErrors.find((error) => error.field === field)?.message;
+  const numberFieldErrors = validateNumberFieldWidget(widget);
+  const numberFieldErrorFor = (field: NumericValidationField) => numberFieldErrors.find((error) => error.field === field)?.message;
 
   return (
     <>
@@ -1813,35 +1860,39 @@ function WidgetBehaviorFields({
         </div>
       ) : null}
 
-      {showNumberRange && value.numberRange ? (
-        <div className="builder-config__grid builder-config__grid--three">
-          <FieldRow label="Minimum">
-            <input
-              type="number"
-              className="builder-input"
-              value={widget.min ?? value.numberRange.min}
-              step={value.numberRange.step ?? 1}
-              onChange={(event) => onPatch({ min: Number(event.target.value) })}
+      {showNumberRange ? (
+        <div className="builder-config__grid">
+          <FieldRow label="Minimum value" hint="Optional. Leave empty when the number has no lower limit.">
+            <OptionalNumberInput
+              label="Minimum value"
+              value={widget.min}
+              placeholder="No minimum"
+              onChange={(min) => onPatch({ min })}
             />
           </FieldRow>
-          <FieldRow label="Maximum">
-            <input
-              type="number"
-              className="builder-input"
-              value={widget.max ?? value.numberRange.max}
-              step={value.numberRange.step ?? 1}
-              onChange={(event) => onPatch({ max: Number(event.target.value) })}
+          <FieldRow
+            label="Maximum value"
+            hint="Optional. Leave empty when the number has no upper limit."
+            error={numberFieldErrorFor("max")}
+          >
+            <OptionalNumberInput
+              label="Maximum value"
+              value={widget.max}
+              placeholder="No maximum"
+              onChange={(max) => onPatch({ max })}
             />
           </FieldRow>
-          <FieldRow label="Step">
-            <input
-              type="number"
-              className="builder-input"
-              value={widget.step ?? value.numberRange.step ?? 1}
-              step={value.numberRange.step ?? 1}
-              onChange={(event) => onPatch({ step: Number(event.target.value) })}
-            />
-          </FieldRow>
+          {value.numberRange ? (
+            <FieldRow label="Step">
+              <input
+                type="number"
+                className="builder-input"
+                value={widget.step ?? value.numberRange.step ?? 1}
+                step={value.numberRange.step ?? 1}
+                onChange={(event) => onPatch({ step: Number(event.target.value) })}
+              />
+            </FieldRow>
+          ) : null}
         </div>
       ) : null}
 
@@ -2146,6 +2197,8 @@ function DefaultValueEditor({
         type="number"
         className="builder-input"
         value={Number(widget.defaultValue ?? 0)}
+        min={widget.widgetType === "int_field" ? widget.min : undefined}
+        max={widget.widgetType === "int_field" ? widget.max : undefined}
         step={widget.step ?? value.numberRange?.step ?? 1}
         onChange={(event) => onPatch({ defaultValue: Number(event.target.value) })}
       />

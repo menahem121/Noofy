@@ -46,6 +46,48 @@ describe("buildDashboardSchemaForEditing", () => {
     });
   });
 
+  it("round-trips optional number-field bounds when reopening the builder", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-number", name: "Number workflow", version: "1.0.0", description: "" },
+      inputs: [
+        {
+          id: "steps",
+          label: "Steps",
+          control: "int_field",
+          binding: { node_id: "3", input_name: "steps" },
+          default: 20,
+          validation: { min: 1, max: 80 },
+        },
+      ],
+      outputs: [],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "steps",
+                type: "int_field",
+                label: "Steps",
+                input_id: "steps",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(schema.widgets[0]).toMatchObject({
+      widgetType: "int_field",
+      defaultValue: 20,
+      min: 1,
+      max: 80,
+    });
+  });
+
   it("keeps loaded note dimensions and replaces incoming minimums with current policy", () => {
     const schema = buildDashboardSchemaForEditing({
       metadata: { id: "wf-1", name: "Workflow", version: "1.0.0", description: "" },
