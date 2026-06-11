@@ -1433,6 +1433,194 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByAltText("Live generation preview")).not.toBeInTheDocument();
   });
 
+  it.each(["classic", "canvas"] as const)(
+    "shows a new live preview over the previous result and retains each image until its replacement loads in %s mode",
+    async (viewMode) => {
+      window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode }));
+      const terminalProgressRequest = deferred<Response>();
+      const secondResultRequest = deferred<Response>();
+      const livePreviewDataUrl = "data:image/png;base64,bmV3LWxpdmUtcHJldmlldw==";
+      let submittedRunCount = 0;
+
+      mockConfiguredDashboardFetch(
+        fetchMock,
+        readyRuntime,
+        configuredPackageData,
+        (init?: RequestInit) => {
+          expect(init?.method).toBe("POST");
+          submittedRunCount += 1;
+          const jobId = submittedRunCount === 1 ? "job-previous" : "job-current";
+          return {
+            job_id: jobId,
+            workflow_id: "text_to_image_v0",
+            engine: "comfyui",
+            status: "queued",
+          };
+        },
+        (url) => {
+          if (url.endsWith("/api/jobs/job-previous/progress")) {
+            return jsonResponse({
+              job_id: "job-previous",
+              status: "completed",
+              value: 1,
+              max: 1,
+              current_node: null,
+              message: "Execution completed",
+            });
+          }
+          if (url.endsWith("/api/jobs/job-previous/result")) {
+            return jsonResponse({
+              job_id: "job-previous",
+              status: "completed",
+              outputs: [
+                {
+                  node_id: "9",
+                  output: {
+                    images: [
+                      {
+                        view_url:
+                          "/api/jobs/job-previous/outputs/view?filename=previous.png&subfolder=&type=output",
+                      },
+                    ],
+                  },
+                },
+              ],
+              error: null,
+            });
+          }
+          if (url.endsWith("/api/jobs/job-current/progress")) {
+            return jsonResponse({
+              job_id: "job-current",
+              status: "running",
+              value: 1,
+              max: 2,
+              current_node: "7",
+              message: "Sampling",
+              live_preview_sequence: 1,
+              live_preview: {
+                sequence: 1,
+                kind: "image",
+                mime_type: "image/png",
+                data_url: livePreviewDataUrl,
+                node_id: "7",
+                prompt_id: "job-current",
+                target_node_ids: ["9"],
+              },
+            });
+          }
+          if (url.endsWith("/api/jobs/job-current/progress?since_preview_sequence=1")) {
+            return terminalProgressRequest.promise;
+          }
+          if (url.endsWith("/api/jobs/job-current/result")) {
+            return secondResultRequest.promise;
+          }
+          return undefined;
+        },
+      );
+
+      renderRunPage();
+      act(() => {
+        window.dispatchEvent(new Event("noofy:prefs-changed"));
+      });
+
+      await waitForReadyStatus();
+      const runButton = screen.getByRole("button", { name: /run workflow/i });
+      await waitFor(() => expect(runButton).toBeEnabled());
+      fireEvent.click(runButton);
+
+      const previousImage = await screen.findByAltText("Generated workflow output");
+      fireEvent.load(previousImage);
+      await waitFor(() => {
+        expect(screen.getByAltText("Generated workflow output")).not.toHaveClass("retained-image--pending");
+      });
+
+      await waitFor(() => expect(runButton).toBeEnabled());
+      fireEvent.click(runButton);
+
+      const pendingLivePreview = await screen.findByAltText("Live generation preview");
+      expect(pendingLivePreview).toHaveClass("retained-image--pending");
+      expect(document.querySelector('img[src*="filename=previous.png"]')).toHaveAttribute("aria-hidden", "true");
+
+      fireEvent.load(pendingLivePreview);
+      await waitFor(() => {
+        expect(screen.getByAltText("Live generation preview")).not.toHaveClass("retained-image--pending");
+        expect(document.querySelector('img[src*="filename=previous.png"]')).not.toBeInTheDocument();
+      });
+      expect(document.querySelector(viewMode === "canvas" ? ".widget-output-image--live" : ".preview-stage--live")).toBeInTheDocument();
+      if (viewMode === "canvas") {
+        const livePreviewButton = screen.getByAltText("Live generation preview").closest("button");
+        expect(livePreviewButton).toHaveAttribute("aria-disabled", "true");
+        expect(livePreviewButton).toHaveAttribute("tabindex", "-1");
+        expect(screen.queryByRole("button", { name: /download result a image/i })).not.toBeInTheDocument();
+      }
+
+      terminalProgressRequest.resolve(
+        jsonResponse({
+          job_id: "job-current",
+          status: "completed",
+          value: 1,
+          max: 1,
+          current_node: null,
+          message: "Execution completed",
+          live_preview_sequence: 1,
+          live_preview: {
+            sequence: 1,
+            kind: "image",
+            mime_type: "image/png",
+            data_url: null,
+            node_id: "7",
+            prompt_id: "job-current",
+            target_node_ids: ["9"],
+          },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          fetchMock.mock.calls.some(([request]) =>
+            String(request).endsWith("/api/jobs/job-current/progress?since_preview_sequence=1"),
+          ),
+        ).toBe(true);
+      }, { timeout: 2500 });
+
+      secondResultRequest.resolve(
+        jsonResponse({
+          job_id: "job-current",
+          status: "completed",
+          outputs: [
+            {
+              node_id: "9",
+              output: {
+                images: [
+                  {
+                    view_url:
+                      "/api/jobs/job-current/outputs/view?filename=current.png&subfolder=&type=output",
+                  },
+                ],
+              },
+            },
+          ],
+          error: null,
+        }),
+      );
+
+      const pendingFinalImage = await screen.findByAltText("Generated workflow output");
+      expect(pendingFinalImage).toHaveClass("retained-image--pending");
+      expect(document.querySelector(`img[src="${livePreviewDataUrl}"]`)).toHaveAttribute("aria-hidden", "true");
+
+      fireEvent.load(pendingFinalImage);
+      await waitFor(() => {
+        expect(screen.getByAltText("Generated workflow output")).not.toHaveClass("retained-image--pending");
+        expect(document.querySelector(`img[src="${livePreviewDataUrl}"]`)).not.toBeInTheDocument();
+      });
+      expect(document.querySelector(viewMode === "canvas" ? ".widget-output-image--live" : ".preview-stage--live")).not.toBeInTheDocument();
+      if (viewMode === "canvas") {
+        expect(screen.getByRole("button", { name: /open generated workflow output full-screen/i })).toHaveAttribute("aria-disabled", "false");
+        expect(screen.getByRole("button", { name: /download result a image/i })).toBeInTheDocument();
+      }
+    },
+  );
+
   it("shows optimistic run feedback immediately while submission is pending", async () => {
     const runRequest = deferred<Response>();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

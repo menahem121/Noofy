@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type SyntheticEvent,
 } from "react";
+import { RetainedImage } from "./RetainedImage";
 
 const DEFAULT_COMPARISON_POSITION = 0;
 const KEYBOARD_STEP = 5;
@@ -16,6 +17,7 @@ interface ImageComparisonSliderProps {
   beforeSrc: string;
   afterSrc: string;
   alt: string;
+  comparisonEnabled?: boolean;
   onOpen?: () => void;
   onAfterImageLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
 }
@@ -24,6 +26,7 @@ export function ImageComparisonSlider({
   beforeSrc,
   afterSrc,
   alt,
+  comparisonEnabled = true,
   onOpen,
   onAfterImageLoad,
 }: ImageComparisonSliderProps) {
@@ -90,11 +93,11 @@ export function ImageComparisonSlider({
     });
   }
 
-  if (loadFailed) {
+  if (!comparisonEnabled || loadFailed) {
     return (
       <div className="image-comparison-slider">
         <OutputImageStage alt={alt} onOpen={onOpen}>
-          <img
+          <RetainedImage
             className="image-comparison-slider__image"
             src={afterSrc}
             alt={alt}
@@ -112,7 +115,7 @@ export function ImageComparisonSlider({
       style={positionStyle}
     >
       <OutputImageStage alt={alt} onOpen={onOpen}>
-        <img
+        <RetainedImage
           className="image-comparison-slider__image image-comparison-slider__image--after"
           src={afterSrc}
           alt={alt}

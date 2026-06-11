@@ -83,6 +83,7 @@ import { DashboardInputControl, SeedModeToggleButton } from "./DashboardInputCon
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { DEFAULT_SEED_MODE, type SeedMode } from "../../lib/seedControl";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
+import { RetainedImage } from "./RetainedImage";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
@@ -1365,6 +1366,9 @@ function OutputWidgetContent({
       && livePreview.target_node_ids.length === 1
       && livePreview.target_node_ids[0] === output.node_id,
   );
+  const displayedImageUrls = livePreviewTargetsOutput && livePreview?.data_url
+    ? [livePreview.data_url]
+    : imageUrls;
   const firstImageUrl = imageUrls[0];
   const [previewImage, setPreviewImage] = useState<{ url: string; alt: string; beforeImageUrl?: string } | null>(null);
 
@@ -1374,17 +1378,21 @@ function OutputWidgetContent({
     }
   }, [imageUrls, previewImage]);
 
-  if (imageUrls.length > 0) {
+  if (displayedImageUrls.length > 0) {
     return (
-      <div className="widget-output-image">
-        <div className={`widget-output-image__grid${imageUrls.length > 1 ? " widget-output-image__grid--multi" : ""}`}>
-          {imageUrls.map((imageUrl, index) => {
-            const alt = imageUrls.length > 1 ? `Generated workflow output ${index + 1}` : "Generated workflow output";
+      <div className={`widget-output-image${livePreviewTargetsOutput ? " widget-output-image--live" : ""}`}>
+        <div className={`widget-output-image__grid${displayedImageUrls.length > 1 ? " widget-output-image__grid--multi" : ""}`}>
+          {displayedImageUrls.map((imageUrl, index) => {
+            const alt = livePreviewTargetsOutput
+              ? "Live generation preview"
+              : displayedImageUrls.length > 1
+                ? `Generated workflow output ${index + 1}`
+                : "Generated workflow output";
             const canCompare = Boolean(imagePreviewEnabled && comparisonBeforeImageUrl);
             if (!imagePreviewEnabled) {
               return (
-                <div className="widget-output-image__preview widget-output-image__preview--static" key={`${imageUrl}-${index}`}>
-                  <img src={imageUrl} alt={alt} />
+                <div className="widget-output-image__preview widget-output-image__preview--static" key={`${output?.node_id ?? "output"}-${index}`}>
+                  <RetainedImage src={imageUrl} alt={alt} />
                 </div>
               );
             }
@@ -1392,34 +1400,40 @@ function OutputWidgetContent({
               return (
                 <div
                   className="widget-output-image__preview widget-output-image__preview--comparison"
-                  key={`${imageUrl}-${index}`}
+                  key={`${output?.node_id ?? "output"}-${index}`}
                 >
                   <ImageComparisonSlider
                     beforeSrc={comparisonBeforeImageUrl}
                     afterSrc={imageUrl}
                     alt={alt}
-                    onOpen={() => setPreviewImage({ url: imageUrl, alt, beforeImageUrl: comparisonBeforeImageUrl })}
+                    comparisonEnabled={!livePreviewTargetsOutput}
+                    onOpen={livePreviewTargetsOutput
+                      ? undefined
+                      : () => setPreviewImage({ url: imageUrl, alt, beforeImageUrl: comparisonBeforeImageUrl })}
                   />
                 </div>
               );
             }
             return (
               <button
-                key={`${imageUrl}-${index}`}
+                key={`${output?.node_id ?? "output"}-${index}`}
                 className="widget-output-image__preview"
                 type="button"
                 aria-label={`Open ${alt} full-screen`}
+                aria-disabled={livePreviewTargetsOutput}
+                tabIndex={livePreviewTargetsOutput ? -1 : undefined}
                 onClick={(event) => {
                   event.stopPropagation();
+                  if (livePreviewTargetsOutput) return;
                   setPreviewImage({ url: imageUrl, alt });
                 }}
               >
-                <img src={imageUrl} alt={alt} />
+                <RetainedImage src={imageUrl} alt={alt} />
               </button>
             );
           })}
         </div>
-        {firstImageUrl ? (
+        {firstImageUrl && !livePreviewTargetsOutput ? (
           <button
             className="widget-output-image__download"
             type="button"
@@ -1553,14 +1567,6 @@ function OutputWidgetContent({
             </div>
           </div>
         ))}
-      </div>
-    );
-  }
-
-  if (livePreviewTargetsOutput && livePreview?.data_url) {
-    return (
-      <div className="widget-output-live-preview">
-        <img src={livePreview.data_url} alt="Live generation preview" />
       </div>
     );
   }

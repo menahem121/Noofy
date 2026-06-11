@@ -112,6 +112,7 @@ import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashb
 import { GallerySaveAction } from "./GallerySaveAction";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
+import { RetainedImage } from "./RetainedImage";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
@@ -506,7 +507,9 @@ export function WorkflowRunPage({
     () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputThreeDsByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputThreeDs, outputFiles),
     [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputThreeDs, outputThreeDsByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
   );
-  const activeLivePreview = livePreview?.data_url && !classicPreviewMedia ? livePreview : null;
+  const activeLivePreview = livePreview?.data_url ? livePreview : null;
+  const classicVisualImageUrl = activeLivePreview?.data_url
+    ?? (classicPreviewMedia?.kind === "image" ? classicPreviewMedia.url : null);
   const hasActiveGallerySave = Object.values(gallerySaveByControlId).some(
     (item) => item.status === "queued" || item.status === "saving",
   );
@@ -1220,10 +1223,11 @@ export function WorkflowRunPage({
       setState((current) => ({ ...current, result }));
       recordTrackedFailure(trackedRunHandle(nextRun), result.job_id, result.error ?? "The local engine could not finish this run.");
     }
+    if (livePreviewRef.current?.handle === trackedRunHandle(nextRun)) {
+      clearLivePreview();
+    }
     if (!selectCurrentTrackedRun(trackedRunsRef.current)) {
       recordWorkflowTerminalResult(result);
-    } else if (livePreviewRef.current?.handle === trackedRunHandle(nextRun)) {
-      clearLivePreview();
     }
     pollNextTrackedRunAfterTerminal();
   }
@@ -1976,16 +1980,20 @@ export function WorkflowRunPage({
             ) : null}
           </div>
 
-          <div className="preview-stage">
-            {classicPreviewMedia?.kind === "image" ? (
+          <div className={`preview-stage${activeLivePreview ? " preview-stage--live" : ""}`}>
+            {classicVisualImageUrl ? (
               comparisonInputImageUrl ? (
                 <ImageComparisonSlider
                   beforeSrc={comparisonInputImageUrl}
-                  afterSrc={classicPreviewMedia.url}
-                  alt="Generated workflow output"
+                  afterSrc={classicVisualImageUrl}
+                  alt={activeLivePreview ? "Live generation preview" : "Generated workflow output"}
+                  comparisonEnabled={!activeLivePreview}
                 />
               ) : (
-                <img src={classicPreviewMedia.url} alt="Generated workflow output" />
+                <RetainedImage
+                  src={classicVisualImageUrl}
+                  alt={activeLivePreview ? "Live generation preview" : "Generated workflow output"}
+                />
               )
             ) : classicPreviewMedia?.kind === "video" ? (
               <div className="preview-video-output">
@@ -2023,10 +2031,6 @@ export function WorkflowRunPage({
                     Open
                   </button>
                 </div>
-              </div>
-            ) : activeLivePreview ? (
-              <div className="preview-live-output">
-                <img src={activeLivePreview.data_url!} alt="Live generation preview" />
               </div>
             ) : (
               <div className="preview-empty">
