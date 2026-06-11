@@ -80,7 +80,7 @@ from app.runs.job_service import RunJobService
 from app.runs.lifecycle_service import RunLifecycleService
 from app.runs.orchestrator import RunOrchestrator
 from app.runs.progress_estimator import WorkflowProgressEstimator
-from app.runs.queue_service import WorkflowRunQueueService
+from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
 from app.runs.result_service import RunResultService
 from app.workflows.authoring import DashboardAuthoringError, DashboardAuthoringService
 from app.workflows.bindings import apply_input_bindings
@@ -321,6 +321,7 @@ class EngineService:
                 memory_service=self.memory_service,
                 imported_package_store=self.imported_package_store,
                 workflow_summary=self.workflow_library_service.workflow_summary,
+                has_pending_workflow_runs=self._workflow_has_pending_queued_runs,
             )
         )
         drain_runner_starts = getattr(
@@ -817,6 +818,21 @@ class EngineService:
             lease_id,
         )
 
+    def _workflow_has_pending_queued_runs(self, workflow_id: str) -> bool:
+        """Whether a queued (not yet submitted) run still needs this workflow."""
+        return any(
+            not record.cancel_requested
+            and record.status
+            in {
+                WorkflowRunQueueStatus.QUEUED,
+                WorkflowRunQueueStatus.REQUEUED,
+                WorkflowRunQueueStatus.HANDING_OFF,
+            }
+            for record in self.workflow_run_queue_service.list_records_for_workflow(
+                workflow_id
+            )
+        )
+
     # ------------------------------------------------------------------
     # Dashboard authoring (M2)
     # ------------------------------------------------------------------
@@ -1033,6 +1049,14 @@ class EngineService:
                     },
                 )
 
+        runner_lifecycle_shutdown = getattr(
+            self.workflow_runner_lifecycle_service, "shutdown", None
+        )
+        if callable(runner_lifecycle_shutdown):
+            await _run_shutdown_step(
+                "workflow_runner_lifecycle_service",
+                runner_lifecycle_shutdown,
+            )
         await _run_shutdown_step(
             "run_lifecycle_service",
             self.run_lifecycle_service.shutdown,

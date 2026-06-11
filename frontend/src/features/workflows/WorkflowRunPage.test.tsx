@@ -913,6 +913,64 @@ describe("WorkflowRunPage", () => {
     delete window.__NOOFY_RUNTIME_CONFIG__;
   });
 
+  it("acquires the runner lease late when the isolated runner binds after the page opened", async () => {
+    let leaseOpenCount = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/runner/leases") && init?.method === "POST") {
+        leaseOpenCount += 1;
+        if (leaseOpenCount === 1) {
+          // No isolated runner is bound yet when the page first opens.
+          return jsonResponse({ workflow_id: "text_to_image_v0", status: "no_runner", lease_id: null, runner: null });
+        }
+        return jsonResponse({
+          workflow_id: "text_to_image_v0",
+          status: "idle_warm",
+          lease_id: "lease-late-1",
+          runner: { runner_id: "isolated-1", open_workflow_lease_count: 1 },
+        });
+      }
+      if (url.endsWith("/api/jobs/job-late/progress")) {
+        return jsonResponse({ job_id: "job-late", status: "running", value: 1, max: 10, current_node: null, message: null });
+      }
+      return undefined;
+    });
+
+    function Harness({ runtime }: { runtime: Partial<WorkflowTabRuntimeState> }) {
+      return (
+        <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+          <WorkflowTabsProvider>
+            <WorkflowRuntimeSeeder workflowRuntime={runtime}>
+              <WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />
+            </WorkflowRuntimeSeeder>
+          </WorkflowTabsProvider>
+        </RuntimeStatusProvider>
+      );
+    }
+
+    const view = render(<Harness runtime={{}} />);
+    await waitForReadyStatus();
+    await waitFor(() => expect(leaseOpenCount).toBe(1));
+
+    // The first run starts and binds the isolated runner after the page was
+    // already open: the tab now tracks a run handle, so the page re-attempts
+    // and acquires the lease that protects the runner from closed-view release.
+    view.rerender(
+      <Harness
+        runtime={{
+          activeJobId: "job-late",
+          activeJobStatus: "running",
+          handleSource: "job",
+          queueId: null,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(leaseOpenCount).toBe(2));
+    // Once a lease is held no further attempts are made.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(leaseOpenCount).toBe(2);
+  });
+
   it("splits diagnostics into ComfyUI engine logs and Noofy logs from existing sources", () => {
     const { comfyuiLogs, noofyLogs } = splitDiagnosticLogs([
       diagnosticEvent("comfyui.adapter", "ComfyUI execution failed"),

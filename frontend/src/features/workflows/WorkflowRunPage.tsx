@@ -281,7 +281,7 @@ export function WorkflowRunPage({
   const runSubmissionInFlightCountRef = useRef(0);
   const modelVerificationStartInFlightRef = useRef(false);
   const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
-  const runnerLeaseOpenedForRef = useRef<string | null>(null);
+  const runnerLeaseRequestRef = useRef<string | null>(null);
 
   useEffect(() => {
     trackedRunsRef.current = trackedRuns;
@@ -1353,16 +1353,41 @@ export function WorkflowRunPage({
     onConfigureDashboard(workflowId, workflowDisplayTitle);
   }, [dashboardSetupRequired, onConfigureDashboard, state.packageData, workflowDisplayTitle, workflowId]);
 
+  // A backend lease is what protects this workflow's isolated runner from
+  // closed-view release while the tab stays open. Isolated runners often bind
+  // only after the page is already open (first run starts them), so the lease
+  // is re-attempted whenever the bound runner or the tracked run handle
+  // changes while no usable lease is held.
+  const tabRuntime = workflowTabs?.runtimeByWorkflowId[workflowId];
+  const heldRunnerLeaseId = tabRuntime?.runnerLeaseId ?? null;
+  const boundRunnerId = runnerIdFromLease(state.workflowStatus?.runner ?? null);
+  const staleRunnerLease = Boolean(
+    heldRunnerLeaseId && boundRunnerId && tabRuntime?.runnerId && tabRuntime.runnerId !== boundRunnerId,
+  );
+  const trackedRunHandleForLease = tabRuntime?.activeJobId ?? tabRuntime?.queueId ?? null;
+
   useEffect(() => {
     if (!workflowTabs || !state.packageData || dashboardSetupRequired) return;
-    if (runnerLeaseOpenedForRef.current === workflowId) return;
+    if (heldRunnerLeaseId && !staleRunnerLease) return;
+    if (runnerLeaseRequestRef.current === workflowId) return;
     let canceled = false;
-    runnerLeaseOpenedForRef.current = workflowId;
+    runnerLeaseRequestRef.current = workflowId;
+    const staleLeaseId = staleRunnerLease ? heldRunnerLeaseId : null;
+    if (staleLeaseId) {
+      // The previously leased runner is gone (released or evicted); its lease
+      // no longer protects the runner now bound to this workflow.
+      void closeWorkflowRunnerLease(workflowId, staleLeaseId).catch(() => undefined);
+    }
     openWorkflowRunnerLease(workflowId)
       .then((response) => {
-        if (!response.lease_id) return;
         if (canceled) {
-          void closeWorkflowRunnerLease(workflowId, response.lease_id);
+          if (response.lease_id) void closeWorkflowRunnerLease(workflowId, response.lease_id);
+          return;
+        }
+        if (!response.lease_id) {
+          if (staleLeaseId) {
+            workflowTabs.setWorkflowRuntime(workflowId, { runnerLeaseId: null, runnerId: null });
+          }
           return;
         }
         workflowTabs.setWorkflowRuntime(workflowId, {
@@ -1372,12 +1397,23 @@ export function WorkflowRunPage({
       })
       .catch(() => {
         // A workflow can be opened without a bound isolated runner; tabs remain navigation-only.
+      })
+      .finally(() => {
+        if (runnerLeaseRequestRef.current === workflowId) runnerLeaseRequestRef.current = null;
       });
     return () => {
       canceled = true;
-      runnerLeaseOpenedForRef.current = null;
+      if (runnerLeaseRequestRef.current === workflowId) runnerLeaseRequestRef.current = null;
     };
-  }, [workflowId, Boolean(state.packageData), dashboardSetupRequired]);
+  }, [
+    workflowId,
+    Boolean(state.packageData),
+    dashboardSetupRequired,
+    heldRunnerLeaseId,
+    staleRunnerLease,
+    boundRunnerId,
+    trackedRunHandleForLease,
+  ]);
 
   const installStatus = typeof state.workflowStatus?.install?.status === "string"
     ? state.workflowStatus.install.status

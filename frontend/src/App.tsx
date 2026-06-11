@@ -19,10 +19,11 @@ import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
 import {
-  cancelJob,
   cancelQueuedRunnerStart,
+  cancelWorkflowActiveAndQueuedRuns,
   closeWorkflowRunnerLease,
   fetchJobProgress,
+  fetchWorkflowActiveAndQueuedRuns,
   recordWorkflowOpened,
   type WorkflowSummary,
 } from "./lib/api/noofyApi";
@@ -188,7 +189,7 @@ function AppContent() {
   }
 
   async function requestCloseWorkflowTab(workflowId: string) {
-    const refreshed = await activeCloseState(workflowTabs.runtimeByWorkflowId[workflowId]);
+    const refreshed = await activeCloseState(workflowId, workflowTabs.runtimeByWorkflowId[workflowId]);
     if (refreshed) {
       setCloseDialog({
         workflowId,
@@ -213,7 +214,7 @@ function AppContent() {
     if (!closeDialog) return;
     setCloseDialog((current) => (current ? { ...current, busy: true, error: null } : current));
     try {
-      await cancelRuntimeHandle(closeDialog.runtime);
+      await cancelRuntimeHandle(closeDialog.workflowId, closeDialog.runtime);
       await closeWorkflowTabNow(closeDialog.workflowId);
       setCloseDialog(null);
     } catch (error) {
@@ -420,17 +421,39 @@ interface WorkflowCloseDialogState {
 
 const activeJobStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 
+const idleTabRuntime: WorkflowTabRuntimeState = {
+  activeJobId: null,
+  activeJobStatus: null,
+  activeJobProgress: null,
+  activeJobUpdatedAt: null,
+  handleSource: null,
+  queueId: null,
+  runnerLeaseId: null,
+  runnerId: null,
+};
+
 async function activeCloseState(
+  workflowId: string,
   runtime: WorkflowTabRuntimeState | undefined,
 ): Promise<WorkflowTabRuntimeState | null> {
-  if (!runtime?.handleSource) return null;
-
-  if (runtime.handleSource === "runner_start_queue" && runtime.queueId) {
-    return runtime.activeJobStatus && activeJobStatuses.has(runtime.activeJobStatus) ? runtime : null;
+  if (runtime?.handleSource === "runner_start_queue" && runtime.queueId) {
+    if (runtime.activeJobStatus && activeJobStatuses.has(runtime.activeJobStatus)) return runtime;
   }
 
-  const jobId = runtime.activeJobId ?? runtime.queueId;
-  if (!jobId) return null;
+  try {
+    // The workflow-scoped summary covers every active and queued generation,
+    // including batch runs beyond the single handle the tab tracks.
+    const summary = await fetchWorkflowActiveAndQueuedRuns(workflowId);
+    return summary.total_count > 0 ? runtime ?? idleTabRuntime : null;
+  } catch {
+    // Summary unavailable; fall back to the tracked handle below.
+  }
+
+  if (runtime?.activeJobStatus && activeJobStatuses.has(runtime.activeJobStatus)) {
+    return runtime;
+  }
+  const jobId = runtime?.activeJobId ?? runtime?.queueId;
+  if (!runtime || !jobId) return null;
   try {
     const progress = await fetchJobProgress(jobId);
     if (activeJobStatuses.has(progress.status)) {
@@ -448,13 +471,24 @@ async function activeCloseState(
   return null;
 }
 
-async function cancelRuntimeHandle(runtime: WorkflowTabRuntimeState) {
+async function cancelRuntimeHandle(workflowId: string, runtime: WorkflowTabRuntimeState) {
   if (runtime.handleSource === "runner_start_queue" && runtime.queueId) {
     await cancelQueuedRunnerStart(runtime.queueId);
-    return;
   }
-  const jobId = runtime.activeJobId ?? runtime.queueId;
-  if (jobId) await cancelJob(jobId);
+  // Cancel every remaining active and queued generation for this workflow,
+  // not just the single handle the tab tracked.
+  const summary = await cancelWorkflowActiveAndQueuedRuns(workflowId);
+  if (summary.failed_to_cancel_count > 0) {
+    throw new Error(
+      "Noofy could not stop every active or queued generation. The tab is still open so you can try again.",
+    );
+  }
+  const remaining = await fetchWorkflowActiveAndQueuedRuns(workflowId);
+  if (remaining.total_count > 0) {
+    throw new Error(
+      "This workflow still has active or queued generations. The tab is still open so you can try again.",
+    );
+  }
 }
 
 async function closeWorkflowSessionLease(workflowId: string, runtime: WorkflowTabRuntimeState | undefined) {
@@ -492,7 +526,8 @@ function WorkflowCloseDialog({
         <header className="workflow-close-modal__header">
           <h2 id="workflow-close-title">Stop this workflow?</h2>
           <p>
-            {dialog.workflowName} is still working. Closing the tab now will stop the current generation.
+            {dialog.workflowName} still has work in progress. Closing this tab will stop its active
+            generations and cancel any generations waiting in its queue.
           </p>
         </header>
         {dialog.error ? (

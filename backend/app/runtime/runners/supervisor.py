@@ -450,6 +450,43 @@ class RunnerSupervisor:
             return None
         return self.get_runner(runner_id)
 
+    def workflows_bound_to_runner(self, runner_id: str) -> list[str]:
+        with self._lock:
+            return sorted(
+                workflow_id
+                for workflow_id, bound_runner_id in self._workflow_runners.items()
+                if bound_runner_id == runner_id
+            )
+
+    def expired_closed_view_runners(self) -> list[RunnerDescriptor]:
+        """Isolated runners whose last workflow view closed and cooldown elapsed.
+
+        Returns only runners that are still resident-idle from the supervisor's
+        perspective; activity and queued-demand safety checks belong to the
+        caller, which must still take an eviction reservation before acting.
+        """
+        now = self._now()
+        with self._lock:
+            runners = list(self._descriptors.values())
+        expired: list[RunnerDescriptor] = []
+        for runner in runners:
+            if runner.kind is not RunnerKind.ISOLATED_COMFYUI:
+                continue
+            if runner.open_workflow_lease_count > 0:
+                continue
+            expires_at = _parse_iso(runner.closed_view_cooldown_expires_at)
+            if expires_at is None or expires_at > now:
+                continue
+            expired.append(runner)
+        return expired
+
+    def closed_view_cooldown_remaining_seconds(self, runner_id: str) -> float | None:
+        descriptor = self.get_runner(runner_id)
+        expires_at = _parse_iso(descriptor.closed_view_cooldown_expires_at)
+        if expires_at is None:
+            return None
+        return max(0.0, (expires_at - self._now()).total_seconds())
+
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
@@ -708,6 +745,9 @@ class RunnerSupervisor:
                     "memory_class": RunnerMemoryClass.UNKNOWN,
                     "memory_estimate_source": RunnerMemoryEstimateSource.UNKNOWN,
                     "memory_estimate_confidence": RunnerMemoryEstimateConfidence.UNKNOWN,
+                    # The released runner no longer holds anything a closed-view
+                    # cooldown should protect or re-release.
+                    "closed_view_cooldown_expires_at": None,
                     "last_used_at": _iso(self._now()),
                     "reservation_token": None,
                     "reservation_kind": None,
@@ -998,12 +1038,20 @@ class RunnerSupervisor:
             self._descriptors[runner_id] = updated
         return lease_id
 
-    def close_workflow_lease(self, lease_id: str) -> RunnerDescriptor | None:
+    def close_workflow_lease(
+        self,
+        lease_id: str,
+        *,
+        workflow_id: str | None = None,
+    ) -> RunnerDescriptor | None:
         with self._lock:
-            lease = self._workflow_leases.pop(lease_id, None)
+            lease = self._workflow_leases.get(lease_id)
             if lease is None:
                 return None
-            _, runner_id = lease
+            lease_workflow_id, runner_id = lease
+            if workflow_id is not None and lease_workflow_id != workflow_id:
+                return None
+            self._workflow_leases.pop(lease_id, None)
             descriptor = self._descriptors.get(runner_id)
             if descriptor is None:
                 return None
@@ -1297,3 +1345,15 @@ def _iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat()
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

@@ -106,10 +106,16 @@ const modelSummary = {
 describe("App workflow tabs", () => {
   const fetchMock = vi.fn();
   let lastOpened: string | null = null;
+  let activeRunCount = 0;
+  let failedCancelCount = 0;
+  let leaseAvailable = false;
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
 
   beforeEach(() => {
     lastOpened = null;
+    activeRunCount = 0;
+    failedCancelCount = 0;
+    leaseAvailable = false;
     workflowListSummary = workflowSummary;
     window.localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
@@ -174,10 +180,40 @@ describe("App workflow tabs", () => {
         }));
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/runner/leases")) {
+        if (leaseAvailable) {
+          return Promise.resolve(jsonResponse({
+            workflow_id: "text_to_image_v0",
+            status: "idle_warm",
+            lease_id: "lease-1",
+            runner: { runner_id: "isolated-1", open_workflow_lease_count: 1 },
+          }));
+        }
         return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", status: "no_runner", lease_id: null, runner: null }));
       }
+      if (url.includes("/runner/leases/") && method === "DELETE") {
+        return Promise.resolve(jsonResponse({
+          workflow_id: "text_to_image_v0",
+          status: "idle",
+          lease_id: "lease-1",
+          runner: { runner_id: "isolated-1", open_workflow_lease_count: 0 },
+        }));
+      }
       if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        activeRunCount = 1;
         return Promise.resolve(jsonResponse({ job_id: "job-1", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" }));
+      }
+      if (url.endsWith("/runs/active-and-queued")) {
+        const active = url.includes("text_to_image_v0") ? activeRunCount : 0;
+        return Promise.resolve(jsonResponse({ active_count: active, queued_count: 0, total_count: active }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/runs/cancel-active-and-queued") && method === "POST") {
+        activeRunCount = 0;
+        return Promise.resolve(jsonResponse({
+          canceled_active_count: 1,
+          canceled_queued_count: 0,
+          already_terminal_count: 0,
+          failed_to_cancel_count: failedCancelCount,
+        }));
       }
       if (url.endsWith("/api/jobs/job-1/progress")) {
         return Promise.resolve(jsonResponse({ job_id: "job-1", status: "running", value: 2, max: 10, current_node: null, message: "Generating..." }));
@@ -327,19 +363,74 @@ describe("App workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
     expect(await screen.findByRole("dialog", { name: "Stop this workflow?" })).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/cancel"))).toBe(false);
+    const cancelAllUrl = "/api/workflows/text_to_image_v0/runs/cancel-active-and-queued";
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith(cancelAllUrl))).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog", { name: "Stop this workflow?" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close Text to Image workspace tab" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith(cancelAllUrl))).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop and close" }));
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/cancel"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith(cancelAllUrl))).toBe(true);
     });
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
     });
+  });
+
+  it("closes an idle tab without confirmation, closes its lease, and never stops the runner", async () => {
+    leaseAvailable = true;
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await screen.findByRole("button", { name: "Run Workflow" });
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).endsWith("/api/workflows/text_to_image_v0/runner/leases")
+        && (init as RequestInit | undefined)?.method === "POST",
+      )).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
+    });
+
+    // The backend is told the view closed...
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).endsWith("/api/workflows/text_to_image_v0/runner/leases/lease-1")
+        && (init as RequestInit | undefined)?.method === "DELETE",
+      )).toBe(true);
+    });
+    // ...but nothing is canceled or force-stopped from the frontend: release
+    // is the backend's deferred, cooldown-gated decision.
+    expect(screen.queryByRole("dialog", { name: "Stop this workflow?" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("cancel"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/runner/stop"))).toBe(false);
+  });
+
+  it("keeps the tab and lease open when the backend cannot cancel every workflow run", async () => {
+    leaseAvailable = true;
+    failedCancelCount = 1;
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Stop this workflow?" });
+    expect(dialog).toHaveTextContent("stop its active generations");
+    fireEvent.click(screen.getByRole("button", { name: "Stop and close" }));
+
+    expect(await screen.findByText(/could not stop every active or queued generation/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close Text to Image workspace tab" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      String(url).includes("/runner/leases/lease-1")
+      && (init as RequestInit | undefined)?.method === "DELETE",
+    )).toBe(false);
   });
 });

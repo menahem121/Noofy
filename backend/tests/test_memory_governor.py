@@ -2369,6 +2369,23 @@ def test_cpu_backend_uses_vram_estimate_as_ram_pressure_proxy() -> None:
     assert decision.predicted_free_ram_after_mb == 1_000
 
 
+def test_eviction_candidates_prefer_closed_view_runner_over_open_view_runner() -> None:
+    # When memory is needed before the closed-view cooldown ends, the runner
+    # whose workflow views are all closed is released first; a runner still
+    # protected by an open workflow view lease ranks behind it.
+    candidates = eviction_candidates(
+        [
+            _runner("runner-open-view", RunnerMemoryClass.GPU_HEAVY, idle_vram_mb=6000, lease_count=1),
+            _runner("runner-closed-view", RunnerMemoryClass.GPU_HEAVY, idle_vram_mb=6000),
+        ]
+    )
+
+    assert [runner.runner_id for runner in candidates] == [
+        "runner-closed-view",
+        "runner-open-view",
+    ]
+
+
 def test_eviction_candidates_prefers_idle_unused_large_runners() -> None:
     candidates = eviction_candidates(
         [

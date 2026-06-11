@@ -7,12 +7,15 @@ environments without memory observation still work.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 from pathlib import Path
 from typing import Callable
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.diagnostics import DiagnosticsSink, sanitize
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.install_state import user_facing_install_message
@@ -47,6 +50,7 @@ from app.runtime.smoke_test import SmokeExecutionFixture
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
     QueuedRunnerStartKind,
+    RunnerDescriptor,
     RunnerKind,
     RunnerMemoryClass,
     QueuedRunnerStartStatus,
@@ -86,6 +90,9 @@ class WorkflowRunnerLifecycleService:
         memory_service: object | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
         workflow_summary: Callable[[WorkflowPackage], dict[str, object]] | None = None,
+        has_pending_workflow_runs: Callable[[str], bool] | None = None,
+        closed_view_auto_release_enabled: bool | None = None,
+        closed_view_release_retry_seconds: float = 10.0,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -97,6 +104,15 @@ class WorkflowRunnerLifecycleService:
         self.memory_service = memory_service
         self.imported_package_store = imported_package_store
         self.workflow_summary = workflow_summary
+        self.has_pending_workflow_runs = has_pending_workflow_runs
+        self._closed_view_auto_release_enabled = closed_view_auto_release_enabled
+        self._closed_view_release_retry_seconds = max(
+            0.01, closed_view_release_retry_seconds
+        )
+        self._closed_view_release_tasks: dict[str, asyncio.Task[None]] = {}
+        self._closed_view_release_last_outcomes: dict[
+            str, tuple[str, str, str | None]
+        ] = {}
 
     # ------------------------------------------------------------------
     # Queued start handoff and cancellation (existing)
@@ -226,7 +242,9 @@ class WorkflowRunnerLifecycleService:
 
     def close_workflow_runner_lease(self, workflow_id: str, lease_id: str) -> dict[str, object]:
         self.workflow_loader.get_package(workflow_id)
-        updated = self.runner_supervisor.close_workflow_lease(lease_id)
+        updated = self.runner_supervisor.close_workflow_lease(
+            lease_id, workflow_id=workflow_id
+        )
         if updated is None:
             self.log_store.add(
                 "warning",
@@ -254,12 +272,336 @@ class WorkflowRunnerLifecycleService:
                 "closed_view_cooldown_expires_at": updated.closed_view_cooldown_expires_at,
             },
         )
+        self._maybe_schedule_closed_view_release(updated)
         return {
             "workflow_id": workflow_id,
             "status": updated.status.value,
             "lease_id": lease_id,
             "runner": updated.model_dump(),
         }
+
+    # ------------------------------------------------------------------
+    # Closed-view cooldown release for isolated runners
+    # ------------------------------------------------------------------
+    #
+    # Closing the last workflow view starts the supervisor's closed-view
+    # cooldown. The frontend only ever closes its lease; deciding whether the
+    # bound isolated runner can actually be released stays here, after the
+    # cooldown, with live re-checks. The core runner is never released through
+    # this path, and the Memory Governor may still evict a zero-lease idle
+    # runner earlier when admission needs the memory.
+
+    _CLOSED_VIEW_RELEASABLE_STATUSES = frozenset(
+        {
+            RunnerStatus.READY,
+            RunnerStatus.IDLE,
+            RunnerStatus.IDLE_WARM,
+            RunnerStatus.CO_RESIDENT,
+            RunnerStatus.RELEASE_FAILED,
+        }
+    )
+
+    # Skip reasons the deferred release keeps retrying because the blocker is
+    # expected to clear (work finishes, streams close, transient states pass).
+    # Anything else — released elsewhere, view reopened, or a runner state the
+    # eviction reservation can never accept (failed, unreachable, unknown) —
+    # ends the retry task instead of polling forever.
+    _RETRYABLE_CLOSED_VIEW_SKIP_REASONS = frozenset(
+        {
+            "active_job",
+            "output_stream_active",
+            "runner_reserved",
+            "runner_reservation_unavailable",
+            "queued_runner_start_pending",
+            "queued_workflow_run_pending",
+            "runtime_activation_in_progress",
+        }
+        | {
+            f"runner_status_{status.value}"
+            for status in (
+                RunnerStatus.STARTING,
+                RunnerStatus.PREPARING,
+                RunnerStatus.RUNNING,
+                RunnerStatus.QUEUED,
+                RunnerStatus.QUEUED_PENDING_SWITCH,
+                RunnerStatus.QUEUED_PENDING_MEMORY,
+                RunnerStatus.RESERVING,
+                RunnerStatus.SUBMITTING,
+                RunnerStatus.STOPPING,
+                RunnerStatus.SWITCHING,
+                RunnerStatus.LOADING_MODEL,
+                RunnerStatus.RETRYING_AFTER_MEMORY_CLEANUP,
+                RunnerStatus.WAITING_FOR_MEMORY_RELEASE,
+                RunnerStatus.EVICTING_RUNNER,
+            )
+        }
+    )
+
+    @property
+    def closed_view_auto_release_enabled(self) -> bool:
+        if self._closed_view_auto_release_enabled is not None:
+            return self._closed_view_auto_release_enabled
+        return settings.closed_view_auto_release_enabled
+
+    def _maybe_schedule_closed_view_release(self, descriptor: RunnerDescriptor) -> None:
+        if not self.closed_view_auto_release_enabled:
+            return
+        if self.runner_process_coordinator is None:
+            return
+        if descriptor.kind is not RunnerKind.ISOLATED_COMFYUI:
+            return
+        if descriptor.open_workflow_lease_count > 0:
+            return
+        if descriptor.closed_view_cooldown_expires_at is None:
+            return
+        runner_id = descriptor.runner_id
+        self._closed_view_release_last_outcomes.pop(runner_id, None)
+        existing = self._closed_view_release_tasks.get(runner_id)
+        if existing is not None and not existing.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Without a running loop the deferred release cannot be scheduled;
+            # the Memory Governor's opportunistic eviction remains the fallback.
+            return
+        task = loop.create_task(self._release_closed_view_runner_when_safe(runner_id))
+        self._closed_view_release_tasks[runner_id] = task
+
+        def remove_finished_task(done: asyncio.Task[None]) -> None:
+            if self._closed_view_release_tasks.get(runner_id) is done:
+                self._closed_view_release_tasks.pop(runner_id, None)
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is not None:
+                self.log_store.add(
+                    "warning",
+                    "Closed-view runner release task failed",
+                    "runtime.runners.lifecycle_service",
+                    details={
+                        "runner_id": runner_id,
+                        "error": str(error),
+                        "error_type": type(error).__name__,
+                    },
+                )
+
+        task.add_done_callback(remove_finished_task)
+
+    async def _release_closed_view_runner_when_safe(self, runner_id: str) -> None:
+        """Keep checking an expired closed view until its runner is safe to stop."""
+        while True:
+            descriptor = self.runner_supervisor.get_runner(runner_id)
+            if (
+                descriptor.kind is not RunnerKind.ISOLATED_COMFYUI
+                or descriptor.open_workflow_lease_count > 0
+                or descriptor.closed_view_cooldown_expires_at is None
+            ):
+                return
+            delay = self.runner_supervisor.closed_view_cooldown_remaining_seconds(
+                runner_id
+            )
+            if delay is None:
+                return
+            if delay > 0:
+                # Small grace so the next check observes an expired timestamp.
+                await asyncio.sleep(delay + 0.05)
+                continue
+            if self.runner_supervisor.runtime_activation_in_progress():
+                outcome = self._closed_view_release_outcome(
+                    descriptor,
+                    status="skipped",
+                    reason="runtime_activation_in_progress",
+                )
+            else:
+                outcome = await self._try_release_closed_view_runner(descriptor)
+            if outcome["status"] == "released":
+                return
+            if (
+                outcome["status"] != "failed"
+                and outcome["reason"] not in self._RETRYABLE_CLOSED_VIEW_SKIP_REASONS
+            ):
+                return
+            # Failed stops leave the runner release_failed with its cooldown
+            # intact, so they retry alongside the transient skip reasons.
+            await asyncio.sleep(self._closed_view_release_retry_seconds)
+
+    async def release_closed_view_runners(self) -> list[dict[str, object]]:
+        """Stop isolated runners whose closed-view cooldown expired, when safe."""
+        results: list[dict[str, object]] = []
+        if not self.closed_view_auto_release_enabled:
+            return results
+        if self.runner_process_coordinator is None:
+            return results
+        if self.runner_supervisor.runtime_activation_in_progress():
+            # A ComfyUI runtime switch already owns runner teardown.
+            return results
+        for descriptor in self.runner_supervisor.expired_closed_view_runners():
+            results.append(await self._try_release_closed_view_runner(descriptor))
+        return results
+
+    async def _try_release_closed_view_runner(
+        self, descriptor: RunnerDescriptor
+    ) -> dict[str, object]:
+        runner_id = descriptor.runner_id
+        skip_reason = self._closed_view_release_skip_reason(descriptor)
+        if skip_reason is not None:
+            return self._closed_view_release_outcome(
+                descriptor, status="skipped", reason=skip_reason
+            )
+        reservation = self.runner_supervisor.reserve_runner_for_eviction(runner_id)
+        if reservation is None:
+            return self._closed_view_release_outcome(
+                descriptor, status="skipped", reason="runner_reservation_unavailable"
+            )
+        # Re-check every safety condition from live state after atomically
+        # reserving. New submissions cannot claim the runner while this
+        # eviction reservation is held.
+        current = self.runner_supervisor.get_runner(runner_id)
+        live_skip_reason = self._closed_view_release_skip_reason(
+            current,
+            expected_reservation_token=reservation.token,
+        )
+        if live_skip_reason is not None:
+            self.runner_supervisor.rollback_runner_reservation(reservation.token)
+            return self._closed_view_release_outcome(
+                current, status="skipped", reason=live_skip_reason
+            )
+        try:
+            stopped = await self.runner_process_coordinator.stop_runner(runner_id)
+        except Exception as exc:
+            self.runner_supervisor.fail_runner_memory_release(reservation.token)
+            return self._closed_view_release_outcome(
+                descriptor,
+                status="failed",
+                reason="runner_stop_error",
+                error=str(exc),
+            )
+        if stopped.status is not RunnerStatus.STOPPED:
+            self.runner_supervisor.fail_runner_memory_release(reservation.token)
+            return self._closed_view_release_outcome(
+                descriptor,
+                status="failed",
+                reason=f"runner_stop_status_{stopped.status.value}",
+            )
+        self.runner_supervisor.confirm_runner_memory_released(reservation.token)
+        self.runner_supervisor.update_runner_status(
+            runner_id, RunnerStatus.EVICTED_AFTER_COOLDOWN
+        )
+        record_metric = getattr(self.memory_service, "record_metric", None)
+        if callable(record_metric):
+            record_metric("idle_runner_released_after_closed_view_cooldown")
+        outcome = self._closed_view_release_outcome(
+            descriptor, status="released", reason="closed_view_cooldown_expired"
+        )
+        # The freed memory may unblock a queued runner start.
+        try:
+            await self.handoff_next_queued_runner_start(released_runner_id=runner_id)
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Queued runner start handoff failed after closed-view release",
+                "runtime.runners.lifecycle_service",
+                details={
+                    "runner_id": runner_id,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+        return outcome
+
+    def _closed_view_release_skip_reason(
+        self,
+        descriptor: RunnerDescriptor,
+        *,
+        expected_reservation_token: str | None = None,
+    ) -> str | None:
+        if descriptor.kind is not RunnerKind.ISOLATED_COMFYUI:
+            return "not_isolated_runner"
+        if descriptor.open_workflow_lease_count > 0:
+            return "workflow_view_reopened"
+        if descriptor.closed_view_cooldown_expires_at is None:
+            return "workflow_view_reopened"
+        if descriptor.current_job_id is not None:
+            return "active_job"
+        if descriptor.output_stream_lease_count > 0:
+            return "output_stream_active"
+        if descriptor.reservation_token not in {
+            None,
+            expected_reservation_token,
+        }:
+            return "runner_reserved"
+        allowed_statuses = self._CLOSED_VIEW_RELEASABLE_STATUSES
+        if expected_reservation_token is not None:
+            allowed_statuses = allowed_statuses | {RunnerStatus.EVICTING_RUNNER}
+        if descriptor.status not in allowed_statuses:
+            return f"runner_status_{descriptor.status.value}"
+        for bound_workflow_id in self.runner_supervisor.workflows_bound_to_runner(
+            descriptor.runner_id
+        ):
+            if (
+                self.runner_supervisor.queued_runner_start_for_workflow(bound_workflow_id)
+                is not None
+            ):
+                return "queued_runner_start_pending"
+            if self.has_pending_workflow_runs is not None and self.has_pending_workflow_runs(
+                bound_workflow_id
+            ):
+                return "queued_workflow_run_pending"
+        return None
+
+    def _closed_view_release_outcome(
+        self,
+        descriptor: RunnerDescriptor,
+        *,
+        status: str,
+        reason: str,
+        error: str | None = None,
+    ) -> dict[str, object]:
+        outcome: dict[str, object] = {
+            "runner_id": descriptor.runner_id,
+            "status": status,
+            "reason": reason,
+        }
+        if error is not None:
+            outcome["error"] = error
+        outcome_key = (status, reason, error)
+        if self._closed_view_release_last_outcomes.get(descriptor.runner_id) == outcome_key:
+            return outcome
+        self._closed_view_release_last_outcomes[descriptor.runner_id] = outcome_key
+        if status == "released":
+            message = "Released isolated workflow runner after closed-view cooldown"
+            level = "info"
+        elif status == "failed":
+            message = "Isolated workflow runner closed-view release failed"
+            level = "warning"
+        else:
+            message = "Isolated workflow runner kept after closed-view cooldown"
+            level = "info"
+        self.log_store.add(
+            level,
+            message,
+            "runtime.runners.lifecycle_service",
+            workflow_id=descriptor.last_workflow_id or descriptor.current_workflow_id,
+            details={
+                **outcome,
+                "open_workflow_lease_count": descriptor.open_workflow_lease_count,
+                "closed_view_cooldown_expires_at": descriptor.closed_view_cooldown_expires_at,
+            },
+        )
+        return outcome
+
+    async def shutdown(self) -> None:
+        """Cancel pending closed-view release tasks during backend shutdown."""
+        tasks = list(self._closed_view_release_tasks.values())
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._closed_view_release_tasks.clear()
+        self._closed_view_release_last_outcomes.clear()
 
     # ------------------------------------------------------------------
     # Install state queries

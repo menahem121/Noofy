@@ -62,6 +62,15 @@ class Settings:
     memory_release_max_poll_interval_seconds: float = float(
         os.environ.get("NOOFY_MEMORY_RELEASE_MAX_POLL_INTERVAL_SECONDS", "1.0")
     )
+    # Grace period after the last open workflow view closes before an idle
+    # isolated runner becomes eligible for automatic release.
+    closed_view_cooldown_seconds: float = float(
+        os.environ.get("NOOFY_CLOSED_VIEW_COOLDOWN_SECONDS", "90")
+    )
+    closed_view_auto_release_enabled: bool = (
+        os.environ.get("NOOFY_CLOSED_VIEW_AUTO_RELEASE_ENABLED", "1").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     noofy_trust_keys_file: str | None = os.environ.get("NOOFY_TRUST_KEYS_FILE")
     comfyui_repo_dir_override_active: bool = bool(os.environ.get("COMFYUI_REPO_DIR"))
     comfyui_python_executable_override_active: bool = bool(os.environ.get("COMFYUI_PYTHON_EXECUTABLE"))

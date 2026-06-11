@@ -331,7 +331,9 @@ def create_default_engine_service() -> EngineService:
         runtime_profile_catalog_provider=runtime_profile_state.catalog,
     )
 
-    supervisor = RunnerSupervisor()
+    supervisor = RunnerSupervisor(
+        closed_view_cooldown_seconds=settings.closed_view_cooldown_seconds,
+    )
     supervisor.register_core_runner(
         RunnerDescriptor(
             runner_id=CORE_RUNNER_ID,

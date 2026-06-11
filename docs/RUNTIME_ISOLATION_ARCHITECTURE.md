@@ -244,7 +244,8 @@ Enforcement points:
 Multiple runners may stay warm only when the Memory Governor judges co-residence safe. The full strategy lives in [MEMORY_GOVERNOR.md](MEMORY_GOVERNOR.md). Architectural points relevant here:
 
 - One resident GPU-heavy runner is the **safe fallback** when confidence is low. `unknown` and `gpu_medium` are treated conservatively as GPU-heavy until local evidence proves otherwise.
-- Compatible runners stay `idle_warm` while at least one workflow view holds a lease; closing the last lease starts a default 90-second cooldown before eviction.
+- Compatible runners stay `idle_warm` while at least one workflow view holds a lease; closing the last lease starts a default 90-second cooldown (`NOOFY_CLOSED_VIEW_COOLDOWN_SECONDS`). After the cooldown, the runner lifecycle service stops the idle isolated runner (`evicted_after_cooldown`) unless the view was reopened or work is active or queued for a workflow bound to it; skipped releases are rechecked until that protection clears. The Memory Governor may still evict the zero-lease runner earlier when admission needs the memory. The core runner is never stopped or `/free`d because a view closed (`NOOFY_CLOSED_VIEW_AUTO_RELEASE_ENABLED=0` disables the cooldown release).
+- Workflow-view leases currently have no heartbeat or TTL. Graceful tab close releases them, but an abruptly terminated frontend can leave a stale lease that biases the runner toward staying warm until Memory Governor pressure cleanup or backend restart. This is a bounded resource-retention limitation, not a path that can stop active or shared work.
 - Local memory observations are stored in mutable local app data — never written back into `.noofy` packages or immutable capsule locks.
 - Memory state surfaces to the UI through a compact `memory_status` field; structured `memory_decision` payloads sit behind developer details. Aggregate counters are exposed at `GET /api/memory-governor/metrics`.
 
