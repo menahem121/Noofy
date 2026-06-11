@@ -317,9 +317,9 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev
 
   return (
     <div className="img-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${kindLabel(item.kind)} details`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="img-modal">
+      <div className={item.kind === "3d" ? "img-modal img-modal--three-d" : "img-modal"}>
         <button className="img-modal__close icon-button" type="button" aria-label="Close" onClick={onClose}><X size={18} /></button>
-        <div className="img-modal__preview-area">
+        <div className={item.kind === "3d" ? "img-modal__preview-area img-modal__preview-area--three-d" : "img-modal__preview-area"}>
           {isMissing ? <div className="img-modal__missing"><AlertCircle size={42} /><span>Output file unavailable</span></div> : <DetailPreview item={item} contentUrl={contentUrl} />}
           {onPrev ? <button className="img-modal__nav img-modal__nav--prev" type="button" aria-label="Previous item" onClick={onPrev}><ChevronLeft size={22} /></button> : null}
           {onNext ? <button className="img-modal__nav img-modal__nav--next" type="button" aria-label="Next item" onClick={onNext}><ChevronRight size={22} /></button> : null}
@@ -355,7 +355,7 @@ function DetailPreview({ item, contentUrl }: { item: GalleryItem; contentUrl: st
   if (item.kind === "image") return <img className="img-modal__img" src={contentUrl} alt={item.prompt || item.filename} />;
   if (item.kind === "video") return <video className="gallery-detail-video" src={contentUrl} controls preload="metadata" />;
   if (item.kind === "audio") return <div className="gallery-detail-audio"><FileAudio size={64} /><strong>{item.filename}</strong><audio src={contentUrl} controls preload="metadata" /></div>;
-  if (item.kind === "3d") return <ThreeDViewer className="gallery-detail-three-d" url={contentUrl} filename={item.filename} size={item.sizeBytes} />;
+  if (item.kind === "3d") return <ThreeDViewer className="gallery-detail-three-d" url={contentUrl} filename={item.filename} size={item.sizeBytes} autoPreviewUnknownSize />;
   return <div className="gallery-detail-file"><FileText size={72} /><strong>{item.extension?.replace(".", "").toUpperCase() || "FILE"}</strong><span>{item.filename}</span></div>;
 }
 

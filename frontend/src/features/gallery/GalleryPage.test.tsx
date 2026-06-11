@@ -1,7 +1,20 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GalleryPage } from "./GalleryPage";
+
+const galleryCss = readFileSync(resolve(process.cwd(), "src/styles/gallery.css"), "utf8");
+const { createThreeDScene, disposeThreeDScene } = vi.hoisted(() => ({
+  createThreeDScene: vi.fn(),
+  disposeThreeDScene: vi.fn(),
+}));
+
+vi.mock("../three-d/threeDScene", () => ({
+  createThreeDScene,
+}));
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -21,6 +34,8 @@ describe("GalleryPage", () => {
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
+    disposeThreeDScene.mockReset();
+    createThreeDScene.mockReset().mockResolvedValue({ animations: [], dispose: disposeThreeDScene });
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/gallery")) return Promise.resolve(jsonResponse({ items, total: items.length }));
@@ -48,13 +63,23 @@ describe("GalleryPage", () => {
     expect(screen.queryByText("motion.webm")).not.toBeInTheDocument();
   });
 
-  it("filters and opens 3D models with the shared guarded viewer", async () => {
+  it("opens saved 3D models immediately in a bounded Gallery viewer", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByRole("button", { name: "3D Models" }));
     fireEvent.click(screen.getByRole("button", { name: "Open 3d model: mesh.glb" }));
 
-    expect(screen.getByRole("dialog", { name: "3D model details" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview 3D model" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "3D model details" });
+    expect(dialog.querySelector(".img-modal--three-d")).toBeInTheDocument();
+    expect(dialog.querySelector(".img-modal__preview-area--three-d")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
+    await waitFor(() => expect(createThreeDScene).toHaveBeenCalledWith(expect.anything(), "/api/gallery/three-d-1/content", "mesh.glb"));
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeEnabled();
+  });
+
+  it("keeps the Gallery 3D stage and controls inside the modal", () => {
+    expect(galleryCss).toMatch(/\.img-modal--three-d\s*\{[^}]*height:\s*min\(760px,\s*calc\(100vh - 48px\)\)/s);
+    expect(galleryCss).toMatch(/\.gallery-detail-three-d\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/s);
+    expect(galleryCss).toMatch(/\.gallery-detail-three-d \.three-d-viewer__stage\s*\{[^}]*min-height:\s*0/s);
   });
 
   it("opens a safe file detail without embedding arbitrary file content", async () => {
