@@ -117,6 +117,7 @@ import { RetainedImage } from "./RetainedImage";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
+import { ViewportMenu } from "./ViewportMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import {
   DashboardInputControl,
@@ -2217,13 +2218,18 @@ export function WorkflowRunPage({
 function ClassicWorkflowOptionsMenu({ onSwitchView }: { onSwitchView: () => void }) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsRef = useRef<HTMLDivElement | null>(null);
+  const optionsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionsMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!optionsOpen) return;
 
     function handlePointerDown(event: globalThis.PointerEvent) {
       const target = event.target;
-      if (target instanceof Node && optionsRef.current?.contains(target)) return;
+      if (
+        target instanceof Node
+        && (optionsRef.current?.contains(target) || optionsMenuRef.current?.contains(target))
+      ) return;
       setOptionsOpen(false);
     }
 
@@ -2242,6 +2248,7 @@ function ClassicWorkflowOptionsMenu({ onSwitchView }: { onSwitchView: () => void
   return (
     <div className="canvas-options-menu" ref={optionsRef}>
       <button
+        ref={optionsTriggerRef}
         className="icon-button canvas-options-menu__trigger"
         type="button"
         aria-label="Workflow options"
@@ -2252,21 +2259,23 @@ function ClassicWorkflowOptionsMenu({ onSwitchView }: { onSwitchView: () => void
       >
         <SlidersHorizontal size={16} aria-hidden="true" />
       </button>
-      {optionsOpen ? (
-        <div className="canvas-options-menu__content" role="menu" aria-label="Workflow options">
-          <button
-            className="canvas-options-menu__item"
-            role="menuitem"
-            type="button"
-            onClick={() => {
-              setOptionsOpen(false);
-              onSwitchView();
-            }}
-          >
-            Switch to Canvas view
-          </button>
-        </div>
-      ) : null}
+      <ViewportMenu
+        open={optionsOpen}
+        triggerRef={optionsTriggerRef}
+        menuRef={optionsMenuRef}
+      >
+        <button
+          className="canvas-options-menu__item"
+          role="menuitem"
+          type="button"
+          onClick={() => {
+            setOptionsOpen(false);
+            onSwitchView();
+          }}
+        >
+          Switch to Canvas view
+        </button>
+      </ViewportMenu>
     </div>
   );
 }

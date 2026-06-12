@@ -84,6 +84,7 @@ import type { LoraBrowserControlProps } from "./DashboardInputControl";
 import { DEFAULT_SEED_MODE, type SeedMode } from "../../lib/seedControl";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 import { RetainedImage } from "./RetainedImage";
+import { ViewportMenu } from "./ViewportMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
@@ -234,6 +235,8 @@ export function CanvasDashboardView({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const actionBarRef = useRef<HTMLDivElement | null>(null);
   const optionsRef = useRef<HTMLDivElement | null>(null);
+  const optionsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionsMenuRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
     controlId: string;
     handle: DashboardResizeHandle;
@@ -278,7 +281,10 @@ export function CanvasDashboardView({
 
     function handlePointerDown(event: globalThis.PointerEvent) {
       const target = event.target;
-      if (target instanceof Node && optionsRef.current?.contains(target)) return;
+      if (
+        target instanceof Node
+        && (optionsRef.current?.contains(target) || optionsMenuRef.current?.contains(target))
+      ) return;
       setOptionsOpen(false);
     }
 
@@ -625,6 +631,7 @@ export function CanvasDashboardView({
               </button>
               <div className="canvas-options-menu" ref={optionsRef}>
                 <button
+                  ref={optionsTriggerRef}
                   className="icon-button canvas-options-menu__trigger"
                   type="button"
                   aria-label="Workflow options"
@@ -636,77 +643,79 @@ export function CanvasDashboardView({
                   <SlidersHorizontal size={16} aria-hidden="true" />
                 </button>
 
-                {optionsOpen ? (
-                  <div className="canvas-options-menu__content" role="menu" aria-label="Workflow options">
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setOptionsOpen(false);
-                        onSwitchView();
-                      }}
-                    >
-                      Switch to Classic view
-                    </button>
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setOptionsOpen(false);
-                        setExportDialog({ extension: ".noofy", url: exportNoofyUrl });
-                      }}
-                    >
-                      Export the Noofy workflow
-                    </button>
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setOptionsOpen(false);
-                        setExportDialog({ extension: ".json", url: exportComfyJsonUrl });
-                      }}
-                    >
-                      Export ComfyUI JSON
-                    </button>
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        onEnterEditLayout();
-                        setOptionsOpen(false);
-                      }}
-                    >
-                      Edit dashboard layout
-                    </button>
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      disabled={!onEditWidgets}
-                      onClick={() => {
-                        onEditWidgets?.();
-                        setOptionsOpen(false);
-                      }}
-                    >
-                      Edit widgets
-                    </button>
-                    <button
-                      className="canvas-options-menu__item"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        onRestoreDefaults();
-                        setOptionsOpen(false);
-                      }}
-                    >
-                      Restore dashboard to the workflow default values
-                    </button>
-                  </div>
-                ) : null}
+                <ViewportMenu
+                  open={optionsOpen}
+                  triggerRef={optionsTriggerRef}
+                  menuRef={optionsMenuRef}
+                >
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setOptionsOpen(false);
+                      onSwitchView();
+                    }}
+                  >
+                    Switch to Classic view
+                  </button>
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setOptionsOpen(false);
+                      setExportDialog({ extension: ".noofy", url: exportNoofyUrl });
+                    }}
+                  >
+                    Export the Noofy workflow
+                  </button>
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setOptionsOpen(false);
+                      setExportDialog({ extension: ".json", url: exportComfyJsonUrl });
+                    }}
+                  >
+                    Export ComfyUI JSON
+                  </button>
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      onEnterEditLayout();
+                      setOptionsOpen(false);
+                    }}
+                  >
+                    Edit dashboard layout
+                  </button>
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    disabled={!onEditWidgets}
+                    onClick={() => {
+                      onEditWidgets?.();
+                      setOptionsOpen(false);
+                    }}
+                  >
+                    Edit widgets
+                  </button>
+                  <button
+                    className="canvas-options-menu__item"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      onRestoreDefaults();
+                      setOptionsOpen(false);
+                    }}
+                  >
+                    Restore dashboard to the workflow default values
+                  </button>
+                </ViewportMenu>
               </div>
               {runState.memoryLoaded ? <CanvasMemoryLoadedPill /> : null}
               {(runState.showStatusNotice || (!runState.canRun && runState.disabledReason)) ? (
