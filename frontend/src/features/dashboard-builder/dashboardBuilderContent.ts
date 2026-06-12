@@ -446,6 +446,12 @@ export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): strin
   if (value.valueKind === "note") return nodeTitle || "Note";
   if (value.valueKind === "three_d_input" || value.valueKind === "three_d_output") return "3D model";
   if (isRefinementLevelValue(value)) return "Refinement Level";
+  if (
+    value.inputName.toLowerCase() === "text" &&
+    ["positive prompt", "negative prompt", "prompt"].includes(value.label.toLowerCase())
+  ) {
+    return value.label;
+  }
 
   const labelMap: Record<string, string> = {
     text: nodeTitle.toLowerCase().includes("negative") ? "Negative prompt" : "Prompt",
@@ -811,6 +817,7 @@ export function workflowFromBindableInputs(
       options?: string[];
       hint?: string;
       auto_select?: boolean;
+      suggested_label?: string;
     }>;
   }>
 ): MockWorkflow {
@@ -861,7 +868,7 @@ export function workflowFromBindableInputs(
       id: `node-${node.node_id}-${inp.input_name}`,
       nodeId: node.node_id,
       inputName: inp.input_name,
-      label: inp.input_name,
+      label: inp.suggested_label ?? inp.input_name,
       valueKind: valueKindFromString(inp.kind),
       rawValue: inp.current_value,
       hint: inp.hint,

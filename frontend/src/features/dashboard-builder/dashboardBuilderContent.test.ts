@@ -580,6 +580,31 @@ describe("normalizeDashboardSchema", () => {
 });
 
 describe("workflowFromBindableInputs", () => {
+  it("uses backend graph-derived prompt labels for generated widget titles", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "6",
+        node_type: "CLIPTextEncode",
+        node_title: "Misleading negative title",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: "a lake",
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+            suggested_label: "Positive prompt",
+          },
+        ],
+      },
+    ]);
+
+    expect(workflow.nodes[0].values[0].label).toBe("Positive prompt");
+    expect(buildInitialDashboard(workflow).widgets[0].title).toBe("Positive prompt");
+  });
+
   it("preselects detected ComfyUI Note nodes as dashboard-only note cards", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {

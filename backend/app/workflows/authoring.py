@@ -715,6 +715,11 @@ def _classify_graph_inputs(
                 input_record["options"] = option_spec.options
             if option_spec.tooltip:
                 input_record["hint"] = option_spec.tooltip
+            if node_type == "CLIPTextEncode" and input_name == "text":
+                input_record["suggested_label"] = _clip_text_prompt_label(
+                    graph,
+                    node_id_str,
+                )
             scalar_inputs.append(input_record)
 
         if scalar_inputs:
@@ -739,6 +744,98 @@ def _classify_graph_inputs(
         seen_note_node_ids.add(node_id)
 
     return nodes
+
+
+def _clip_text_prompt_label(graph: Mapping[str, Any], node_id: str) -> str:
+    roles = _downstream_prompt_roles(graph, node_id)
+    if roles == {"positive"}:
+        return "Positive prompt"
+    if roles == {"negative"}:
+        return "Negative prompt"
+    return "Prompt"
+
+
+def _downstream_prompt_roles(
+    graph: Mapping[str, Any],
+    source_node_id: str,
+) -> set[str]:
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    node_types: dict[str, str] = {}
+
+    for raw_node_id, raw_node in graph.items():
+        if not isinstance(raw_node, Mapping):
+            continue
+        node_id = str(raw_node_id)
+        node_types[node_id] = str(
+            raw_node.get("class_type") or raw_node.get("type") or ""
+        )
+        raw_inputs = raw_node.get("inputs")
+        if not isinstance(raw_inputs, Mapping):
+            continue
+        for input_name, value in raw_inputs.items():
+            linked_node_id = _linked_source_node_id(value)
+            if linked_node_id is None:
+                continue
+            outgoing.setdefault(linked_node_id, []).append(
+                (node_id, str(input_name))
+            )
+
+    roles: set[str] = set()
+    pending = [source_node_id]
+    visited = {source_node_id}
+    while pending:
+        current_node_id = pending.pop()
+        for downstream_node_id, input_name in outgoing.get(current_node_id, []):
+            role = _prompt_role_for_connection(
+                node_types.get(downstream_node_id, ""),
+                input_name,
+            )
+            if role is not None:
+                roles.add(role)
+                if len(roles) > 1:
+                    return roles
+                continue
+            if not _is_conditioning_passthrough_input(input_name):
+                continue
+            if downstream_node_id not in visited:
+                visited.add(downstream_node_id)
+                pending.append(downstream_node_id)
+    return roles
+
+
+def _linked_source_node_id(value: Any) -> str | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not isinstance(value[0], (str, int))
+        or not isinstance(value[1], int)
+    ):
+        return None
+    return str(value[0])
+
+
+def _prompt_role_for_connection(node_type: str, input_name: str) -> str | None:
+    normalized_input = input_name.casefold().replace("-", "_").replace(" ", "_")
+    input_tokens = {token for token in normalized_input.split("_") if token}
+    has_positive = "positive" in input_tokens
+    has_negative = "negative" in input_tokens
+    if has_positive != has_negative:
+        return "positive" if has_positive else "negative"
+
+    normalized_node_type = "".join(
+        character for character in node_type.casefold() if character.isalnum()
+    )
+    if normalized_node_type == "basicguider" and normalized_input == "conditioning":
+        return "positive"
+    return None
+
+
+def _is_conditioning_passthrough_input(input_name: str) -> bool:
+    normalized = input_name.casefold().replace("-", "_").replace(" ", "_")
+    return any(
+        token == "conditioning" or token.startswith("conditioning")
+        for token in normalized.split("_")
+    )
 
 
 def _classified_note_node(node_id: str, node: Mapping[str, Any]) -> dict[str, Any]:

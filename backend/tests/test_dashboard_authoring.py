@@ -883,6 +883,109 @@ def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     assert text_inputs, "text input should be classified"
 
 
+def test_classify_graph_inputs_labels_clip_text_from_downstream_prompt_role() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "CLIPTextEncode",
+                "_meta": {"title": "Misleading negative title"},
+                "inputs": {"text": "content is not inspected", "clip": ["10", 0]},
+            },
+            "2": {
+                "class_type": "CLIPTextEncode",
+                "_meta": {"title": "Misleading positive title"},
+                "inputs": {"text": "", "clip": ["10", 0]},
+            },
+            "3": {
+                "class_type": "ConditioningSetArea",
+                "inputs": {"conditioning": ["1", 0], "width": 512},
+            },
+            "4": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "positive": ["3", 0],
+                    "negative": ["2", 0],
+                },
+            },
+        }
+    )
+
+    labels = {
+        node["node_id"]: next(
+            input_record["suggested_label"]
+            for input_record in node["inputs"]
+            if input_record["input_name"] == "text"
+        )
+        for node in nodes
+        if node["node_type"] == "CLIPTextEncode"
+    }
+    assert labels == {"1": "Positive prompt", "2": "Negative prompt"}
+
+
+def test_classify_graph_inputs_labels_basic_guider_conditioning_as_positive() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "hello", "clip": ["10", 0]},
+            },
+            "2": {
+                "class_type": "BasicGuider",
+                "inputs": {"conditioning": ["1", 0], "model": ["10", 0]},
+            },
+        }
+    )
+
+    assert nodes[0]["inputs"][0]["suggested_label"] == "Positive prompt"
+
+
+@pytest.mark.parametrize(
+    "downstream_nodes",
+    [
+        {},
+        {
+            "2": {
+                "class_type": "ConditioningSetArea",
+                "inputs": {"conditioning": ["1", 0]},
+            },
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "positive": ["2", 0],
+                    "negative": ["2", 0],
+                },
+            },
+        },
+        {
+            "2": {
+                "class_type": "UnknownMultiOutputNode",
+                "inputs": {"value": ["1", 0]},
+            },
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {"positive": ["2", 1]},
+            },
+        },
+    ],
+    ids=["unclassified", "ambiguous", "unrelated-intermediate"],
+)
+def test_classify_graph_inputs_uses_generic_prompt_label_without_single_role(
+    downstream_nodes: dict[str, Any],
+) -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "1": {
+                "class_type": "CLIPTextEncode",
+                "_meta": {"title": "Negative prompt"},
+                "inputs": {"text": "blurry", "clip": ["10", 0]},
+            },
+            **downstream_nodes,
+        }
+    )
+
+    assert nodes[0]["inputs"][0]["suggested_label"] == "Prompt"
+
+
 def test_get_bindable_inputs_includes_image_output_widgets(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)
