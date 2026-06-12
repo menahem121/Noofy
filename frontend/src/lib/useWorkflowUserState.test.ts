@@ -145,7 +145,7 @@ describe("useWorkflowUserState", () => {
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(remote)));
 
     const { result } = renderHook(() =>
-      useWorkflowUserState("wf-1", {}, "1.0", new Map()),
+      useWorkflowUserState("wf-1", {}, "1.0", new Map(), ["ctrl-1"]),
     );
     await waitFor(() => expect(result.current.hasLayoutOverrides).toBe(false));
 
@@ -200,7 +200,7 @@ describe("useWorkflowUserState", () => {
     fetchMock.mockResolvedValue(jsonResponse(afterDelete));
 
     const { result } = renderHook(() =>
-      useWorkflowUserState("wf-1", {}, "1.0", new Map()),
+      useWorkflowUserState("wf-1", {}, "1.0", new Map(), ["ctrl-1"]),
     );
     await waitFor(() => expect(result.current.hasLayoutOverrides).toBe(true));
     expect(result.current.actionBarPositionOverride).toEqual({ x: 30, y: 40 });
@@ -300,6 +300,107 @@ describe("useWorkflowUserState", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("merges package context changes locally without refetching or reverting edits", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+      values: { prompt: "remote text", removed: "old value" },
+      layout_overrides: {
+        "keep-layout": { x: 1, y: 0, w: 4, h: 2 },
+        "drop-layout": { x: 2, y: 0, w: 4, h: 2 },
+      },
+      output_preferences: {
+        "keep-output": { auto_save: true },
+        "drop-output": { auto_save: true },
+      },
+    };
+    fetchMock.mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return Promise.resolve(jsonResponse(remote));
+      return Promise.resolve(jsonResponse(remote));
+    });
+
+    const { result, rerender } = renderHook(
+      ({
+        defaults,
+        version,
+        inputIndex,
+        layoutIds,
+        outputIds,
+      }: {
+        defaults: Record<string, unknown>;
+        version: string;
+        inputIndex: Map<string, WorkflowInputDef>;
+        layoutIds: string[];
+        outputIds: string[];
+      }) => useWorkflowUserState("wf-1", defaults, version, inputIndex, layoutIds, outputIds),
+      {
+        initialProps: {
+          defaults: { prompt: "creator prompt", removed: "creator old" } as Record<string, unknown>,
+          version: "1.0",
+          inputIndex: makeInputIndex("prompt", "removed"),
+          layoutIds: ["keep-layout", "drop-layout"],
+          outputIds: ["keep-output", "drop-output"],
+        },
+      },
+    );
+    await waitFor(() => expect(result.current.values.prompt).toBe("remote text"));
+    expect(result.current.loaded).toBe(true);
+
+    act(() => result.current.setValue("prompt", "edited locally"));
+    rerender({
+      defaults: { prompt: "new creator prompt", added: "new default" },
+      version: "1.1",
+      inputIndex: makeInputIndex("prompt", "added"),
+      layoutIds: ["keep-layout"],
+      outputIds: ["keep-output"],
+    });
+
+    expect(result.current.loaded).toBe(true);
+    await waitFor(() => {
+      expect(result.current.values).toEqual({
+        prompt: "edited locally",
+        added: "new default",
+      });
+    });
+    expect(result.current.layoutOverrides).toEqual({
+      "keep-layout": { x: 1, y: 0, w: 4, h: 2 },
+    });
+    expect(result.current.outputPreferences).toEqual({
+      "keep-output": { auto_save: true },
+    });
+    expect(fetchMock.mock.calls.filter(([, init]) => !init?.method || init.method === "GET")).toHaveLength(1);
+
+    await act(async () => vi.advanceTimersByTime(700));
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(putCall).toBeDefined();
+    expect(JSON.parse((putCall![1] as RequestInit).body as string).values).toEqual({
+      prompt: "edited locally",
+      added: "new default",
+    });
+  });
+
+  it("flushes a pending debounced save when the hook unmounts", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+      values: { prompt: "remote text" },
+    };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(remote)));
+
+    const { result, unmount } = renderHook(() =>
+      useWorkflowUserState("wf-1", { prompt: "creator prompt" }, "1.0", makeInputIndex("prompt")),
+    );
+    await waitFor(() => expect(result.current.values.prompt).toBe("remote text"));
+
+    act(() => result.current.setValue("prompt", "edited before leaving"));
+    unmount();
+
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(putCall).toBeDefined();
+    expect(JSON.parse((putCall![1] as RequestInit).body as string).values.prompt)
+      .toBe("edited before leaving");
+  });
+
   it("setValue does not clobber existing layout overrides", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),
@@ -311,7 +412,7 @@ describe("useWorkflowUserState", () => {
     fetchMock.mockResolvedValue(jsonResponse(remote));
 
     const { result } = renderHook(() =>
-      useWorkflowUserState("wf-1", {}, "1.0", makeInputIndex("prompt")),
+      useWorkflowUserState("wf-1", {}, "1.0", makeInputIndex("prompt"), ["ctrl-1"]),
     );
     await waitFor(() => expect(result.current.hasLayoutOverrides).toBe(true));
 

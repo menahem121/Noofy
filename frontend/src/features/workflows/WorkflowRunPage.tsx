@@ -138,7 +138,7 @@ interface WorkflowRunPageProps {
 }
 
 interface RunPageState {
-  loading: boolean;
+  firstLoadedWorkflowId: string | null;
   workflowStatus: WorkflowStatusResponse | null;
   modelSummary: RequiredModelSummary | null;
   packageData: WorkflowPackageResponse | null;
@@ -217,7 +217,7 @@ interface LoraBrowserDialogState {
 }
 
 const initialState: RunPageState = {
-  loading: true,
+  firstLoadedWorkflowId: null,
   workflowStatus: null,
   modelSummary: null,
   packageData: null,
@@ -360,51 +360,63 @@ export function WorkflowRunPage({
     };
   }, [runComparisonInputAssetId]);
 
+  // A workflow prop change renders before the reset effect below runs. Keep
+  // the previous workflow's requirements out of reconciliation and UI.
+  const loadedWorkflowStateMatches = state.firstLoadedWorkflowId === workflowId;
+  const packageDataForWorkflow =
+    loadedWorkflowStateMatches ? state.packageData : null;
+  const workflowStatusForWorkflow =
+    loadedWorkflowStateMatches ? state.workflowStatus : null;
+  const modelSummaryForWorkflow =
+    loadedWorkflowStateMatches ? state.modelSummary : null;
+  const validationForWorkflow =
+    loadedWorkflowStateMatches ? state.validation : null;
+
   // Build input index from package data.
   const inputIndex = useMemo<Map<string, WorkflowInputDef>>(() => {
     const map = new Map<string, WorkflowInputDef>();
-    for (const input of state.packageData?.inputs ?? []) {
+    for (const input of packageDataForWorkflow?.inputs ?? []) {
       map.set(input.id, input);
     }
     return map;
-  }, [state.packageData]);
+  }, [packageDataForWorkflow]);
 
   // Build output index.
   const outputIndex = useMemo<Map<string, WorkflowOutputDef>>(() => {
     const map = new Map<string, WorkflowOutputDef>();
-    for (const output of state.packageData?.outputs ?? []) {
+    for (const output of packageDataForWorkflow?.outputs ?? []) {
       map.set(output.id, output);
     }
     return map;
-  }, [state.packageData]);
+  }, [packageDataForWorkflow]);
 
   // Collect creator defaults from package data.
   const packageDefaults = useMemo<Record<string, unknown>>(() => {
     const defaults: Record<string, unknown> = {};
-    for (const input of state.packageData?.inputs ?? []) {
+    for (const input of packageDataForWorkflow?.inputs ?? []) {
       defaults[input.id] = defaultValueForWorkflowInput(input);
     }
     return defaults;
-  }, [state.packageData]);
+  }, [packageDataForWorkflow]);
 
   const allControls = useMemo(
-    () => state.packageData?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
-    [state.packageData],
+    () => packageDataForWorkflow?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
+    [packageDataForWorkflow],
   );
   const allGroups = useMemo(
-    () => state.packageData?.dashboard?.sections.flatMap((section) => section.groups ?? []) ?? [],
-    [state.packageData],
+    () => packageDataForWorkflow?.dashboard?.sections.flatMap((section) => section.groups ?? []) ?? [],
+    [packageDataForWorkflow],
   );
   const topLevelItems = useMemo(
     () =>
-      state.packageData?.dashboard?.sections.flatMap((section) =>
+      packageDataForWorkflow?.dashboard?.sections.flatMap((section) =>
         topLevelDashboardControlItems(section.controls, section.groups ?? []),
       ) ?? [],
-    [state.packageData],
+    [packageDataForWorkflow],
   );
   const dashboardVersion = useMemo(
-    () => dashboardUserStateVersion(state.packageData),
-    [state.packageData],
+    () => dashboardUserStateVersion(packageDataForWorkflow),
+    [packageDataForWorkflow],
   );
   const dashboardControlIds = useMemo(() => allControls.map((control) => control.id), [allControls]);
   const dashboardLayoutIds = useMemo(() => topLevelItems.map((item) => item.id), [topLevelItems]);
@@ -446,16 +458,16 @@ export function WorkflowRunPage({
   }
 
   const submittedInputValues = useMemo(
-    () => normalizedLoraInputValues(state.packageData, inputValues),
-    [state.packageData, inputValues],
+    () => normalizedLoraInputValues(packageDataForWorkflow, inputValues),
+    [packageDataForWorkflow, inputValues],
   );
   const activeModelSummary = useMemo(
-    () => activeRequiredModelSummary(state.modelSummary, state.packageData, submittedInputValues),
-    [state.modelSummary, state.packageData, submittedInputValues],
+    () => activeRequiredModelSummary(modelSummaryForWorkflow, packageDataForWorkflow, submittedInputValues),
+    [modelSummaryForWorkflow, packageDataForWorkflow, submittedInputValues],
   );
   const activeValidation = useMemo(
-    () => activeWorkflowValidation(state.validation, state.packageData, submittedInputValues),
-    [state.validation, state.packageData, submittedInputValues],
+    () => activeWorkflowValidation(validationForWorkflow, packageDataForWorkflow, submittedInputValues),
+    [validationForWorkflow, packageDataForWorkflow, submittedInputValues],
   );
 
   // Build output-images-by-node-id map for canvas output widgets.
@@ -519,8 +531,8 @@ export function WorkflowRunPage({
     [state.result],
   );
   const classicPreviewMedia = useMemo(
-    () => selectClassicPreviewMedia(allControls, state.packageData?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputThreeDsByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputThreeDs, outputFiles),
-    [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputThreeDs, outputThreeDsByNodeId, outputVideos, outputVideosByNodeId, state.packageData?.outputs],
+    () => selectClassicPreviewMedia(allControls, packageDataForWorkflow?.outputs ?? [], outputImagesByNodeId, outputAudiosByNodeId, outputVideosByNodeId, outputThreeDsByNodeId, outputFilesByNodeId, outputImages, outputAudios, outputVideos, outputThreeDs, outputFiles),
+    [allControls, outputAudios, outputAudiosByNodeId, outputFiles, outputFilesByNodeId, outputImages, outputImagesByNodeId, outputThreeDs, outputThreeDsByNodeId, outputVideos, outputVideosByNodeId, packageDataForWorkflow?.outputs],
   );
   const activeLivePreview = livePreview?.data_url ? livePreview : null;
   const classicVisualImageUrl = activeLivePreview?.data_url
@@ -588,7 +600,7 @@ export function WorkflowRunPage({
   async function loadRequirements() {
     const targetWorkflowId = workflowId;
     const loadSequence = ++requirementsLoadSequenceRef.current;
-    setState((current) => ({ ...current, loading: true, error: null, packageLoadError: null }));
+    setState((current) => ({ ...current, error: null, packageLoadError: null }));
     try {
       const [workflowStatus, packageResult, modelSummary, apiKeySettings] = await Promise.all([
         fetchWorkflowStatus(targetWorkflowId).catch(() => null),
@@ -611,7 +623,7 @@ export function WorkflowRunPage({
       }
       setState((current) => ({
         ...current,
-        loading: false,
+        firstLoadedWorkflowId: targetWorkflowId,
         workflowStatus,
         modelSummary,
         packageData: packageResult.packageData,
@@ -628,7 +640,7 @@ export function WorkflowRunPage({
       }
       setState((current) => ({
         ...current,
-        loading: false,
+        firstLoadedWorkflowId: targetWorkflowId,
         workflowStatus: null,
         modelSummary: null,
         packageData: null,
@@ -642,6 +654,17 @@ export function WorkflowRunPage({
 
   useEffect(() => {
     void runtimeStatus.refreshRuntime({ silent: true });
+    setState((current) => ({
+      ...current,
+      firstLoadedWorkflowId: null,
+      workflowStatus: null,
+      modelSummary: null,
+      packageData: null,
+      apiKeySettings: null,
+      validation: null,
+      error: null,
+      packageLoadError: null,
+    }));
     void loadRequirements();
     setRequiredModelsModalOpen(false);
     setModelDownloadJob(null);
@@ -782,7 +805,7 @@ export function WorkflowRunPage({
       return;
     }
 
-    const shouldTrackPreparation = shouldShowRunPreparationDialog(state.workflowStatus);
+    const shouldTrackPreparation = shouldShowRunPreparationDialog(workflowStatusForWorkflow);
     let stopPreparationPolling: (() => void) | null = null;
     const stopPreparationTracking = () => {
       if (!stopPreparationPolling) return;
@@ -812,7 +835,7 @@ export function WorkflowRunPage({
     }
     const outputPreferencesSnapshot = getOutputPreferencesSnapshot();
     const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
-      state.packageData,
+      packageDataForWorkflow,
       allControls,
       submittedValuesSnapshot,
     );
@@ -1039,11 +1062,11 @@ export function WorkflowRunPage({
     const civitaiConfigured = Boolean(state.apiKeySettings?.providers?.civitai?.configured);
     const disabledReason = !civitaiConfigured
       ? "Requires a CivitAI API key. Add one in Settings to search and download LoRAs."
-      : !state.packageData
+      : !packageDataForWorkflow
         ? "Workflow context is still loading."
         : undefined;
     return {
-      enabled: civitaiConfigured && Boolean(state.packageData),
+      enabled: civitaiConfigured && Boolean(packageDataForWorkflow),
       disabledReason,
       extraOptions: downloadedLoraOptions[input.id] ?? [],
       onOpen: () => setLoraBrowserDialog({ control, input }),
@@ -1423,11 +1446,11 @@ export function WorkflowRunPage({
 
   const unresolvedModelSummary = activeModelSummary?.models.filter((model) => model.status !== "available") ?? [];
   const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : activeValidation?.missing_models ?? [];
-  const workflowSummary = state.workflowStatus?.workflow;
-  const workflowNameSource = workflowSummary ?? state.packageData?.metadata ?? state.packageData;
+  const workflowSummary = workflowStatusForWorkflow?.workflow;
+  const workflowNameSource = workflowSummary ?? packageDataForWorkflow?.metadata ?? packageDataForWorkflow;
   const workflowDisplayTitle = workflowDisplayName(workflowNameSource);
   const dashboardSetupRequired = Boolean(
-    state.packageData && packageNeedsDashboardSetup(state.packageData, workflowSummary),
+    packageDataForWorkflow && packageNeedsDashboardSetup(packageDataForWorkflow, workflowSummary),
   );
   const trust = workflowSummary?.trust;
 
@@ -1436,25 +1459,25 @@ export function WorkflowRunPage({
     const name = workflowDisplayName(workflowNameSource);
     if (name) onWorkflowNameChange?.(name);
   }, [
-    state.packageData?.display_name,
-    state.packageData?.metadata?.display_name,
-    state.packageData?.metadata?.name,
+    packageDataForWorkflow?.display_name,
+    packageDataForWorkflow?.metadata?.display_name,
+    packageDataForWorkflow?.metadata?.name,
     workflowSummary?.display_name,
     workflowSummary?.name,
     workflowNameSource,
   ]);
 
   useLayoutEffect(() => {
-    if (!dashboardSetupRequired || !state.packageData || !onConfigureDashboard) return;
+    if (!dashboardSetupRequired || !packageDataForWorkflow || !onConfigureDashboard) return;
     const redirectKey = [
       workflowId,
-      state.packageData.dashboard.status,
-      dashboardUserStateVersion(state.packageData),
+      packageDataForWorkflow.dashboard.status,
+      dashboardUserStateVersion(packageDataForWorkflow),
     ].join(":");
     if (dashboardSetupRouteRequestedRef.current === redirectKey) return;
     dashboardSetupRouteRequestedRef.current = redirectKey;
     onConfigureDashboard(workflowId, workflowDisplayTitle);
-  }, [dashboardSetupRequired, onConfigureDashboard, state.packageData, workflowDisplayTitle, workflowId]);
+  }, [dashboardSetupRequired, onConfigureDashboard, packageDataForWorkflow, workflowDisplayTitle, workflowId]);
 
   // A backend lease is what protects this workflow's isolated runner from
   // closed-view release while the tab stays open. Isolated runners often bind
@@ -1463,14 +1486,14 @@ export function WorkflowRunPage({
   // changes while no usable lease is held.
   const tabRuntime = workflowTabs?.runtimeByWorkflowId[workflowId];
   const heldRunnerLeaseId = tabRuntime?.runnerLeaseId ?? null;
-  const boundRunnerId = runnerIdFromLease(state.workflowStatus?.runner ?? null);
+  const boundRunnerId = runnerIdFromLease(workflowStatusForWorkflow?.runner ?? null);
   const staleRunnerLease = Boolean(
     heldRunnerLeaseId && boundRunnerId && tabRuntime?.runnerId && tabRuntime.runnerId !== boundRunnerId,
   );
   const trackedRunHandleForLease = tabRuntime?.activeJobId ?? tabRuntime?.queueId ?? null;
 
   useEffect(() => {
-    if (!workflowTabs || !state.packageData || dashboardSetupRequired) return;
+    if (!workflowTabs || !packageDataForWorkflow || dashboardSetupRequired) return;
     if (heldRunnerLeaseId && !staleRunnerLease) return;
     if (runnerLeaseRequestRef.current === workflowId) return;
     let canceled = false;
@@ -1510,7 +1533,7 @@ export function WorkflowRunPage({
     };
   }, [
     workflowId,
-    Boolean(state.packageData),
+    Boolean(packageDataForWorkflow),
     dashboardSetupRequired,
     heldRunnerLeaseId,
     staleRunnerLease,
@@ -1518,8 +1541,8 @@ export function WorkflowRunPage({
     trackedRunHandleForLease,
   ]);
 
-  const installStatus = typeof state.workflowStatus?.install?.status === "string"
-    ? state.workflowStatus.install.status
+  const installStatus = typeof workflowStatusForWorkflow?.install?.status === "string"
+    ? workflowStatusForWorkflow.install.status
     : null;
   const memoryStatus = activeMemoryStatus;
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
@@ -1537,12 +1560,13 @@ export function WorkflowRunPage({
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
-  const workflowValuesReady = !state.loading && userStateLoaded;
+  const initialLoadPending = state.firstLoadedWorkflowId !== workflowId;
+  const workflowValuesReady = !initialLoadPending && userStateLoaded;
   // An active run does not disable Run: pressing it again queues another run
   // behind the current one. Only real blockers gate the button.
   const canRun = Boolean(
     workflowValuesReady
-      && state.workflowStatus?.can_prepare !== false
+      && workflowStatusForWorkflow?.can_prepare !== false
       && activeValidation?.valid
       && activeModelSummary?.ready_to_run !== false
       && !backendKnownUnreachable
@@ -1567,7 +1591,7 @@ export function WorkflowRunPage({
         missingModels,
         modelSummaryReady: activeModelSummary?.ready_to_run,
         validation: activeValidation,
-        workflowStatus: state.workflowStatus,
+        workflowStatus: workflowStatusForWorkflow,
       });
   const canCancel = Boolean(
     (remainingTrackedRunCount > 0 || (isRunning && (state.job || activeCancelableRunHandle))) && !isBlockedByMemory,
@@ -1606,12 +1630,12 @@ export function WorkflowRunPage({
   );
 
   const hasDashboard = Boolean(
-    state.packageData?.dashboard?.status === "configured" && allControls.length > 0,
+    packageDataForWorkflow?.dashboard?.status === "configured" && allControls.length > 0,
   );
-  const showCanvasView = viewMode === "canvas" && (state.loading || hasDashboard);
+  const showCanvasView = viewMode === "canvas" && (initialLoadPending || hasDashboard);
   const isEditingLayout = draftLayoutOverrides !== null;
   const creatorActionBarPosition = actionBarPositionFromDashboard(
-    state.packageData?.dashboard?.presentation?.action_bar,
+    packageDataForWorkflow?.dashboard?.presentation?.action_bar,
   );
   const userActionBarPosition = actionBarPositionFromDashboard(actionBarPositionOverride);
   const canvasActionBarPosition = draftActionBarTouched
@@ -1646,10 +1670,10 @@ export function WorkflowRunPage({
       for (const [controlId, layout] of entries) {
         await setLayoutOverride(controlId, layout);
       }
-      if (draftActionBarTouched && draftActionBarPosition && state.packageData) {
+      if (draftActionBarTouched && draftActionBarPosition && packageDataForWorkflow) {
         await saveDashboard(
           workflowId,
-          dashboardSavePayloadWithActionBarPosition(state.packageData, draftActionBarPosition),
+          dashboardSavePayloadWithActionBarPosition(packageDataForWorkflow, draftActionBarPosition),
         );
         await setActionBarPositionOverride(draftActionBarPosition);
         setState((current) => updatePackageActionBarPosition(current, draftActionBarPosition));
@@ -1901,12 +1925,12 @@ export function WorkflowRunPage({
   ) : null;
   const exportReview: WorkflowExportReviewModel = {
     name: workflowDisplayTitle,
-    description: state.packageData?.metadata?.description ?? workflowSummary?.description ?? "",
-    author: state.packageData?.metadata?.author ?? "",
-    website: state.packageData?.metadata?.website ?? "",
-    category: state.packageData?.metadata?.category ?? workflowSummary?.category ?? "",
-    tags: state.packageData?.metadata?.tags ?? workflowSummary?.tags ?? [],
-    icon: state.packageData?.metadata?.icon ?? workflowSummary?.icon ?? "",
+    description: packageDataForWorkflow?.metadata?.description ?? workflowSummary?.description ?? "",
+    author: packageDataForWorkflow?.metadata?.author ?? "",
+    website: packageDataForWorkflow?.metadata?.website ?? "",
+    category: packageDataForWorkflow?.metadata?.category ?? workflowSummary?.category ?? "",
+    tags: packageDataForWorkflow?.metadata?.tags ?? workflowSummary?.tags ?? [],
+    icon: packageDataForWorkflow?.metadata?.icon ?? workflowSummary?.icon ?? "",
     source: workflowSummary?.source_label ?? workflowSummary?.trust?.label ?? "Noofy workflow",
     requiredModels: activeModelSummary?.models?.map((model) => ({
       name: model.filename,
@@ -2110,7 +2134,7 @@ export function WorkflowRunPage({
           ) : (
             <FallbackInputs
               inputValues={inputValues}
-              inputs={state.packageData?.inputs ?? []}
+              inputs={packageDataForWorkflow?.inputs ?? []}
               onChange={(id, value) => setInputValue(id, value)}
             />
           )}
@@ -2147,7 +2171,7 @@ export function WorkflowRunPage({
               <h2>Preview</h2>
               {previewProgressMessage ? <p>{previewProgressMessage}</p> : null}
             </div>
-            {state.validation?.valid ? (
+            {activeValidation?.valid ? (
               <span className="mini-status">
                 <CheckCircle2 size={13} aria-hidden="true" />
                 Ready
@@ -4567,6 +4591,7 @@ function buildDashboardSchemaForEditing(
         options: stringArrayValidation(input.validation.options),
         acceptedExtensions: stringArrayValidation(input.validation.accepted_extensions),
         acceptedMimeTypes: stringArrayValidation(input.validation.accepted_mime_types),
+        ...(control.type === "seed_widget" ? { seedMode: seedModeFromValidation(input.validation) } : {}),
         layout,
       });
       continue;

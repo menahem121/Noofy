@@ -1114,13 +1114,20 @@ describe("WorkflowRunPage", () => {
   });
 
   it("refreshes LoRA options and auto-selects the downloaded LoRA when the value is unchanged", async () => {
+    const refreshedPackage = deferred<Response>();
+    let packageFetchCount = 0;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
       if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
-      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(loraPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) {
+        packageFetchCount += 1;
+        return packageFetchCount === 1
+          ? Promise.resolve(jsonResponse(loraPackageData))
+          : refreshedPackage.promise;
+      }
       if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(readyModelSummary));
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
       if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
@@ -1173,7 +1180,19 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("cinematic.safetensors")).toBeInTheDocument();
     }, { timeout: 2500 });
-    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/package"))).toBe(true);
+    await waitFor(() => expect(packageFetchCount).toBe(2));
+    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled();
+    expect(
+      fetchMock.mock.calls.filter(([url, init]) =>
+        String(url).endsWith("/api/workflows/text_to_image_v0/user-state")
+        && (!init?.method || init.method === "GET"),
+      ),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      refreshedPackage.resolve(jsonResponse(loraPackageData));
+    });
   });
 
   it("does not overwrite the LoRA value if the user changes it before download completes", async () => {
@@ -4512,6 +4531,115 @@ describe("WorkflowRunPage", () => {
       expect(screen.queryByRole("heading", { name: "Slow Workflow" })).not.toBeInTheDocument();
       expect(screen.queryByDisplayValue("slow default")).not.toBeInTheDocument();
     });
+  });
+
+  it("hides the previous dashboard until the switched workflow values are ready", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const nextPackageResponse = deferred<Response>();
+    const packageFor = (workflowId: string, workflowName: string, defaultValue: string) => ({
+      ...configuredPackageData,
+      metadata: {
+        ...configuredPackageData.metadata,
+        id: workflowId,
+        name: workflowName,
+      },
+      inputs: configuredPackageData.inputs.map((input) => ({
+        ...input,
+        default: defaultValue,
+      })),
+    });
+    const firstPackage = packageFor("first-workflow", "First Workflow", "first default");
+    const nextPackage = packageFor("next-workflow", "Next Workflow", "next default");
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/first-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "first-workflow",
+          workflow: { ...workflowStatus.workflow, id: "first-workflow", name: "First Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/next-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "next-workflow",
+          workflow: { ...workflowStatus.workflow, id: "next-workflow", name: "Next Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/first-workflow/package")) {
+        return Promise.resolve(jsonResponse(firstPackage));
+      }
+      if (url.endsWith("/api/workflows/next-workflow/package")) return nextPackageResponse.promise;
+      if (url.endsWith("/model-summary")) {
+        const id = url.includes("first-workflow") ? "first-workflow" : "next-workflow";
+        return Promise.resolve(jsonResponse({ ...readyModelSummary, workflow_id: id }));
+      }
+      if (url.endsWith("/validate")) {
+        const id = url.includes("first-workflow") ? "first-workflow" : "next-workflow";
+        return Promise.resolve(jsonResponse({ ...validWorkflow, workflow_id: id }));
+      }
+      if (url.endsWith("/runs/active-and-queued")) {
+        return Promise.resolve(jsonResponse({ active_count: 0, queued_count: 0, total_count: 0 }));
+      }
+      if (url.endsWith("/api/workflows/first-workflow/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "first-workflow",
+          dashboard_version: dashboardUserStateVersionForTest(firstPackage),
+          values: { prompt: "first saved value" },
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        }));
+      }
+      if (url.endsWith("/api/workflows/next-workflow/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "next-workflow",
+          dashboard_version: dashboardUserStateVersionForTest(nextPackage),
+          values: { prompt: "next saved value" },
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const page = (workflowId: string) => (
+      <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+        <WorkflowRunPage workflowId={workflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
+      </RuntimeStatusProvider>
+    );
+    const { rerender } = render(page("first-workflow"));
+    expect(await screen.findByDisplayValue("first saved value")).toBeInTheDocument();
+
+    rerender(page("next-workflow"));
+
+    expect(screen.getByText("Loading saved settings")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("first saved value")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([url, requestInit]) =>
+        String(url).endsWith("/api/workflows/next-workflow/user-state")
+        && (!requestInit?.method || requestInit.method === "GET"),
+      ),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      nextPackageResponse.resolve(jsonResponse(nextPackage));
+    });
+
+    expect(await screen.findByDisplayValue("next saved value")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([url, requestInit]) =>
+        String(url).endsWith("/api/workflows/next-workflow/user-state")
+        && (!requestInit?.method || requestInit.method === "GET"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("shows the compact resource monitor in the top bar while idle", async () => {

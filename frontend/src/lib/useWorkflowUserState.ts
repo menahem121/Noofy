@@ -69,6 +69,60 @@ function pruneState(
   };
 }
 
+function mergeCurrentContext(
+  state: WorkflowUserState,
+  packageDefaults: Record<string, unknown>,
+  inputIndex: Map<string, WorkflowInputDef>,
+  validLayoutIds: string[],
+  validOutputControlIds: string[],
+  currentDashboardVersion: string,
+): WorkflowUserState {
+  const values: Record<string, unknown> = {};
+  for (const id of inputIndex.keys()) {
+    values[id] = Object.prototype.hasOwnProperty.call(state.values, id)
+      ? state.values[id]
+      : packageDefaults[id];
+  }
+
+  const validLayoutIdSet = new Set(validLayoutIds);
+  const layoutOverrides = Object.fromEntries(
+    Object.entries(state.layout_overrides).filter(([id]) => validLayoutIdSet.has(id)),
+  );
+  const validOutputControlIdSet = new Set(validOutputControlIds);
+  const outputPreferences = Object.fromEntries(
+    Object.entries(state.output_preferences ?? {}).filter(([id]) => validOutputControlIdSet.has(id)),
+  );
+
+  if (
+    state.dashboard_version === currentDashboardVersion &&
+    sameRecord(state.values, values) &&
+    sameRecord(state.layout_overrides, layoutOverrides) &&
+    sameRecord(state.output_preferences ?? {}, outputPreferences)
+  ) {
+    return state;
+  }
+
+  return {
+    ...state,
+    dashboard_version: currentDashboardVersion,
+    values,
+    layout_overrides: layoutOverrides,
+    output_preferences: outputPreferences,
+  };
+}
+
+function sameRecord(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]))
+  );
+}
+
 export function useWorkflowUserState(
   workflowId: string,
   packageDefaults: Record<string, unknown>,
@@ -80,7 +134,9 @@ export function useWorkflowUserState(
   const [userState, setUserState] = useState<WorkflowUserState>(() =>
     emptyState(workflowId, dashboardVersion),
   );
+  const [loadedWorkflowId, setLoadedWorkflowId] = useState<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const fetchStartedForRef = useRef<string | null>(null);
   const latestStateRef = useRef<WorkflowUserState>(userState);
 
   useEffect(() => {
@@ -100,8 +156,7 @@ export function useWorkflowUserState(
     layoutIdsKey,
     outputControlIdsKey,
   ].join("\u0001");
-  const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
-  const loaded = !hasPackageContext || loadedContextKey === contextKey;
+  const loaded = !hasPackageContext || loadedWorkflowId === workflowId;
 
   function cancelPendingSave() {
     if (saveTimerRef.current !== null) {
@@ -112,16 +167,24 @@ export function useWorkflowUserState(
 
   useEffect(() => {
     let active = true;
+    const capturedWorkflowId = workflowId;
     if (!hasPackageContext) {
       const initial = emptyState(workflowId, dashboardVersion);
       setUserState(initial);
       latestStateRef.current = initial;
-      setLoadedContextKey(contextKey);
+      fetchStartedForRef.current = null;
       return () => {
         active = false;
-        cancelPendingSave();
+        flushPendingSave(capturedWorkflowId);
       };
     }
+    if (fetchStartedForRef.current === workflowId) {
+      return () => {
+        active = false;
+        flushPendingSave(capturedWorkflowId);
+      };
+    }
+    fetchStartedForRef.current = workflowId;
     fetchUserState(workflowId)
       .then((remote) => {
         if (!active) return;
@@ -158,29 +221,51 @@ export function useWorkflowUserState(
         latestStateRef.current = initial;
       })
       .finally(() => {
-        if (active) setLoadedContextKey(contextKey);
+        if (active) setLoadedWorkflowId(capturedWorkflowId);
       });
     return () => {
       active = false;
-      cancelPendingSave();
+      flushPendingSave(capturedWorkflowId);
     };
-  }, [
-    workflowId,
-    dashboardVersion,
-    packageDefaultsKey,
-    inputIdsKey,
-    layoutIdsKey,
-    outputControlIdsKey,
-    hasPackageContext,
-    contextKey,
-  ]);
+  // Package details can change while the Run page remains mounted. Fetch the
+  // persisted state once; subsequent package changes are merged locally below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId, hasPackageContext]);
+
+  useEffect(() => {
+    if (!hasPackageContext || loadedWorkflowId !== workflowId) return;
+    setUserState((current) => {
+      const next = mergeCurrentContext(
+        current,
+        packageDefaults,
+        inputIndex,
+        validLayoutIds,
+        validOutputControlIds,
+        dashboardVersion,
+      );
+      if (next === current) return current;
+      latestStateRef.current = next;
+      return next;
+    });
+  // loadedWorkflowId is required so a context that changed during the initial
+  // request is reconciled immediately after that request completes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextKey, loadedWorkflowId, hasPackageContext, workflowId]);
 
   function scheduleSave(next: WorkflowUserState) {
     cancelPendingSave();
+    latestStateRef.current = next;
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void saveUserState(workflowId, next);
+      void saveUserState(workflowId, latestStateRef.current).catch(() => undefined);
     }, DEBOUNCE_MS);
+  }
+
+  function flushPendingSave(targetWorkflowId: string) {
+    if (saveTimerRef.current === null) return;
+    window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    void saveUserState(targetWorkflowId, latestStateRef.current).catch(() => undefined);
   }
 
   const setValue = useCallback(

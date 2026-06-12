@@ -345,6 +345,8 @@ describe("HomePage", () => {
       groups: [],
       layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
       status: "draft",
+      baseKey: "",
+      updatedAt: Date.now(),
     });
   }
 

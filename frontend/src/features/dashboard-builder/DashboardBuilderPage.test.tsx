@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderPage } from "./DashboardBuilderPage";
-import { dashboardDraftKey, toBackendPayload, type DashboardSchema } from "./dashboardBuilderContent";
+import {
+  dashboardDraftKey,
+  dashboardSchemaFingerprint,
+  saveDashboardDraft,
+  toBackendPayload,
+  type DashboardSchema,
+} from "./dashboardBuilderContent";
 import { topLevelDashboardControlItems } from "../workflows/dashboardTopLevelItems";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -1110,7 +1116,7 @@ describe("DashboardBuilderPage", () => {
     expect(screen.getByText("Saved as draft")).toBeInTheDocument();
     expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId)) ?? "{}")).toMatchObject({
       workflowId: invalidSliderSchema.workflowId,
-      widgets: [expect.objectContaining({ defaultValue: 0.3 })],
+      widgets: expect.arrayContaining([expect.objectContaining({ defaultValue: 0.3 })]),
       status: "draft",
     });
 
@@ -1146,11 +1152,7 @@ describe("DashboardBuilderPage", () => {
     const stepInput = screen.getByLabelText("Step size");
 
     fireEvent.change(defaultValueInput, { target: { value: "" } });
-    await waitFor(() => {
-      expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId)) ?? "{}")).toMatchObject({
-        widgets: [expect.objectContaining({ defaultValue: 0.3 })],
-      });
-    });
+    expect(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId))).toBeNull();
     fireEvent.blur(defaultValueInput);
     expect(defaultValueInput).toHaveValue("0.3");
 
@@ -1162,6 +1164,9 @@ describe("DashboardBuilderPage", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Step size must be positive. Decimals such as 0.01 are allowed.")).not.toBeInTheDocument();
+      expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey(invalidSliderSchema.workflowId)) ?? "{}")).toMatchObject({
+        widgets: expect.arrayContaining([expect.objectContaining({ defaultValue: 0.3, step: 0.01 })]),
+      });
       expect(screen.queryByText("Default value must match the step size from the minimum value.")).not.toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
@@ -1300,9 +1305,9 @@ describe("DashboardBuilderPage", () => {
 
   it("keeps the current local draft ahead of saved dashboard and workflow values", async () => {
     const workflowId = "wf-current-default";
-    window.localStorage.setItem(
-      dashboardDraftKey(workflowId),
-      JSON.stringify({ ...promptSchema(workflowId, "current unsaved prompt"), status: "draft" }),
+    saveDashboardDraft(
+      promptSchema(workflowId, "current unsaved prompt"),
+      dashboardSchemaFingerprint(promptSchema(workflowId, "saved dashboard prompt")),
     );
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -1348,6 +1353,11 @@ describe("DashboardBuilderPage", () => {
 
   it("keeps saved dashboard defaults ahead of original workflow values", async () => {
     const workflowId = "wf-saved-default";
+    const onContinue = vi.fn();
+    saveDashboardDraft(
+      promptSchema(workflowId, "stale draft prompt"),
+      dashboardSchemaFingerprint(promptSchema(workflowId, "older saved prompt")),
+    );
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -1363,7 +1373,7 @@ describe("DashboardBuilderPage", () => {
         workflowName="Prompt workflow"
         initialSchema={promptSchema(workflowId, "saved dashboard prompt")}
         onBack={vi.fn()}
-        onContinue={vi.fn()}
+        onContinue={onContinue}
         onNavigate={vi.fn()}
       />,
     );
@@ -1371,6 +1381,11 @@ describe("DashboardBuilderPage", () => {
     const preview = await screen.findByLabelText("Dashboard preview");
     expect(within(preview).getByDisplayValue("saved dashboard prompt")).toBeInTheDocument();
     expect(within(preview).queryByDisplayValue("a lake")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(dashboardDraftKey(workflowId))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    expect(onContinue).toHaveBeenCalled();
+    expect(window.localStorage.getItem(dashboardDraftKey(workflowId))).toBeNull();
   });
 
   it("uses original workflow values when no dashboard schema or draft exists", async () => {
@@ -1396,6 +1411,7 @@ describe("DashboardBuilderPage", () => {
 
     const preview = await screen.findByLabelText("Dashboard preview");
     expect(within(preview).getByDisplayValue("a lake")).toBeInTheDocument();
+    expect(window.localStorage.getItem(dashboardDraftKey(workflowId))).toBeNull();
   });
 
   it("sets and clears optional minimum and maximum values for number fields", async () => {
@@ -1544,7 +1560,7 @@ describe("DashboardBuilderPage", () => {
         },
       ],
     };
-    window.localStorage.setItem(dashboardDraftKey("wf-image"), JSON.stringify({ ...draft, status: "draft" }));
+    saveDashboardDraft(draft, "");
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));

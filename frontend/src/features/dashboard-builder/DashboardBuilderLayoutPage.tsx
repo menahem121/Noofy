@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type SetStateAction } from "react";
 import {
   Box,
   ArrowLeft,
@@ -55,9 +55,9 @@ import {
   WIDGET_TYPE_LABELS,
   buildInitialDashboard,
   clearDashboardDraft,
-  loadDashboardDraft,
   normalizeDashboardSchema,
   removeDashboardWidgetsFromSchema,
+  resolveBuilderSchemaSource,
   saveDashboardDraft,
   topLevelDashboardItems,
   toBackendPayload,
@@ -120,12 +120,10 @@ export function DashboardBuilderLayoutPage({
   const activeWorkflowId = workflowId ?? MOCK_WORKFLOW.id;
   const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
   const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
-  const scopedInitialSchemaKey = useMemo(
-    () => scopedInitialSchema ? JSON.stringify(scopedInitialSchema) : "",
-    [scopedInitialSchema],
-  );
   const saveSequenceRef = useRef(0);
   const activeWorkflowIdRef = useRef(activeWorkflowId);
+  const draftBaseKeyRef = useRef("");
+  const draftActiveRef = useRef(false);
 
   const workflow: MockWorkflow = useMemo(() => {
     return {
@@ -138,7 +136,12 @@ export function DashboardBuilderLayoutPage({
   }, [activeWorkflowId, activeWorkflowName, workflowId]);
 
   const [schema, setSchema] = useState<DashboardSchema>(
-    () => normalizeDashboardSchema(loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(workflow)),
+    () => {
+      const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
+      draftBaseKeyRef.current = source.baseKey;
+      draftActiveRef.current = source.fromDraft;
+      return normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow));
+    },
   );
   const schemaRef = useRef(schema);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -169,7 +172,10 @@ export function DashboardBuilderLayoutPage({
   useLayoutEffect(() => {
     activeWorkflowIdRef.current = activeWorkflowId;
     saveSequenceRef.current += 1;
-    const nextSchema = normalizeDashboardSchema(loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(workflow));
+    const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
+    draftBaseKeyRef.current = source.baseKey;
+    draftActiveRef.current = source.fromDraft;
+    const nextSchema = normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow));
     setSchema(nextSchema);
     setSelectedItemId(null);
     setActiveDragItemId(null);
@@ -182,7 +188,7 @@ export function DashboardBuilderLayoutPage({
     resizeStateRef.current = null;
     moveStateRef.current = null;
     schemaRef.current = nextSchema;
-  }, [activeWorkflowId, activeWorkflowName, scopedInitialSchemaKey]);
+  }, [activeWorkflowId]);
 
   useLayoutEffect(() => {
     schemaRef.current = schema;
@@ -191,8 +197,8 @@ export function DashboardBuilderLayoutPage({
   const schemaReady = schema.workflowId === activeWorkflowId;
 
   useEffect(() => {
-    if (!schemaReady) return;
-    saveDashboardDraft(schema);
+    if (!schemaReady || !draftActiveRef.current) return;
+    saveDashboardDraft(schema, draftBaseKeyRef.current);
   }, [schema, schemaReady]);
 
   const topLevelItems = schemaReady ? topLevelDashboardItems(schema) : [];
@@ -205,6 +211,11 @@ export function DashboardBuilderLayoutPage({
       ? "Dashboard ready to save."
       : "Place all widgets on the canvas before saving.";
   const canvasRows = schemaReady ? canvasRowsForItems(topLevelItems.map((item) => ({ layout: dashboardItemLayout(item) }))) : 0;
+
+  function updateSchemaFromUser(updater: SetStateAction<DashboardSchema>) {
+    draftActiveRef.current = true;
+    setSchema(updater);
+  }
 
   function handleTrayPointerStart(event: PointerEvent<HTMLElement>, itemId: string) {
     event.preventDefault();
@@ -287,7 +298,7 @@ export function DashboardBuilderLayoutPage({
   }
 
   function placeItem(itemId: string, desiredLayout: DashboardWidgetLayout) {
-    setSchema((current) => {
+    updateSchemaFromUser((current) => {
       const item = topLevelDashboardItems(current).find((candidate) => candidate.id === itemId);
       if (!item) return current;
 
@@ -320,12 +331,12 @@ export function DashboardBuilderLayoutPage({
   }
 
   function removeItem(itemId: string) {
-    setSchema((current) => removeDashboardItemLayout(current, itemId));
+    updateSchemaFromUser((current) => removeDashboardItemLayout(current, itemId));
     setSelectedItemId((current) => (current === itemId ? null : current));
   }
 
   function removeVisibleItem(itemId: string) {
-    setSchema((current) => {
+    updateSchemaFromUser((current) => {
       const item = topLevelDashboardItems(current).find((candidate) => candidate.id === itemId);
       if (!item) return current;
       const widgetIds = item.kind === "group" ? item.widgets.map((widget) => widget.id) : [item.widget.id];
@@ -391,7 +402,7 @@ export function DashboardBuilderLayoutPage({
 
     function commitMove(finalLayout: DashboardWidgetLayout | undefined) {
       if (!finalLayout) return;
-      setSchema((current) => {
+      updateSchemaFromUser((current) => {
         const nextSchema = setDashboardItemLayout(current, itemId, finalLayout);
         schemaRef.current = nextSchema;
         return nextSchema;
@@ -443,7 +454,7 @@ export function DashboardBuilderLayoutPage({
     function handlePointerMove(pointerEvent: globalThis.PointerEvent) {
       const resizeState = resizeStateRef.current;
       if (!resizeState) return;
-      setSchema((current) => {
+      updateSchemaFromUser((current) => {
         const candidate = fitLayout(
           resizeLayoutFromPointerDelta({
             startLayout: resizeState.startLayout,
@@ -484,7 +495,8 @@ export function DashboardBuilderLayoutPage({
 
   function handleSaveDraft() {
     if (!schemaReady) return;
-    saveDashboardDraft(schema);
+    draftActiveRef.current = true;
+    saveDashboardDraft(schema, draftBaseKeyRef.current);
     setSaveError(null);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
@@ -492,7 +504,9 @@ export function DashboardBuilderLayoutPage({
 
   function handleBackToWidgets() {
     const nextSchema = schemaReady ? schema : buildInitialDashboard(workflow);
-    if (schemaReady) saveDashboardDraft(nextSchema);
+    if (schemaReady && draftActiveRef.current) {
+      saveDashboardDraft(nextSchema, draftBaseKeyRef.current);
+    }
     onBackToWidgets(nextSchema);
   }
 
@@ -508,12 +522,14 @@ export function DashboardBuilderLayoutPage({
       .then(() => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         clearDashboardDraft(targetId);
+        draftActiveRef.current = false;
         saveSequenceRef.current += 1;
         onSaveComplete(targetId);
       })
       .catch((error) => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
-        saveDashboardDraft({ ...schema, workflowId: targetId });
+        draftActiveRef.current = true;
+        saveDashboardDraft({ ...schema, workflowId: targetId }, draftBaseKeyRef.current);
         setSavedFlash(null);
         setSaveError(
           error instanceof Error

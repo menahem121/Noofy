@@ -4,7 +4,12 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderLayoutPage } from "./DashboardBuilderLayoutPage";
-import { dashboardDraftKey, type DashboardSchema } from "./dashboardBuilderContent";
+import {
+  dashboardDraftKey,
+  dashboardSchemaFingerprint,
+  saveDashboardDraft,
+  type DashboardSchema,
+} from "./dashboardBuilderContent";
 
 const builderLayoutCss = readFileSync(resolve(process.cwd(), "src/styles/dashboard-builder.css"), "utf8");
 const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
@@ -156,18 +161,17 @@ describe("DashboardBuilderLayoutPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
-    window.localStorage.setItem(
-      dashboardDraftKey("wf-1"),
-      JSON.stringify({
-        ...placedSchema,
-        status: "draft",
-        widgets: [{ ...placedSchema.widgets[0], defaultValue: "current edited value" }],
-      }),
-    );
     const currentSchema = {
       ...placedSchema,
       widgets: [{ ...placedSchema.widgets[0], defaultValue: "original .noofy value" }],
     };
+    saveDashboardDraft(
+      {
+        ...placedSchema,
+        widgets: [{ ...placedSchema.widgets[0], defaultValue: "current edited value" }],
+      },
+      dashboardSchemaFingerprint(currentSchema),
+    );
     const onBackToWidgets = vi.fn();
 
     render(
@@ -197,7 +201,38 @@ describe("DashboardBuilderLayoutPage", () => {
     });
   });
 
-  it("refreshes preview values when the current schema changes for the same workflow", async () => {
+  it("discards a stale draft when the saved dashboard widgets changed", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const staleDraft = {
+      ...placedSchema,
+      widgets: [{ ...placedSchema.widgets[0], defaultValue: "stale draft value" }],
+    };
+    saveDashboardDraft(staleDraft, dashboardSchemaFingerprint({
+      ...placedSchema,
+      widgets: [{ ...placedSchema.widgets[0], defaultValue: "older saved value" }],
+    }));
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox")).toHaveTextContent("a lake");
+    expect(screen.queryByText("stale draft value")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
+  });
+
+  it("preserves current layout state across equivalent parent rerenders", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -207,11 +242,6 @@ describe("DashboardBuilderLayoutPage", () => {
       ...placedSchema,
       widgets: [{ ...placedSchema.widgets[0], defaultValue: "first edited value" }],
     };
-    const nextSchema = {
-      ...placedSchema,
-      widgets: [{ ...placedSchema.widgets[0], defaultValue: "latest edited value" }],
-    };
-
     const { rerender } = render(
       <DashboardBuilderLayoutPage
         workflowId="wf-1"
@@ -224,24 +254,6 @@ describe("DashboardBuilderLayoutPage", () => {
     );
     expect(await screen.findByRole("textbox")).toHaveTextContent("first edited value");
 
-    window.localStorage.setItem(
-      dashboardDraftKey("wf-1"),
-      JSON.stringify({ ...nextSchema, status: "draft" }),
-    );
-    rerender(
-      <DashboardBuilderLayoutPage
-        workflowId="wf-1"
-        workflowName="Workflow"
-        initialSchema={nextSchema}
-        onBackToWidgets={vi.fn()}
-        onSaveComplete={vi.fn()}
-        onNavigate={vi.fn()}
-      />,
-    );
-
-    expect(await screen.findByRole("textbox")).toHaveTextContent("latest edited value");
-    expect(screen.queryByText("first edited value")).not.toBeInTheDocument();
-
     const widget = screen.getByRole("textbox").closest("article");
     fireEvent.click(widget!);
     expect(widget).toHaveClass("layout-canvas-widget--selected");
@@ -250,7 +262,7 @@ describe("DashboardBuilderLayoutPage", () => {
       <DashboardBuilderLayoutPage
         workflowId="wf-1"
         workflowName="Workflow"
-        initialSchema={{ ...nextSchema, widgets: nextSchema.widgets.map((item) => ({ ...item })) }}
+        initialSchema={{ ...firstSchema, widgets: firstSchema.widgets.map((item) => ({ ...item })) }}
         onBackToWidgets={vi.fn()}
         onSaveComplete={vi.fn()}
         onNavigate={vi.fn()}
@@ -260,7 +272,7 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.getByRole("textbox").closest("article")).toHaveClass("layout-canvas-widget--selected");
   });
 
-  it("autosaves layout changes without requiring the draft button", async () => {
+  it("writes a stamped draft only after a real layout change", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -279,11 +291,15 @@ describe("DashboardBuilderLayoutPage", () => {
     );
 
     await screen.findByRole("textbox");
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^remove prompt$/i }));
     await waitFor(() => {
       const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
       expect(stored).toMatchObject({
         workflowId: "wf-1",
         status: "draft",
+        baseKey: dashboardSchemaFingerprint(placedSchema),
+        updatedAt: expect.any(Number),
         widgets: [expect.objectContaining({ id: "ctrl-prompt" })],
       });
     });
@@ -321,7 +337,12 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(alert).toHaveTextContent("Your local draft was kept.");
     expect(onSaveComplete).not.toHaveBeenCalled();
     const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
-    expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
+    expect(stored).toMatchObject({
+      workflowId: "wf-1",
+      status: "draft",
+      baseKey: dashboardSchemaFingerprint(placedSchema),
+      updatedAt: expect.any(Number),
+    });
   });
 
   it("clears the local draft and opens the workflow after backend save succeeds", async () => {
@@ -334,7 +355,7 @@ describe("DashboardBuilderLayoutPage", () => {
       }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
-    window.localStorage.setItem(dashboardDraftKey("wf-1"), JSON.stringify({ workflowId: "wf-1", status: "draft" }));
+    saveDashboardDraft(placedSchema, dashboardSchemaFingerprint(placedSchema));
 
     render(
       <DashboardBuilderLayoutPage

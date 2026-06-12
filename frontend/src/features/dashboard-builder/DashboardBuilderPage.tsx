@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import {
   ArrowLeft,
   ArrowDown,
@@ -46,9 +46,9 @@ import {
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
   isOutputWidgetType,
-  loadDashboardDraft,
   normalizeDashboardSchema,
   removeDashboardWidgetsFromSchema,
+  resolveBuilderSchemaSource,
   saveDashboardDraft,
   suggestTitle,
   suggestWidgetType,
@@ -152,6 +152,8 @@ export function DashboardBuilderPage({
   const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
   const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
   const loadSequenceRef = useRef(0);
+  const draftBaseKeyRef = useRef("");
+  const draftActiveRef = useRef(false);
   const [workflowState, setWorkflowState] = useState<WorkflowAuthoringState>(() => {
     if (workflowId) return { loading: true, workflow: null, error: null };
     return {
@@ -161,10 +163,14 @@ export function DashboardBuilderPage({
     };
   });
   const [schema, setSchema] = useState<DashboardSchema>(
-    () =>
-      normalizeDashboardSchema(
-        loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
-      ),
+    () => {
+      const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
+      draftBaseKeyRef.current = source.baseKey;
+      draftActiveRef.current = source.fromDraft;
+      return normalizeDashboardSchema(
+        source.schema ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+      );
+    },
   );
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
@@ -208,10 +214,12 @@ export function DashboardBuilderPage({
   }, [workflowId, activeWorkflowId, activeWorkflowName]);
 
   useLayoutEffect(() => {
+    const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
+    draftBaseKeyRef.current = source.baseKey;
+    draftActiveRef.current = source.fromDraft;
     setSchema(
       normalizeDashboardSchema(
-        loadDashboardDraft(activeWorkflowId) ??
-          scopedInitialSchema ??
+        source.schema ??
           buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
       ),
     );
@@ -229,12 +237,12 @@ export function DashboardBuilderPage({
   useEffect(() => {
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
-    const savedDraft = loadDashboardDraft(activeWorkflowId);
-    // A draft is the user's unsaved dashboard work. Saved dashboard defaults
-    // are the next source, and bindable workflow values are only a fallback.
-    const sourceSchema = savedDraft ?? scopedInitialSchema ?? buildInitialDashboard(workflow);
+    const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
+    draftBaseKeyRef.current = source.baseKey;
+    draftActiveRef.current = source.fromDraft;
+    const sourceSchema = source.schema ?? buildInitialDashboard(workflow);
     const nextSchema = normalizeDashboardSchema(
-      savedDraft
+      source.fromDraft
         ? reconcileDashboardSchemaForWorkflow(sourceSchema, workflow)
         : addAutomaticDashboardWidgets(reconcileDashboardSchemaForWorkflow(sourceSchema, workflow), workflow),
     );
@@ -261,8 +269,8 @@ export function DashboardBuilderPage({
   const displayWorkflowName = builderReady ? workflow.name : activeWorkflowName;
 
   useEffect(() => {
-    if (!builderReady) return;
-    saveDashboardDraft(schema);
+    if (!builderReady || !draftActiveRef.current) return;
+    saveDashboardDraft(schema, draftBaseKeyRef.current);
   }, [builderReady, schema]);
 
   const valueIndex = useMemo(() => {
@@ -328,6 +336,11 @@ export function DashboardBuilderPage({
   const selectedValueRecord = selectedValueId ? valueIndex.get(selectedValueId) ?? null : null;
   const hasValidationErrors = builderReady && schema.widgets.some((widget) => validateWidgetForSave(widget).length > 0);
 
+  function updateSchemaFromUser(updater: SetStateAction<DashboardSchema>) {
+    draftActiveRef.current = true;
+    setSchema(updater);
+  }
+
   function handleSelectValue(valueId: string) {
     const record = valueIndex.get(valueId);
     if (!record) return;
@@ -341,7 +354,7 @@ export function DashboardBuilderPage({
     }
 
     const newWidget = createDashboardWidgetForValue(record.value, record.node);
-    setSchema((current) => ({ ...current, widgets: [...current.widgets, newWidget] }));
+    updateSchemaFromUser((current) => ({ ...current, widgets: [...current.widgets, newWidget] }));
     setSelectedValueId(valueId);
     setSelectedWidgetId(newWidget.id);
     setSelectedGroupId(null);
@@ -366,7 +379,7 @@ export function DashboardBuilderPage({
       description: "",
       defaultValue: null,
     };
-    setSchema((current) => ({ ...current, widgets: [...current.widgets, note] }));
+    updateSchemaFromUser((current) => ({ ...current, widgets: [...current.widgets, note] }));
     setSelectedValueId(note.valueId);
     setSelectedWidgetId(note.id);
     setSelectedGroupId(null);
@@ -389,14 +402,14 @@ export function DashboardBuilderPage({
   }
 
   function patchWidget(widgetId: string, patch: Partial<DashboardWidget>) {
-    setSchema((current) => ({
+    updateSchemaFromUser((current) => ({
       ...current,
       widgets: current.widgets.map((c) => (c.id === widgetId ? { ...c, ...patch } : c)),
     }));
   }
 
   function patchGroup(groupId: string, patch: Partial<DashboardWidgetGroup>) {
-    setSchema((current) => ({
+    updateSchemaFromUser((current) => ({
       ...current,
       groups: current.groups.map((group) => (group.id === groupId ? { ...group, ...patch } : group)),
     }));
@@ -412,7 +425,7 @@ export function DashboardBuilderPage({
   }
 
   function commitRemoveWidget(widgetId: string, keepHiddenDefault: boolean) {
-    setSchema((current) => removeDashboardWidgetsFromSchema(current, [widgetId], keepHiddenDefault));
+    updateSchemaFromUser((current) => removeDashboardWidgetsFromSchema(current, [widgetId], keepHiddenDefault));
     if (selectedWidgetId === widgetId) {
       setSelectedWidgetId(null);
       setSelectedValueId(null);
@@ -460,7 +473,7 @@ export function DashboardBuilderPage({
     event.preventDefault();
     event.stopPropagation();
     if (!createdDrag || createdDrag.kind !== "widget" || createdDrag.widgetId === targetWidgetId) return;
-    setSchema((current) => groupWidgetOnTarget(current, createdDrag.widgetId, targetWidgetId));
+    updateSchemaFromUser((current) => groupWidgetOnTarget(current, createdDrag.widgetId, targetWidgetId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
@@ -480,7 +493,7 @@ export function DashboardBuilderPage({
     event.preventDefault();
     event.stopPropagation();
     if (!createdDrag || createdDrag.kind !== "widget") return;
-    setSchema((current) => moveWidgetToGroup(current, createdDrag.widgetId, targetGroupId));
+    updateSchemaFromUser((current) => moveWidgetToGroup(current, createdDrag.widgetId, targetGroupId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
@@ -505,7 +518,7 @@ export function DashboardBuilderPage({
     event.stopPropagation();
     if (!createdDrag) return;
     const dropped = createdDrag;
-    setSchema((current) => moveCreatedItemToTopLevelPosition(current, dropped, beforeId));
+    updateSchemaFromUser((current) => moveCreatedItemToTopLevelPosition(current, dropped, beforeId));
     if (dropped.kind === "widget") handleSelectWidget(dropped.widgetId);
     else handleSelectGroup(dropped.groupId);
     handleCreatedDragEnd();
@@ -527,7 +540,7 @@ export function DashboardBuilderPage({
     event.preventDefault();
     event.stopPropagation();
     if (!createdDrag || createdDrag.kind !== "widget") return;
-    setSchema((current) => moveWidgetToGroupPosition(current, createdDrag.widgetId, targetGroupId, beforeWidgetId));
+    updateSchemaFromUser((current) => moveWidgetToGroupPosition(current, createdDrag.widgetId, targetGroupId, beforeWidgetId));
     handleSelectWidget(createdDrag.widgetId);
     handleCreatedDragEnd();
   }
@@ -543,14 +556,15 @@ export function DashboardBuilderPage({
 
   function handleSaveDraft() {
     if (!builderReady) return;
-    saveDashboardDraft(schema);
+    draftActiveRef.current = true;
+    saveDashboardDraft(schema, draftBaseKeyRef.current);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
   function handleContinue() {
     if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
-    saveDashboardDraft(schema);
+    if (draftActiveRef.current) saveDashboardDraft(schema, draftBaseKeyRef.current);
     onContinue(schema);
   }
 

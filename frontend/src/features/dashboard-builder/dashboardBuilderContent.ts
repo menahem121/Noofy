@@ -172,35 +172,175 @@ export function dashboardDraftKey(workflowId: string) {
   return `noofy.builderDraft.${workflowId}`;
 }
 
-export function saveDashboardDraft(schema: DashboardSchema) {
+export interface DashboardDraftEntry {
+  schema: DashboardSchema;
+  baseKey: string;
+  updatedAt: number;
+}
+
+export interface BuilderSchemaSource {
+  schema: DashboardSchema | null;
+  baseKey: string;
+  fromDraft: boolean;
+}
+
+export function dashboardSchemaFingerprint(schema: DashboardSchema): string {
+  const normalized = normalizeDashboardSchema(schema);
+  const fingerprintShape = {
+    workflowId: normalized.workflowId,
+    widgets: normalized.widgets.map(widgetFingerprintShape),
+    hiddenWidgets: (normalized.hiddenWidgets ?? []).map(widgetFingerprintShape),
+    groups: normalized.groups.map((group) => ({
+      id: group.id,
+      title: group.title,
+      description: group.description,
+      widgetIds: group.widgetIds,
+    })),
+  };
+  // Layout geometry and presentation are intentionally excluded. Draft widget
+  // edits win by product rule even when saved layout or action-bar position changes.
+  return hashString(stableJson(fingerprintShape));
+}
+
+export function saveDashboardDraft(schema: DashboardSchema, baseKey: string) {
   window.localStorage.setItem(
     dashboardDraftKey(schema.workflowId),
-    JSON.stringify({ ...normalizeDashboardSchema(schema), status: "draft" }),
+    JSON.stringify({
+      ...normalizeDashboardSchema(schema),
+      status: "draft",
+      baseKey,
+      updatedAt: Date.now(),
+    }),
   );
 }
 
-export function loadDashboardDraft(workflowId: string): DashboardSchema | null {
+export function loadDashboardDraftEntry(workflowId: string): DashboardDraftEntry | null {
   try {
     const raw = window.localStorage.getItem(dashboardDraftKey(workflowId));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<DashboardSchema>;
+    const parsed = JSON.parse(raw) as Partial<DashboardSchema> & {
+      status?: unknown;
+      baseKey?: unknown;
+      updatedAt?: unknown;
+    };
     if (
+      parsed.status !== "draft" ||
       parsed.workflowId !== workflowId ||
       typeof parsed.version !== "number" ||
       typeof parsed.workflowName !== "string" ||
       !Array.isArray(parsed.widgets) ||
-      !parsed.layout
+      !parsed.layout ||
+      typeof parsed.baseKey !== "string" ||
+      typeof parsed.updatedAt !== "number" ||
+      !Number.isFinite(parsed.updatedAt)
     ) {
       return null;
     }
-    return normalizeDashboardSchema(parsed as DashboardSchema);
+    const { status: _status, baseKey, updatedAt, ...schema } = parsed as DashboardSchema & {
+      status?: unknown;
+      baseKey: string;
+      updatedAt: number;
+    };
+    return {
+      schema: normalizeDashboardSchema(schema),
+      baseKey,
+      updatedAt,
+    };
   } catch {
     return null;
   }
 }
 
+export function loadDashboardDraft(workflowId: string): DashboardSchema | null {
+  return loadDashboardDraftEntry(workflowId)?.schema ?? null;
+}
+
+export function resolveBuilderSchemaSource(
+  workflowId: string,
+  initialSchema?: DashboardSchema,
+): BuilderSchemaSource {
+  const rawDraftExists = window.localStorage.getItem(dashboardDraftKey(workflowId)) !== null;
+  const entry = loadDashboardDraftEntry(workflowId);
+  if (rawDraftExists && !entry) clearDashboardDraft(workflowId);
+
+  if (!entry) {
+    return {
+      schema: initialSchema ? normalizeDashboardSchema(initialSchema) : null,
+      baseKey: initialSchema ? dashboardSchemaFingerprint(initialSchema) : "",
+      fromDraft: false,
+    };
+  }
+  if (!initialSchema) {
+    return { schema: entry.schema, baseKey: entry.baseKey, fromDraft: true };
+  }
+
+  const initialKey = dashboardSchemaFingerprint(initialSchema);
+  if (
+    entry.baseKey === initialKey ||
+    dashboardSchemaFingerprint(entry.schema) === initialKey
+  ) {
+    return { schema: entry.schema, baseKey: entry.baseKey, fromDraft: true };
+  }
+
+  clearDashboardDraft(workflowId);
+  return {
+    schema: normalizeDashboardSchema(initialSchema),
+    baseKey: initialKey,
+    fromDraft: false,
+  };
+}
+
 export function clearDashboardDraft(workflowId: string) {
   window.localStorage.removeItem(dashboardDraftKey(workflowId));
+}
+
+function widgetFingerprintShape(widget: DashboardWidget) {
+  return {
+    id: widget.id,
+    valueId: widget.valueId,
+    binding: widget.binding,
+    widgetType: widget.widgetType,
+    title: widget.title,
+    description: widget.description,
+    defaultValue:
+      widget.widgetType === "lora_loader" && (
+        widget.defaultValue === null ||
+        widget.defaultValue === undefined ||
+        widget.defaultValue === ""
+      )
+        ? "None"
+        : widget.defaultValue,
+    min: widget.min,
+    max: widget.max,
+    step: widget.step,
+    options: widget.options,
+    acceptedExtensions: widget.acceptedExtensions,
+    acceptedMimeTypes: widget.acceptedMimeTypes,
+    drawMask: widget.drawMask,
+    defaultPinned: widget.defaultPinned,
+    hasExecutableBinding: widget.hasExecutableBinding,
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hashString(value: string): string {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 export const NODE_ICONS: Record<NodeIconKind, LucideIcon> = {

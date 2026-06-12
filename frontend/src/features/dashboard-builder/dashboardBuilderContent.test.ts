@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   addAutomaticDashboardWidgets,
@@ -9,13 +9,194 @@ import {
   normalizeDashboardSchema,
   buildInitialDashboard,
   createDashboardWidgetForValue,
+  clearDashboardDraft,
   dashboardDraftKey,
+  dashboardSchemaFingerprint,
   loadDashboardDraft,
+  loadDashboardDraftEntry,
+  resolveBuilderSchemaSource,
   saveDashboardDraft,
   toBackendPayload,
   workflowFromBindableInputs,
   type DashboardSchema,
 } from "./dashboardBuilderContent";
+
+function draftSchema(defaultValue = "a lake"): DashboardSchema {
+  return {
+    version: 1,
+    workflowId: "wf-draft",
+    workflowName: "Draft workflow",
+    layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+    presentation: { actionBar: { x: 10, y: 20 } },
+    groups: [
+      {
+        id: "main",
+        title: "Main",
+        description: "Primary controls",
+        widgetIds: ["prompt", "note"],
+        layout: { x: 0, y: 0, w: 16, h: 8 },
+      },
+    ],
+    widgets: [
+      {
+        id: "prompt",
+        valueId: "prompt",
+        binding: { nodeId: "6", inputName: "text" },
+        widgetType: "textarea",
+        title: "Prompt",
+        description: "Describe the result.",
+        defaultValue,
+        layout: { x: 0, y: 0, w: 16, h: 6 },
+      },
+      {
+        id: "note",
+        valueId: "note:note",
+        binding: { nodeId: "", inputName: "" },
+        widgetType: "note",
+        title: "Tip",
+        description: "Use a detailed prompt.",
+        defaultValue: null,
+      },
+    ],
+  };
+}
+
+describe("dashboard draft trust", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("fingerprints widget content but ignores geometry, presentation, seed mode, and workflow name", () => {
+    const schema = draftSchema();
+    const sameContent = {
+      ...schema,
+      workflowName: "Renamed workflow",
+      layout: { gridColumns: 20, rowHeight: 48, gridGap: 2, responsive: false },
+      presentation: { actionBar: { x: 400, y: 300 } },
+      widgets: schema.widgets.map((widget) => ({
+        ...widget,
+        seedMode: "randomize" as const,
+        layout: { x: 8, y: 12, w: 20, h: 9 },
+      })),
+      groups: schema.groups.map((group) => ({
+        ...group,
+        layout: { x: 8, y: 12, w: 20, h: 9 },
+      })),
+    };
+
+    expect(dashboardSchemaFingerprint(sameContent)).toBe(dashboardSchemaFingerprint(schema));
+    expect(dashboardSchemaFingerprint({
+      ...schema,
+      widgets: schema.widgets.map((widget, index) => index === 0 ? { ...widget, title: "Idea" } : widget),
+    }))
+      .not.toBe(dashboardSchemaFingerprint(schema));
+    expect(dashboardSchemaFingerprint({ ...schema, widgets: schema.widgets.slice(0, 1) }))
+      .not.toBe(dashboardSchemaFingerprint(schema));
+    expect(dashboardSchemaFingerprint(draftSchema("a mountain"))).not.toBe(dashboardSchemaFingerprint(schema));
+    expect(dashboardSchemaFingerprint({ ...schema, groups: [{ ...schema.groups[0], title: "Inputs" }] }))
+      .not.toBe(dashboardSchemaFingerprint(schema));
+  });
+
+  it("canonicalizes empty LoRA defaults to None", () => {
+    const schema = draftSchema();
+    const lora = {
+      ...schema.widgets[0],
+      id: "lora",
+      widgetType: "lora_loader" as const,
+      defaultValue: null,
+    };
+
+    expect(dashboardSchemaFingerprint({ ...schema, widgets: [lora] })).toBe(
+      dashboardSchemaFingerprint({ ...schema, widgets: [{ ...lora, defaultValue: "None" }] }),
+    );
+  });
+
+  it("resolves fresh, genuine, in-flow, stale, and legacy draft sources", () => {
+    const saved = draftSchema();
+    const savedKey = dashboardSchemaFingerprint(saved);
+    const edited = draftSchema("edited prompt");
+
+    expect(resolveBuilderSchemaSource("wf-draft", saved)).toMatchObject({
+      schema: normalizeDashboardSchema(saved),
+      baseKey: savedKey,
+      fromDraft: false,
+    });
+
+    saveDashboardDraft(edited, "");
+    expect(resolveBuilderSchemaSource("wf-draft")).toMatchObject({
+      schema: normalizeDashboardSchema(edited),
+      baseKey: "",
+      fromDraft: true,
+    });
+
+    saveDashboardDraft(edited, savedKey);
+    expect(resolveBuilderSchemaSource("wf-draft", saved)).toMatchObject({
+      schema: normalizeDashboardSchema(edited),
+      baseKey: savedKey,
+      fromDraft: true,
+    });
+
+    saveDashboardDraft(edited, savedKey);
+    expect(resolveBuilderSchemaSource("wf-draft", edited)).toMatchObject({
+      schema: normalizeDashboardSchema(edited),
+      baseKey: savedKey,
+      fromDraft: true,
+    });
+
+    const newerSaved = draftSchema("new saved prompt");
+    saveDashboardDraft(edited, savedKey);
+    expect(resolveBuilderSchemaSource("wf-draft", newerSaved)).toMatchObject({
+      schema: normalizeDashboardSchema(newerSaved),
+      baseKey: dashboardSchemaFingerprint(newerSaved),
+      fromDraft: false,
+    });
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-draft"))).toBeNull();
+
+    window.localStorage.setItem(
+      dashboardDraftKey("wf-draft"),
+      JSON.stringify({ ...edited, status: "draft" }),
+    );
+    expect(loadDashboardDraftEntry("wf-draft")).toBeNull();
+    expect(resolveBuilderSchemaSource("wf-draft", saved)).toMatchObject({
+      schema: normalizeDashboardSchema(saved),
+      fromDraft: false,
+    });
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-draft"))).toBeNull();
+
+    window.localStorage.setItem(
+      dashboardDraftKey("wf-draft"),
+      JSON.stringify({
+        ...edited,
+        status: "saved",
+        baseKey: savedKey,
+        updatedAt: Date.now(),
+      }),
+    );
+    expect(loadDashboardDraftEntry("wf-draft")).toBeNull();
+    expect(resolveBuilderSchemaSource("wf-draft", saved)).toMatchObject({
+      schema: normalizeDashboardSchema(saved),
+      fromDraft: false,
+    });
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-draft"))).toBeNull();
+  });
+
+  it("stores a stamped envelope while exposing only its schema to draft consumers", () => {
+    const schema = draftSchema();
+    const baseKey = dashboardSchemaFingerprint(schema);
+    saveDashboardDraft(schema, baseKey);
+
+    const raw = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-draft")) ?? "{}");
+    expect(raw).toMatchObject({ status: "draft", baseKey, updatedAt: expect.any(Number) });
+    expect(loadDashboardDraft("wf-draft")).toEqual(normalizeDashboardSchema(schema));
+    expect(loadDashboardDraftEntry("wf-draft")).toMatchObject({
+      schema: normalizeDashboardSchema(schema),
+      baseKey,
+    });
+
+    clearDashboardDraft("wf-draft");
+    expect(loadDashboardDraft("wf-draft")).toBeNull();
+  });
+});
 
 describe("toBackendPayload", () => {
   it("persists the creator-defined canvas action bar presentation", () => {
@@ -379,7 +560,7 @@ describe("saveDashboardDraft", () => {
       widgets: [],
     };
 
-    saveDashboardDraft(schema);
+    saveDashboardDraft(schema, "");
 
     const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}");
     expect(stored).toMatchObject({ workflowId: "wf-1", status: "draft" });
@@ -404,7 +585,7 @@ describe("saveDashboardDraft", () => {
       }],
     };
 
-    saveDashboardDraft(schema);
+    saveDashboardDraft(schema, "");
 
     expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}").widgets[0].layout).toEqual({
       x: 2,
