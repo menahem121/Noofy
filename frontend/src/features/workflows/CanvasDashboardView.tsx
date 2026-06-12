@@ -1415,48 +1415,47 @@ function OutputWidgetContent({
               : displayedImageUrls.length > 1
                 ? `Generated workflow output ${index + 1}`
                 : "Generated workflow output";
-            const canCompare = Boolean(imagePreviewEnabled && comparisonBeforeImageUrl);
-            if (!imagePreviewEnabled) {
-              return (
-                <div className="widget-output-image__preview widget-output-image__preview--static" key={`${output?.node_id ?? "output"}-${index}`}>
-                  <RetainedImage src={imageUrl} alt={alt} />
-                </div>
-              );
-            }
-            if (canCompare && comparisonBeforeImageUrl) {
+            if (comparisonBeforeImageUrl) {
               return (
                 <div
-                  className="widget-output-image__preview widget-output-image__preview--comparison"
+                  className={`widget-output-image__preview widget-output-image__preview--comparison${imagePreviewEnabled ? "" : " widget-output-image__preview--static"}`}
                   key={`${output?.node_id ?? "output"}-${index}`}
                 >
                   <ImageComparisonSlider
                     beforeSrc={comparisonBeforeImageUrl}
                     afterSrc={imageUrl}
                     alt={alt}
-                    comparisonEnabled={!livePreviewTargetsOutput}
-                    onOpen={livePreviewTargetsOutput
+                    comparisonEnabled={imagePreviewEnabled && !livePreviewTargetsOutput}
+                    onOpen={!imagePreviewEnabled || livePreviewTargetsOutput
                       ? undefined
                       : () => setPreviewImage({ url: imageUrl, alt, beforeImageUrl: comparisonBeforeImageUrl })}
                   />
                 </div>
               );
             }
+            const previewInteractive = imagePreviewEnabled && !livePreviewTargetsOutput;
             return (
-              <button
+              <div
                 key={`${output?.node_id ?? "output"}-${index}`}
-                className="widget-output-image__preview"
-                type="button"
-                aria-label={`Open ${alt} full-screen`}
-                aria-disabled={livePreviewTargetsOutput}
-                tabIndex={livePreviewTargetsOutput ? -1 : undefined}
+                className={`widget-output-image__preview${imagePreviewEnabled ? "" : " widget-output-image__preview--static"}`}
+                role={imagePreviewEnabled ? "button" : undefined}
+                aria-label={imagePreviewEnabled ? `Open ${alt} full-screen` : undefined}
+                aria-disabled={imagePreviewEnabled ? !previewInteractive : undefined}
+                tabIndex={previewInteractive ? 0 : imagePreviewEnabled ? -1 : undefined}
                 onClick={(event) => {
+                  if (!previewInteractive) return;
                   event.stopPropagation();
-                  if (livePreviewTargetsOutput) return;
+                  setPreviewImage({ url: imageUrl, alt });
+                }}
+                onKeyDown={(event) => {
+                  if (!previewInteractive || (event.key !== "Enter" && event.key !== " ")) return;
+                  event.preventDefault();
+                  event.stopPropagation();
                   setPreviewImage({ url: imageUrl, alt });
                 }}
               >
                 <RetainedImage src={imageUrl} alt={alt} />
-              </button>
+              </div>
             );
           })}
         </div>

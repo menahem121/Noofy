@@ -162,23 +162,27 @@ function OutputImageStage({
   children: ReactNode;
   onOpen?: () => void;
 }) {
-  if (onOpen) {
-    return (
-      <button
-        className="image-comparison-slider__stage image-comparison-slider__stage--button"
-        type="button"
-        aria-label={`Open ${alt} full-screen`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpen();
-        }}
-      >
-        {children}
-      </button>
-    );
-  }
-
-  return <div className="image-comparison-slider__stage">{children}</div>;
+  return (
+    <div
+      className={`image-comparison-slider__stage${onOpen ? " image-comparison-slider__stage--button" : ""}`}
+      role={onOpen ? "button" : undefined}
+      aria-label={onOpen ? `Open ${alt} full-screen` : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={(event) => {
+        if (!onOpen) return;
+        event.stopPropagation();
+        onOpen();
+      }}
+      onKeyDown={(event) => {
+        if (!onOpen || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {

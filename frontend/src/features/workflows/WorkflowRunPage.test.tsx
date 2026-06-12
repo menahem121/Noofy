@@ -1612,7 +1612,7 @@ describe("WorkflowRunPage", () => {
       });
       expect(document.querySelector(viewMode === "canvas" ? ".widget-output-image--live" : ".preview-stage--live")).toBeInTheDocument();
       if (viewMode === "canvas") {
-        const livePreviewButton = screen.getByAltText("Live generation preview").closest("button");
+        const livePreviewButton = screen.getByAltText("Live generation preview").closest("[role='button']");
         expect(livePreviewButton).toHaveAttribute("aria-disabled", "true");
         expect(livePreviewButton).toHaveAttribute("tabindex", "-1");
         expect(screen.queryByRole("button", { name: /download result a image/i })).not.toBeInTheDocument();
@@ -4971,6 +4971,81 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
     expect(promptCell).toHaveStyle({ width: "50%" });
     expect(promptCell).toHaveStyle({ height: "192px" });
+  });
+
+  it.each([
+    ["canceling", /^cancel$/i],
+    ["saving", /save dashboard/i],
+  ])("keeps a run output mounted after %s a layout edit", async (_action, actionName) => {
+    const terminalProgressRequest = deferred<Response>();
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        job_id: "job-layout-edit",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      },
+      (url) => {
+        if (url.endsWith("/api/jobs/job-layout-edit/progress")) {
+          return terminalProgressRequest.promise;
+        }
+        if (url.endsWith("/api/jobs/job-layout-edit/result")) {
+          return jsonResponse({
+            job_id: "job-layout-edit",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-layout-edit/outputs/view?filename=result.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+    expect(await screen.findByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    terminalProgressRequest.resolve(
+      jsonResponse({
+        job_id: "job-layout-edit",
+        status: "completed",
+        value: 2,
+        max: 2,
+        current_node: null,
+        message: "Execution completed",
+      }),
+    );
+
+    const outputImage = await screen.findByAltText("Generated workflow output");
+    fireEvent.load(outputImage);
+    await waitFor(() => expect(screen.getByAltText("Generated workflow output")).not.toHaveClass("retained-image--pending"));
+    const loadedOutputImage = screen.getByAltText("Generated workflow output");
+
+    fireEvent.click(screen.getByRole("button", { name: actionName }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument());
+    expect(screen.getByAltText("Generated workflow output")).toBe(loadedOutputImage);
+    expect(loadedOutputImage).not.toHaveClass("retained-image--pending");
   });
 
   it("saves a grid-snapped resized layout to user state overrides", async () => {
