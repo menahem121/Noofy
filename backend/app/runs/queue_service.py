@@ -314,7 +314,7 @@ class WorkflowRunQueueService:
             message = record.last_reason or "Workflow run could not be started."
         else:
             status = "queued_pending_memory"
-            message = "Waiting for enough memory to start this workflow."
+            message = _queued_wait_message(record.last_reason)
         return JobProgress(job_id=record.queue_id, queue_id=record.queue_id, status=status, message=message)
 
     def _queue_id_locked(self, handle: str) -> str | None:
@@ -354,6 +354,21 @@ class WorkflowRunQueueService:
             self._records.pop(queue_id, None)
             if record.submitted_job_id is not None:
                 self._job_to_queue.pop(record.submitted_job_id, None)
+
+
+def _queued_wait_message(reason: str | None) -> str:
+    """User-facing wait copy for a queued run that has not been submitted yet.
+
+    Runs queued behind the workflow's own active run (or its starting runner)
+    are normal queue behavior and must not read like a memory problem.
+    """
+    if reason in {"runner_submission_reservation_unavailable", "queued_behind_active_run"}:
+        return "This run is queued and will start when the current run finishes."
+    if reason == "waiting_for_active_workflow":
+        return "Noofy will start this workflow after the active run finishes."
+    if reason == "starting":
+        return "This run will start when the workflow's runner is ready."
+    return "Waiting for enough memory to start this workflow."
 
 
 def _now_iso() -> str:

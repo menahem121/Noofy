@@ -105,6 +105,38 @@ def test_workflow_queue_uses_uuid_alias_and_same_id_requeue() -> None:
     assert queue.resolve(record.queue_id).job_id == "job-1"
 
 
+def test_queued_run_progress_reads_as_queue_state_not_memory_wait() -> None:
+    """Runs queued behind the workflow's own active run (or starting runner)
+    must not report a misleading memory-wait message."""
+    queue = WorkflowRunQueueService()
+    expectations = {
+        "runner_submission_reservation_unavailable": (
+            "This run is queued and will start when the current run finishes."
+        ),
+        "queued_behind_active_run": (
+            "This run is queued and will start when the current run finishes."
+        ),
+        "waiting_for_active_workflow": (
+            "Noofy will start this workflow after the active run finishes."
+        ),
+        "starting": "This run will start when the workflow's runner is ready.",
+        "queued_pending_memory": "Waiting for enough memory to start this workflow.",
+        None: "Waiting for enough memory to start this workflow.",
+    }
+    for reason, message in expectations.items():
+        record = queue.enqueue(
+            workflow_id="wf",
+            inputs={},
+            options={},
+            run_submission_snapshot=_snapshot(),
+            reason=reason,
+        )
+        progress = queue.progress(record.queue_id)
+        assert progress is not None
+        assert progress.status == "queued_pending_memory"
+        assert progress.message == message, reason
+
+
 def test_workflow_queue_fails_after_eight_transient_handoff_failures() -> None:
     queue = WorkflowRunQueueService()
     record = queue.enqueue(

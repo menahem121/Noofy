@@ -367,7 +367,8 @@ describe("App workflow tabs", () => {
     expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
-    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeDisabled();
+    // Run stays enabled during the active run; pressing it queues another run.
+    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeEnabled();
     expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));

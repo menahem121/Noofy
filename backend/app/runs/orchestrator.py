@@ -274,12 +274,13 @@ class RunOrchestrator:
             runner_unavailable = await self.ensure_workflow_runner(package)
             if isinstance(runner_unavailable, dict):
                 runner_start_queue_id = runner_unavailable.get("queue_id")
+                wait_reason = str(runner_unavailable.get("status") or "waiting_for_runner_start")
                 queued = self.workflow_run_queue_service.enqueue(
                     workflow_id=workflow_id,
                     inputs=runtime_inputs,
                     options=options,
                     run_submission_snapshot=run_submission_snapshot,
-                    reason=str(runner_unavailable.get("status") or "waiting_for_runner_start"),
+                    reason=wait_reason,
                     prerequisite_runner_start_queue_id=(
                         str(runner_start_queue_id)
                         if runner_start_queue_id is not None
@@ -287,16 +288,26 @@ class RunOrchestrator:
                     ),
                     queue_id=queue_id,
                 )
+                # The workflow's own runner is already starting: queueing behind
+                # it is normal background behavior, so the frontend keeps the
+                # state silent. Runner starts queued behind memory or another
+                # workflow's GPU work remain user-facing waits.
+                if wait_reason == "starting":
+                    state = "queued_behind_active_run"
+                    message = "This run will start when the workflow's runner is ready."
+                else:
+                    state = "waiting_for_active_workflow"
+                    message = "This workflow is waiting for its isolated runner to become ready."
                 return EngineJob(
                     job_id=queued.queue_id,
                     queue_id=queued.queue_id,
                     workflow_id=workflow_id,
                     engine="noofy",
                     status="queued_pending_memory",
-                    message="This workflow is waiting for its isolated runner to become ready.",
+                    message=message,
                     memory_status={
-                        "state": "waiting_for_active_workflow",
-                        "message": "This workflow is waiting for its isolated runner to become ready.",
+                        "state": state,
+                        "message": message,
                         "runner_start_queue_id": queued.prerequisite_runner_start_queue_id,
                     },
                 )

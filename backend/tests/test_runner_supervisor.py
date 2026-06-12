@@ -11,6 +11,7 @@ from app.diagnostics import LogStore
 from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo, WorkflowValidationResult
 from app.engine.service import EngineService
+from app.runs.queue_service import WorkflowRunQueueStatus
 from app.runtime.memory import service as memory_service_module
 from app.runtime.memory.memory_governor import (
     BackendAllocatorMemorySample,
@@ -1184,6 +1185,56 @@ async def test_second_run_of_same_workflow_queues_silently_behind_active_run() -
 
 
 @pytest.mark.anyio
+async def test_repeated_runs_queue_n_deep_behind_active_run() -> None:
+    """Pressing Run repeatedly while the workflow is running queues each run
+    cleanly: active run + N queued, all silent, handed off in FIFO order."""
+    adapter = RecordingAdapter(
+        models=[ModelInfo(folder="checkpoints", filename="v1-5-pruned-emaonly-fp16.safetensors")],
+        next_job_id="job-from-queue-1",
+    )
+    service, supervisor = _build_service(adapter)
+    supervisor.mark_runner_job_started(CORE_RUNNER_ID, "job-active", workflow_id="text_to_image_v0")
+
+    first = await service.run_workflow("text_to_image_v0", inputs={"prompt": "first queued"}, options={})
+    second = await service.run_workflow("text_to_image_v0", inputs={"prompt": "second queued"}, options={})
+
+    assert isinstance(first, EngineJob)
+    assert isinstance(second, EngineJob)
+    for queued in (first, second):
+        assert queued.status == "queued_pending_memory"
+        assert queued.memory_status is not None
+        assert queued.memory_status["state"] == "queued_behind_active_run"
+    assert first.queue_id != second.queue_id
+    assert adapter.run_calls == []
+
+    # Queue progress reads as queue state, not as a memory wait.
+    queue_progress = service.workflow_run_queue_service.progress(first.queue_id)
+    assert queue_progress is not None
+    assert queue_progress.message == "This run is queued and will start when the current run finishes."
+
+    # First queued run is handed off when the active run finishes; the second
+    # stays queued behind the newly running one.
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "job-active")
+    await asyncio.sleep(0.05)
+    assert [inputs["prompt"] for _, inputs in adapter.run_calls] == ["first queued"]
+    second_record = service.workflow_run_queue_service.get(second.queue_id)
+    assert second_record is not None
+    assert second_record.status in {
+        WorkflowRunQueueStatus.QUEUED,
+        WorkflowRunQueueStatus.REQUEUED,
+    }
+
+    # And the second follows once the first finishes.
+    adapter._next_job_id = "job-from-queue-2"
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "job-from-queue-1")
+    await asyncio.sleep(0.05)
+    assert [inputs["prompt"] for _, inputs in adapter.run_calls] == [
+        "first queued",
+        "second queued",
+    ]
+
+
+@pytest.mark.anyio
 async def test_second_run_behind_another_workflow_keeps_visible_waiting_state() -> None:
     """Waiting on a different workflow's run still surfaces user-facing context."""
     adapter = RecordingAdapter(
@@ -1784,6 +1835,142 @@ async def test_custom_node_run_click_survives_queued_runner_start() -> None:
 
     assert queued.status == "queued_pending_memory"
     assert queued.queue_id == queued.job_id
+    assert service.workflow_run_queue_service.resolve(queued.job_id).job_id == "isolated-job"
+    assert isolated_adapter.run_calls == [("isolated-job", {})]
+    assert core_adapter.run_calls == []
+
+
+class GatedStartAutoPrepareLifecycle(AutoPrepareLifecycle):
+    """Holds runner starts at a gate so tests can overlap Run presses."""
+
+    def __init__(self, supervisor: RunnerSupervisor, adapter: RecordingAdapter) -> None:
+        super().__init__(supervisor, adapter)
+        self.install_status = "ready"
+        self.start_gate = asyncio.Event()
+
+    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+        self.start_calls.append(workflow_id)
+        await self.start_gate.wait()
+        descriptor = _isolated_descriptor(status=RunnerStatus.READY)
+        self.supervisor.upsert_runner(descriptor, self.adapter)
+        self.supervisor.bind_workflow_runner(workflow_id, descriptor.runner_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "ready",
+            "runner": descriptor.model_dump(mode="json"),
+            "pid": descriptor.pid,
+            "install_status": "ready",
+            "error": None,
+        }
+
+
+@pytest.mark.anyio
+async def test_rapid_run_presses_share_one_runner_start_and_queue_extra_runs() -> None:
+    """Two overlapping Run presses on a cold isolated workflow start the runner
+    once; the extra press queues behind the first instead of racing a second
+    prepare/start cycle."""
+    core_adapter = RecordingAdapter()
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = GatedStartAutoPrepareLifecycle(supervisor, isolated_adapter)
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    first_press = asyncio.create_task(
+        service.run_workflow("text_to_image_v0", inputs={"prompt": "first"}, options={})
+    )
+    second_press = asyncio.create_task(
+        service.run_workflow("text_to_image_v0", inputs={"prompt": "second"}, options={})
+    )
+    await asyncio.sleep(0.05)
+    # The second press waits on the per-workflow ensure lock instead of racing
+    # a second start while the first is still in flight.
+    assert lifecycle.start_calls == ["text_to_image_v0"]
+
+    lifecycle.start_gate.set()
+    results = await asyncio.gather(first_press, second_press)
+
+    assert lifecycle.start_calls == ["text_to_image_v0"]
+    assert all(isinstance(result, EngineJob) for result in results)
+    submitted = [job for job in results if job.status != "queued_pending_memory"]
+    queued = [job for job in results if job.status == "queued_pending_memory"]
+    assert len(submitted) == 1
+    assert len(queued) == 1
+    assert queued[0].memory_status is not None
+    assert queued[0].memory_status["state"] == "queued_behind_active_run"
+    assert len(isolated_adapter.run_calls) == 1
+    assert core_adapter.run_calls == []
+
+
+class StartingAutoPrepareLifecycle(QueuedAutoPrepareLifecycle):
+    """Reports the runner as actively starting until `runner_ready` flips."""
+
+    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+        if not self.runner_ready:
+            self.start_calls.append(workflow_id)
+            return {
+                "workflow_id": workflow_id,
+                "status": RunnerStatus.STARTING.value,
+                "runner": None,
+                "pid": None,
+                "install_status": "ready",
+                "error": None,
+            }
+        return await super().start_workflow_runner(workflow_id)
+
+
+@pytest.mark.anyio
+async def test_run_during_in_flight_runner_start_queues_silently() -> None:
+    """A Run press while the workflow's own runner is still starting queues the
+    run silently instead of failing with 'runner is not ready: starting'."""
+    core_adapter = RecordingAdapter()
+    isolated_adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="isolated-job",
+    )
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = StartingAutoPrepareLifecycle(supervisor, isolated_adapter)
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    queued = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(queued, EngineJob)
+    assert queued.status == "queued_pending_memory"
+    assert queued.memory_status is not None
+    assert queued.memory_status["state"] == "queued_behind_active_run"
+    assert isolated_adapter.run_calls == []
+
+    lifecycle.runner_ready = True
+    service.run_lifecycle_service.request_dispatch("runner_ready")
+    await asyncio.sleep(0.05)
     assert service.workflow_run_queue_service.resolve(queued.job_id).job_id == "isolated-job"
     assert isolated_adapter.run_calls == [("isolated-job", {})]
     assert core_adapter.run_calls == []

@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -211,6 +212,10 @@ class EngineService:
             launch_settings_store=comfyui_launch_settings_store,
             on_endpoint_changed=self._reconfigure_core_runner_endpoint,
         )
+
+        # Rapid Run presses must not race two prepare/start cycles for the
+        # same workflow runner; later presses wait, then queue behind it.
+        self._workflow_runner_ensure_locks: dict[str, asyncio.Lock] = {}
 
         # Shared state dicts — passed by reference to sub-services so they
         # all see the same live data without coordinator coupling.
@@ -712,6 +717,17 @@ class EngineService:
         if capsule_lock is None or not capsule_lock.custom_nodes:
             return None
 
+        # Rapid repeated Run presses must not race concurrent prepare/start
+        # cycles; the second press waits, then sees the bound runner and queues.
+        lock = self._workflow_runner_ensure_locks.setdefault(workflow_id, asyncio.Lock())
+        async with lock:
+            return await self._ensure_workflow_runner_for_run_locked(
+                workflow_id, capsule_lock
+            )
+
+    async def _ensure_workflow_runner_for_run_locked(
+        self, workflow_id: str, capsule_lock: CapsuleLock
+    ) -> str | dict[str, object] | None:
         runner = self.runner_supervisor.runner_for_workflow(workflow_id)
         expected_compatibility_key = (
             getattr(capsule_lock.runtime, "runner_process_compatibility_key", None)
@@ -791,9 +807,12 @@ class EngineService:
             RunnerStatus.IDLE.value,
             RunnerStatus.IDLE_WARM.value,
         }:
+            # A runner that is already starting for this workflow is not a
+            # failure: the run queues and dispatches once the runner is ready.
             if start.get("status") in {
                 RunnerStatus.QUEUED_PENDING_MEMORY.value,
                 RunnerStatus.QUEUED_PENDING_SWITCH.value,
+                RunnerStatus.STARTING.value,
             }:
                 return start
             return _workflow_runner_unavailable_message(start)

@@ -1724,7 +1724,8 @@ describe("WorkflowRunPage", () => {
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByText("0%")).toBeInTheDocument();
     expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+    // Run stays enabled while a run is pending: another press queues a run.
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
@@ -2803,6 +2804,89 @@ describe("WorkflowRunPage", () => {
       expect(document.querySelector(".preview-panel .panel-heading p")).not.toBeInTheDocument();
     });
     expect(screen.queryByText("This run is queued and will start when the current run finishes.")).not.toBeInTheDocument();
+  });
+
+  it("keeps Run enabled during an active run so repeated presses queue more runs", async () => {
+    let runCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, () => {
+      runCalls += 1;
+      if (runCalls === 1) {
+        return {
+          job_id: "job-first",
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "running",
+          message: "Generating image...",
+        };
+      }
+      return {
+        job_id: `queue-${runCalls}`,
+        queue_id: `queue-${runCalls}`,
+        workflow_id: "text_to_image_v0",
+        engine: "noofy",
+        status: "queued_pending_memory",
+        message: "This run is queued and will start when the current run finishes.",
+        memory_status: {
+          state: "queued_behind_active_run",
+          message: "This run is queued and will start when the current run finishes.",
+        },
+      };
+    }, (url) => {
+      if (url.endsWith("/api/jobs/job-first/progress")) {
+        return jsonResponse({
+          job_id: "job-first",
+          status: "running",
+          value: 1,
+          max: 4,
+          current_node: null,
+          message: "Generating image...",
+        });
+      }
+      const queueProgressMatch = url.match(/\/api\/jobs\/(queue-\d+)\/progress$/);
+      if (queueProgressMatch) {
+        return jsonResponse({
+          job_id: queueProgressMatch[1],
+          queue_id: queueProgressMatch[1],
+          status: "queued_pending_memory",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "This run is queued and will start when the current run finishes.",
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+
+    // Three presses: the first starts the run, the next two queue behind it.
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runCalls).toBe(1));
+    expect(runButton).toBeEnabled();
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runCalls).toBe(2));
+    expect(runButton).toBeEnabled();
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runCalls).toBe(3));
+    expect(runButton).toBeEnabled();
+
+    // Current run plus the two queued presses show up in the queue indicator.
+    expect(await screen.findByTitle("3 runs remaining")).toBeInTheDocument();
+
+    // Queueing behind the workflow's own runs stays silent and never blocks.
+    expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Waiting for another run")).not.toBeInTheDocument();
+    expect(screen.queryByText(/handoff/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Run queued")).not.toBeInTheDocument();
+
+    // The active run's progress stays on screen instead of flashing back to a
+    // preparing/starting state when more runs are queued.
+    expect(screen.queryByText("Starting workflow...")).not.toBeInTheDocument();
+    expect(screen.queryByText(/preparing workflow/i)).not.toBeInTheDocument();
   });
 
   it("clears queued memory copy after cancellation", async () => {
@@ -4382,7 +4466,9 @@ describe("WorkflowRunPage", () => {
       engineOfflineRuntimeState,
     );
 
-    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeDisabled();
+    // While progress is active the stale offline status is not trusted, and
+    // Run stays enabled so another press can queue behind the active run.
+    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
     expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
   });

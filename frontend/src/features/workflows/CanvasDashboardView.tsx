@@ -597,7 +597,13 @@ export function CanvasDashboardView({
                 className="primary-button canvas-action-cluster__run"
                 type="button"
                 disabled={!runState.canRun}
-                title={!runState.canRun && runState.disabledReason ? runState.disabledReason : undefined}
+                title={
+                  !runState.canRun && runState.disabledReason
+                    ? runState.disabledReason
+                    : runState.canRun && runState.isRunning
+                      ? "Queue another run behind the current one"
+                      : undefined
+                }
                 aria-describedby={!runState.canRun && runState.disabledReason ? "canvas-run-disabled-reason" : undefined}
                 onClick={onRun}
               >

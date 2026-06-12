@@ -771,24 +771,39 @@ export function WorkflowRunPage({
     const runCount = clampBatchCount(batchCount);
     const submittedValuesSnapshot = { ...submittedInputValues };
     // Seeds whose value should advance after each queued generation.
-    const runInputs: Record<string, unknown> = { ...submittedValuesSnapshot };
     const advanceableSeedIds = Object.keys(seedDefaultModes).filter(
-      (id) => seedModes[id] !== "fixed" && typeof runInputs[id] === "number",
+      (id) => seedModes[id] !== "fixed" && typeof submittedValuesSnapshot[id] === "number",
     );
-    const persistAdvancedSeeds = () => {
+    // Precompute one input set per generation and persist the advanced seed
+    // values synchronously, so a rapid next Run press starts from the advanced
+    // seeds instead of re-submitting the ones already queued here.
+    const generationInputs: Record<string, unknown>[] = [];
+    const seedCursor: Record<string, unknown> = { ...submittedValuesSnapshot };
+    for (let index = 0; index < runCount; index += 1) {
+      generationInputs.push({ ...seedCursor });
       for (const id of advanceableSeedIds) {
-        setInputValue(id, runInputs[id]);
+        seedCursor[id] = nextSeedValue(seedCursor[id], seedModes[id], inputIndex.get(id)?.validation);
       }
-    };
+    }
+    for (const id of advanceableSeedIds) {
+      setInputValue(id, seedCursor[id]);
+    }
     const outputPreferencesSnapshot = getOutputPreferencesSnapshot();
     const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
       state.packageData,
       allControls,
       submittedValuesSnapshot,
     );
+    // Pressing Run while this workflow already has an active run queues more
+    // runs behind it: keep the active run's progress, live preview, and
+    // comparison on screen instead of flashing back to a starting state.
+    const queueingBehindActiveRun =
+      trackedRunsRef.current.some(isTrackedRunActive) || isActiveWorkflowProgress(displayedProgress);
     beginRunSubmission();
-    clearLivePreview();
-    setRunComparisonInputAssetId(submittedComparisonInputAssetId);
+    if (!queueingBehindActiveRun) {
+      clearLivePreview();
+      setRunComparisonInputAssetId(submittedComparisonInputAssetId);
+    }
     setFailureDialog(null);
     setInputErrorDialog(null);
     if (shouldTrackPreparation) {
@@ -800,17 +815,21 @@ export function WorkflowRunPage({
     } else {
       setRunPreparationDialog(null);
     }
-    setState((current) => ({
-      ...current,
-      job: null,
-      progress: optimisticProgress(),
-      error: null,
-    }));
+    if (queueingBehindActiveRun) {
+      setState((current) => ({ ...current, error: null }));
+    } else {
+      setState((current) => ({
+        ...current,
+        job: null,
+        progress: optimisticProgress(),
+        error: null,
+      }));
+    }
 
     try {
       for (let index = 0; index < runCount; index += 1) {
         const response = await runWorkflow(workflowId, {
-          inputs: { ...runInputs },
+          inputs: { ...generationInputs[index] },
           options: {},
           output_preferences_snapshot: outputPreferencesSnapshot,
         });
@@ -837,27 +856,20 @@ export function WorkflowRunPage({
         }
 
         setSubmittedJob(response);
-        // A generation was queued — advance the seed(s) for the next one.
-        for (const id of advanceableSeedIds) {
-          runInputs[id] = nextSeedValue(runInputs[id], seedModes[id], inputIndex.get(id)?.validation);
-        }
         if (isTrackableJob(response)) {
           addTrackedRun(trackedRunFromJob(response));
         } else {
           stopPreparationTracking();
           finishRunSubmission();
           setRunPreparationDialog(null);
-          persistAdvancedSeeds();
           return;
         }
       }
       stopPreparationTracking();
       finishRunSubmission();
       setRunPreparationDialog(null);
-      persistAdvancedSeeds();
       void pollTrackedRunsDue(true);
     } catch (error) {
-      persistAdvancedSeeds();
       stopPreparationTracking();
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
@@ -1180,7 +1192,12 @@ export function WorkflowRunPage({
       }
       const nextRun = trackedRunFromProgress(run, progress, Date.now());
       upsertTrackedRun(nextRun, progress);
-      setState((current) => ({ ...current, progress, error: null }));
+      // Background polls of queued runs must not replace the progress of the
+      // run that is currently displayed (the bar would flicker back to zero).
+      const currentRunAfterUpdate = selectCurrentTrackedRun(trackedRunsRef.current);
+      if (!currentRunAfterUpdate || currentRunAfterUpdate.clientId === nextRun.clientId) {
+        setState((current) => ({ ...current, progress, error: null }));
+      }
 
       if (!terminalStatuses.has(progress.status)) return;
       if (isQueueOnlyTerminal(nextRun, progress)) {
@@ -1310,10 +1327,14 @@ export function WorkflowRunPage({
   function setSubmittedJob(job: EngineJob) {
     const progress = progressFromSubmittedJob(job);
     recordWorkflowJob(job, progress);
+    // A submission that queues behind a different active run must not replace
+    // the displayed progress of the run that is currently executing.
+    const currentRun = selectCurrentTrackedRun(trackedRunsRef.current);
+    const keepDisplayedProgress = Boolean(currentRun && !progressMatchesTrackedRun(progress, currentRun));
     setState((current) => ({
       ...current,
       job,
-      progress,
+      progress: keepDisplayedProgress ? current.progress : progress,
     }));
   }
 
@@ -1494,6 +1515,8 @@ export function WorkflowRunPage({
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
+  // An active run does not disable Run: pressing it again queues another run
+  // behind the current one. Only real blockers gate the button.
   const canRun = Boolean(
     state.workflowStatus?.can_prepare !== false
       && activeValidation?.valid
@@ -1501,21 +1524,19 @@ export function WorkflowRunPage({
       && !backendKnownUnreachable
       && !engineKnownUnavailable
       && !isBlockedByMemory
-      && !isRunning
       && !memoryRefusesRun,
   );
   const hasDownloadableRequiredModels = requiredModelDownloadSelections(activeModelSummary, workflowId).length > 0;
   const hasRequiredModelFixAction = Boolean(
     activeModelSummary && (missingModels.length > 0 || activeModelSummary.ready_to_run === false),
   );
-  const runDisabledReason = canRun || isRunning
+  const runDisabledReason = canRun
     ? null
     : workflowRunDisabledReason({
         backendKnownUnreachable,
         engineKnownUnavailable,
         installStatus,
         isBlockedByMemory,
-        isRunning,
         isWaitingForMemory,
         loading: state.loading,
         memoryStatus,
@@ -2064,7 +2085,13 @@ export function WorkflowRunPage({
 
           <div className="button-row">
             <BatchCountStepper value={batchCount} onChange={setBatchCount} />
-            <button className="primary-button" type="button" disabled={!canRun} onClick={() => void handleRun()}>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!canRun}
+              title={isRunning ? "Queue another run behind the current one" : undefined}
+              onClick={() => void handleRun()}
+            >
               {isRunning ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
               Run Workflow
             </button>
@@ -3540,7 +3567,6 @@ interface RunDisabledReasonInput {
   engineKnownUnavailable: boolean;
   installStatus: string | null;
   isBlockedByMemory: boolean;
-  isRunning: boolean;
   isWaitingForMemory: boolean;
   loading: boolean;
   memoryStatus: MemoryStatus | null;
@@ -3555,7 +3581,6 @@ function workflowRunDisabledReason({
   engineKnownUnavailable,
   installStatus,
   isBlockedByMemory,
-  isRunning,
   isWaitingForMemory,
   loading,
   memoryStatus,
@@ -3568,7 +3593,6 @@ function workflowRunDisabledReason({
   if (isBlockedByMemory) return "Noofy cannot safely start this workflow with the memory available right now.";
   if (isWaitingForMemory && memoryStatus) return memoryStatusDisplay(memoryStatus).message;
   if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
-  if (isRunning) return "This workflow is already running.";
   if (backendKnownUnreachable) return "The local app service is offline.";
   if (engineKnownUnavailable) return "The ComfyUI engine is not ready yet.";
   if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {
