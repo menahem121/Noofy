@@ -1689,6 +1689,44 @@ export function WorkflowRunPage({
     }
   }
 
+  function handleCanvasControlTitleChange(controlId: string, title: string) {
+    setState((current) => updatePackageDashboardTitle(current, "control", controlId, title));
+  }
+
+  function handleCanvasGroupTitleChange(groupId: string, title: string) {
+    setState((current) => updatePackageDashboardTitle(current, "group", groupId, title));
+  }
+
+  async function handleCanvasControlTitleCommit(controlId: string, title: string) {
+    if (!packageDataForWorkflow) return;
+    try {
+      await saveDashboard(
+        workflowId,
+        dashboardSavePayloadWithTitle(packageDataForWorkflow, "control", controlId, title),
+      );
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
+  async function handleCanvasGroupTitleCommit(groupId: string, title: string) {
+    if (!packageDataForWorkflow) return;
+    try {
+      await saveDashboard(
+        workflowId,
+        dashboardSavePayloadWithTitle(packageDataForWorkflow, "group", groupId, title),
+      );
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
   function handleCancelLayoutEdit() {
     setDraftLayoutOverrides(null);
     setDraftActionBarPosition(null);
@@ -2054,6 +2092,10 @@ export function WorkflowRunPage({
             onSaveLayout={() => void handleSaveLayout()}
             onCancelLayoutEdit={handleCancelLayoutEdit}
             onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
+            onControlTitleChange={handleCanvasControlTitleChange}
+            onControlTitleCommit={(controlId, title) => void handleCanvasControlTitleCommit(controlId, title)}
+            onGroupTitleChange={handleCanvasGroupTitleChange}
+            onGroupTitleCommit={(groupId, title) => void handleCanvasGroupTitleCommit(groupId, title)}
             onLayoutOverride={(controlId: string, layout: GridItemLayout) =>
               setDraftLayoutOverrides((current) => ({ ...(current ?? layoutOverrides), [controlId]: layout }))
             }
@@ -4451,15 +4493,41 @@ function dashboardSavePayloadWithActionBarPosition(
   packageData: WorkflowPackageResponse,
   position: CanvasActionBarPosition,
 ): DashboardSavePayload {
+  return dashboardSavePayloadWithUpdates(packageData, { actionBarPosition: position });
+}
+
+function dashboardSavePayloadWithTitle(
+  packageData: WorkflowPackageResponse,
+  kind: "control" | "group",
+  id: string,
+  title: string,
+): DashboardSavePayload {
+  return dashboardSavePayloadWithUpdates(packageData, {
+    titleUpdate: { kind, id, title },
+  });
+}
+
+function dashboardSavePayloadWithUpdates(
+  packageData: WorkflowPackageResponse,
+  updates: {
+    actionBarPosition?: CanvasActionBarPosition;
+    titleUpdate?: { kind: "control" | "group"; id: string; title: string };
+  },
+): DashboardSavePayload {
   const sections = packageData.dashboard.sections.map((section) => {
     const controlTypeById = new Map(section.controls.map((control) => [control.id, control.type]));
     return {
       ...section,
       controls: section.controls.map((control) => {
-        if (!control.layout) return control;
+        const label =
+          updates.titleUpdate?.kind === "control" && updates.titleUpdate.id === control.id
+            ? updates.titleUpdate.title
+            : control.label;
+        if (!control.layout) return { ...control, label };
         const minimum = minimumSizeForWidgetType(control.type);
         return {
           ...control,
+          label,
           layout: {
             x: control.layout.x,
             y: control.layout.y,
@@ -4471,13 +4539,18 @@ function dashboardSavePayloadWithActionBarPosition(
         };
       }),
       groups: (section.groups ?? []).map((group) => {
-        if (!group.layout) return group;
+        const title =
+          updates.titleUpdate?.kind === "group" && updates.titleUpdate.id === group.id
+            ? updates.titleUpdate.title
+            : group.title;
+        if (!group.layout) return { ...group, title };
         const childTypes = group.control_ids
           .map((controlId) => controlTypeById.get(controlId))
           .filter((controlType): controlType is string => Boolean(controlType));
         const minimum = minimumSizeForWidgetGroup(childTypes);
         return {
           ...group,
+          title,
           layout: {
             x: group.layout.x,
             y: group.layout.y,
@@ -4497,13 +4570,15 @@ function dashboardSavePayloadWithActionBarPosition(
       status: "configured",
       outputs: packageData.outputs,
       sections,
-      presentation: {
-        ...(packageData.dashboard.presentation ?? {}),
-        action_bar: {
-          x: Math.max(0, Math.round(position.x)),
-          y: Math.max(0, Math.round(position.y)),
-        },
-      },
+      presentation: updates.actionBarPosition
+        ? {
+            ...(packageData.dashboard.presentation ?? {}),
+            action_bar: {
+              x: Math.max(0, Math.round(updates.actionBarPosition.x)),
+              y: Math.max(0, Math.round(updates.actionBarPosition.y)),
+            },
+          }
+        : packageData.dashboard.presentation,
     },
   };
 }
@@ -4526,6 +4601,39 @@ function updatePackageActionBarPosition(
             y: Math.max(0, Math.round(position.y)),
           },
         },
+      },
+    },
+  };
+}
+
+function updatePackageDashboardTitle(
+  current: RunPageState,
+  kind: "control" | "group",
+  id: string,
+  title: string,
+): RunPageState {
+  if (!current.packageData) return current;
+  return {
+    ...current,
+    packageData: {
+      ...current.packageData,
+      dashboard: {
+        ...current.packageData.dashboard,
+        sections: current.packageData.dashboard.sections.map((section) => ({
+          ...section,
+          controls:
+            kind === "control"
+              ? section.controls.map((control) =>
+                  control.id === id ? { ...control, label: title } : control,
+                )
+              : section.controls,
+          groups:
+            kind === "group"
+              ? section.groups?.map((group) =>
+                  group.id === id ? { ...group, title } : group,
+                )
+              : section.groups,
+        })),
       },
     },
   };

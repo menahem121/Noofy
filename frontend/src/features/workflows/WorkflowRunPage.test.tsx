@@ -3651,6 +3651,38 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("edits a canvas widget title inline and saves the dashboard label without touching the widget body", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    await screen.findByRole("button", { name: /workflow options/i });
+    const promptCell = document.querySelector('[data-dashboard-control-id="prompt"]') as HTMLElement;
+    expect(promptCell).toBeInTheDocument();
+
+    fireEvent.doubleClick(within(promptCell).getByRole("heading", { name: "Prompt" }));
+
+    const titleInput = within(promptCell).getByRole("textbox", { name: "Edit widget name" });
+    fireEvent.change(titleInput, { target: { value: "Creative prompt" } });
+
+    expect(titleInput).toHaveValue("Creative prompt");
+    expect(promptCell.querySelector("textarea")).toHaveValue("a lake");
+
+    fireEvent.blur(titleInput);
+
+    expect(within(promptCell).getByRole("heading", { name: "Creative prompt" })).toBeInTheDocument();
+    await waitFor(() => {
+      const dashboardSave = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/workflows/text_to_image_v0/dashboard") &&
+          (init as RequestInit | undefined)?.method === "PUT" &&
+          JSON.parse(((init as RequestInit | undefined)?.body as string | undefined) ?? "{}")
+            .dashboard?.sections?.[0]?.controls?.[0]?.label === "Creative prompt",
+      );
+      expect(dashboardSave).toBeDefined();
+    });
+  });
+
   it("orders workflow toolbar controls as batch, run, cancel, then options", async () => {
     mockConfiguredDashboardFetch(fetchMock);
 

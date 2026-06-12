@@ -335,6 +335,39 @@
   cursor: default;
 }
 
+.canvas-widget-title {
+  width: fit-content;
+  max-width: 100%;
+  cursor: text;
+  transition: color 180ms ease;
+}
+
+.canvas-widget-title:hover {
+  color: var(--primary-hover);
+}
+
+.canvas-widget-title-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 7px;
+  border: 1px solid rgba(139, 92, 246, 0.72);
+  border-radius: 7px;
+  outline: none;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.14);
+}
+
+.canvas-widget-title-input--h4 {
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .widget-canvas-cell__content {
   flex: 1;
   display: flex;

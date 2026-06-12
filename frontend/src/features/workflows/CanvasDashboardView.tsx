@@ -163,6 +163,10 @@ interface CanvasDashboardViewProps {
   onSaveLayout: () => void;
   onCancelLayoutEdit: () => void;
   onEditWidgets?: () => void;
+  onControlTitleChange: (controlId: string, title: string) => void;
+  onControlTitleCommit: (controlId: string, title: string) => void;
+  onGroupTitleChange: (groupId: string, title: string) => void;
+  onGroupTitleCommit: (groupId: string, title: string) => void;
   onLayoutOverride: (controlId: string, layout: GridItemLayout) => void;
   onActionBarPositionChange: (position: CanvasActionBarPosition) => void;
 }
@@ -222,6 +226,10 @@ export function CanvasDashboardView({
   onSaveLayout,
   onCancelLayoutEdit,
   onEditWidgets,
+  onControlTitleChange,
+  onControlTitleCommit,
+  onGroupTitleChange,
+  onGroupTitleCommit,
   onLayoutOverride,
   onActionBarPositionChange,
 }: CanvasDashboardViewProps) {
@@ -818,6 +826,10 @@ export function CanvasDashboardView({
                 onOutputPreferenceChange={onOutputPreferenceChange}
                 onSaveOutputToGallery={onSaveOutputToGallery}
                 onCancelOutputGallerySave={onCancelOutputGallerySave}
+                onControlTitleChange={onControlTitleChange}
+                onControlTitleCommit={onControlTitleCommit}
+                onGroupTitleChange={onGroupTitleChange}
+                onGroupTitleCommit={onGroupTitleCommit}
                 onMoveStart={(event) => handleMoveStart(event, item.id, displayLayout)}
                 onResizeStart={(event, handle) => handleResizeStart(event, item.id, displayLayout, handle)}
               />
@@ -911,6 +923,10 @@ function CanvasWidgetCell({
   onOutputPreferenceChange,
   onSaveOutputToGallery,
   onCancelOutputGallerySave,
+  onControlTitleChange,
+  onControlTitleCommit,
+  onGroupTitleChange,
+  onGroupTitleCommit,
   onMoveStart,
   onResizeStart,
 }: {
@@ -943,6 +959,10 @@ function CanvasWidgetCell({
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onSaveOutputToGallery?: (controlId: string) => void;
   onCancelOutputGallerySave?: (controlId: string) => void;
+  onControlTitleChange: (controlId: string, title: string) => void;
+  onControlTitleCommit: (controlId: string, title: string) => void;
+  onGroupTitleChange: (groupId: string, title: string) => void;
+  onGroupTitleCommit: (groupId: string, title: string) => void;
   onMoveStart: (event: PointerEvent<HTMLElement>) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>, handle: DashboardResizeHandle) => void;
 }) {
@@ -994,7 +1014,25 @@ function CanvasWidgetCell({
             <Icon size={16} />
           </span>
           <div>
-            <h3>{title}</h3>
+            <EditableCanvasTitle
+              value={title}
+              ariaLabel={isGroup ? "Edit group name" : "Edit widget name"}
+              disabled={isEditingLayout}
+              onChange={(nextTitle) => {
+                if (isGroup) {
+                  onGroupTitleChange(item.group.id, nextTitle);
+                  return;
+                }
+                onControlTitleChange(control!.id, nextTitle);
+              }}
+              onCommit={(nextTitle) => {
+                if (isGroup) {
+                  onGroupTitleCommit(item.group.id, nextTitle);
+                  return;
+                }
+                onControlTitleCommit(control!.id, nextTitle);
+              }}
+            />
             {description ? <p>{description}</p> : null}
           </div>
         </div>
@@ -1074,6 +1112,8 @@ function CanvasWidgetCell({
             gallerySaveByControlId={gallerySaveByControlId}
             onSaveOutputToGallery={onSaveOutputToGallery}
             onCancelOutputGallerySave={onCancelOutputGallerySave}
+            onControlTitleChange={onControlTitleChange}
+            onControlTitleCommit={onControlTitleCommit}
           />
         ) : control!.type === "note" ? (
           <DashboardNoteBody body={control!.description} />
@@ -1149,6 +1189,8 @@ function GroupedCanvasControls({
   onOutputPreferenceChange,
   onSaveOutputToGallery,
   onCancelOutputGallerySave,
+  onControlTitleChange,
+  onControlTitleCommit,
 }: {
   item: Extract<DashboardTopLevelControlItem, { kind: "group" }>;
   inputIndex: Map<string, WorkflowInputDef>;
@@ -1177,6 +1219,8 @@ function GroupedCanvasControls({
   onOutputPreferenceChange: (controlId: string, autoSave: boolean) => void;
   onSaveOutputToGallery?: (controlId: string) => void;
   onCancelOutputGallerySave?: (controlId: string) => void;
+  onControlTitleChange: (controlId: string, title: string) => void;
+  onControlTitleCommit: (controlId: string, title: string) => void;
 }) {
   return (
     <div className="canvas-widget-group">
@@ -1190,10 +1234,20 @@ function GroupedCanvasControls({
         return (
           <div className={controlClasses} key={control.id} data-dashboard-control-id={control.id}>
             {control.type === "note" ? (
-              <DashboardNoteBody title={control.label} body={control.description} />
+              <DashboardNoteBody
+                title={control.label}
+                body={control.description}
+                onTitleChange={(title) => onControlTitleChange(control.id, title)}
+                onTitleCommit={(title) => onControlTitleCommit(control.id, title)}
+              />
             ) : isOutput ? (
               <>
-                <GroupedCanvasControlHeader control={control} disabled={disabled} />
+                <GroupedCanvasControlHeader
+                  control={control}
+                  disabled={disabled}
+                  onTitleChange={(title) => onControlTitleChange(control.id, title)}
+                  onTitleCommit={(title) => onControlTitleCommit(control.id, title)}
+                />
                 <OutputWidgetContent
                   control={control}
                   outputIndex={outputIndex}
@@ -1234,7 +1288,12 @@ function GroupedCanvasControls({
               </>
             ) : (
               <>
-                <GroupedCanvasControlHeader control={control} disabled={disabled} />
+                <GroupedCanvasControlHeader
+                  control={control}
+                  disabled={disabled}
+                  onTitleChange={(title) => onControlTitleChange(control.id, title)}
+                  onTitleCommit={(title) => onControlTitleCommit(control.id, title)}
+                />
                 <InputWidgetContent
                   control={control}
                   inputIndex={inputIndex}
@@ -1259,13 +1318,30 @@ function GroupedCanvasControls({
   );
 }
 
-function GroupedCanvasControlHeader({ control, disabled }: { control: DashboardControlDef; disabled: boolean }) {
+function GroupedCanvasControlHeader({
+  control,
+  disabled,
+  onTitleChange,
+  onTitleCommit,
+}: {
+  control: DashboardControlDef;
+  disabled: boolean;
+  onTitleChange: (title: string) => void;
+  onTitleCommit: (title: string) => void;
+}) {
   const { seedModes, onSeedModeChange } = useContext(SeedModeContext);
   const seedInputId = control.type === "seed_widget" ? control.input_id ?? control.id : null;
   return (
     <div className="canvas-widget-group__control-header">
       <div className="canvas-widget-group__control-heading">
-        <h4>{control.label}</h4>
+        <EditableCanvasTitle
+          value={control.label}
+          ariaLabel="Edit widget name"
+          disabled={disabled}
+          heading="h4"
+          onChange={onTitleChange}
+          onCommit={onTitleCommit}
+        />
         {control.description ? <p className="canvas-widget-group__description">{control.description}</p> : null}
       </div>
       {seedInputId ? (
@@ -1340,12 +1416,93 @@ function outputControlsFromTopLevelItems(items: DashboardTopLevelControlItem[]):
   return controls;
 }
 
-function DashboardNoteBody({ title, body }: { title?: string; body?: string }) {
+function DashboardNoteBody({
+  title,
+  body,
+  onTitleChange,
+  onTitleCommit,
+}: {
+  title?: string;
+  body?: string;
+  onTitleChange?: (title: string) => void;
+  onTitleCommit?: (title: string) => void;
+}) {
   return (
     <div className="dashboard-note-card dashboard-note-card--canvas">
-      {title ? <h3>{title}</h3> : null}
+      {title ? (
+        onTitleChange && onTitleCommit ? (
+          <EditableCanvasTitle
+            value={title}
+            ariaLabel="Edit widget name"
+            onChange={onTitleChange}
+            onCommit={onTitleCommit}
+          />
+        ) : (
+          <h3>{title}</h3>
+        )
+      ) : null}
       <p>{body || "No note text added yet."}</p>
     </div>
+  );
+}
+
+function EditableCanvasTitle({
+  value,
+  ariaLabel,
+  heading = "h3",
+  disabled = false,
+  onChange,
+  onCommit,
+}: {
+  value: string;
+  ariaLabel: string;
+  heading?: "h3" | "h4";
+  disabled?: boolean;
+  onChange: (title: string) => void;
+  onCommit: (title: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const Heading = heading;
+
+  if (editing && !disabled) {
+    return (
+      <input
+        className={`canvas-widget-title-input canvas-widget-title-input--${heading}`}
+        type="text"
+        value={value}
+        aria-label={ariaLabel}
+        autoFocus
+        onFocus={(event) => event.currentTarget.select()}
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          onCommit(value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === "Escape") {
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <Heading
+      className="canvas-widget-title"
+      title={disabled ? undefined : "Double-click to edit widget name"}
+      onDoubleClick={(event) => {
+        if (disabled) return;
+        event.stopPropagation();
+        setEditing(true);
+      }}
+    >
+      {value}
+    </Heading>
   );
 }
 
