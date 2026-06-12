@@ -87,6 +87,10 @@ describe("GalleryPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open file: captions.srt" }));
     expect(screen.getByRole("dialog", { name: "File details" })).toBeInTheDocument();
     expect(screen.queryByRole("iframe")).not.toBeInTheDocument();
+    expect(screen.getByText("Transcript Maker")).toBeInTheDocument();
+    expect(screen.getByText("application/x-subrip")).toBeInTheDocument();
+    expect(screen.getByText("400 B")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /details/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
   });

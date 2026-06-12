@@ -567,6 +567,31 @@ describe("DashboardBuilderPage", () => {
     expect(within(valuesPanel).getByText("No values match your search.")).toBeInTheDocument();
   });
 
+  it("edits a widget name inline from the created widgets list without changing its description", async () => {
+    const onContinue = await renderDragBuilder(dragSchema());
+    const widget = screen.getByTestId("created-widget-ctrl-node-6-text");
+
+    fireEvent.doubleClick(within(widget).getByText("Prompt"));
+
+    const nameInput = within(widget).getByRole("textbox", { name: "Edit widget name" });
+    fireEvent.change(nameInput, { target: { value: "Creative prompt" } });
+
+    expect(nameInput).toHaveValue("Creative prompt");
+    expect(within(widget).getByText("Describe the image.")).toBeInTheDocument();
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Creative prompt");
+
+    fireEvent.blur(nameInput);
+    expect(within(widget).getByText("Creative prompt")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    expect(onContinue.mock.calls[0][0].widgets[0]).toEqual(
+      expect.objectContaining({
+        title: "Creative prompt",
+        description: "Describe the image.",
+      }),
+    );
+  });
+
   it("lists repeated primitive workflow nodes as separate value dropdowns", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,

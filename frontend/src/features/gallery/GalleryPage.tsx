@@ -300,7 +300,6 @@ function CardVisual({ item }: { item: GalleryItem }) {
 }
 
 function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev, onNext }: { item: GalleryItem; index: number; total: number; onClose: () => void; onFavorite: () => void; onDelete: () => void; onPrev: (() => void) | null; onNext: (() => void) | null }) {
-  const [details, setDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const contentUrl = galleryContentUrl(item);
   const isMissing = item.fileState === "missing";
@@ -313,7 +312,7 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, onNext, onPrev]);
-  useEffect(() => { setConfirmDelete(false); setDetails(false); }, [item.id]);
+  useEffect(() => { setConfirmDelete(false); }, [item.id]);
 
   return (
     <div className="img-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${kindLabel(item.kind)} details`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -333,8 +332,7 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev
           <div className="img-modal__scroll">
             <div className="img-modal__section"><span className="img-modal__section-label">Generated with</span><p className="img-modal__prompt">{item.widgetTitle || item.workflowName}</p></div>
             {item.prompt ? <div className="img-modal__section"><span className="img-modal__section-label">Prompt</span><p className="img-modal__prompt">{item.prompt}</p></div> : null}
-            <button className="ghost-button gallery-details-toggle" type="button" onClick={() => setDetails((value) => !value)}>{details ? "Hide details" : "Show details"}</button>
-            {details ? <Metadata item={item} /> : null}
+            <Metadata item={item} />
           </div>
           <div className="img-modal__footer">
             <div className="img-modal__actions">

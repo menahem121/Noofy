@@ -728,6 +728,7 @@ export function DashboardBuilderPage({
                   dropPreview={createdDropPreview}
                   onSelectWidget={handleSelectWidget}
                   onSelectGroup={handleSelectGroup}
+                  onRenameWidget={(widgetId, title) => patchWidget(widgetId, { title })}
                   onRemoveWidget={removeWidget}
                   onDragStart={handleCreatedDragStart}
                   onGroupDragStart={handleCreatedGroupDragStart}
@@ -2415,6 +2416,7 @@ function CreatedWidgetsList({
   dropPreview,
   onSelectWidget,
   onSelectGroup,
+  onRenameWidget,
   onRemoveWidget,
   onDragStart,
   onGroupDragStart,
@@ -2436,6 +2438,7 @@ function CreatedWidgetsList({
   dropPreview: CreatedDropPreview;
   onSelectWidget: (id: string) => void;
   onSelectGroup: (id: string) => void;
+  onRenameWidget: (id: string, title: string) => void;
   onRemoveWidget: (id: string) => void;
   onDragStart: (id: string) => void;
   onGroupDragStart: (id: string) => void;
@@ -2473,6 +2476,7 @@ function CreatedWidgetsList({
                 dropPreview={dropPreview}
                 onSelectGroup={() => onSelectGroup(item.id)}
                 onSelectWidget={onSelectWidget}
+                onRenameWidget={onRenameWidget}
                 onRemoveWidget={onRemoveWidget}
                 onDragStart={onDragStart}
                 onGroupDragStart={() => onGroupDragStart(item.id)}
@@ -2491,6 +2495,7 @@ function CreatedWidgetsList({
                 dragging={draggingWidgetId === item.id}
                 groupPreview={dropPreview?.kind === "group" && dropPreview.targetWidgetId === item.id}
                 onSelect={() => onSelectWidget(item.id)}
+                onRename={(title) => onRenameWidget(item.id, title)}
                 onRemove={() => onRemoveWidget(item.id)}
                 onDragStart={() => onDragStart(item.id)}
                 onDragEnd={onDragEnd}
@@ -2549,6 +2554,7 @@ function PreviewGroup({
   dropPreview,
   onSelectGroup,
   onSelectWidget,
+  onRenameWidget,
   onRemoveWidget,
   onDragStart,
   onGroupDragStart,
@@ -2568,6 +2574,7 @@ function PreviewGroup({
   dropPreview: CreatedDropPreview;
   onSelectGroup: () => void;
   onSelectWidget: (id: string) => void;
+  onRenameWidget: (id: string, title: string) => void;
   onRemoveWidget: (id: string) => void;
   onDragStart: (id: string) => void;
   onGroupDragStart: () => void;
@@ -2631,6 +2638,7 @@ function PreviewGroup({
                 dropPreview.targetWidgetId === widget.id
               }
               onSelect={() => onSelectWidget(widget.id)}
+              onRename={(title) => onRenameWidget(widget.id, title)}
               onRemove={() => onRemoveWidget(widget.id)}
               onDragStart={() => onDragStart(widget.id)}
               onDragEnd={onDragEnd}
@@ -2658,6 +2666,7 @@ function PreviewWidget({
   compact = false,
   groupPreview = false,
   onSelect,
+  onRename,
   onRemove,
   onDragStart,
   onDragEnd,
@@ -2670,18 +2679,21 @@ function PreviewWidget({
   compact?: boolean;
   groupPreview?: boolean;
   onSelect: () => void;
+  onRename: (title: string) => void;
   onRemove: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragOver: (event: DragEvent<HTMLElement>) => void;
   onDrop: (event: DragEvent<HTMLElement>) => void;
 }) {
+  const [editingTitle, setEditingTitle] = useState(false);
+
   return (
     <article
       className={`preview-widget ${isSelected ? "preview-widget--selected" : ""} ${compact ? "preview-widget--compact" : ""} ${
         dragging ? "preview-widget--dragging" : ""
       } ${groupPreview ? "preview-widget--group-preview" : ""}`}
-      draggable
+      draggable={!editingTitle}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();
@@ -2703,7 +2715,42 @@ function PreviewWidget({
 
       <div className="preview-widget__body">
         <div className="preview-widget__heading">
-          <h5>{widget.title}</h5>
+          {editingTitle ? (
+            <input
+              className="preview-widget__title-input"
+              type="text"
+              value={widget.title}
+              aria-label="Edit widget name"
+              autoFocus
+              draggable={false}
+              onFocus={(event) => event.currentTarget.select()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onDragStart={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onChange={(event) => onRename(event.target.value)}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === "Escape") {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          ) : (
+            <h5
+              className="preview-widget__title"
+              title="Double-click to edit widget name"
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                setEditingTitle(true);
+              }}
+            >
+              {widget.title}
+            </h5>
+          )}
           {widget.widgetType !== "note" && widget.description ? <p>{widget.description}</p> : null}
         </div>
         <PreviewWidgetInput widget={widget} />

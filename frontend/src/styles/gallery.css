@@ -889,11 +889,6 @@
   font-size: 14px;
 }
 
-.gallery-details-toggle {
-  align-self: flex-start;
-  margin-bottom: 16px;
-}
-
 .img-modal__body {
   display: flex;
   flex-direction: column;
