@@ -1970,7 +1970,6 @@ export function WorkflowRunPage({
               canRun,
               canCancel,
               memoryLoaded: showMemoryLoadedPill,
-              cancelLabel: remainingTrackedRunCount > 1 ? "Cancel Runs" : "Cancel Run",
               cancelTitle: cancelTooltip,
               showStatusNotice: showUserFacingMemoryNotice,
               statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
@@ -2086,18 +2085,24 @@ export function WorkflowRunPage({
           <div className="button-row">
             <BatchCountStepper value={batchCount} onChange={setBatchCount} />
             <button
-              className="primary-button"
+              className="primary-button workflow-run-action-button"
               type="button"
               disabled={!canRun}
-              title={isRunning ? "Queue another run behind the current one" : undefined}
+              aria-label="Run Workflow"
+              title={isRunning ? "Queue another run behind the current one" : "Run Workflow"}
               onClick={() => void handleRun()}
             >
               {isRunning ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-              Run Workflow
             </button>
-            <button className="secondary-button" type="button" disabled={!canCancel} title={cancelTooltip} onClick={() => void handleCancel()}>
+            <button
+              className="secondary-button workflow-run-action-button"
+              type="button"
+              disabled={!canCancel}
+              aria-label="Cancel Workflow"
+              title={cancelTooltip}
+              onClick={() => void handleCancel()}
+            >
               <Square size={16} aria-hidden="true" />
-              Cancel
             </button>
             <ClassicWorkflowOptionsMenu onSwitchView={() => setViewMode("canvas")} />
           </div>

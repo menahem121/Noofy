@@ -159,6 +159,13 @@
   font-size: 12px;
 }
 
+.canvas-action-cluster__cancel.workflow-run-action-button,
+.canvas-action-cluster__run.workflow-run-action-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
 .canvas-memory-loaded-pill {
   display: inline-flex;
   align-items: center;

@@ -1726,7 +1726,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
     // Run stays enabled while a run is pending: another press queues a run.
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel Workflow" })).toBeDisabled();
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
 
@@ -2947,7 +2947,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument();
     expect(screen.queryByText("Noofy is freeing memory before starting this workflow.")).not.toBeInTheDocument();
     expect(screen.queryByText("Noofy is unloading idle models so this workflow has enough room to start.")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /cancel run/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
 
     await waitFor(() => expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
@@ -3023,9 +3023,9 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByText("20%")).toBeInTheDocument();
     });
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel Workflow" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
 
     await waitFor(() => expect(cancelCalls).toBe(1));
     await waitFor(() => {
@@ -3074,7 +3074,7 @@ describe("WorkflowRunPage", () => {
     });
 
     expect((await screen.findAllByText("Working")).length).toBeGreaterThan(0);
-    const cancelButton = await screen.findByRole("button", { name: /cancel run/i });
+    const cancelButton = await screen.findByRole("button", { name: "Cancel Workflow" });
     await waitFor(() => expect(cancelButton).toBeEnabled());
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     fireEvent.click(cancelButton);
@@ -3390,7 +3390,7 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
     expect(await screen.findByTitle("1 run remaining")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /cancel run/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
 
     expect(await screen.findByRole("dialog", { name: "Cancel 20 runs?" })).toBeInTheDocument();
     expect(cancelCalls).toBe(0);
@@ -3640,7 +3640,7 @@ describe("WorkflowRunPage", () => {
     await screen.findByRole("button", { name: /workflow options/i });
     const batch = screen.getByRole("spinbutton", { name: "Batch count" }).closest(".canvas-batch-count-stepper") as HTMLElement;
     const runButton = screen.getByRole("button", { name: /run workflow/i });
-    const cancelButton = screen.getByRole("button", { name: /cancel run/i });
+    const cancelButton = screen.getByRole("button", { name: "Cancel Workflow" });
     const optionsButton = screen.getByRole("button", { name: /workflow options/i });
 
     expect(batch.compareDocumentPosition(runButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -4627,8 +4627,13 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     const optionsButton = await screen.findByRole("button", { name: /workflow options/i });
-    expect(screen.getByRole("button", { name: /cancel run/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /run workflow/i })).toBeInTheDocument();
+    const cancelButton = screen.getByRole("button", { name: "Cancel Workflow" });
+    const runButton = screen.getByRole("button", { name: "Run Workflow" });
+    expect(cancelButton).toBeDisabled();
+    expect(cancelButton).toHaveAttribute("title", "Cancel current run");
+    expect(cancelButton).toHaveTextContent("");
+    expect(runButton).toHaveAttribute("title", "Run Workflow");
+    expect(runButton).toHaveTextContent("");
     expect(screen.queryByText("Restore dashboard to the workflow default values")).not.toBeInTheDocument();
 
     fireEvent.click(optionsButton);
@@ -4878,7 +4883,7 @@ describe("WorkflowRunPage", () => {
 
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /cancel run/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel Workflow" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /run workflow/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Workflow progress")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save dashboard/i })).toBeInTheDocument();

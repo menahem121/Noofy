@@ -3245,6 +3245,12 @@ button.dashboard-image-input__surface {
   font-size: 13px;
 }
 
+.workflow-run-action-button {
+  width: 46px;
+  min-width: 46px;
+  padding: 0;
+}
+
 .primary-button--reddit {
   background: linear-gradient(135deg, #ff4500, #d83a00);
 }

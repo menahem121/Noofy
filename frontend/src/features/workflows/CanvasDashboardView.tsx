@@ -96,7 +96,6 @@ export interface CanvasRunState {
   canRun: boolean;
   canCancel: boolean;
   memoryLoaded?: boolean;
-  cancelLabel?: string | null;
   cancelTitle?: string | null;
   showStatusNotice?: boolean;
   statusTitle?: string | null;
@@ -594,15 +593,16 @@ export function CanvasDashboardView({
             <>
               <CanvasBatchCountStepper value={batchCount} onChange={onBatchCountChange} />
               <button
-                className="primary-button canvas-action-cluster__run"
+                className="primary-button canvas-action-cluster__run workflow-run-action-button"
                 type="button"
                 disabled={!runState.canRun}
+                aria-label="Run Workflow"
                 title={
                   !runState.canRun && runState.disabledReason
                     ? runState.disabledReason
                     : runState.canRun && runState.isRunning
                       ? "Queue another run behind the current one"
-                      : undefined
+                      : "Run Workflow"
                 }
                 aria-describedby={!runState.canRun && runState.disabledReason ? "canvas-run-disabled-reason" : undefined}
                 onClick={onRun}
@@ -612,17 +612,16 @@ export function CanvasDashboardView({
                 ) : (
                   <Play size={16} aria-hidden="true" />
                 )}
-                Run Workflow
               </button>
               <button
-                className="secondary-button canvas-action-cluster__cancel"
+                className="secondary-button canvas-action-cluster__cancel workflow-run-action-button"
                 type="button"
                 disabled={!runState.canCancel}
+                aria-label="Cancel Workflow"
                 title={runState.cancelTitle ?? undefined}
                 onClick={onCancel}
               >
                 <Square size={14} aria-hidden="true" />
-                {runState.cancelLabel ?? "Cancel Run"}
               </button>
               <div className="canvas-options-menu" ref={optionsRef}>
                 <button
