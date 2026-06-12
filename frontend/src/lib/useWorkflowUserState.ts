@@ -15,6 +15,9 @@ import type { GridItemLayout } from "./gridLayout";
 
 const DEBOUNCE_MS = 600;
 const EMPTY_CONTROL_IDS: string[] = [];
+const EMPTY_VALUES: Record<string, unknown> = {};
+const EMPTY_LAYOUT_OVERRIDES: Record<string, GridItemLayout> = {};
+const EMPTY_OUTPUT_PREFERENCES: OutputPreferences = {};
 
 function emptyState(workflowId: string, dashboardVersion: string): WorkflowUserState {
   return {
@@ -77,7 +80,6 @@ export function useWorkflowUserState(
   const [userState, setUserState] = useState<WorkflowUserState>(() =>
     emptyState(workflowId, dashboardVersion),
   );
-  const [loaded, setLoaded] = useState(false);
   const saveTimerRef = useRef<number | null>(null);
   const latestStateRef = useRef<WorkflowUserState>(userState);
 
@@ -90,6 +92,16 @@ export function useWorkflowUserState(
   const layoutIdsKey = useMemo(() => stableListKey(validLayoutIds), [validLayoutIds]);
   const outputControlIdsKey = useMemo(() => stableListKey(validOutputControlIds), [validOutputControlIds]);
   const hasPackageContext = dashboardVersion !== "" || inputIndex.size > 0 || Object.keys(packageDefaults).length > 0;
+  const contextKey = [
+    workflowId,
+    dashboardVersion,
+    packageDefaultsKey,
+    inputIdsKey,
+    layoutIdsKey,
+    outputControlIdsKey,
+  ].join("\u0001");
+  const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
+  const loaded = !hasPackageContext || loadedContextKey === contextKey;
 
   function cancelPendingSave() {
     if (saveTimerRef.current !== null) {
@@ -104,13 +116,12 @@ export function useWorkflowUserState(
       const initial = emptyState(workflowId, dashboardVersion);
       setUserState(initial);
       latestStateRef.current = initial;
-      setLoaded(true);
+      setLoadedContextKey(contextKey);
       return () => {
         active = false;
         cancelPendingSave();
       };
     }
-    setLoaded(false);
     fetchUserState(workflowId)
       .then((remote) => {
         if (!active) return;
@@ -147,7 +158,7 @@ export function useWorkflowUserState(
         latestStateRef.current = initial;
       })
       .finally(() => {
-        if (active) setLoaded(true);
+        if (active) setLoadedContextKey(contextKey);
       });
     return () => {
       active = false;
@@ -161,6 +172,7 @@ export function useWorkflowUserState(
     layoutIdsKey,
     outputControlIdsKey,
     hasPackageContext,
+    contextKey,
   ]);
 
   function scheduleSave(next: WorkflowUserState) {
@@ -281,18 +293,25 @@ export function useWorkflowUserState(
   const hasLayoutOverrides = Object.keys(userState.layout_overrides).length > 0;
 
   return {
-    values: loaded ? userState.values : packageDefaults,
+    loaded,
+    values: loaded ? userState.values : EMPTY_VALUES,
     setValue,
     restoreDefaults,
-    layoutOverrides: userState.layout_overrides as Record<string, GridItemLayout>,
+    layoutOverrides: loaded
+      ? userState.layout_overrides as Record<string, GridItemLayout>
+      : EMPTY_LAYOUT_OVERRIDES,
     setLayoutOverride,
-    outputPreferences: userState.output_preferences ?? {},
+    outputPreferences: loaded
+      ? userState.output_preferences ?? EMPTY_OUTPUT_PREFERENCES
+      : EMPTY_OUTPUT_PREFERENCES,
     setOutputPreference,
     getOutputPreferencesSnapshot,
-    actionBarPositionOverride: userState.presentation_overrides?.action_bar ?? null,
+    actionBarPositionOverride: loaded
+      ? userState.presentation_overrides?.action_bar ?? null
+      : null,
     setActionBarPositionOverride,
     resetLayout,
-    hasLayoutOverrides,
+    hasLayoutOverrides: loaded && hasLayoutOverrides,
   };
 }
 

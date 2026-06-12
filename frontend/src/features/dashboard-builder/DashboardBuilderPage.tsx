@@ -163,7 +163,7 @@ export function DashboardBuilderPage({
   const [schema, setSchema] = useState<DashboardSchema>(
     () =>
       normalizeDashboardSchema(
-        scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
+        loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
       ),
   );
   const [selectedValueId, setSelectedValueId] = useState<string | null>(null);
@@ -210,8 +210,8 @@ export function DashboardBuilderPage({
   useLayoutEffect(() => {
     setSchema(
       normalizeDashboardSchema(
-        scopedInitialSchema ??
-          loadDashboardDraft(activeWorkflowId) ??
+        loadDashboardDraft(activeWorkflowId) ??
+          scopedInitialSchema ??
           buildInitialDashboard(emptyWorkflow(activeWorkflowId, activeWorkflowName)),
       ),
     );
@@ -230,6 +230,8 @@ export function DashboardBuilderPage({
     const workflow = workflowState.workflow;
     if (workflowState.loading || !workflow || workflow.id !== activeWorkflowId) return;
     const savedDraft = loadDashboardDraft(activeWorkflowId);
+    // A draft is the user's unsaved dashboard work. Saved dashboard defaults
+    // are the next source, and bindable workflow values are only a fallback.
     const sourceSchema = savedDraft ?? scopedInitialSchema ?? buildInitialDashboard(workflow);
     const nextSchema = normalizeDashboardSchema(
       savedDraft
@@ -548,6 +550,7 @@ export function DashboardBuilderPage({
 
   function handleContinue() {
     if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
+    saveDashboardDraft(schema);
     onContinue(schema);
   }
 

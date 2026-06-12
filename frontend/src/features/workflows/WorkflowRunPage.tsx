@@ -294,6 +294,9 @@ export function WorkflowRunPage({
   const modelVerificationStartInFlightRef = useRef(false);
   const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
   const runnerLeaseRequestRef = useRef<string | null>(null);
+  const requirementsLoadSequenceRef = useRef(0);
+  const activeWorkflowIdRef = useRef(workflowId);
+  activeWorkflowIdRef.current = workflowId;
 
   useEffect(() => {
     trackedRunsRef.current = trackedRuns;
@@ -407,6 +410,7 @@ export function WorkflowRunPage({
   const dashboardLayoutIds = useMemo(() => topLevelItems.map((item) => item.id), [topLevelItems]);
 
   const {
+    loaded: userStateLoaded,
     values: inputValues,
     setValue: setInputValue,
     restoreDefaults,
@@ -582,21 +586,29 @@ export function WorkflowRunPage({
   }
 
   async function loadRequirements() {
+    const targetWorkflowId = workflowId;
+    const loadSequence = ++requirementsLoadSequenceRef.current;
     setState((current) => ({ ...current, loading: true, error: null, packageLoadError: null }));
     try {
       const [workflowStatus, packageResult, modelSummary, apiKeySettings] = await Promise.all([
-        fetchWorkflowStatus(workflowId).catch(() => null),
-        fetchWorkflowPackage(workflowId)
+        fetchWorkflowStatus(targetWorkflowId).catch(() => null),
+        fetchWorkflowPackage(targetWorkflowId)
           .then((packageData) => ({ packageData, error: null }))
           .catch((error: unknown) => ({
             packageData: null,
             error: error instanceof Error ? error.message : String(error),
           })),
-        fetchWorkflowModelSummary(workflowId).catch(() => null),
+        fetchWorkflowModelSummary(targetWorkflowId).catch(() => null),
         fetchApiKeySettings().catch(() => null),
       ]);
 
-      const validation = await validateWorkflow(workflowId);
+      const validation = await validateWorkflow(targetWorkflowId);
+      if (
+        loadSequence !== requirementsLoadSequenceRef.current ||
+        activeWorkflowIdRef.current !== targetWorkflowId
+      ) {
+        return;
+      }
       setState((current) => ({
         ...current,
         loading: false,
@@ -608,6 +620,12 @@ export function WorkflowRunPage({
         packageLoadError: packageResult.error,
       }));
     } catch (error) {
+      if (
+        loadSequence !== requirementsLoadSequenceRef.current ||
+        activeWorkflowIdRef.current !== targetWorkflowId
+      ) {
+        return;
+      }
       setState((current) => ({
         ...current,
         loading: false,
@@ -638,6 +656,9 @@ export function WorkflowRunPage({
     setFailedTrackedRuns([]);
     setFailedRunSummaryOpen(false);
     setWorkflowCancelConfirmation(null);
+    return () => {
+      requirementsLoadSequenceRef.current += 1;
+    };
   }, [workflowId, runtimeStatus.refreshRuntime]);
 
   useEffect(() => {
@@ -1516,10 +1537,12 @@ export function WorkflowRunPage({
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
+  const workflowValuesReady = !state.loading && userStateLoaded;
   // An active run does not disable Run: pressing it again queues another run
   // behind the current one. Only real blockers gate the button.
   const canRun = Boolean(
-    state.workflowStatus?.can_prepare !== false
+    workflowValuesReady
+      && state.workflowStatus?.can_prepare !== false
       && activeValidation?.valid
       && activeModelSummary?.ready_to_run !== false
       && !backendKnownUnreachable
@@ -1539,7 +1562,7 @@ export function WorkflowRunPage({
         installStatus,
         isBlockedByMemory,
         isWaitingForMemory,
-        loading: state.loading,
+        loading: !workflowValuesReady,
         memoryStatus,
         missingModels,
         modelSummaryReady: activeModelSummary?.ready_to_run,
@@ -1958,6 +1981,7 @@ export function WorkflowRunPage({
             outputThreeDsByNodeId={outputThreeDsByNodeId}
             livePreview={activeLivePreview}
             comparisonBeforeImageUrl={comparisonInputImageUrl}
+            valuesReady={workflowValuesReady}
             inputValues={inputValues}
             seedModes={seedModes}
             onSeedModeChange={handleSeedModeChange}
@@ -2056,7 +2080,15 @@ export function WorkflowRunPage({
             </div>
           </div>
 
-          {hasDashboard ? (
+          {!workflowValuesReady ? (
+            <div className="workflow-values-loading" role="status" aria-live="polite">
+              <Loader2 className="spin" size={20} aria-hidden="true" />
+              <div>
+                <strong>Loading saved settings</strong>
+                <span>Preparing your workflow values.</span>
+              </div>
+            </div>
+          ) : hasDashboard ? (
             <WorkflowDefaultAssetProvider workflowId={workflowId}>
               <DashboardInputControls
                 items={inputTopLevelItems}

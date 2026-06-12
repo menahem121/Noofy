@@ -4378,9 +4378,140 @@ describe("WorkflowRunPage", () => {
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Inputs" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading saved settings");
 
     // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
     await act(async () => {});
+  });
+
+  it.each(["canvas", "classic"] as const)(
+    "does not flash package defaults while saved values load in %s view",
+    async (viewMode) => {
+      window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode }));
+      const userStateResponse = deferred<Response>();
+      const dashboardVersion = dashboardUserStateVersionForTest(configuredPackageData);
+      mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+        if (url.endsWith("/api/workflows/text_to_image_v0/user-state") && (!init?.method || init.method === "GET")) {
+          return userStateResponse.promise;
+        }
+        return undefined;
+      });
+
+      renderRunPage();
+
+      expect(await screen.findByText("Loading saved settings")).toBeInTheDocument();
+      expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
+      expect(screen.queryByText("a lake")).not.toBeInTheDocument();
+      if (viewMode === "classic") {
+        expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
+      } else {
+        expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
+      }
+
+      await act(async () => {
+        userStateResponse.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: dashboardVersion,
+          values: { prompt: "my saved prompt" },
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        }));
+      });
+
+      expect(await screen.findByDisplayValue("my saved prompt")).toBeInTheDocument();
+      expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
+    },
+  );
+
+  it("ignores a slower workflow load after switching to another workflow", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const slowPackageResponse = deferred<Response>();
+    const packageFor = (workflowId: string, workflowName: string, defaultValue: string) => ({
+      ...configuredPackageData,
+      metadata: {
+        ...configuredPackageData.metadata,
+        id: workflowId,
+        name: workflowName,
+      },
+      inputs: configuredPackageData.inputs.map((input) => ({
+        ...input,
+        default: defaultValue,
+      })),
+    });
+    const fastPackage = packageFor("fast-workflow", "Fast Workflow", "fast default");
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/slow-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "slow-workflow",
+          workflow: { ...workflowStatus.workflow, id: "slow-workflow", name: "Slow Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/fast-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "fast-workflow",
+          workflow: { ...workflowStatus.workflow, id: "fast-workflow", name: "Fast Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/slow-workflow/package")) return slowPackageResponse.promise;
+      if (url.endsWith("/api/workflows/fast-workflow/package")) {
+        return Promise.resolve(jsonResponse(fastPackage));
+      }
+      if (url.endsWith("/model-summary")) {
+        const id = url.includes("slow-workflow") ? "slow-workflow" : "fast-workflow";
+        return Promise.resolve(jsonResponse({ ...readyModelSummary, workflow_id: id }));
+      }
+      if (url.endsWith("/validate")) {
+        const id = url.includes("slow-workflow") ? "slow-workflow" : "fast-workflow";
+        return Promise.resolve(jsonResponse({ ...validWorkflow, workflow_id: id }));
+      }
+      if (url.endsWith("/runs/active-and-queued")) {
+        return Promise.resolve(jsonResponse({ active_count: 0, queued_count: 0, total_count: 0 }));
+      }
+      if (url.endsWith("/api/workflows/fast-workflow/user-state")) {
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "fast-workflow",
+          dashboard_version: dashboardUserStateVersionForTest(fastPackage),
+          values: { prompt: "fast saved value" },
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const page = (workflowId: string) => (
+      <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+        <WorkflowRunPage workflowId={workflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
+      </RuntimeStatusProvider>
+    );
+    const { rerender } = render(page("slow-workflow"));
+    rerender(page("fast-workflow"));
+
+    expect(await screen.findByDisplayValue("fast saved value")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Fast Workflow" })).toBeInTheDocument();
+
+    await act(async () => {
+      slowPackageResponse.resolve(
+        jsonResponse(packageFor("slow-workflow", "Slow Workflow", "slow default")),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("fast saved value")).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Slow Workflow" })).not.toBeInTheDocument();
+      expect(screen.queryByDisplayValue("slow default")).not.toBeInTheDocument();
+    });
   });
 
   it("shows the compact resource monitor in the top bar while idle", async () => {

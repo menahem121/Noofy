@@ -150,6 +150,116 @@ describe("DashboardBuilderLayoutPage", () => {
     window.localStorage.clear();
   });
 
+  it("uses the current local draft instead of saved workflow defaults", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    window.localStorage.setItem(
+      dashboardDraftKey("wf-1"),
+      JSON.stringify({
+        ...placedSchema,
+        status: "draft",
+        widgets: [{ ...placedSchema.widgets[0], defaultValue: "current edited value" }],
+      }),
+    );
+    const currentSchema = {
+      ...placedSchema,
+      widgets: [{ ...placedSchema.widgets[0], defaultValue: "original .noofy value" }],
+    };
+    const onBackToWidgets = vi.fn();
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={currentSchema}
+        onBackToWidgets={onBackToWidgets}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox")).toHaveTextContent("current edited value");
+    expect(screen.queryByText("original .noofy value")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /back to widgets/i }));
+    expect(onBackToWidgets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: [expect.objectContaining({ defaultValue: "current edited value" })],
+      }),
+    );
+    expect(
+      JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}"),
+    ).toMatchObject({
+      widgets: [expect.objectContaining({ defaultValue: "current edited value" })],
+    });
+  });
+
+  it("refreshes preview values when the current schema changes for the same workflow", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const firstSchema = {
+      ...placedSchema,
+      widgets: [{ ...placedSchema.widgets[0], defaultValue: "first edited value" }],
+    };
+    const nextSchema = {
+      ...placedSchema,
+      widgets: [{ ...placedSchema.widgets[0], defaultValue: "latest edited value" }],
+    };
+
+    const { rerender } = render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={firstSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("textbox")).toHaveTextContent("first edited value");
+
+    window.localStorage.setItem(
+      dashboardDraftKey("wf-1"),
+      JSON.stringify({ ...nextSchema, status: "draft" }),
+    );
+    rerender(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={nextSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox")).toHaveTextContent("latest edited value");
+    expect(screen.queryByText("first edited value")).not.toBeInTheDocument();
+
+    const widget = screen.getByRole("textbox").closest("article");
+    fireEvent.click(widget!);
+    expect(widget).toHaveClass("layout-canvas-widget--selected");
+
+    rerender(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={{ ...nextSchema, widgets: nextSchema.widgets.map((item) => ({ ...item })) }}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("textbox").closest("article")).toHaveClass("layout-canvas-widget--selected");
+  });
+
   it("autosaves layout changes without requiring the draft button", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

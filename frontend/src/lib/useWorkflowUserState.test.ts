@@ -52,13 +52,14 @@ describe("useWorkflowUserState", () => {
     fetchMock.mockReset();
   });
 
-  it("uses package defaults before the remote state loads", () => {
+  it("does not expose package defaults before the remote state loads", () => {
     fetchMock.mockReturnValue(new Promise(() => {})); // never resolves
     const defaults = { prompt: "a dog" };
     const { result } = renderHook(() =>
       useWorkflowUserState("wf-1", defaults, "1.0", makeInputIndex("prompt")),
     );
-    expect(result.current.values).toEqual({ prompt: "a dog" });
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.values).toEqual({});
   });
 
   it("merges remote values over package defaults after load", async () => {
@@ -73,6 +74,7 @@ describe("useWorkflowUserState", () => {
       useWorkflowUserState("wf-1", defaults, "1.0", makeInputIndex("prompt", "seed")),
     );
     await waitFor(() => expect(result.current.values.prompt).toBe("a cat"));
+    expect(result.current.loaded).toBe(true);
     // seed not in remote values → default is used
     expect(result.current.values.seed).toBe(42);
   });
@@ -84,6 +86,7 @@ describe("useWorkflowUserState", () => {
       useWorkflowUserState("wf-1", defaults, "1.0", makeInputIndex("prompt")),
     );
     await waitFor(() => expect(result.current.values.prompt).toBe("fallback"));
+    expect(result.current.loaded).toBe(true);
   });
 
   it("setValue updates the value immediately and schedules a save", async () => {

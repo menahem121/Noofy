@@ -17,6 +17,12 @@
   overflow: hidden;
 }
 
+.canvas-dashboard__canvas > .workflow-values-loading {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
 .workspace-content--canvas-run {
   position: relative;
 }

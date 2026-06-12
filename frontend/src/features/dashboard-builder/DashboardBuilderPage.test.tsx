@@ -464,6 +464,27 @@ function dragSchema(groups: DashboardSchema["groups"] = []): DashboardSchema {
   };
 }
 
+function promptSchema(workflowId: string, defaultValue: string): DashboardSchema {
+  return {
+    version: 1,
+    workflowId,
+    workflowName: "Prompt workflow",
+    layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+    groups: [],
+    widgets: [
+      {
+        id: "prompt",
+        valueId: "prompt",
+        binding: { nodeId: "6", inputName: "text" },
+        widgetType: "textarea",
+        title: "Prompt",
+        description: "",
+        defaultValue,
+      },
+    ],
+  };
+}
+
 function dragDataTransfer() {
   return {
     effectAllowed: "",
@@ -1275,6 +1296,106 @@ describe("DashboardBuilderPage", () => {
         ]),
       }),
     );
+  });
+
+  it("keeps the current local draft ahead of saved dashboard and workflow values", async () => {
+    const workflowId = "wf-current-default";
+    window.localStorage.setItem(
+      dashboardDraftKey(workflowId),
+      JSON.stringify({ ...promptSchema(workflowId, "current unsaved prompt"), status: "draft" }),
+    );
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith(`/api/workflows/${workflowId}/bindable-inputs`)) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const onContinue = vi.fn();
+    render(
+      <DashboardBuilderPage
+        workflowId={workflowId}
+        workflowName="Prompt workflow"
+        initialSchema={promptSchema(workflowId, "saved dashboard prompt")}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const preview = await screen.findByLabelText("Dashboard preview");
+    expect(within(preview).getByDisplayValue("current unsaved prompt")).toBeInTheDocument();
+    const defaultEditor = within(screen.getByLabelText("Widget configuration")).getByDisplayValue("current unsaved prompt");
+    fireEvent.change(defaultEditor, { target: { value: "just edited prompt" } });
+    expect(within(preview).getByDisplayValue("just edited prompt")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        widgets: expect.arrayContaining([
+          expect.objectContaining({ id: "prompt", defaultValue: "just edited prompt" }),
+        ]),
+      }),
+    );
+    expect(
+      JSON.parse(window.localStorage.getItem(dashboardDraftKey(workflowId)) ?? "{}"),
+    ).toMatchObject({
+      widgets: [expect.objectContaining({ id: "prompt", defaultValue: "just edited prompt" })],
+    });
+  });
+
+  it("keeps saved dashboard defaults ahead of original workflow values", async () => {
+    const workflowId = "wf-saved-default";
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith(`/api/workflows/${workflowId}/bindable-inputs`)) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId={workflowId}
+        workflowName="Prompt workflow"
+        initialSchema={promptSchema(workflowId, "saved dashboard prompt")}
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const preview = await screen.findByLabelText("Dashboard preview");
+    expect(within(preview).getByDisplayValue("saved dashboard prompt")).toBeInTheDocument();
+    expect(within(preview).queryByDisplayValue("a lake")).not.toBeInTheDocument();
+  });
+
+  it("uses original workflow values when no dashboard schema or draft exists", async () => {
+    const workflowId = "wf-workflow-fallback";
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith(`/api/workflows/${workflowId}/bindable-inputs`)) {
+        return Promise.resolve(jsonResponse(savedDashboardBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId={workflowId}
+        workflowName="Prompt workflow"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const preview = await screen.findByLabelText("Dashboard preview");
+    expect(within(preview).getByDisplayValue("a lake")).toBeInTheDocument();
   });
 
   it("sets and clears optional minimum and maximum values for number fields", async () => {

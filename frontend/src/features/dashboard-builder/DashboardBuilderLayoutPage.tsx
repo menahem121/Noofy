@@ -120,6 +120,10 @@ export function DashboardBuilderLayoutPage({
   const activeWorkflowId = workflowId ?? MOCK_WORKFLOW.id;
   const activeWorkflowName = workflowName ?? (workflowId ? workflowId : MOCK_WORKFLOW.name);
   const scopedInitialSchema = initialSchema?.workflowId === activeWorkflowId ? initialSchema : undefined;
+  const scopedInitialSchemaKey = useMemo(
+    () => scopedInitialSchema ? JSON.stringify(scopedInitialSchema) : "",
+    [scopedInitialSchema],
+  );
   const saveSequenceRef = useRef(0);
   const activeWorkflowIdRef = useRef(activeWorkflowId);
 
@@ -134,7 +138,7 @@ export function DashboardBuilderLayoutPage({
   }, [activeWorkflowId, activeWorkflowName, workflowId]);
 
   const [schema, setSchema] = useState<DashboardSchema>(
-    () => normalizeDashboardSchema(scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow)),
+    () => normalizeDashboardSchema(loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(workflow)),
   );
   const schemaRef = useRef(schema);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -165,7 +169,7 @@ export function DashboardBuilderLayoutPage({
   useLayoutEffect(() => {
     activeWorkflowIdRef.current = activeWorkflowId;
     saveSequenceRef.current += 1;
-    const nextSchema = normalizeDashboardSchema(scopedInitialSchema ?? loadDashboardDraft(activeWorkflowId) ?? buildInitialDashboard(workflow));
+    const nextSchema = normalizeDashboardSchema(loadDashboardDraft(activeWorkflowId) ?? scopedInitialSchema ?? buildInitialDashboard(workflow));
     setSchema(nextSchema);
     setSelectedItemId(null);
     setActiveDragItemId(null);
@@ -178,7 +182,7 @@ export function DashboardBuilderLayoutPage({
     resizeStateRef.current = null;
     moveStateRef.current = null;
     schemaRef.current = nextSchema;
-  }, [activeWorkflowId]);
+  }, [activeWorkflowId, activeWorkflowName, scopedInitialSchemaKey]);
 
   useLayoutEffect(() => {
     schemaRef.current = schema;
@@ -486,6 +490,12 @@ export function DashboardBuilderLayoutPage({
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
+  function handleBackToWidgets() {
+    const nextSchema = schemaReady ? schema : buildInitialDashboard(workflow);
+    if (schemaReady) saveDashboardDraft(nextSchema);
+    onBackToWidgets(nextSchema);
+  }
+
   function handleSaveDashboard() {
     if (!schemaReady || !allWidgetsPlaced || isSavingDashboard) return;
     const targetId = activeWorkflowId;
@@ -530,7 +540,7 @@ export function DashboardBuilderLayoutPage({
             <button
               className="ghost-button ghost-button--back"
               type="button"
-              onClick={() => onBackToWidgets(schemaReady ? schema : buildInitialDashboard(workflow))}
+              onClick={handleBackToWidgets}
             >
               <ArrowLeft size={15} aria-hidden="true" />
               Back to widgets

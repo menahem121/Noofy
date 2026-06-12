@@ -126,6 +126,7 @@ interface CanvasDashboardViewProps {
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
+  valuesReady: boolean;
   inputValues: Record<string, unknown>;
   seedModes: Record<string, SeedMode>;
   onSeedModeChange: (inputId: string, mode: SeedMode) => void;
@@ -184,6 +185,7 @@ export function CanvasDashboardView({
   outputThreeDsByNodeId,
   livePreview,
   comparisonBeforeImageUrl,
+  valuesReady,
   inputValues,
   seedModes,
   onSeedModeChange,
@@ -564,6 +566,24 @@ export function CanvasDashboardView({
         top: `${displayedActionBarPosition.y}px`,
       }
     : undefined;
+
+  if (!valuesReady) {
+    return (
+      <SeedModeContext.Provider value={{ seedModes, onSeedModeChange }}>
+        <div className="canvas-dashboard">
+          <DashboardCanvasFrame className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
+            <div className="workflow-values-loading" role="status" aria-live="polite">
+              <Loader2 className="spin" size={20} aria-hidden="true" />
+              <div>
+                <strong>Loading saved settings</strong>
+                <span>Preparing your dashboard values.</span>
+              </div>
+            </div>
+          </DashboardCanvasFrame>
+        </div>
+      </SeedModeContext.Provider>
+    );
+  }
 
   return (
     <SeedModeContext.Provider value={{ seedModes, onSeedModeChange }}>
