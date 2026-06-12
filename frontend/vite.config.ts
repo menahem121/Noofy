@@ -22,6 +22,13 @@ export default defineConfig({
     host: tauriDevHost || "127.0.0.1",
     port: 5173,
     strictPort: true,
+    watch: {
+      ignored: [
+        "**/coverage/**",
+        "**/src-tauri/resources/noofy-runtime/**",
+        "**/src-tauri/target/**",
+      ],
+    },
     headers: {
       "Cache-Control": "no-store",
     },
