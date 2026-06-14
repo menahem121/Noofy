@@ -20,6 +20,16 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.archive_safety import (
+    MaterializedPathIndex,
+    PathSafetyError,
+    StreamLimitError,
+    contained_destination,
+    copy_stream_limited,
+    ignored_archive_member,
+    safe_relative_posix_path,
+    zip_member_unsafe_reason,
+)
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.isolation import SHA256_PATTERN, CustomNodeLock, TrustLevel
 from app.source_policy import SourcePolicy
@@ -29,6 +39,8 @@ CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME = (
     "noofy-custom-node-source-cache-manifest.json"
 )
 _BLOCKED_FLOATING_REFS = {"", "head", "latest", "main", "master", "trunk"}
+MAX_CUSTOM_NODE_SOURCE_ARCHIVE_FILES = 20_000
+MAX_CUSTOM_NODE_SOURCE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
 
 class NodeRegistrySourceKind(StrEnum):
@@ -97,8 +109,12 @@ class NodeRegistrySource(BaseModel):
     def _validate_archive_subdir(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        _safe_relative_posix_path(value, allow_nested=True)
-        return value.rstrip("/")
+        normalized = value.rstrip("/")
+        try:
+            safe_relative_posix_path(normalized, allow_nested=True)
+        except PathSafetyError as exc:
+            raise ValueError("archive_subdir must be a safe relative path") from exc
+        return normalized
 
     @model_validator(mode="after")
     def _validate_pinned_ref(self) -> NodeRegistrySource:
@@ -701,6 +717,8 @@ def _extract_verified_zip_archive(
                 )
             subdir_prefix = f"{archive_subdir.rstrip('/')}/" if archive_subdir else None
             extracted_count = 0
+            extracted_bytes = 0
+            path_index = MaterializedPathIndex()
             for member in members:
                 relative_name = member.filename
                 if subdir_prefix is not None:
@@ -709,21 +727,129 @@ def _extract_verified_zip_archive(
                     relative_name = relative_name.removeprefix(subdir_prefix)
                 if not relative_name:
                     continue
-                if _zip_member_is_symlink(member):
+                if ignored_archive_member(relative_name):
+                    continue
+                unsafe_reason = zip_member_unsafe_reason(member)
+                if unsafe_reason == "symlink":
                     raise NodeRegistryResolutionError(
                         NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
                         "Noofy found an unsafe path inside a workflow extension archive.",
                         developer_details={
+                            "boundary": "archive_member_path",
                             "archive_path": member.filename,
                             "reason": "symlink",
                         },
                     )
-                safe_name = _safe_relative_posix_path(relative_name, allow_nested=True)
-                destination = target_dir / safe_name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as source_file:
-                    destination.write_bytes(source_file.read())
+                if unsafe_reason == "special_file":
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy found an unsafe path inside a workflow extension archive.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "archive_path": member.filename,
+                            "reason": "special_file",
+                        },
+                    )
+                try:
+                    safe_name = safe_relative_posix_path(
+                        relative_name,
+                        allow_nested=True,
+                    )
+                    path_index.add(safe_name)
+                except PathSafetyError as exc:
+                    message = (
+                        "Noofy found conflicting paths inside a workflow extension archive."
+                        if exc.reason == "collision"
+                        else "Noofy found an unsafe path inside a workflow extension archive."
+                    )
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        message,
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "archive_path": member.filename,
+                            "reason": exc.reason,
+                        },
+                    ) from exc
                 extracted_count += 1
+                if extracted_count > MAX_CUSTOM_NODE_SOURCE_ARCHIVE_FILES:
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy found too many files inside a workflow extension archive.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "reason": "oversized",
+                            "max_files": MAX_CUSTOM_NODE_SOURCE_ARCHIVE_FILES,
+                        },
+                    )
+                if (
+                    extracted_bytes + member.file_size
+                    > MAX_CUSTOM_NODE_SOURCE_UNCOMPRESSED_BYTES
+                ):
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy found too much data inside a workflow extension archive.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "reason": "oversized",
+                            "max_uncompressed_bytes": MAX_CUSTOM_NODE_SOURCE_UNCOMPRESSED_BYTES,
+                        },
+                    )
+                try:
+                    destination = contained_destination(target_dir, safe_name)
+                except PathSafetyError as exc:
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy found an unsafe path inside a workflow extension archive.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "archive_path": member.filename,
+                            "reason": exc.reason,
+                        },
+                    ) from exc
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with (
+                        archive.open(member) as source_file,
+                        destination.open("xb") as destination_file,
+                    ):
+                        copied_bytes = copy_stream_limited(
+                            source_file,
+                            destination_file,
+                            max_bytes=(
+                                MAX_CUSTOM_NODE_SOURCE_UNCOMPRESSED_BYTES
+                                - extracted_bytes
+                            ),
+                        )
+                except StreamLimitError as exc:
+                    destination.unlink(missing_ok=True)
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy found too much data inside a workflow extension archive.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "archive_path": member.filename,
+                            "reason": "oversized",
+                            "max_uncompressed_bytes": (
+                                MAX_CUSTOM_NODE_SOURCE_UNCOMPRESSED_BYTES
+                            ),
+                            "copied_bytes": extracted_bytes + exc.copied_bytes,
+                        },
+                    ) from exc
+                extracted_bytes += copied_bytes
+                if copied_bytes != member.file_size:
+                    destination.unlink(missing_ok=True)
+                    raise NodeRegistryResolutionError(
+                        NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
+                        "Noofy could not verify a workflow extension archive member.",
+                        developer_details={
+                            "boundary": "archive_member_path",
+                            "archive_path": member.filename,
+                            "reason": "size_mismatch",
+                            "declared_size_bytes": member.file_size,
+                            "copied_size_bytes": copied_bytes,
+                        },
+                    )
             if extracted_count == 0:
                 raise NodeRegistryResolutionError(
                     NodeRegistryResolutionErrorCode.UNSUPPORTED_ARCHIVE_FORMAT,
@@ -739,37 +865,6 @@ def _extract_verified_zip_archive(
             "Noofy could not read the workflow extension archive.",
             developer_details={"reason": "bad_zip"},
         ) from exc
-
-
-def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
-    return ((member.external_attr >> 16) & 0o170000) == 0o120000
-
-
-def _safe_relative_posix_path(value: str, *, allow_nested: bool) -> str:
-    if "\\" in value:
-        raise NodeRegistryResolutionError(
-            NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
-            "Noofy found an unsafe path inside a workflow extension archive.",
-            developer_details={"path": value, "reason": "backslash"},
-        )
-    path = PurePosixPath(value)
-    if (
-        path.is_absolute()
-        or not path.parts
-        or any(part in {"", ".", ".."} for part in path.parts)
-    ):
-        raise NodeRegistryResolutionError(
-            NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
-            "Noofy found an unsafe path inside a workflow extension archive.",
-            developer_details={"path": value, "reason": "path_traversal"},
-        )
-    if not allow_nested and len(path.parts) != 1:
-        raise NodeRegistryResolutionError(
-            NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH,
-            "Noofy found an unsafe path inside a workflow extension archive.",
-            developer_details={"path": value, "reason": "nested_path"},
-        )
-    return value
 
 
 def _normalized_sha256(value: str) -> str:

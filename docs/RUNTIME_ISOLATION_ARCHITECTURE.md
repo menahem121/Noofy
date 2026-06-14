@@ -173,6 +173,39 @@ For verified or registry-resolved packages the resolver:
 6. Materializes a per-view model tree from the shared model store (hardlink → symlink → copy fallback).
 7. Runs the split smoke suite (dependency import, custom-node import, runner health, workflow execution).
 8. Atomically promotes dependency env, runner workspace, and install state.
+
+### Custom-Node Source Boundary
+
+Custom-node source validation is strict at Noofy-controlled mount points and
+permissive inside an isolated package tree. A package folder created directly
+under `runner-workspace/custom_nodes/` cannot use protected runtime names such
+as `models`, `input`, `output`, `temp`, or `user`. Once a safe package folder
+has been selected, those names are valid internal package directories.
+
+For example, this is valid and remains entirely inside the isolated package:
+
+```text
+runner-workspace/custom_nodes/comfyui-rmbg/models/birefnet.py
+```
+
+Archive members and internal package paths still reject absolute paths,
+traversal, backslashes, symlinks, special files, oversized trees, and
+case-insensitive collisions. Materialization containment checks ensure source
+files cannot escape the selected custom-node package destination. The trusted
+backend only validates, hashes, and copies these files as data; imports and
+execution remain confined to isolated runner processes.
+
+Custom-node package replacement is transactional. Noofy stages and hashes every
+package under the runner workspace, verifies the staged content against the
+workspace manifest, and only then promotes it. If staging or promotion fails,
+the previous materialized package and manifest are restored and temporary
+staging data is removed.
+
+The custom-node workspace manifest schema is `0.2.0`. It records the exported
+source folder separately from the runner package folder when a protected source
+name must be remapped. Remapping is explicit rather than silent, and the normal
+isolated custom-node import smoke test remains the compatibility gate: required
+node types must register from the staged runner before the workspace is ready.
 9. Quarantines failed staging directories with a bounded retention window; never mutates ready artifacts.
 
 Backend startup runs an idempotent sweep that quarantines stale transactions, kills orphan runner processes from a prior crash, removes stale PID/temp files, and expires old quarantines.

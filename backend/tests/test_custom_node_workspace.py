@@ -2,18 +2,24 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.runtime.dependencies.custom_nodes import (
+    CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION,
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CoreNodeManifest,
     CoreNodeManifestCatalog,
     CustomNodeMaterializationError,
     CustomNodeMaterializationErrorCode,
+    CustomNodeSourceBoundary,
+    CustomNodeSourceKind,
+    CustomNodeWorkspaceEntry,
+    CustomNodeWorkspaceManifest,
     CustomNodeWorkspaceMaterializer,
     core_node_manifest_catalog_for_runtime_profiles,
     validate_custom_node_source_relative_paths,
 )
-from app.runtime.dependencies.isolation import CapsuleLock
+from app.runtime.dependencies.isolation import CapsuleLock, TrustLevel
 from app.runtime.profiles import (
     load_runtime_profile_catalog,
     runtime_profile_catalog_for_local_comfyui,
@@ -101,6 +107,11 @@ def test_materializer_recognizes_core_nodes_and_materializes_required_bundled_no
     assert not (workspace / "custom_nodes" / "UnusedNode").exists()
     stored_manifest = json.loads((workspace / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME).read_text(encoding="utf-8"))
     assert stored_manifest["manifest_hash"] == manifest.manifest_hash
+    assert stored_manifest["schema_version"] == "0.2.0"
+    assert (
+        CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION
+        == stored_manifest["schema_version"]
+    )
 
 
 def test_materializer_does_not_mutate_trusted_core_runtime_files(tmp_path: Path) -> None:
@@ -202,6 +213,29 @@ def test_materializer_rejects_case_insensitive_path_collision(tmp_path: Path) ->
     assert error.value.code is CustomNodeMaterializationErrorCode.CASE_INSENSITIVE_PATH_COLLISION
 
 
+def test_materializer_rejects_nested_case_insensitive_path_collision(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(
+        source_files,
+        "custom-node",
+        {
+            "models/Foo.py": "x = 1\n",
+            "models/foo.py": "x = 2\n",
+        },
+    )
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        _materializer().build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+
+    assert error.value.code is CustomNodeMaterializationErrorCode.CASE_INSENSITIVE_PATH_COLLISION
+    assert error.value.boundary is CustomNodeSourceBoundary.CUSTOM_NODE_INTERNAL_PATH
+    assert error.value.relative_path == "models/foo.py"
+
+
 def test_materializer_rejects_symlink_escape(tmp_path: Path) -> None:
     source_files = tmp_path / "source-files"
     _write_graph(source_files, ["CustomRequired"])
@@ -216,6 +250,7 @@ def test_materializer_rejects_symlink_escape(tmp_path: Path) -> None:
         _materializer().build_manifest(capsule_lock=capsule, source_files_dir=source_files)
 
     assert error.value.code is CustomNodeMaterializationErrorCode.SYMLINK_ESCAPE
+    assert error.value.boundary is CustomNodeSourceBoundary.CUSTOM_NODE_INTERNAL_PATH
 
 
 def test_materializer_rejects_oversized_source(tmp_path: Path) -> None:
@@ -244,6 +279,386 @@ def test_materializer_rejects_protected_custom_node_folder_name(tmp_path: Path) 
         _materializer().build_manifest(capsule_lock=capsule, source_files_dir=source_files)
 
     assert error.value.code is CustomNodeMaterializationErrorCode.PROTECTED_PATH_SHADOWING
+    assert error.value.boundary is CustomNodeSourceBoundary.CUSTOM_NODE_PACKAGE_FOLDER
+    assert error.value.developer_details["reason"] == "protected_package_folder"
+
+
+def test_materializer_allows_nested_models_directory_inside_custom_node(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(
+        source_files,
+        "comfyui-rmbg",
+        {
+            "__init__.py": "NODE_CLASS_MAPPINGS = {}\n",
+            "nodes.py": "x = 1\n",
+            "models/__init__.py": "",
+            "models/birefnet.py": "MODEL = 'BiRefNet'\n",
+        },
+    )
+    capsule = _capsule(
+        [{"package_id": "comfyui-rmbg", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    workspace = tmp_path / "runner-workspace"
+    materializer = _materializer()
+
+    manifest = materializer.build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
+    materializer.materialize(
+        manifest=manifest,
+        source_files_dir=source_files,
+        runner_workspace_dir=workspace,
+    )
+
+    assert manifest.entries[0].materialized_relative_path == "custom_nodes/comfyui-rmbg"
+    assert manifest.entries[0].source_folder_name == "comfyui-rmbg"
+    assert manifest.entries[0].policy_flags["folder_name_remapped"] is False
+    assert (
+        workspace / "custom_nodes" / "comfyui-rmbg" / "models" / "birefnet.py"
+    ).read_text(encoding="utf-8") == "MODEL = 'BiRefNet'\n"
+
+
+def test_materializer_allows_common_internal_runtime_like_folder_names(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    internal_names = [
+        "models",
+        "input",
+        "output",
+        "temp",
+        "user",
+        "assets",
+        "configs",
+        "weights",
+    ]
+    _write_custom_node(
+        source_files,
+        "custom-node",
+        {f"{name}/marker.txt": name for name in internal_names},
+    )
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    workspace = tmp_path / "runner-workspace"
+    materializer = _materializer()
+
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    materializer.materialize(
+        manifest=manifest,
+        source_files_dir=source_files,
+        runner_workspace_dir=workspace,
+    )
+
+    for name in internal_names:
+        assert (
+            workspace / "custom_nodes" / "custom-node" / name / "marker.txt"
+        ).read_text(encoding="utf-8") == name
+
+
+def test_materializer_remaps_protected_source_folder_to_safe_package_id(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "models", {"node.py": "x = 1\n"})
+    capsule = _capsule(
+        [{"package_id": "comfyui-rmbg", "source": "bundled_archive:models", "node_types": ["CustomRequired"]}]
+    )
+    workspace = tmp_path / "runner-workspace"
+    materializer = _materializer()
+
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    materializer.materialize(
+        manifest=manifest,
+        source_files_dir=source_files,
+        runner_workspace_dir=workspace,
+    )
+
+    entry = manifest.entries[0]
+    assert entry.materialized_relative_path == "custom_nodes/comfyui-rmbg"
+    assert entry.source_folder_name == "models"
+    assert entry.policy_flags["folder_name_remapped"] is True
+    assert (workspace / "custom_nodes" / "comfyui-rmbg" / "node.py").exists()
+    assert not (workspace / "custom_nodes" / "models").exists()
+
+
+def test_remapped_package_keeps_explicit_source_and_target_names_for_import_smoke(
+    tmp_path: Path,
+) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "models", {"node.py": "x = 1\n"})
+    capsule = _capsule(
+        [{"package_id": "safe-package", "source": "bundled_archive:models", "node_types": ["CustomRequired"]}]
+    )
+
+    manifest = _materializer().build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
+
+    entry = manifest.entries[0]
+    assert entry.source_folder_name == "models"
+    assert entry.materialized_relative_path == "custom_nodes/safe-package"
+    assert entry.policy_flags == {
+        "has_install_py": False,
+        "folder_name_remapped": True,
+    }
+    assert entry.node_types == ["CustomRequired"]
+
+
+@pytest.mark.parametrize(
+    "materialized_relative_path",
+    [
+        "custom_nodes/foo/bar",
+        "custom_nodes/models",
+        "models/foo",
+        "../custom_nodes/foo",
+        "custom_nodes",
+    ],
+)
+def test_workspace_entry_rejects_arbitrary_nested_materialized_path(
+    materialized_relative_path: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        _workspace_entry(materialized_relative_path)
+
+
+def test_workspace_manifest_rejects_pre_boundary_schema_version() -> None:
+    with pytest.raises(ValidationError):
+        CustomNodeWorkspaceManifest(
+            schema_version="0.1.0",
+            runtime_profile_id="profile",
+            runtime_profile_variant_id="variant",
+            runtime_profile_manifest_hash="sha256:" + ("1" * 64),
+            core_node_manifest_hash="sha256:" + ("2" * 64),
+        )
+
+
+def test_internal_source_path_still_rejects_traversal() -> None:
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        validate_custom_node_source_relative_paths(["models/../../escape.py"])
+
+    assert error.value.code is CustomNodeMaterializationErrorCode.PATH_TRAVERSAL
+    assert error.value.boundary is CustomNodeSourceBoundary.ARCHIVE_MEMBER_PATH
+    assert error.value.developer_details["relative_path"] == "models/../../escape.py"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "/absolute.py",
+        "models//birefnet.py",
+        "models/./birefnet.py",
+        "models\\birefnet.py",
+    ],
+)
+def test_internal_source_path_rejects_invalid_path_shape(relative_path: str) -> None:
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        validate_custom_node_source_relative_paths([relative_path])
+
+    assert error.value.code is CustomNodeMaterializationErrorCode.PATH_TRAVERSAL
+    assert error.value.boundary is CustomNodeSourceBoundary.ARCHIVE_MEMBER_PATH
+
+
+def test_materializer_never_writes_outside_runner_custom_nodes_package(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "custom-node", {"node.py": "x = 1\n"})
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    workspace = tmp_path / "runner-workspace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("trusted\n", encoding="utf-8")
+    (workspace / "custom_nodes").mkdir(parents=True)
+    (workspace / "custom_nodes" / "custom-node").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        materializer.materialize(
+            manifest=manifest,
+            source_files_dir=source_files,
+            runner_workspace_dir=workspace,
+        )
+
+    assert error.value.boundary is CustomNodeSourceBoundary.RUNNER_WORKSPACE_DESTINATION
+    assert error.value.developer_details["reason"] == "destination_escape"
+    assert sentinel.read_text(encoding="utf-8") == "trusted\n"
+    assert not (outside / "node.py").exists()
+
+
+def test_materializer_rejects_existing_package_symlink_inside_custom_nodes(
+    tmp_path: Path,
+) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "custom-node", {"node.py": "x = 1\n"})
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    workspace = tmp_path / "runner-workspace"
+    other_package = workspace / "custom_nodes" / "other-package"
+    other_package.mkdir(parents=True)
+    sentinel = other_package / "sentinel.txt"
+    sentinel.write_text("trusted\n", encoding="utf-8")
+    (workspace / "custom_nodes" / "custom-node").symlink_to(
+        other_package,
+        target_is_directory=True,
+    )
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        materializer.materialize(
+            manifest=manifest,
+            source_files_dir=source_files,
+            runner_workspace_dir=workspace,
+        )
+
+    assert error.value.boundary is CustomNodeSourceBoundary.RUNNER_WORKSPACE_DESTINATION
+    assert error.value.developer_details["reason"] == "destination_symlink"
+    assert sentinel.read_text(encoding="utf-8") == "trusted\n"
+    assert not (other_package / "node.py").exists()
+
+
+def test_failed_staging_preserves_existing_materialized_package(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "custom-node", {"node.py": "new\n"})
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    workspace = tmp_path / "runner-workspace"
+    ready_package = workspace / "custom_nodes" / "custom-node"
+    ready_package.mkdir(parents=True)
+    (ready_package / "node.py").write_text("ready\n", encoding="utf-8")
+    (source_files / "custom_nodes" / "custom-node" / "node.py").write_text(
+        "changed after manifest\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        materializer.materialize(
+            manifest=manifest,
+            source_files_dir=source_files,
+            runner_workspace_dir=workspace,
+        )
+
+    assert error.value.developer_details["reason"] == "source_content_hash_mismatch"
+    assert (ready_package / "node.py").read_text(encoding="utf-8") == "ready\n"
+    assert not list((workspace / "custom_nodes").glob(".noofy-materialize-*"))
+
+
+def test_failed_atomic_promotion_restores_existing_materialized_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "custom-node", {"node.py": "new\n"})
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    workspace = tmp_path / "runner-workspace"
+    ready_package = workspace / "custom_nodes" / "custom-node"
+    ready_package.mkdir(parents=True)
+    (ready_package / "node.py").write_text("ready\n", encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_staged_package_promotion(path: Path, target: Path) -> Path:
+        if path.parent.name == "packages" and path.name == "custom-node":
+            raise OSError("injected promotion failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_staged_package_promotion)
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        materializer.materialize(
+            manifest=manifest,
+            source_files_dir=source_files,
+            runner_workspace_dir=workspace,
+        )
+
+    assert (
+        error.value.code
+        is CustomNodeMaterializationErrorCode.WORKSPACE_PROMOTION_FAILED
+    )
+    assert (ready_package / "node.py").read_text(encoding="utf-8") == "ready\n"
+    assert not list((workspace / "custom_nodes").glob(".noofy-materialize-*"))
+
+
+def test_failed_manifest_promotion_restores_package_and_previous_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "custom-node", {"node.py": "new\n"})
+    capsule = _capsule(
+        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+    manifest = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    workspace = tmp_path / "runner-workspace"
+    ready_package = workspace / "custom_nodes" / "custom-node"
+    ready_package.mkdir(parents=True)
+    (ready_package / "node.py").write_text("ready\n", encoding="utf-8")
+    manifest_path = workspace / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    manifest_path.write_text("previous manifest\n", encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_staged_manifest_promotion(path: Path, target: Path) -> Path:
+        if (
+            path.name == CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+            and path.parent.name.startswith(".noofy-materialize-")
+        ):
+            raise OSError("injected manifest promotion failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_staged_manifest_promotion)
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        materializer.materialize(
+            manifest=manifest,
+            source_files_dir=source_files,
+            runner_workspace_dir=workspace,
+        )
+
+    assert (
+        error.value.code
+        is CustomNodeMaterializationErrorCode.WORKSPACE_PROMOTION_FAILED
+    )
+    assert (ready_package / "node.py").read_text(encoding="utf-8") == "ready\n"
+    assert manifest_path.read_text(encoding="utf-8") == "previous manifest\n"
+    assert not list((workspace / "custom_nodes").glob(".noofy-materialize-*"))
+
+
+def test_nested_source_content_hash_changes_when_nested_file_changes(tmp_path: Path) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["CustomRequired"])
+    _write_custom_node(source_files, "comfyui-rmbg", {"models/birefnet.py": "version = 1\n"})
+    capsule = _capsule(
+        [{"package_id": "comfyui-rmbg", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
+    )
+    materializer = _materializer()
+
+    first = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    (source_files / "custom_nodes" / "comfyui-rmbg" / "models" / "birefnet.py").write_text(
+        "version = 2\n",
+        encoding="utf-8",
+    )
+    second = materializer.build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+
+    assert first.entries[0].source_content_hash != second.entries[0].source_content_hash
+    assert first.manifest_hash != second.manifest_hash
 
 
 def _write_graph(source_files: Path, node_types: list[str]) -> None:
@@ -258,6 +673,19 @@ def _write_custom_node(source_files: Path, folder_name: str, files: dict[str, st
         path = node_dir / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
+
+
+def _workspace_entry(materialized_relative_path: str) -> CustomNodeWorkspaceEntry:
+    return CustomNodeWorkspaceEntry(
+        custom_node_package_id="custom-node",
+        source_kind=CustomNodeSourceKind.BUNDLED_ARCHIVE,
+        source_ref="bundled_from_creator_machine",
+        source_content_hash="sha256:" + ("1" * 64),
+        materialized_relative_path=materialized_relative_path,
+        source_folder_name="custom-node",
+        import_order_index=0,
+        package_trust_level=TrustLevel.QUARANTINED_COMMUNITY,
+    )
 
 
 def _capsule(custom_nodes: list[dict]) -> CapsuleLock:

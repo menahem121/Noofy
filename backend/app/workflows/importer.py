@@ -3,15 +3,20 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import shutil
 import zipfile
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.archive_safety import (
+    PathSafetyError,
+    StreamLimitError,
+    contained_destination,
+    copy_stream_limited,
+)
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
@@ -786,15 +791,38 @@ class NoofyArchiveImporter:
 
     def extract_source_files(self, target_dir: Path) -> None:
         target_dir.mkdir(parents=True, exist_ok=True)
+        extracted_bytes = 0
         for name, info in self.members.items():
             if info.is_dir():
                 continue
-            target = target_dir.joinpath(*PurePosixPath(name).parts)
-            if not _path_is_within(target_dir, target):
-                raise NoofyImportError("Workflow package contains an unsafe path.")
+            try:
+                target = contained_destination(target_dir, name)
+            except PathSafetyError as exc:
+                raise NoofyImportError(
+                    "Workflow package contains an unsafe path."
+                ) from exc
             target.parent.mkdir(parents=True, exist_ok=True)
-            with self.archive.open(info, "r") as source, target.open("wb") as dest:
-                shutil.copyfileobj(source, dest)
+            try:
+                with (
+                    self.archive.open(info, "r") as source,
+                    target.open("xb") as dest,
+                ):
+                    copied_bytes = copy_stream_limited(
+                        source,
+                        dest,
+                        max_bytes=MAX_TOTAL_UNCOMPRESSED_BYTES - extracted_bytes,
+                    )
+            except StreamLimitError as exc:
+                target.unlink(missing_ok=True)
+                raise NoofyImportError(
+                    "Workflow package expands to too much data."
+                ) from exc
+            extracted_bytes += copied_bytes
+            if copied_bytes != info.file_size:
+                target.unlink(missing_ok=True)
+                raise NoofyImportError(
+                    "Workflow package member size could not be verified."
+                )
 
     def _validate_package_asset_defaults(self, inputs: list[WorkflowInput]) -> None:
         for workflow_input in inputs:
@@ -1002,12 +1030,6 @@ def _package_imported_as_copy(package: WorkflowPackage, root_dir: Path) -> Workf
                 }
             )
         copy_index += 1
-
-
-def _path_is_within(root_dir: Path, path: Path) -> bool:
-    root = root_dir.resolve(strict=False)
-    candidate = path.resolve(strict=False)
-    return candidate == root or candidate.is_relative_to(root)
 
 
 def _zip_member_is_symlink(info: zipfile.ZipInfo) -> bool:

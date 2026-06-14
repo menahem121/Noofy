@@ -233,13 +233,20 @@ class CapsuleInstaller:
                 if exc.code is CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE
                 else InstallStatus.BLOCKED_BY_POLICY
             )
+            self.log_store.add(
+                "error",
+                "Custom-node source preparation failed",
+                "capsule.installer",
+                workflow_id=workflow_id,
+                details=exc.developer_details,
+            )
             state = self._transition(
                 fingerprint,
                 status,
                 workflow_id,
-                last_error=str(exc),
+                last_error=exc.user_message,
             )
-            raise CapsuleInstallError(str(exc), state=state) from exc
+            raise CapsuleInstallError(exc.user_message, state=state) from exc
         except Exception as exc:
             state = self._transition(
                 fingerprint,

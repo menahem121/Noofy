@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-import stat
 import zipfile
 from pathlib import PurePosixPath
+
+from app.archive_safety import (
+    MaterializedPathIndex,
+    PathSafetyError,
+    ignored_archive_member,
+    safe_relative_posix_path,
+    zip_member_unsafe_reason,
+)
 
 
 class ArchiveValidationError(RuntimeError):
@@ -22,11 +29,22 @@ def validate_archive_members(
 
     total_uncompressed = 0
     raw_members: dict[str, zipfile.ZipInfo] = {}
+    raw_path_index = MaterializedPathIndex()
     for info in infos:
-        name = safe_archive_name(info.filename)
-        if zip_member_is_symlink(info):
+        archive_name = (
+            info.filename[:-1]
+            if info.is_dir() and info.filename.endswith("/")
+            else info.filename
+        )
+        name = safe_archive_name(archive_name)
+        unsafe_reason = zip_member_unsafe_reason(info)
+        if unsafe_reason == "symlink":
             raise ArchiveValidationError(
                 f"Workflow package contains an unsupported symlink: {name}"
+            )
+        if unsafe_reason == "special_file":
+            raise ArchiveValidationError(
+                f"Workflow package contains an unsupported special file: {name}"
             )
         total_uncompressed += info.file_size
         if total_uncompressed > max_total_uncompressed_bytes:
@@ -35,22 +53,27 @@ def validate_archive_members(
             continue
         if ignored_archive_member(name):
             continue
-        if name in raw_members:
+        try:
+            raw_path_index.add(name)
+        except PathSafetyError:
             raise ArchiveValidationError(
                 f"Workflow package contains duplicate file path: {name}"
-            )
+            ) from None
         raw_members[name] = info
 
     root_prefix = single_wrapper_root(raw_members, required_files=required_files)
     members: dict[str, zipfile.ZipInfo] = {}
+    path_index = MaterializedPathIndex()
     for name, info in raw_members.items():
         normalized_name = strip_wrapper_root(name, root_prefix)
         if normalized_name is None or ignored_archive_member(normalized_name):
             continue
-        if normalized_name in members:
+        try:
+            path_index.add(normalized_name)
+        except PathSafetyError:
             raise ArchiveValidationError(
                 f"Workflow package contains duplicate file path: {normalized_name}"
-            )
+            ) from None
         members[normalized_name] = info
 
     missing = sorted(required_files - set(members))
@@ -62,26 +85,16 @@ def validate_archive_members(
 
 
 def safe_archive_name(name: str) -> str:
-    if "\\" in name:
-        raise ArchiveValidationError(f"Workflow package contains an unsafe path: {name}")
-    path = PurePosixPath(name)
-    if path.is_absolute():
+    try:
+        return safe_relative_posix_path(name, allow_nested=True)
+    except PathSafetyError as exc:
+        if exc.reason == "path_traversal" and PurePosixPath(name).is_absolute():
+            raise ArchiveValidationError(
+                f"Workflow package contains an absolute path: {name}"
+            ) from exc
         raise ArchiveValidationError(
-            f"Workflow package contains an absolute path: {name}"
-        )
-    if not path.parts or any(part in {"", ".", ".."} for part in path.parts):
-        raise ArchiveValidationError(f"Workflow package contains an unsafe path: {name}")
-    return str(path)
-
-
-def ignored_archive_member(name: str) -> bool:
-    parts = PurePosixPath(name).parts
-    return (
-        not parts
-        or parts[0] == "__MACOSX"
-        or parts[-1] == ".DS_Store"
-        or parts[-1].startswith("._")
-    )
+            f"Workflow package contains an unsafe path: {name}"
+        ) from exc
 
 
 def single_wrapper_root(
@@ -122,4 +135,4 @@ def strip_wrapper_root(name: str, root_prefix: str | None) -> str | None:
 
 
 def zip_member_is_symlink(info: zipfile.ZipInfo) -> bool:
-    return stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK
+    return zip_member_unsafe_reason(info) == "symlink"

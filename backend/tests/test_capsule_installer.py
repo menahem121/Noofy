@@ -807,6 +807,11 @@ async def test_prepare_imported_custom_node_capsule_uses_app_workflow_id_for_sou
     custom_node_dir = source_files_dir / "custom_nodes" / "custom-node-a"
     custom_node_dir.mkdir(parents=True)
     (custom_node_dir / "node.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    (custom_node_dir / "models").mkdir()
+    (custom_node_dir / "models" / "birefnet.py").write_text(
+        "MODEL = 'BiRefNet'\n",
+        encoding="utf-8",
+    )
     (source_files_dir / "comfyui_graph.json").write_text(
         json.dumps({"1": {"class_type": "CustomNodeA", "inputs": {}}}),
         encoding="utf-8",
@@ -868,6 +873,92 @@ async def test_prepare_imported_custom_node_capsule_uses_app_workflow_id_for_sou
     assert state.runner_workspace_path is not None
     runner_workspace = Path(state.runner_workspace_path)
     assert (runner_workspace / "custom_nodes" / "custom-node-a" / "node.py").exists()
+    assert (
+        runner_workspace
+        / "custom_nodes"
+        / "custom-node-a"
+        / "models"
+        / "birefnet.py"
+    ).exists()
+
+
+@pytest.mark.anyio
+async def test_custom_node_path_policy_failure_is_beginner_safe_and_keeps_diagnostics(
+    tmp_path: Path,
+) -> None:
+    source_files_dir = tmp_path / "source-files"
+    protected_node_dir = source_files_dir / "custom_nodes" / "models"
+    protected_node_dir.mkdir(parents=True)
+    (protected_node_dir / "node.py").write_text(
+        "NODE_CLASS_MAPPINGS = {}\n",
+        encoding="utf-8",
+    )
+    (source_files_dir / "comfyui_graph.json").write_text(
+        json.dumps({"1": {"class_type": "CustomNodeA", "inputs": {}}}),
+        encoding="utf-8",
+    )
+    capsule = CapsuleLock.model_validate(
+        _capsule_lock_data(
+            fingerprint="fp-custom-node-path-policy",
+            models=[],
+            custom_nodes=[
+                {
+                    "package_id": "models",
+                    "source": "bundled_archive:models",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomNodeA"],
+                }
+            ],
+        )
+    )
+
+    async def downloader(url: str, dest: Path) -> int:
+        raise AssertionError("no models should be downloaded")
+
+    log_store = LogStore()
+    state_store = InstallStateStore(tmp_path / "install-state")
+    model_store = ModelStore(
+        blobs_dir=tmp_path / "blobs",
+        refs_dir=tmp_path / "refs",
+        materialized_dir=tmp_path / "materialized",
+        transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+        downloader=downloader,
+    )
+    workspace_preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_files_dir=source_files_dir,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=log_store,
+    )
+    installer = CapsuleInstaller(
+        install_state_store=state_store,
+        model_store=model_store,
+        workspace_preparer=workspace_preparer,
+        log_store=log_store,
+    )
+
+    with pytest.raises(
+        CapsuleInstallError,
+        match="Noofy could not prepare one workflow extension safely.",
+    ) as error:
+        await installer.prepare(capsule)
+
+    assert error.value.state.status is InstallStatus.BLOCKED_BY_POLICY
+    assert error.value.state.last_error == (
+        "Noofy could not prepare one workflow extension safely."
+    )
+    diagnostic = next(
+        event
+        for event in log_store.list_events().events
+        if event.message == "Custom-node source preparation failed"
+    )
+    assert diagnostic.details["boundary"] == "custom_node_package_folder"
+    assert diagnostic.details["relative_path"] == "models"
+    assert diagnostic.details["reason"] == "protected_package_folder"
+    assert "protected runtime name" in diagnostic.details["technical_message"]
 
 
 @pytest.mark.anyio

@@ -265,7 +265,11 @@ def test_source_cache_downloads_verifies_and_extracts_archive_without_mutating_c
     tmp_path: Path,
 ) -> None:
     archive_bytes = _zip_bytes(
-        {"repo/custom_nodes/magic_node.py": "NODE_CLASS_MAPPINGS = {}\n"}
+        {
+            "repo/custom_nodes/magic_node.py": "NODE_CLASS_MAPPINGS = {}\n",
+            "repo/models/birefnet.py": "MODEL = 'BiRefNet'\n",
+            "repo/input/example.txt": "input\n",
+        }
     )
     digest = hashlib.sha256(archive_bytes).hexdigest()
     trusted_core_file = tmp_path / "trusted-core" / "custom_nodes" / "trusted.py"
@@ -289,7 +293,51 @@ def test_source_cache_downloads_verifies_and_extracts_archive_without_mutating_c
     assert fetcher.urls == ["https://example.test/comfyui-magic/archive/7b3f5d0.zip"]
     assert cached.source_cache_ref == f"{digest}/source"
     assert (cached.source_dir / "custom_nodes" / "magic_node.py").exists()
+    assert (cached.source_dir / "models" / "birefnet.py").exists()
+    assert (cached.source_dir / "input" / "example.txt").exists()
     assert trusted_core_file.read_text(encoding="utf-8") == "trusted\n"
+
+
+def test_source_cache_streams_archive_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_bytes = _zip_bytes({"models/model.bin": "streamed-content"})
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    calls: list[int] = []
+    from app.runtime import node_registry
+
+    original_copy_stream_limited = node_registry.copy_stream_limited
+
+    def track_stream_copy(source, destination, *, max_bytes: int, chunk_bytes=1024 * 1024):
+        calls.append(max_bytes)
+        return original_copy_stream_limited(
+            source,
+            destination,
+            max_bytes=max_bytes,
+            chunk_bytes=3,
+        )
+
+    monkeypatch.setattr(node_registry, "copy_stream_limited", track_stream_copy)
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
+
+    cached = cache.materialize(
+        NodeRegistrySource(
+            source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+            source_url="https://example.test/node.zip",
+            source_ref="release-2026-05-03",
+            source_content_hash=f"sha256:{digest}",
+        )
+    )
+
+    assert calls
+    assert (cached.source_dir / "models" / "model.bin").read_text(
+        encoding="utf-8"
+    ) == "streamed-content"
 
 
 def test_source_cache_rejects_hash_mismatch(tmp_path: Path) -> None:
@@ -363,6 +411,100 @@ def test_source_cache_rejects_archive_path_traversal(tmp_path: Path) -> None:
         )
 
     assert error.value.code is NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH
+    assert error.value.developer_details["boundary"] == "archive_member_path"
+
+
+def test_source_cache_rejects_case_insensitive_archive_path_collision(
+    tmp_path: Path,
+) -> None:
+    archive_bytes = _zip_bytes(
+        {
+            "models/Foo.py": "first\n",
+            "models/foo.py": "second\n",
+        }
+    )
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        cache.materialize(
+            NodeRegistrySource(
+                source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+                source_url="https://example.test/node.zip",
+                source_ref="release-2026-05-03",
+                source_content_hash=f"sha256:{digest}",
+            )
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH
+    assert error.value.developer_details["boundary"] == "archive_member_path"
+    assert error.value.developer_details["reason"] == "collision"
+
+
+@pytest.mark.parametrize(
+    "archive_path",
+    [
+        "models//birefnet.py",
+        "models/./birefnet.py",
+        "models\\birefnet.py",
+    ],
+)
+def test_source_cache_rejects_invalid_archive_path_shape(
+    tmp_path: Path,
+    archive_path: str,
+) -> None:
+    archive_bytes = _zip_bytes({archive_path: "bad\n"})
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        cache.materialize(
+            NodeRegistrySource(
+                source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+                source_url="https://example.test/node.zip",
+                source_ref="release-2026-05-03",
+                source_content_hash=f"sha256:{digest}",
+            )
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH
+    assert error.value.developer_details["boundary"] == "archive_member_path"
+
+
+def test_source_cache_rejects_file_directory_archive_collision(tmp_path: Path) -> None:
+    archive_bytes = _zip_bytes(
+        {
+            "models": "file\n",
+            "models/birefnet.py": "nested\n",
+        }
+    )
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    cache = CustomNodeSourceCache(
+        cache_dir=tmp_path / "source-cache",
+        fetcher=FakeFetcher(archive_bytes),
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(NodeRegistryResolutionError) as error:
+        cache.materialize(
+            NodeRegistrySource(
+                source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+                source_url="https://example.test/node.zip",
+                source_ref="release-2026-05-03",
+                source_content_hash=f"sha256:{digest}",
+            )
+        )
+
+    assert error.value.code is NodeRegistryResolutionErrorCode.UNSAFE_ARCHIVE_PATH
+    assert error.value.developer_details["reason"] == "collision"
 
 
 def test_source_cache_rejects_existing_cache_metadata_mismatch(tmp_path: Path) -> None:

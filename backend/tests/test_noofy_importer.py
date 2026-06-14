@@ -209,6 +209,36 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
+def test_noofy_importer_streams_source_file_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    original_copy_stream_limited = importer_module.copy_stream_limited
+
+    def track_stream_copy(source, destination, *, max_bytes: int, chunk_bytes=1024 * 1024):
+        calls.append(max_bytes)
+        return original_copy_stream_limited(
+            source,
+            destination,
+            max_bytes=max_bytes,
+            chunk_bytes=5,
+        )
+
+    monkeypatch.setattr(
+        importer_module,
+        "copy_stream_limited",
+        track_stream_copy,
+    )
+    importer = NoofyArchiveImporter(_archive_bytes())
+    target_dir = tmp_path / "source-files"
+
+    importer.extract_source_files(target_dir)
+
+    assert calls
+    assert (target_dir / "custom_nodes").is_dir()
+
+
 def test_noofy_importer_preserves_declared_non_image_output_kinds() -> None:
     archive = _archive_bytes_with_dashboard_update(
         {
