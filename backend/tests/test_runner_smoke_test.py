@@ -956,13 +956,67 @@ async def test_dependency_import_smoke_runs_declared_non_core_wheels(
 
 
 @pytest.mark.anyio
+async def test_dependency_import_smoke_uses_runtime_python_with_dependency_overlay(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_workspace(tmp_path)
+    runtime_python = tmp_path / "runtime" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text("# fake runtime python\n", encoding="utf-8")
+    site_packages = (
+        prepared.dependency_env_path / "venv" / "lib" / "python3.13" / "site-packages"
+    )
+    site_packages.mkdir(parents=True)
+    (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "name": "overlay-package",
+                        "relationship": "direct",
+                        "import_names": ["overlay_import"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    async def command_runner(command: list[str], prepared_workspace):
+        commands.append(command)
+        return 0, ""
+
+    result = await _check_dependency_imports_with_runner(
+        prepared,
+        command_runner=command_runner,
+        runtime_python_executable=str(runtime_python),
+    )
+
+    assert result.status is SmokeStageStatus.PASSED
+    assert commands[0][0] == str(runtime_python)
+    assert str(site_packages) in commands[0][2]
+    assert "sys.path.append(path)" in commands[0][2]
+
+
+@pytest.mark.anyio
 async def test_dependency_import_smoke_reports_import_failure(tmp_path: Path) -> None:
     prepared = _prepared_workspace(tmp_path)
     python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
     python_path.parent.mkdir(parents=True)
     python_path.write_text("# fake python\n", encoding="utf-8")
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
-        json.dumps({"wheels": [{"name": "broken-package", "relationship": "direct"}]}),
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "name": "broken-package",
+                        "relationship": "direct",
+                        "import_names": ["broken_package"],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -976,7 +1030,7 @@ async def test_dependency_import_smoke_reports_import_failure(tmp_path: Path) ->
     assert result.status is SmokeStageStatus.FAILED
     assert result.message == "Dependency environment import smoke failed."
     assert result.details["import_targets"] == [
-        {"package_name": "broken-package", "import_names": []}
+        {"package_name": "broken-package", "import_names": ["broken_package"]}
     ]
     assert "ModuleNotFoundError" in result.details["output"]
 
@@ -990,7 +1044,17 @@ async def test_dependency_import_smoke_reports_unsupported_accelerator_friendly(
     python_path.parent.mkdir(parents=True)
     python_path.write_text("# fake python\n", encoding="utf-8")
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
-        json.dumps({"wheels": [{"name": "needs-accel", "relationship": "direct"}]}),
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "name": "needs-accel",
+                        "relationship": "direct",
+                        "import_names": ["needs_accel"],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 

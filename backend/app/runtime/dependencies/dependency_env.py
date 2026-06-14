@@ -127,6 +127,7 @@ class UvDependencyEnvironmentInstaller:
                 "--require-hashes",
                 "--only-binary",
                 ":all:",
+                "--no-deps",
                 "--no-index",
                 "--find-links",
                 str(self.wheel_cache_dir),
@@ -230,8 +231,16 @@ def _summarize_uv_failure(result: subprocess.CompletedProcess[str]) -> str:
     output = (result.stderr or result.stdout or "").strip()
     if not output:
         return f"Dependency environment installer failed with exit code {result.returncode}."
-    first_line = output.splitlines()[0].strip()
-    return f"Dependency environment installer failed: {first_line}"
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    error_line = next(
+        (
+            line
+            for line in lines
+            if line.startswith(("error:", "ERROR:", "Error:"))
+        ),
+        lines[0],
+    )
+    return f"Dependency environment installer failed: {error_line}"
 
 
 def _redacted_command(command: list[str]) -> list[str]:

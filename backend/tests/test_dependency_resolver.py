@@ -2,6 +2,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from app.runtime.dependencies.dependency_resolver import (
     PyPIPackageIndexClient,
     ResolvedRequirement,
     UvDependencyLockResolver,
+    _import_names_from_wheel,
     custom_node_dependency_source_dirs,
     parse_uv_compiled_requirements,
 )
@@ -335,6 +337,19 @@ def test_pypi_materializer_accepts_older_cp_abi3_wheel_for_target_python(
     )
 
     assert wheel.wheel_filename == "opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_17_x86_64.whl"
+
+
+def test_import_names_from_wheel_falls_back_to_top_level_packages(
+    tmp_path: Path,
+) -> None:
+    wheel_path = tmp_path / "markdown_it_py-4.2.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as wheel:
+        wheel.writestr("markdown_it/__init__.py", "")
+        wheel.writestr("markdown_it/main.py", "")
+        wheel.writestr("markdown_it_py-4.2.0.dist-info/METADATA", "")
+        wheel.writestr("../../../bin/markdown-it", "")
+
+    assert _import_names_from_wheel(wheel_path) == ["markdown_it"]
 
 
 def test_workspace_preparer_can_resolve_missing_lock_from_custom_node_sources(

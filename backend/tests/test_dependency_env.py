@@ -96,6 +96,7 @@ def test_uv_dependency_installer_writes_lock_requirements_and_runs_uv(
     assert commands[1][:4] == ["uv", "pip", "install", "--python"]
     assert "--require-hashes" in commands[1]
     assert "--only-binary" in commands[1]
+    assert "--no-deps" in commands[1]
     assert "--no-index" in commands[1]
     assert "--find-links" in commands[1]
 
@@ -249,4 +250,46 @@ def test_uv_dependency_installer_reports_command_failure_without_traceback(
 
     assert (
         str(error.value) == "Dependency environment installer failed: resolver failed"
+    )
+
+
+def test_uv_dependency_installer_reports_uv_error_line_after_context(
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "wheel-cache"
+    cache_dir.mkdir()
+    lock = _lock_for_cached_wheel(cache_dir)
+
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            2,
+            stdout="",
+            stderr=(
+                "Using Python 3.13.13 environment at: venv\n"
+                "error: In `--require-hashes` mode, all requirements must be pinned"
+            ),
+        )
+
+    installer = UvDependencyEnvironmentInstaller(
+        wheel_cache_dir=cache_dir,
+        command_runner=runner,
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(DependencyEnvironmentInstallError) as error:
+        installer.install(
+            DependencyEnvironmentInstallRequest(
+                lock=lock,
+                target_dir=tmp_path / "stage",
+                python_version="3.13",
+                workflow_id="workflow",
+            )
+        )
+
+    assert str(error.value) == (
+        "Dependency environment installer failed: error: In `--require-hashes` mode, "
+        "all requirements must be pinned"
     )

@@ -593,19 +593,47 @@ def _platform_tags_match(
 def _import_names_from_wheel(path: Path) -> list[str]:
     try:
         with zipfile.ZipFile(path) as wheel:
-            for name in wheel.namelist():
+            names = wheel.namelist()
+            for name in names:
                 if name.endswith(".dist-info/top_level.txt"):
                     contents = wheel.read(name).decode("utf-8", errors="replace")
-                    return sorted(
+                    import_names = sorted(
                         {
                             line.strip()
                             for line in contents.splitlines()
                             if line.strip() and _is_valid_import_name(line.strip())
                         }
                     )
+                    if import_names:
+                        return import_names
+            return _import_names_from_wheel_files(names)
     except zipfile.BadZipFile:
         return []
     return []
+
+
+def _import_names_from_wheel_files(names: list[str]) -> list[str]:
+    import_names: set[str] = set()
+    for raw_name in names:
+        parts = raw_name.split("/")
+        if not parts:
+            continue
+        root = parts[0]
+        if (
+            not root
+            or root.startswith(".")
+            or root.endswith((".dist-info", ".data", ".libs"))
+        ):
+            continue
+        if len(parts) == 1 and root.endswith(".py"):
+            import_name = root[:-3]
+        elif len(parts) > 1 and parts[1] == "__init__.py":
+            import_name = root
+        else:
+            continue
+        if _is_valid_import_name(import_name):
+            import_names.add(import_name)
+    return sorted(import_names)
 
 
 def _is_valid_import_name(value: str) -> bool:

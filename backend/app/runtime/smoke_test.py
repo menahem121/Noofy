@@ -14,6 +14,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -97,9 +98,7 @@ class RunnerSmokeTester:
         self.launch_spec_factory = launch_spec_factory
         self.execution_fixture = execution_fixture
         self.execution_fixture_resolver = execution_fixture_resolver
-        self.dependency_import_checker = (
-            dependency_import_checker or _check_dependency_imports
-        )
+        self.dependency_import_checker = dependency_import_checker
         self.object_info_fetcher = object_info_fetcher or _fetch_object_info
         self.prompt_executor = prompt_executor or _execute_prompt_and_wait
         self.log_store = log_store
@@ -122,7 +121,13 @@ class RunnerSmokeTester:
                 "runner_workspace_path": str(prepared_workspace.runner_workspace_path),
             },
         )
-        dependency_env = await self.dependency_import_checker(prepared_workspace)
+        if self.dependency_import_checker is None:
+            dependency_env = await _check_dependency_imports(
+                prepared_workspace,
+                runtime_python_executable=spec.python_executable,
+            )
+        else:
+            dependency_env = await self.dependency_import_checker(prepared_workspace)
         if dependency_env.status is not SmokeStageStatus.PASSED:
             report = SmokeTestReport(
                 dependency_env=dependency_env,
@@ -538,10 +543,13 @@ async def _fetch_object_info(base_url: str) -> Mapping[str, object]:
 
 async def _check_dependency_imports(
     prepared_workspace: PreparedRuntimeWorkspace,
+    *,
+    runtime_python_executable: str | None = None,
 ) -> SmokeStageResult:
     return await _check_dependency_imports_with_runner(
         prepared_workspace,
         command_runner=_run_dependency_import_command,
+        runtime_python_executable=runtime_python_executable,
     )
 
 
@@ -549,6 +557,7 @@ async def _check_dependency_imports_with_runner(
     prepared_workspace: PreparedRuntimeWorkspace,
     *,
     command_runner: DependencyImportCommandRunner,
+    runtime_python_executable: str | None = None,
 ) -> SmokeStageResult:
     lock_path = prepared_workspace.dependency_env_path / "noofy-dependency-lock.json"
     if not lock_path.exists():
@@ -573,7 +582,11 @@ async def _check_dependency_imports_with_runner(
             details={"dependency_lock_path": str(lock_path)},
         )
 
-    python_path = _dependency_env_python_path(prepared_workspace.dependency_env_path)
+    python_path = (
+        Path(runtime_python_executable)
+        if runtime_python_executable
+        else _dependency_env_python_path(prepared_workspace.dependency_env_path)
+    )
     if not python_path.exists():
         return SmokeStageResult(
             status=SmokeStageStatus.FAILED,
@@ -584,17 +597,20 @@ async def _check_dependency_imports_with_runner(
             },
         )
 
+    dependency_site_packages = [
+        str(path)
+        for path in _dependency_env_site_packages(prepared_workspace.dependency_env_path)
+    ]
     script = (
         "import importlib\n"
-        "import importlib.metadata\n"
+        "import sys\n"
+        f"dependency_site_packages = {dependency_site_packages!r}\n"
+        "for path in dependency_site_packages:\n"
+        "    if path not in sys.path:\n"
+        "        sys.path.append(path)\n"
         f"targets = {import_targets!r}\n"
         "for target in targets:\n"
-        "    package = target['package_name']\n"
         "    names = target.get('import_names') or []\n"
-        "    if not names:\n"
-        "        dist = importlib.metadata.distribution(package)\n"
-        "        top_level = dist.read_text('top_level.txt')\n"
-        "        names = [line.strip() for line in top_level.splitlines() if line.strip()] if top_level else [package.replace('-', '_')]\n"
         "    for name in names:\n"
         "        importlib.import_module(name)\n"
     )
@@ -660,11 +676,17 @@ def _dependency_import_targets(
         name = wheel.get("name")
         if isinstance(name, str) and name:
             raw_import_names = wheel.get("import_names", [])
-            targets[name] = (
-                {str(item) for item in raw_import_names if isinstance(item, str)}
+            import_names = (
+                {
+                    str(item)
+                    for item in raw_import_names
+                    if isinstance(item, str) and item
+                }
                 if isinstance(raw_import_names, list)
                 else set()
             )
+            if import_names:
+                targets[name] = import_names
     return [
         {
             "package_name": package_name,
@@ -679,6 +701,15 @@ def _dependency_env_python_path(dependency_env_path: Any) -> Any:
     if os.name == "nt":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
+
+
+def _dependency_env_site_packages(dependency_env_path: Any) -> list[Any]:
+    venv_dir = dependency_env_path / "venv"
+    candidates = [
+        *(venv_dir / "lib").glob("python*/site-packages"),
+        venv_dir / "Lib" / "site-packages",
+    ]
+    return [path for path in candidates if path.is_dir()]
 
 
 async def _execute_prompt_and_wait(
