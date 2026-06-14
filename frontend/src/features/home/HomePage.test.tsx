@@ -91,6 +91,25 @@ const mediumHardwareWarning = {
   developer_details: {},
 };
 
+const capacityHardwareWarning = {
+  ...mediumHardwareWarning,
+  severity: "high",
+  confidence: "high",
+  exceeds_machine_capacity: true,
+  reason_codes: ["estimated_vram_capacity_risk"],
+  estimate: {
+    estimated_peak_vram_mb: 14_000,
+    estimated_peak_ram_mb: null,
+    source: "local_observed",
+    confidence: "high",
+  },
+  machine_signal: {
+    ...mediumHardwareWarning.machine_signal,
+    total_vram_mb: 12_000,
+    free_vram_mb: 11_000,
+  },
+};
+
 const searchableWorkflows = [
   {
     id: "native_text",
@@ -235,6 +254,24 @@ describe("HomePage", () => {
                 signature_status: "bundled_trusted_core",
               },
             },
+            {
+              id: "too_large_workflow",
+              name: "Too Large Workflow",
+              version: "0.1.0",
+              description: "Needs more memory than this machine has.",
+              trust_level: "noofy_verified",
+              hardware_warning: capacityHardwareWarning,
+              trust: {
+                level: "noofy_verified",
+                label: "Noofy Verified",
+                summary: "Built or reviewed for Noofy's managed runtime.",
+                badge_tone: "verified",
+                can_prepare_automatically: true,
+                requires_explicit_opt_in: false,
+                source_policy: "noofy_verified_sources_only",
+                signature_status: "bundled_trusted_core",
+              },
+            },
           ]),
         );
       }
@@ -246,12 +283,16 @@ describe("HomePage", () => {
 
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("1 built-in workflow available.")).toBeInTheDocument();
+    expect(screen.getByText("2 built-in workflows available.")).toBeInTheDocument();
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
-    expect(screen.getByText("Noofy Verified")).toBeInTheDocument();
+    expect(screen.getAllByText("Noofy Verified")).toHaveLength(2);
     expect(screen.getByText("May be heavy")).toHaveAttribute(
       "title",
       "This workflow may run slowly or fail on this machine, depending on settings and available memory. You can still try it.",
+    );
+    expect(screen.getByText("Not enough memory")).toHaveAttribute(
+      "title",
+      "This workflow needs about 13.7 GB VRAM, but this machine has 11.7 GB. Lower-memory settings or a lighter workflow may be required.",
     );
   });
 

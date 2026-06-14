@@ -42,6 +42,8 @@ from app.runtime.memory.memory_governor import (
     eviction_candidates,
     estimate_evidence_rank,
     likely_memory_error,
+    memory_requirement_for_decision,
+    memory_requirement_from_error,
     memory_release_blocking_constraints,
     memory_release_satisfied,
     memory_pressure_from_free_ratio,
@@ -110,6 +112,49 @@ def test_machine_memory_snapshot_validates_bounds_and_forbids_extra_fields() -> 
 
     with pytest.raises(ValidationError):
         MachineMemorySnapshot(unexpected=True)  # type: ignore[call-arg]
+
+
+def test_memory_requirement_from_runtime_oom_detects_capacity_shortfall() -> None:
+    requirement = memory_requirement_from_error(
+        "Allocation on device 0 would exceed allowed memory. (out of memory)\n"
+        "Currently allocated     : 20.99 GiB\n"
+        "Requested               : 1.19 GiB\n"
+        "Device limit            : 22.06 GiB\n"
+        "Free (according to CUDA): 8.12 MiB"
+    )
+
+    assert requirement is not None
+    assert requirement["required_vram_mb"] == 22_713
+    assert requirement["total_vram_mb"] == 22_589
+    assert requirement["capacity_exceeded"] is True
+    assert requirement["freeing_memory_may_help"] is False
+
+
+def test_memory_requirement_for_decision_reports_when_freeing_memory_may_help() -> None:
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.BLOCKED_BY_MEMORY,
+        reason_code="temporary_pressure",
+        confidence=RunnerMemoryEstimateConfidence.HIGH,
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-a",
+            source=RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+            confidence=RunnerMemoryEstimateConfidence.HIGH,
+            estimated_peak_vram_mb=10_000,
+        ),
+        machine_snapshot=MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=24_000,
+            free_vram_mb=5_000,
+        ),
+        required_vram_margin_mb=1_000,
+    )
+
+    requirement = memory_requirement_for_decision(decision)
+
+    assert requirement["required_vram_mb"] == 11_000
+    assert requirement["total_vram_mb"] == 24_000
+    assert requirement["capacity_exceeded"] is False
+    assert requirement["freeing_memory_may_help"] is True
 
 
 def test_conservative_memory_class_treats_unknown_and_medium_as_heavy() -> None:

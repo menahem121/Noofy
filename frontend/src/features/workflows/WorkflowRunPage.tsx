@@ -66,6 +66,7 @@ import {
   type JobProgress,
   type JobResult,
   type GallerySaveRequest,
+  type MemoryRequirement,
   type MemoryStatus,
   type ModelDownloadJobStatus,
   type ModelDownloadSelection,
@@ -155,6 +156,7 @@ interface RunFailureDialogState {
   errorMessage: string;
   userMessage: string | null;
   errorCode: JobResult["error_code"];
+  memoryRequirement: MemoryRequirement | null;
   developerDetails: Record<string, unknown>;
   jobId: string | null;
   logsLoading: boolean;
@@ -183,6 +185,7 @@ interface FailedTrackedRun {
   message: string;
   userMessage?: string | null;
   errorCode?: JobResult["error_code"];
+  memoryRequirement?: MemoryRequirement | null;
   developerDetails?: Record<string, unknown>;
 }
 
@@ -1110,12 +1113,14 @@ export function WorkflowRunPage({
     errorCode: JobResult["error_code"] = null,
     userMessage: string | null = null,
     developerDetails: Record<string, unknown> = {},
+    memoryRequirement: MemoryRequirement | null = null,
   ) {
     const memoryFailure = isMemoryFailureCode(errorCode);
     setFailureDialog({
       errorMessage,
       userMessage,
       errorCode,
+      memoryRequirement,
       developerDetails,
       jobId,
       logsLoading: !memoryFailure,
@@ -1345,7 +1350,15 @@ export function WorkflowRunPage({
     const nextRun = trackedRunWithStatus(run, progress.status, progress.message);
     upsertTrackedRun(nextRun);
     if (progress.status === "failed") {
-      recordTrackedFailure(trackedRunHandle(nextRun), null, progress.message ?? "Workflow run failed.");
+      recordTrackedFailure(
+        trackedRunHandle(nextRun),
+        null,
+        progress.message ?? "Workflow run failed.",
+        progress.error_code,
+        null,
+        progress.developer_details,
+        progress.memory_requirement,
+      );
     }
     pollNextTrackedRunAfterTerminal();
   }
@@ -1391,6 +1404,7 @@ export function WorkflowRunPage({
         result.error_code,
         result.user_message,
         result.developer_details,
+        result.memory_requirement,
       );
     }
     if (livePreviewRef.current?.handle === trackedRunHandle(nextRun)) {
@@ -1415,12 +1429,13 @@ export function WorkflowRunPage({
     errorCode: JobResult["error_code"] = null,
     userMessage: string | null = null,
     developerDetails: Record<string, unknown> = {},
+    memoryRequirement: MemoryRequirement | null = null,
   ) {
     setFailedTrackedRuns((current) => {
       if (current.some((item) => item.handle === handle)) return current;
-      const next = [...current, { handle, jobId, message, errorCode, userMessage, developerDetails }];
+      const next = [...current, { handle, jobId, message, errorCode, userMessage, developerDetails, memoryRequirement }];
       if (next.length === 1) {
-        void openFailureDialog(message, jobId ?? handle, errorCode, userMessage, developerDetails);
+        void openFailureDialog(message, jobId ?? handle, errorCode, userMessage, developerDetails, memoryRequirement);
       } else if (next.length > 1) {
         setFailureDialog(null);
       }
@@ -1440,6 +1455,22 @@ export function WorkflowRunPage({
       job,
       progress: keepDisplayedProgress ? current.progress : progress,
     }));
+    if (job.status === "blocked_by_memory" || isBlockingMemoryState(job.memory_status?.state ?? "")) {
+      void openFailureDialog(
+        "Not enough memory to run this workflow",
+        job.job_id,
+        "insufficient_memory",
+        MEMORY_FAILURE_MESSAGE,
+        {
+          job_id: job.job_id,
+          workflow_id: workflowId,
+          memory_status: job.memory_status ?? null,
+          memory_decision: job.memory_decision ?? null,
+          memory_requirement: job.memory_requirement ?? null,
+        },
+        job.memory_requirement ?? null,
+      );
+    }
   }
 
   function recordWorkflowJob(job: EngineJob, progress: JobProgress) {
@@ -1611,7 +1642,8 @@ export function WorkflowRunPage({
     memoryNotice
       && !showMemoryLoadedPill
       && memoryNotice.title !== "Memory status"
-      && !(memoryStatus && isSilentQueuedMemoryState(memoryStatus.state)),
+      && !(memoryStatus && isSilentQueuedMemoryState(memoryStatus.state))
+      && !(memoryStatus && isBlockingMemoryState(memoryStatus.state)),
   );
   const backendKnownUnreachable = runtimeStatus.backendStatus === "unreachable";
   const engineKnownUnavailable =
@@ -1958,7 +1990,6 @@ export function WorkflowRunPage({
           <div>
             <strong>{memoryNotice?.title ?? memoryStatusTitle(memoryStatus.state)}</strong>
             <span>{memoryNotice?.message ?? memoryStatus.message}</span>
-            {isBlockingMemoryState(memoryStatus.state) ? <MemoryFailureSteps /> : null}
             {memoryDiagnostics ? (
               <details className="memory-status-developer-details">
                 <summary>Developer details</summary>
@@ -2003,6 +2034,7 @@ export function WorkflowRunPage({
         run.errorCode,
         run.userMessage ?? null,
         run.developerDetails ?? {},
+        run.memoryRequirement ?? null,
       )}
     />
   ) : null;
@@ -2129,10 +2161,9 @@ export function WorkflowRunPage({
               showStatusNotice: showUserFacingMemoryNotice,
               statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
               statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
-              disabledReason: runDisabledReason,
+              disabledReason: memoryRefusesRun ? null : runDisabledReason,
               disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
               developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
-              showMemoryFailureSteps: Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state)),
             }}
             batchCount={batchCount}
             exportNoofyUrl={exportWorkflowUrl(workflowId)}
@@ -2606,7 +2637,8 @@ function WorkflowFailureDialog({
             <span>Workflow: {workflowId}</span>
             {dialog.jobId ? <span>Job: {dialog.jobId}</span> : <span>Job: not created yet</span>}
           </div>
-          {memoryFailure ? <MemoryFailureSteps /> : null}
+          {memoryFailure ? <MemoryRequirementSummary requirement={dialog.memoryRequirement} /> : null}
+          {memoryFailure ? <MemoryFailureSteps requirement={dialog.memoryRequirement} /> : null}
           {memoryFailure ? (
             <section className="workflow-input-error-details" aria-label="Developer details">
               <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
@@ -3282,6 +3314,9 @@ function progressFromSubmittedJob(job: EngineJob): JobProgress {
     max: null,
     current_node: null,
     message: job.memory_status?.message ?? job.message ?? "Preparing workflow...",
+    error_code: job.error_code,
+    memory_requirement: job.memory_requirement,
+    developer_details: job.memory_decision ? { memory_decision: job.memory_decision } : {},
   };
 }
 
@@ -3674,15 +3709,53 @@ function isMemoryFailureCode(code: JobResult["error_code"]) {
   return code === "memory_oom" || code === "insufficient_memory";
 }
 
-function MemoryFailureSteps() {
+function MemoryRequirementSummary({ requirement }: { requirement: MemoryRequirement | null }) {
+  if (!requirement) return null;
+  const rows = [
+    memoryRequirementRow("GPU memory", requirement.required_vram_mb, requirement.total_vram_mb, requirement.source),
+    memoryRequirementRow("RAM", requirement.required_ram_mb, requirement.total_ram_mb, requirement.source),
+  ].filter((row): row is string => Boolean(row));
+  if (rows.length === 0) return null;
   return (
-    <section className="workflow-memory-failure-steps" aria-label="Ways to free memory">
-      <strong>Try one of these:</strong>
+    <section className="workflow-memory-requirement" aria-label="Approximate memory requirement">
+      <strong>Approximate memory needed</strong>
+      {rows.map((row) => <span key={row}>{row}</span>)}
+      {requirement.capacity_exceeded === true ? (
+        <p>This workflow needs more memory than this machine has. Closing apps or freeing memory is unlikely to make it run.</p>
+      ) : requirement.freeing_memory_may_help === true ? (
+        <p>This machine has enough total memory, but not enough is free right now.</p>
+      ) : null}
+    </section>
+  );
+}
+
+function memoryRequirementRow(label: string, requiredMb: number | null, totalMb: number | null, source: string) {
+  if (requiredMb == null && totalMb == null) return null;
+  if (requiredMb != null && totalMb != null) {
+    if (source === "runtime_oom") {
+      return `${label}: about ${formatMemoryGb(requiredMb)} required; about ${formatMemoryGb(totalMb)} was available to this workflow.`;
+    }
+    return `${label}: about ${formatMemoryGb(requiredMb)} required; this machine has about ${formatMemoryGb(totalMb)}.`;
+  }
+  if (requiredMb != null) return `${label}: about ${formatMemoryGb(requiredMb)} required.`;
+  return `${label}: this machine has about ${formatMemoryGb(totalMb as number)}.`;
+}
+
+function formatMemoryGb(memoryMb: number) {
+  const value = memoryMb / 1024;
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} GB`;
+}
+
+function MemoryFailureSteps({ requirement }: { requirement: MemoryRequirement | null }) {
+  const freeingMemoryMayHelp = requirement?.freeing_memory_may_help === true;
+  return (
+    <section className="workflow-memory-failure-steps" aria-label="Ways to use less memory">
+      <strong>{freeingMemoryMayHelp ? "Try one of these:" : "To run this workflow:"}</strong>
       <ul>
-        <li>Close other apps that may be using memory.</li>
+        {freeingMemoryMayHelp ? <li>Close other apps that may be using memory.</li> : null}
         <li>If available, reduce resolution, batch size, or video length.</li>
         <li>Use a lighter model or workflow.</li>
-        <li>Free memory, then try again.</li>
+        {freeingMemoryMayHelp ? <li>Free memory, then try again.</li> : null}
       </ul>
     </section>
   );

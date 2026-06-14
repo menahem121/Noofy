@@ -3135,6 +3135,9 @@ async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() ->
     assert isinstance(job, EngineJob)
     assert job.status == "blocked_by_memory"
     assert job.error_code == "insufficient_memory"
+    assert job.memory_requirement is not None
+    assert job.memory_requirement["total_vram_mb"] == 12_000
+    assert job.memory_requirement["freeing_memory_may_help"] is True
     assert job.memory_status is not None
     assert job.memory_status["state"] == "memory_cleanup_failed"
     assert job.memory_decision is not None

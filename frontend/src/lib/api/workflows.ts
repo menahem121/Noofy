@@ -62,6 +62,7 @@ export interface WorkflowHardwareWarningEvidence {
 export interface WorkflowHardwareWarning {
   severity: WorkflowHardwareWarningSeverity;
   confidence: WorkflowHardwareWarningConfidence;
+  exceeds_machine_capacity?: boolean;
   reason_codes: WorkflowHardwareWarningReasonCode[];
   estimate: WorkflowHardwareWarningEstimate;
   machine_signal: WorkflowHardwareWarningMachineSignal | null;

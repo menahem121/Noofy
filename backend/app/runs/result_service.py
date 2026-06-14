@@ -11,7 +11,7 @@ from app.history import HistoryService
 from app.runs.job_service import RunJobService
 from app.runs.progress_estimator import WorkflowProgressEstimator, progress_ready_for_result_fetch
 from app.runs.queue_service import WorkflowRunQueueService
-from app.runtime.memory.memory_governor import likely_memory_error
+from app.runtime.memory.memory_governor import likely_memory_error, memory_requirement_from_error
 from app.workflows.library import WorkflowLibraryStore
 
 MEMORY_FAILURE_TITLE = "Not enough memory to run this workflow"
@@ -125,11 +125,13 @@ class RunResultService:
     def _public_terminal_result(self, result: JobResult) -> JobResult:
         if result.status != "failed" or not likely_memory_error(result.error):
             return result
+        memory_requirement = memory_requirement_from_error(result.error)
         return result.model_copy(
             update={
                 "error": MEMORY_FAILURE_TITLE,
                 "error_code": "memory_oom",
                 "user_message": MEMORY_FAILURE_MESSAGE,
+                "memory_requirement": memory_requirement,
                 "developer_details": {
                     **result.developer_details,
                     "error_code": "memory_oom",
@@ -141,6 +143,7 @@ class RunResultService:
                         "message": MEMORY_FAILURE_MESSAGE,
                     },
                     "memory_decision": None,
+                    "memory_requirement": memory_requirement,
                 },
             }
         )
@@ -176,6 +179,7 @@ class RunResultService:
             status=result.status,
             message=result.user_message or result.error,
             error_code=result.error_code,
+            memory_requirement=result.memory_requirement,
             developer_details=result.developer_details,
         )
 

@@ -216,6 +216,8 @@ async def test_job_service_returns_user_safe_memory_failure_progress() -> None:
         "Your computer does not have enough available RAM or GPU memory for this workflow right now."
     )
     assert progress.developer_details["original_error"] == "MPS backend out of memory"
+    assert progress.memory_requirement is not None
+    assert progress.memory_requirement["capacity_exceeded"] is None
 
 
 @pytest.mark.anyio
@@ -380,7 +382,13 @@ async def test_run_result_service_returns_user_safe_memory_failure_and_preserves
             return JobResult(
                 job_id=job_id,
                 status="failed",
-                error="CUDA out of memory. Tried to allocate 1.19 GiB.",
+                error=(
+                    "CUDA out of memory.\n"
+                    "Currently allocated: 20.99 GiB\n"
+                    "Requested: 1.19 GiB\n"
+                    "Device limit: 22.06 GiB\n"
+                    "Free (according to CUDA): 8.12 MiB"
+                ),
             )
 
     adapter = MemoryFailureAdapter()
@@ -391,10 +399,10 @@ async def test_run_result_service_returns_user_safe_memory_failure_and_preserves
         return None
 
     def record_observation(result: JobResult) -> None:
-        assert result.error == "CUDA out of memory. Tried to allocate 1.19 GiB."
+        assert result.error.startswith("CUDA out of memory.")
 
     async def maybe_retry(result: JobResult):
-        assert result.error == "CUDA out of memory. Tried to allocate 1.19 GiB."
+        assert result.error.startswith("CUDA out of memory.")
         return None
 
     service = RunResultService(
@@ -418,9 +426,17 @@ async def test_run_result_service_returns_user_safe_memory_failure_and_preserves
     assert result.user_message == (
         "Your computer does not have enough available RAM or GPU memory for this workflow right now."
     )
+    assert result.memory_requirement is not None
+    assert result.memory_requirement["capacity_exceeded"] is True
     assert result.developer_details == {
         "error_code": "memory_oom",
-        "original_error": "CUDA out of memory. Tried to allocate 1.19 GiB.",
+        "original_error": (
+            "CUDA out of memory.\n"
+            "Currently allocated: 20.99 GiB\n"
+            "Requested: 1.19 GiB\n"
+            "Device limit: 22.06 GiB\n"
+            "Free (according to CUDA): 8.12 MiB"
+        ),
         "job_id": "job-1",
         "workflow_id": "wf",
         "memory_status": {
@@ -428,13 +444,12 @@ async def test_run_result_service_returns_user_safe_memory_failure_and_preserves
             "message": "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
         },
         "memory_decision": None,
+        "memory_requirement": result.memory_requirement,
     }
     assert progress is not None
     assert progress.error_code == "memory_oom"
     assert progress.message == result.user_message
-    assert progress.developer_details["original_error"] == (
-        "CUDA out of memory. Tried to allocate 1.19 GiB."
-    )
+    assert progress.memory_requirement == result.memory_requirement
 
 
 @pytest.mark.anyio

@@ -247,6 +247,25 @@
   color: var(--text-secondary);
 }
 
+.workflow-memory-requirement {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+}
+
+.workflow-memory-requirement strong {
+  color: var(--text-primary);
+}
+
+.workflow-memory-requirement p {
+  margin: 5px 0 0;
+  color: var(--text-primary);
+}
+
 .workflow-memory-failure-steps strong {
   color: var(--text-primary);
 }

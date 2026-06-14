@@ -20,6 +20,19 @@ export interface MemoryStatus {
   can_retry_after_cleanup: boolean;
 }
 
+export interface MemoryRequirement {
+  required_vram_mb: number | null;
+  total_vram_mb: number | null;
+  available_vram_mb: number | null;
+  required_ram_mb: number | null;
+  total_ram_mb: number | null;
+  available_ram_mb: number | null;
+  capacity_exceeded: boolean | null;
+  freeing_memory_may_help: boolean | null;
+  source: string;
+  confidence: string;
+}
+
 export interface EngineJob {
   job_id: string;
   workflow_id: string;
@@ -28,6 +41,7 @@ export interface EngineJob {
   queue_id?: string | null;
   message?: string | null;
   error_code?: "insufficient_memory" | "memory_oom" | null;
+  memory_requirement?: MemoryRequirement | null;
   memory_decision?: Record<string, unknown> | null;
   memory_status?: MemoryStatus | null;
 }
@@ -41,6 +55,7 @@ export interface JobProgress {
   current_node: string | null;
   message: string | null;
   error_code?: "insufficient_memory" | "memory_oom" | null;
+  memory_requirement?: MemoryRequirement | null;
   developer_details?: Record<string, unknown>;
   live_preview_sequence?: number | null;
   live_preview?: JobLivePreview | null;
@@ -76,6 +91,7 @@ export interface JobResult {
   error: string | null;
   error_code?: "insufficient_memory" | "memory_oom" | null;
   user_message?: string | null;
+  memory_requirement?: MemoryRequirement | null;
   developer_details?: Record<string, unknown>;
 }
 

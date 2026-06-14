@@ -12,6 +12,7 @@ import os
 import contextlib
 import json
 import platform
+import re
 import subprocess
 import threading
 import time
@@ -2218,6 +2219,133 @@ def likely_memory_error(message: str | None) -> bool:
         "not enough memory",
     ]
     return any(marker in normalized for marker in markers)
+
+
+def memory_requirement_for_decision(decision: MemoryGovernorDecision) -> dict[str, Any]:
+    estimate = decision.workflow_estimate
+    machine = decision.machine_snapshot
+    unified_memory = machine is not None and machine.backend in {MemoryBackend.MPS, MemoryBackend.CPU}
+    required_vram_mb = (
+        (estimate.estimated_peak_vram_mb or 0) + (decision.required_vram_margin_mb or 0)
+        if not unified_memory and estimate is not None and estimate.estimated_peak_vram_mb is not None
+        else None
+    )
+    estimated_ram_mb = (
+        estimate.estimated_peak_ram_mb
+        if estimate is not None and estimate.estimated_peak_ram_mb is not None
+        else estimate.estimated_peak_vram_mb if unified_memory and estimate is not None else None
+    )
+    required_ram_mb = (
+        estimated_ram_mb + (decision.required_ram_margin_mb or 0)
+        if estimated_ram_mb is not None
+        else None
+    )
+    return _memory_requirement_payload(
+        required_vram_mb=required_vram_mb,
+        total_vram_mb=machine.total_vram_mb if machine is not None else None,
+        available_vram_mb=machine.free_vram_mb if machine is not None else None,
+        required_ram_mb=required_ram_mb,
+        total_ram_mb=machine.total_ram_mb if machine is not None else None,
+        available_ram_mb=machine.free_ram_mb if machine is not None else None,
+        source="memory_governor_decision",
+        confidence=decision.confidence.value,
+    )
+
+
+def memory_requirement_from_error(message: str | None) -> dict[str, Any] | None:
+    if not likely_memory_error(message):
+        return None
+    allocated_mb = _parse_labeled_memory_mb(message, "currently allocated")
+    requested_mb = _parse_labeled_memory_mb(message, "requested")
+    device_limit_mb = _parse_labeled_memory_mb(message, "device limit")
+    free_vram_mb = _parse_labeled_memory_mb(message, "free (according to cuda)")
+    required_vram_mb = (
+        allocated_mb + requested_mb
+        if allocated_mb is not None and requested_mb is not None
+        else None
+    )
+    return _memory_requirement_payload(
+        required_vram_mb=required_vram_mb,
+        total_vram_mb=device_limit_mb,
+        available_vram_mb=free_vram_mb,
+        required_ram_mb=None,
+        total_ram_mb=None,
+        available_ram_mb=None,
+        source="runtime_oom",
+        confidence="high" if required_vram_mb is not None and device_limit_mb is not None else "unknown",
+    )
+
+
+def _memory_requirement_payload(
+    *,
+    required_vram_mb: int | None,
+    total_vram_mb: int | None,
+    available_vram_mb: int | None,
+    required_ram_mb: int | None,
+    total_ram_mb: int | None,
+    available_ram_mb: int | None,
+    source: str,
+    confidence: str,
+) -> dict[str, Any]:
+    capacity_checks = [
+        required > total
+        for required, total in (
+            (required_vram_mb, total_vram_mb),
+            (required_ram_mb, total_ram_mb),
+        )
+        if required is not None and total is not None
+    ]
+    free_shortfall_checks = [
+        required > available
+        for required, available in (
+            (required_vram_mb, available_vram_mb),
+            (required_ram_mb, available_ram_mb),
+        )
+        if required is not None and available is not None
+    ]
+    capacity_exceeded = any(capacity_checks) if capacity_checks else None
+    freeing_memory_may_help = (
+        not capacity_exceeded and any(free_shortfall_checks)
+        if capacity_exceeded is not None and free_shortfall_checks
+        else None
+    )
+    return {
+        "required_vram_mb": required_vram_mb,
+        "total_vram_mb": total_vram_mb,
+        "available_vram_mb": available_vram_mb,
+        "required_ram_mb": required_ram_mb,
+        "total_ram_mb": total_ram_mb,
+        "available_ram_mb": available_ram_mb,
+        "capacity_exceeded": capacity_exceeded,
+        "freeing_memory_may_help": freeing_memory_may_help,
+        "source": source,
+        "confidence": confidence,
+    }
+
+
+def _parse_labeled_memory_mb(message: str | None, label: str) -> int | None:
+    if not message:
+        return None
+    match = re.search(
+        rf"{re.escape(label)}\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*([kmgt]i?b)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    multipliers = {
+        "kb": 1 / 1000,
+        "kib": 1 / 1024,
+        "mb": 1,
+        "mib": 1,
+        "gb": 1000,
+        "gib": 1024,
+        "tb": 1_000_000,
+        "tib": 1024 * 1024,
+    }
+    return round(value * multipliers[unit])
 
 
 def retry_after_memory_cleanup_decision(

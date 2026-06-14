@@ -17,6 +17,7 @@ from app.runtime.memory.memory_governor import (
     MachineMemorySnapshot,
     MemoryDecisionAction,
     MemoryGovernorDecision,
+    memory_requirement_for_decision,
 )
 from app.runtime.memory.input_features import (
     build_memory_signature_set,
@@ -596,6 +597,7 @@ class RunOrchestrator:
                 status="blocked_by_memory",
                 message=memory_decision.user_message,
                 error_code="insufficient_memory",
+                memory_requirement=memory_requirement_for_decision(memory_decision),
                 memory_decision=memory_decision.model_dump(mode="json"),
                 memory_status=self.memory_status_payload(memory_decision),
             )

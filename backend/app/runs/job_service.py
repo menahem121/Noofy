@@ -6,7 +6,7 @@ from typing import cast
 from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, EngineOutputStream, JobProgress, LogLevel
-from app.runtime.memory.memory_governor import likely_memory_error
+from app.runtime.memory.memory_governor import likely_memory_error, memory_requirement_from_error
 from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerStatus, RunnerSupervisor
 from app.runs.progress_estimator import WorkflowProgressEstimator
 from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
@@ -142,10 +142,12 @@ class RunJobService:
     def _public_progress(progress: JobProgress) -> JobProgress:
         if progress.status != "failed" or not likely_memory_error(progress.message):
             return progress
+        memory_requirement = memory_requirement_from_error(progress.message)
         return progress.model_copy(
             update={
                 "message": MEMORY_FAILURE_MESSAGE,
                 "error_code": "memory_oom",
+                "memory_requirement": memory_requirement,
                 "developer_details": {
                     **progress.developer_details,
                     "error_code": "memory_oom",
@@ -156,6 +158,7 @@ class RunJobService:
                         "message": MEMORY_FAILURE_MESSAGE,
                     },
                     "memory_decision": None,
+                    "memory_requirement": memory_requirement,
                 },
             }
         )

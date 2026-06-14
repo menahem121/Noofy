@@ -7,6 +7,13 @@ export interface HardwareWarningPillView {
 }
 
 export function hardwareWarningPillView(warning: WorkflowHardwareWarning): HardwareWarningPillView {
+  if (warning.exceeds_machine_capacity) {
+    return {
+      tone: "high",
+      label: "Not enough memory",
+      tooltip: capacityShortfallTooltip(warning),
+    };
+  }
   if (warning.severity === "high") {
     return {
       tone: "high",
@@ -19,6 +26,26 @@ export function hardwareWarningPillView(warning: WorkflowHardwareWarning): Hardw
     label: "May be heavy",
     tooltip: "This workflow may run slowly or fail on this machine, depending on settings and available memory. You can still try it.",
   };
+}
+
+function capacityShortfallTooltip(warning: WorkflowHardwareWarning) {
+  const estimate = warning.estimate;
+  const machine = warning.machine_signal;
+  if (
+    estimate.estimated_peak_vram_mb != null
+    && machine?.total_vram_mb != null
+    && estimate.estimated_peak_vram_mb > machine.total_vram_mb
+  ) {
+    return `This workflow needs about ${formatMemoryMb(estimate.estimated_peak_vram_mb)} VRAM, but this machine has ${formatMemoryMb(machine.total_vram_mb)}. Lower-memory settings or a lighter workflow may be required.`;
+  }
+  if (
+    estimate.estimated_peak_ram_mb != null
+    && machine?.total_ram_mb != null
+    && estimate.estimated_peak_ram_mb > machine.total_ram_mb
+  ) {
+    return `This workflow needs about ${formatMemoryMb(estimate.estimated_peak_ram_mb)} RAM, but this machine has ${formatMemoryMb(machine.total_ram_mb)}. Lower-memory settings or a lighter workflow may be required.`;
+  }
+  return "This workflow requires more memory than this machine has. Lower-memory settings or a lighter workflow may be required.";
 }
 
 export function hardwareWarningExplanation(warning: WorkflowHardwareWarning) {

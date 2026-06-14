@@ -23,6 +23,7 @@ function jsonResponse(data: unknown, status = 200) {
 const highHardwareWarning = {
   severity: "high",
   confidence: "medium",
+  exceeds_machine_capacity: true,
   reason_codes: ["model_size_heuristic", "estimated_vram_capacity_risk"],
   estimate: {
     estimated_peak_vram_mb: 12_000,
@@ -414,17 +415,17 @@ describe("WorkflowsPage", () => {
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
   });
 
-  it("shows advisory hardware warning pills without disabling Open", async () => {
+  it("shows definite over-capacity warning pills without disabling Open", async () => {
     renderPage();
 
     const rowTitle = await screen.findByText("Cleanup Flow");
     const row = rowTitle.closest("article")!;
-    const pill = within(row).getByText("Likely too heavy");
+    const pill = within(row).getByText("Not enough memory");
     const openButton = within(row).getByRole("button", { name: "Open" });
 
     expect(pill).toHaveAttribute(
       "title",
-      "This workflow will probably need more memory than this machine can comfortably provide. You can still try it.",
+      "This workflow needs about 11.7 GB VRAM, but this machine has 7.8 GB. Lower-memory settings or a lighter workflow may be required.",
     );
     expect(openButton).not.toBeDisabled();
 
@@ -579,7 +580,7 @@ describe("WorkflowsPage", () => {
     fireEvent.click(rowTitle.closest("article")!);
 
     expect(await screen.findByText("Hardware compatibility")).toBeInTheDocument();
-    expect(screen.getByText("This workflow will probably need more memory than this machine can comfortably provide. You can still try it.")).toBeInTheDocument();
+    expect(screen.getByText("This workflow needs about 11.7 GB VRAM, but this machine has 7.8 GB. Lower-memory settings or a lighter workflow may be required.")).toBeInTheDocument();
     expect(screen.getByText("11.7 GB VRAM")).toBeInTheDocument();
     expect(screen.getByText("6.8 GB VRAM free of 7.8 GB")).toBeInTheDocument();
     expect(screen.getByText("Model size estimate and current machine")).toBeInTheDocument();

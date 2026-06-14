@@ -91,6 +91,7 @@ class WorkflowHardwareWarning(BaseModel):
 
     severity: HardwareWarningSeverity
     confidence: HardwareWarningConfidence
+    exceeds_machine_capacity: bool = False
     reason_codes: list[HardwareWarningReasonCode]
     estimate: WorkflowHardwareWarningEstimate
     machine_signal: WorkflowHardwareWarningMachineSignal | None = None
@@ -155,9 +156,11 @@ def evaluate_workflow_hardware_warning(
     if decision is None:
         return None
     severity, confidence, reason_codes = decision
+    exceeds_machine_capacity = _trusted_estimate_exceeds_capacity(estimate, machine_snapshot)
     return WorkflowHardwareWarning(
         severity=severity,
         confidence=confidence,
+        exceeds_machine_capacity=exceeds_machine_capacity,
         reason_codes=reason_codes,
         estimate=_warning_estimate(estimate),
         machine_signal=_machine_signal(machine_snapshot),
@@ -167,6 +170,7 @@ def evaluate_workflow_hardware_warning(
             machine_snapshot=machine_snapshot,
             evidence=evidence,
             reason_codes=reason_codes,
+            exceeds_machine_capacity=exceeds_machine_capacity,
         ),
     )
 
@@ -395,6 +399,7 @@ def _developer_details(
     machine_snapshot: MachineMemorySnapshot | None,
     evidence: WorkflowHardwareWarningEvidence,
     reason_codes: list[HardwareWarningReasonCode],
+    exceeds_machine_capacity: bool,
 ) -> dict[str, object]:
     return {
         "reason_codes": [reason.value for reason in reason_codes],
@@ -406,6 +411,7 @@ def _developer_details(
         "local_input_profile_match": evidence.local_input_profile_match,
         "local_successful_runs": evidence.local_successful_runs,
         "local_memory_error_runs": evidence.local_memory_error_runs,
+        "exceeds_machine_capacity": exceeds_machine_capacity,
     }
 
 
@@ -452,6 +458,21 @@ def _strong_capacity_risk(
             machine_snapshot.total_ram_mb,
         )
     return vram_capacity_risk or ram_capacity_risk
+
+
+def _trusted_estimate_exceeds_capacity(
+    estimate: WorkflowMemoryEstimate,
+    machine_snapshot: MachineMemorySnapshot | None,
+) -> bool:
+    if machine_snapshot is None or estimate.effective_source not in {
+        RunnerMemoryEstimateSource.LOCAL_OBSERVED,
+        RunnerMemoryEstimateSource.DECLARED,
+    }:
+        return False
+    return _exceeds_total(estimate.estimated_peak_vram_mb, machine_snapshot.total_vram_mb) or _exceeds_total(
+        estimate.estimated_peak_ram_mb,
+        machine_snapshot.total_ram_mb,
+    )
 
 
 def _exceeds_total(estimated_mb: int | None, total_mb: int | None) -> bool:

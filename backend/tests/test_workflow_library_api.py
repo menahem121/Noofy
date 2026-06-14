@@ -874,6 +874,32 @@ def test_hardware_warning_is_red_for_matching_local_memory_failure(tmp_path: Pat
     assert warning["reason_codes"] == [HardwareWarningReasonCode.LOCAL_MEMORY_ERROR.value]
 
 
+def test_hardware_warning_marks_trusted_peak_above_machine_capacity(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=14_000,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        memory_snapshot=_cuda_snapshot(total_vram_mb=12_000, free_vram_mb=11_000),
+        memory_learning_store=learning,
+    )
+
+    warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
+
+    assert warning["severity"] == "high"
+    assert warning["exceeds_machine_capacity"] is True
+    assert warning["estimate"]["estimated_peak_vram_mb"] == 14_000
+    assert warning["machine_signal"]["total_vram_mb"] == 12_000
+    assert warning["developer_details"]["exceeds_machine_capacity"] is True
+
+
 def test_matching_local_success_suppresses_creator_only_hardware_warning(tmp_path: Path) -> None:
     learning = LocalMemoryLearningStore(tmp_path / "learning")
     learning.record(
@@ -993,6 +1019,7 @@ def test_model_size_capacity_risk_can_produce_red_warning(tmp_path: Path) -> Non
     warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
 
     assert warning["severity"] == "high"
+    assert warning["exceeds_machine_capacity"] is False
     assert warning["confidence"] == "low"
     assert HardwareWarningReasonCode.MODEL_SIZE_HEURISTIC.value in warning["reason_codes"]
     assert HardwareWarningReasonCode.ESTIMATED_VRAM_CAPACITY_RISK.value in warning["reason_codes"]

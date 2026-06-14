@@ -2545,6 +2545,18 @@ describe("WorkflowRunPage", () => {
           error: "Not enough memory to run this workflow",
           error_code: "memory_oom",
           user_message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
+          memory_requirement: {
+            required_vram_mb: 22712,
+            total_vram_mb: 22589,
+            available_vram_mb: 8,
+            required_ram_mb: null,
+            total_ram_mb: null,
+            available_ram_mb: null,
+            capacity_exceeded: true,
+            freeing_memory_may_help: false,
+            source: "runtime_oom",
+            confidence: "high",
+          },
           developer_details: {
             original_error: "CUDA out of memory. Tried to allocate 1.19 GiB.",
             workflow_id: "text_to_image_v0",
@@ -2569,7 +2581,10 @@ describe("WorkflowRunPage", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Not enough memory to run this workflow" });
     expect(within(dialog).getByText("Your computer does not have enough available RAM or GPU memory for this workflow right now.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Close other apps that may be using memory.")).toBeInTheDocument();
+    expect(within(dialog).getByText("GPU memory: about 22.2 GB required; about 22.1 GB was available to this workflow.")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Closing apps or freeing memory is unlikely/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Close other apps that may be using memory.")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Free memory, then try again.")).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("heading", { name: "ComfyUI engine logs" })).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/CUDA out of memory/)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/jobs/job-memory/logs?limit=200"))).toBe(false);
@@ -2745,6 +2760,7 @@ describe("WorkflowRunPage", () => {
       message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
     },
   ])("shows distinct memory copy for $state", async ({ state, status, title, message }) => {
+    const exceedsCapacity = state === "blocked_exceeds_capacity";
     mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, {
       job_id: `memory-${state}`,
       workflow_id: "text_to_image_v0",
@@ -2755,6 +2771,18 @@ describe("WorkflowRunPage", () => {
         action: status === "blocked_by_memory" ? "blocked_by_memory" : "queue_pending_memory",
         reason_code: "test_memory_state",
       },
+      memory_requirement: status === "blocked_by_memory" ? {
+        required_vram_mb: exceedsCapacity ? 26_000 : 10_000,
+        total_vram_mb: 24_000,
+        available_vram_mb: 5_000,
+        required_ram_mb: null,
+        total_ram_mb: 64_000,
+        available_ram_mb: 50_000,
+        capacity_exceeded: exceedsCapacity,
+        freeing_memory_may_help: !exceedsCapacity,
+        source: "memory_governor_decision",
+        confidence: "high",
+      } : null,
       memory_status: {
         state,
         message: "Not enough memory is available for this run.",
@@ -2786,10 +2814,24 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
     if (status === "blocked_by_memory") {
-      expect(screen.getByText("Close other apps that may be using memory.")).toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: title });
+      expect(within(dialog).getByText(
+        exceedsCapacity
+          ? "GPU memory: about 25.4 GB required; this machine has about 23.4 GB."
+          : "GPU memory: about 9.77 GB required; this machine has about 23.4 GB.",
+      )).toBeInTheDocument();
+      if (exceedsCapacity) {
+        expect(within(dialog).queryByText("Close other apps that may be using memory.")).not.toBeInTheDocument();
+      } else {
+        expect(within(dialog).getByText("Close other apps that may be using memory.")).toBeInTheDocument();
+      }
+      expect(screen.queryByText(/test_memory_state/)).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Developer details" }));
+      expect(within(dialog).getByText(/test_memory_state/)).toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
     }
     expect(screen.getByText("Developer details")).toBeInTheDocument();
-    expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
   });
 
   it.each(["ready_warm_co_resident", "ready_reusing_runner"])(

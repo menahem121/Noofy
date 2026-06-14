@@ -40,6 +40,7 @@ from app.runtime.memory.memory_governor import (
     build_workflow_memory_estimate,
     decide_memory_admission,
     likely_memory_error,
+    memory_requirement_for_decision,
     memory_user_status_for_decision,
     record_memory_governor_decision,
     retry_after_memory_cleanup_decision,
@@ -1158,6 +1159,7 @@ def _memory_cleanup_failed_job(
         status="blocked_by_memory",
         message="Noofy could not confirm that enough memory was released for this workflow.",
         error_code="insufficient_memory",
+        memory_requirement=memory_requirement_for_decision(decision),
         memory_decision=memory_decision,
         memory_status={
             **memory_user_status_for_decision(decision).model_dump(mode="json"),

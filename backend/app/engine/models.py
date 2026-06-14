@@ -267,6 +267,7 @@ class EngineJob(BaseModel):
     queue_id: str | None = None
     message: str | None = None
     error_code: MemoryFailureCode | None = None
+    memory_requirement: dict[str, Any] | None = None
     memory_decision: dict[str, Any] | None = None
     memory_status: dict[str, Any] | None = None
 
@@ -306,6 +307,7 @@ class JobProgress(BaseModel):
     current_node: str | None = None
     message: str | None = None
     error_code: MemoryFailureCode | None = None
+    memory_requirement: dict[str, Any] | None = None
     developer_details: dict[str, Any] = Field(default_factory=dict)
     live_preview_sequence: int | None = None
     live_preview: JobLivePreview | None = None
@@ -320,6 +322,7 @@ class JobResult(BaseModel):
     error: str | None = None
     error_code: MemoryFailureCode | None = None
     user_message: str | None = None
+    memory_requirement: dict[str, Any] | None = None
     developer_details: dict[str, Any] = Field(default_factory=dict)
 
 
