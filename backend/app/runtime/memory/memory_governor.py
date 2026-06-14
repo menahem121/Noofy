@@ -304,6 +304,10 @@ class LocalMemoryEvidenceSummary(BaseModel):
         )
 
     @property
+    def has_estimate_evidence(self) -> bool:
+        return self.successful_runs > 0 or self.memory_error_runs > 0
+
+    @property
     def has_repeated_success(self) -> bool:
         return self.successful_runs >= 2 and self.memory_error_runs == 0
 
@@ -1396,7 +1400,7 @@ def build_workflow_memory_estimate(
     ]
     estimate_fields = _estimate_request_fields(request)
     local = request.local_evidence
-    if local is not None and local.has_local_evidence:
+    if local is not None and local.has_estimate_evidence:
         settings_match = _local_evidence_matches_request(request, local)
         confidence = RunnerMemoryEstimateConfidence.LOW
         reasons = ["local_memory_evidence", *estimate_reasons]

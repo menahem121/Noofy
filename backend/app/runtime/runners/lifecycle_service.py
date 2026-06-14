@@ -744,8 +744,7 @@ class WorkflowRunnerLifecycleService:
             "compatibility_guidance": _compatibility_guidance(package),
             "runner": runner.model_dump(mode="json") if runner is not None else None,
             "runner_status": runner.status.value if runner is not None else "not_started",
-            "can_prepare": install["status"]
-            not in {InstallStatus.UNSUPPORTED.value, InstallStatus.BLOCKED_BY_POLICY.value},
+            "can_prepare": _install_status_can_prepare(install.get("status")),
             "can_cancel_preparation": False,
             "can_cancel_job": runner.current_job_id is not None if runner is not None else False,
         }
@@ -1815,6 +1814,10 @@ def _required_actions_for_workflow(
         InstallStatus.PENDING.value,
         InstallStatus.IMPORTED.value,
         InstallStatus.NEEDS_INPUT_SETUP.value,
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value,
+        InstallStatus.BLOCKED_BY_POLICY.value,
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE.value,
+        InstallStatus.FAILED.value,
     }:
         actions.append(
             {
@@ -1839,6 +1842,10 @@ def _required_actions_for_workflow(
             }
         )
     return actions
+
+
+def _install_status_can_prepare(status: object) -> bool:
+    return status != InstallStatus.UNSUPPORTED.value
 
 
 def _compatibility_guidance(package: WorkflowPackage) -> dict[str, object] | None:

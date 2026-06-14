@@ -1198,6 +1198,70 @@ def test_progress_from_comfyui_error_ws_message(tmp_path: Path) -> None:
     assert progress.message == "model failed"
 
 
+def test_progress_from_comfyui_history_error_preserves_exception_message(
+    tmp_path: Path,
+) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    progress = adapter._progress_from_history(
+        "job-1",
+        {
+            "status": {
+                "status_str": "error",
+                "completed": False,
+                "messages": [
+                    ["execution_start", {"prompt_id": "job-1"}],
+                    [
+                        "execution_error",
+                        {
+                            "prompt_id": "job-1",
+                            "node_id": "1",
+                            "exception_message": "CUDA out of memory",
+                        },
+                    ],
+                ],
+            }
+        },
+    )
+
+    assert progress.status == "failed"
+    assert progress.message == "CUDA out of memory"
+
+
+def test_result_from_comfyui_history_error_preserves_exception_message(
+    tmp_path: Path,
+) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-1",
+        {
+            "status": {
+                "status_str": "error",
+                "completed": False,
+                "messages": [
+                    ["execution_start", {"prompt_id": "job-1"}],
+                    [
+                        "execution_error",
+                        {
+                            "prompt_id": "job-1",
+                            "node_id": "1",
+                            "exception_message": "CUDA out of memory",
+                        },
+                    ],
+                ],
+            }
+        },
+    )
+
+    assert result.status == "failed"
+    assert result.error == "CUDA out of memory"
+
+
 def test_handle_ws_error_message_logs_failure(tmp_path: Path) -> None:
     log_store = LogStore()
     adapter = ComfyUIEngineAdapter(

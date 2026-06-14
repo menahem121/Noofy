@@ -4997,6 +4997,48 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
+  it("keeps Run enabled after a retryable workflow preparation failure", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...workflowStatus,
+            install: {
+              status: "failed",
+              user_facing_message: "Cannot prepare automatically",
+              last_error: "Previous preparation failed.",
+            },
+            can_prepare: true,
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+        return Promise.resolve(
+          jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "0.1.0",
+            values: {},
+            layout_overrides: {},
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+    expect(screen.queryByText("This workflow cannot run on this machine")).not.toBeInTheDocument();
+  });
+
   it("renders the classic two-panel dashboard when classic mode is selected", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
     mockConfiguredDashboardFetch(fetchMock);

@@ -386,6 +386,41 @@ def test_get_install_state_for_custom_node_workflow_starts_pending(tmp_path: Pat
     assert payload["requires_preparation"] is True
 
 
+def test_workflow_status_keeps_retryable_prepare_failures_preparable(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload()
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+
+    for status in (
+        InstallStatus.FAILED,
+        InstallStatus.CANNOT_PREPARE_AUTOMATICALLY,
+        InstallStatus.BLOCKED_BY_POLICY,
+        InstallStatus.UNSUPPORTED_RUNTIME_PROFILE,
+    ):
+        service.capsule_installer.install_state_store.update(
+            capsule_lock.runtime.capsule_fingerprint,
+            status=status,
+            last_error="previous preparation failed",
+        )
+
+        payload = service.workflow_status("runner_workflow")
+
+        assert payload["can_prepare"] is True
+        action_kinds = {action["kind"] for action in payload["required_actions"]}
+        assert "prepare_workflow" in action_kinds
+        assert "review_preparation_issue" in action_kinds
+
+
 def test_get_install_state_for_unknown_workflow_returns_unsupported(tmp_path: Path) -> None:
     service = _build_service(tmp_path)
 

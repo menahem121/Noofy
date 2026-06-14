@@ -1155,10 +1155,11 @@ class ComfyUIEngineAdapter:
         if completed:
             return JobProgress(job_id=job_id, status="completed", value=1, max=1)
         if status_str == "error":
+            error_message = _history_error_message(history_entry)
             return JobProgress(
                 job_id=job_id,
                 status="failed",
-                message="ComfyUI reported execution error",
+                message=error_message or "ComfyUI reported execution error",
             )
         return JobProgress(job_id=job_id, status="running")
 
@@ -1170,11 +1171,12 @@ class ComfyUIEngineAdapter:
         status_str = status.get("status_str") if isinstance(status, dict) else None
 
         if status_str == "error":
+            error_message = _history_error_message(history_entry)
             return JobResult(
                 job_id=job_id,
                 status="failed",
                 outputs=[],
-                error="ComfyUI reported execution error",
+                error=error_message or "ComfyUI reported execution error",
             )
 
         outputs = []
@@ -1477,6 +1479,30 @@ def _result_has_media(result: JobResult) -> bool:
             if isinstance(items, list) and items:
                 return True
     return False
+
+
+def _history_error_message(history_entry: dict[str, Any]) -> str | None:
+    status = history_entry.get("status")
+    if not isinstance(status, dict):
+        return None
+    messages = status.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for raw_message in reversed(messages):
+        if not isinstance(raw_message, list | tuple) or len(raw_message) < 2:
+            continue
+        message_type = raw_message[0]
+        data = raw_message[1]
+        if message_type != "execution_error" or not isinstance(data, dict):
+            continue
+        error_message = (
+            data.get("exception_message")
+            or data.get("message")
+            or data.get("exception_type")
+        )
+        if error_message:
+            return sanitize_text(str(error_message))
+    return None
 
 
 def _engine_output_type_from_item(item: dict[str, Any]) -> str:

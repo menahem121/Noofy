@@ -1115,6 +1115,26 @@ def test_build_workflow_memory_estimate_lowers_confidence_for_local_memory_failu
     assert "local_memory_failure" in estimate.reasons
 
 
+def test_build_workflow_memory_estimate_ignores_generic_failed_peak_when_creator_hint_exists() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                backend=MemoryBackend.CUDA,
+                other_failed_runs=1,
+                observed_peak_vram_mb=21_774,
+            ),
+            creator_observed_peak_vram_mb=23_995,
+        )
+    )
+
+    assert estimate.source is RunnerMemoryEstimateSource.CREATOR_OBSERVED
+    assert estimate.estimated_peak_vram_mb == 23_995
+    assert estimate.local_evidence is None
+    assert "creator_observed_memory_hint" in estimate.reasons
+
+
 def test_build_workflow_memory_estimate_lowers_confidence_for_changed_settings() -> None:
     estimate = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(
