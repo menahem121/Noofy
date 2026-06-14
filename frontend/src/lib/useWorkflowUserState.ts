@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   deleteUserStateLayout,
@@ -18,6 +18,20 @@ const EMPTY_CONTROL_IDS: string[] = [];
 const EMPTY_VALUES: Record<string, unknown> = {};
 const EMPTY_LAYOUT_OVERRIDES: Record<string, GridItemLayout> = {};
 const EMPTY_OUTPUT_PREFERENCES: OutputPreferences = {};
+
+interface WorkflowUserStateCacheEntry {
+  state: WorkflowUserState;
+  revision: number;
+  dirtyRevision: number | null;
+}
+
+interface PendingWorkflowUserStateSave {
+  workflowId: string;
+  state: WorkflowUserState;
+  revision: number;
+}
+
+const workflowUserStateCache = new Map<string, WorkflowUserStateCacheEntry>();
 
 function emptyState(workflowId: string, dashboardVersion: string): WorkflowUserState {
   return {
@@ -131,18 +145,6 @@ export function useWorkflowUserState(
   validLayoutIds: string[] = EMPTY_CONTROL_IDS,
   validOutputControlIds: string[] = validLayoutIds,
 ) {
-  const [userState, setUserState] = useState<WorkflowUserState>(() =>
-    emptyState(workflowId, dashboardVersion),
-  );
-  const [loadedWorkflowId, setLoadedWorkflowId] = useState<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const fetchStartedForRef = useRef<string | null>(null);
-  const latestStateRef = useRef<WorkflowUserState>(userState);
-
-  useEffect(() => {
-    latestStateRef.current = userState;
-  }, [userState]);
-
   const packageDefaultsKey = useMemo(() => stableRecordKey(packageDefaults), [packageDefaults]);
   const inputIdsKey = useMemo(() => stableListKey(Array.from(inputIndex.keys())), [inputIndex]);
   const layoutIdsKey = useMemo(() => stableListKey(validLayoutIds), [validLayoutIds]);
@@ -156,6 +158,39 @@ export function useWorkflowUserState(
     layoutIdsKey,
     outputControlIdsKey,
   ].join("\u0001");
+  const [userState, setUserState] = useState<WorkflowUserState>(() =>
+    cachedStateForContext(
+      workflowId,
+      packageDefaults,
+      inputIndex,
+      validLayoutIds,
+      validOutputControlIds,
+      dashboardVersion,
+      hasPackageContext,
+    ) ?? emptyState(workflowId, dashboardVersion),
+  );
+  const [loadedWorkflowId, setLoadedWorkflowId] = useState<string | null>(() =>
+    cachedStateForContext(
+      workflowId,
+      packageDefaults,
+      inputIndex,
+      validLayoutIds,
+      validOutputControlIds,
+      dashboardVersion,
+      hasPackageContext,
+    )
+      ? workflowId
+      : null,
+  );
+  const saveTimerRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef<PendingWorkflowUserStateSave | null>(null);
+  const fetchStartedForRef = useRef<string | null>(null);
+  const latestStateRef = useRef<WorkflowUserState>(userState);
+
+  useEffect(() => {
+    latestStateRef.current = userState;
+  }, [userState]);
+
   const loaded = !hasPackageContext || loadedWorkflowId === workflowId;
 
   function cancelPendingSave() {
@@ -163,7 +198,50 @@ export function useWorkflowUserState(
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
+    pendingSaveRef.current = null;
   }
+
+  useLayoutEffect(() => {
+    const capturedWorkflowId = workflowId;
+    return () => {
+      flushPendingSave(capturedWorkflowId);
+    };
+  // Flush pending edits before a workflow switch hydrates another tab.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId]);
+
+  useLayoutEffect(() => {
+    if (!hasPackageContext) return;
+    const cached = cachedStateForContext(
+      workflowId,
+      packageDefaults,
+      inputIndex,
+      validLayoutIds,
+      validOutputControlIds,
+      dashboardVersion,
+      hasPackageContext,
+    );
+    if (!cached) return;
+
+    const cachedEntry = workflowUserStateCache.get(workflowId);
+    const shouldPersistMigration = Boolean(
+      cachedEntry && cached.dashboard_version !== cachedEntry.state.dashboard_version,
+    );
+    if (cachedEntry?.state !== cached) {
+      writeCachedState(workflowId, cached, {
+        dirty: shouldPersistMigration,
+        preserveDirty: true,
+      });
+    }
+    setUserState(cached);
+    latestStateRef.current = cached;
+    setLoadedWorkflowId(workflowId);
+    if (shouldPersistMigration) {
+      scheduleSave(cached);
+    }
+  // Cache hydration must happen before paint on workflow tab switches.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextKey, hasPackageContext, workflowId]);
 
   useEffect(() => {
     let active = true;
@@ -178,6 +256,20 @@ export function useWorkflowUserState(
         flushPendingSave(capturedWorkflowId);
       };
     }
+    const cached = cachedStateForContext(
+      workflowId,
+      packageDefaults,
+      inputIndex,
+      validLayoutIds,
+      validOutputControlIds,
+      dashboardVersion,
+      hasPackageContext,
+    );
+    if (cached) {
+      setUserState(cached);
+      latestStateRef.current = cached;
+      setLoadedWorkflowId(workflowId);
+    }
     if (fetchStartedForRef.current === workflowId) {
       return () => {
         active = false;
@@ -185,9 +277,11 @@ export function useWorkflowUserState(
       };
     }
     fetchStartedForRef.current = workflowId;
+    const fetchBaselineRevision = workflowUserStateCache.get(workflowId)?.revision ?? 0;
     fetchUserState(workflowId)
       .then((remote) => {
         if (!active) return;
+        if (!canApplyFetchedState(capturedWorkflowId, fetchBaselineRevision)) return;
         const pruned = pruneState(
           remote,
           packageDefaults,
@@ -205,12 +299,18 @@ export function useWorkflowUserState(
         };
         setUserState(merged);
         latestStateRef.current = merged;
+        writeCachedState(capturedWorkflowId, merged, { dirty: false, clearDirty: true });
         if (pruned.dashboard_version !== remote.dashboard_version) {
           scheduleSave(merged);
         }
       })
       .catch(() => {
         if (!active) return;
+        if (cached) {
+          setUserState(cached);
+          latestStateRef.current = cached;
+          return;
+        }
         const initial: WorkflowUserState = {
           ...emptyState(workflowId, dashboardVersion),
           values: { ...packageDefaults },
@@ -219,6 +319,7 @@ export function useWorkflowUserState(
         };
         setUserState(initial);
         latestStateRef.current = initial;
+        writeCachedState(capturedWorkflowId, initial, { dirty: false, clearDirty: true });
       })
       .finally(() => {
         if (active) setLoadedWorkflowId(capturedWorkflowId);
@@ -245,6 +346,11 @@ export function useWorkflowUserState(
       );
       if (next === current) return current;
       latestStateRef.current = next;
+      if (next.dashboard_version !== current.dashboard_version) {
+        scheduleSave(next);
+      } else {
+        writeCachedState(workflowId, next, { dirty: false, preserveDirty: true });
+      }
       return next;
     });
   // loadedWorkflowId is required so a context that changed during the initial
@@ -255,9 +361,21 @@ export function useWorkflowUserState(
   function scheduleSave(next: WorkflowUserState) {
     cancelPendingSave();
     latestStateRef.current = next;
+    writeCachedState(workflowId, next, { dirty: true });
+    const pendingSave = {
+      workflowId,
+      state: next,
+      revision: workflowUserStateCache.get(workflowId)?.revision ?? 0,
+    };
+    pendingSaveRef.current = pendingSave;
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void saveUserState(workflowId, latestStateRef.current).catch(() => undefined);
+      if (pendingSaveRef.current === pendingSave) {
+        pendingSaveRef.current = null;
+      }
+      void saveUserState(pendingSave.workflowId, pendingSave.state)
+        .then(() => markCachedStateSaved(pendingSave.workflowId, pendingSave.revision))
+        .catch(() => undefined);
     }, DEBOUNCE_MS);
   }
 
@@ -265,7 +383,12 @@ export function useWorkflowUserState(
     if (saveTimerRef.current === null) return;
     window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
-    void saveUserState(targetWorkflowId, latestStateRef.current).catch(() => undefined);
+    const pendingSave = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    if (!pendingSave || pendingSave.workflowId !== targetWorkflowId) return;
+    void saveUserState(pendingSave.workflowId, pendingSave.state)
+      .then(() => markCachedStateSaved(pendingSave.workflowId, pendingSave.revision))
+      .catch(() => undefined);
   }
 
   const setValue = useCallback(
@@ -293,8 +416,9 @@ export function useWorkflowUserState(
     };
     setUserState(next);
     latestStateRef.current = next;
+    writeCachedState(workflowId, next, { dirty: false, clearDirty: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowId, packageDefaults]);
+  }, [workflowId, packageDefaults, contextKey]);
 
   const setLayoutOverride = useCallback(
     async (controlId: string, layout: GridItemLayout) => {
@@ -370,10 +494,11 @@ export function useWorkflowUserState(
         presentation_overrides: cleared.presentation_overrides ?? {},
       };
       latestStateRef.current = next;
+      writeCachedState(workflowId, next, { dirty: false, clearDirty: true });
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowId]);
+  }, [workflowId, contextKey]);
 
   const hasLayoutOverrides = Object.keys(userState.layout_overrides).length > 0;
 
@@ -400,6 +525,67 @@ export function useWorkflowUserState(
   };
 }
 
+function cachedStateForContext(
+  workflowId: string,
+  packageDefaults: Record<string, unknown>,
+  inputIndex: Map<string, WorkflowInputDef>,
+  validLayoutIds: string[],
+  validOutputControlIds: string[],
+  dashboardVersion: string,
+  hasPackageContext: boolean,
+): WorkflowUserState | null {
+  if (!hasPackageContext) return null;
+  const cached = workflowUserStateCache.get(workflowId);
+  if (!cached) return null;
+  return mergeCurrentContext(
+    cached.state,
+    packageDefaults,
+    inputIndex,
+    validLayoutIds,
+    validOutputControlIds,
+    dashboardVersion,
+  );
+}
+
+function writeCachedState(
+  workflowId: string,
+  state: WorkflowUserState,
+  options: { dirty: boolean; preserveDirty?: boolean; clearDirty?: boolean },
+) {
+  const current = workflowUserStateCache.get(workflowId);
+  const revision = (current?.revision ?? 0) + 1;
+  let dirtyRevision: number | null;
+  if (options.clearDirty) {
+    dirtyRevision = null;
+  } else if (options.dirty) {
+    dirtyRevision = revision;
+  } else if (options.preserveDirty) {
+    dirtyRevision = current?.dirtyRevision ?? null;
+  } else {
+    dirtyRevision = null;
+  }
+  workflowUserStateCache.set(workflowId, {
+    state,
+    revision,
+    dirtyRevision,
+  });
+}
+
+function markCachedStateSaved(workflowId: string, savedRevision: number) {
+  const current = workflowUserStateCache.get(workflowId);
+  if (!current || current.revision !== savedRevision || current.dirtyRevision === null) return;
+  workflowUserStateCache.set(workflowId, {
+    ...current,
+    dirtyRevision: null,
+  });
+}
+
+function canApplyFetchedState(workflowId: string, fetchBaselineRevision: number) {
+  const current = workflowUserStateCache.get(workflowId);
+  if (!current) return true;
+  return current.revision === fetchBaselineRevision && current.dirtyRevision === null;
+}
+
 function stableListKey(values: string[]): string {
   return [...values].sort().join("\u0000");
 }
@@ -414,4 +600,8 @@ function stableRecordKey(values: Record<string, unknown>): string {
   } catch {
     return stableListKey(Object.keys(values));
   }
+}
+
+export function __resetWorkflowUserStateCacheForTests() {
+  workflowUserStateCache.clear();
 }

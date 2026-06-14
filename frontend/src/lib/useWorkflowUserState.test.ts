@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkflowInputDef, WorkflowUserState } from "./api/noofyApi";
-import { useWorkflowUserState } from "./useWorkflowUserState";
+import { __resetWorkflowUserStateCacheForTests, useWorkflowUserState } from "./useWorkflowUserState";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -47,6 +47,7 @@ describe("useWorkflowUserState", () => {
   });
 
   afterEach(() => {
+    __resetWorkflowUserStateCacheForTests();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     fetchMock.mockReset();

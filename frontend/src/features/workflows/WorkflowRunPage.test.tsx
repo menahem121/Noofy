@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
-import { WorkflowTabsProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
-import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
+import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
+import { __resetWorkflowRunPageCacheForTests, splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
+import { __resetWorkflowUserStateCacheForTests } from "../../lib/useWorkflowUserState";
 
 vi.mock("../three-d/threeDScene", () => ({
   createThreeDScene: vi.fn().mockResolvedValue({
@@ -813,6 +814,33 @@ function WorkflowRuntimeSeeder({
   return <>{children}</>;
 }
 
+function WorkflowTabSwitchRunHarness() {
+  const [activeWorkflowId, setActiveWorkflowId] = useState("first-workflow");
+  return (
+    <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+      <WorkflowTabsProvider>
+        <WorkflowTabsRouteProvider
+          activeWorkflowId={activeWorkflowId}
+          onActivateWorkflowTab={(workflowId) => setActiveWorkflowId(workflowId)}
+          onRequestCloseWorkflowTab={vi.fn()}
+        >
+          <WorkflowTabSwitchSeeder />
+          <WorkflowRunPage workflowId={activeWorkflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
+        </WorkflowTabsRouteProvider>
+      </WorkflowTabsProvider>
+    </RuntimeStatusProvider>
+  );
+}
+
+function WorkflowTabSwitchSeeder() {
+  const { openWorkflowTab } = useWorkflowTabs();
+  useEffect(() => {
+    openWorkflowTab("first-workflow", "First Workflow");
+    openWorkflowTab("next-workflow", "Next Workflow");
+  }, [openWorkflowTab]);
+  return null;
+}
+
 async function waitForReadyStatus() {
   expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
 }
@@ -914,6 +942,8 @@ describe("WorkflowRunPage", () => {
   });
 
   afterEach(() => {
+    __resetWorkflowRunPageCacheForTests();
+    __resetWorkflowUserStateCacheForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
@@ -4672,6 +4702,106 @@ describe("WorkflowRunPage", () => {
         && (!requestInit?.method || requestInit.method === "GET"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps a previously loaded workflow tab rendered while its state refreshes in the background", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const firstPackageRefresh = deferred<Response>();
+    const firstUserStateRefresh = deferred<Response>();
+    let firstPackageRequestCount = 0;
+    let firstUserStateRequestCount = 0;
+    const packageFor = (workflowId: string, workflowName: string, defaultValue: string) => ({
+      ...configuredPackageData,
+      metadata: {
+        ...configuredPackageData.metadata,
+        id: workflowId,
+        name: workflowName,
+      },
+      inputs: configuredPackageData.inputs.map((input) => ({
+        ...input,
+        default: defaultValue,
+      })),
+    });
+    const stateFor = (workflowId: string, packageData: ReturnType<typeof packageFor>, prompt: string) => ({
+      schema_version: "1",
+      workflow_id: workflowId,
+      dashboard_version: dashboardUserStateVersionForTest(packageData),
+      values: { prompt },
+      layout_overrides: {},
+      presentation_overrides: {},
+      output_preferences: {},
+    });
+    const firstPackage = packageFor("first-workflow", "First Workflow", "first default");
+    const nextPackage = packageFor("next-workflow", "Next Workflow", "next default");
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/settings/apis")) return Promise.resolve(jsonResponse(configuredApiSettings));
+      if (url.endsWith("/api/workflows/first-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "first-workflow",
+          workflow: { ...workflowStatus.workflow, id: "first-workflow", name: "First Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/next-workflow/status")) {
+        return Promise.resolve(jsonResponse({
+          ...workflowStatus,
+          workflow_id: "next-workflow",
+          workflow: { ...workflowStatus.workflow, id: "next-workflow", name: "Next Workflow" },
+        }));
+      }
+      if (url.endsWith("/api/workflows/first-workflow/package")) {
+        firstPackageRequestCount += 1;
+        return firstPackageRequestCount === 1
+          ? Promise.resolve(jsonResponse(firstPackage))
+          : firstPackageRefresh.promise;
+      }
+      if (url.endsWith("/api/workflows/next-workflow/package")) {
+        return Promise.resolve(jsonResponse(nextPackage));
+      }
+      if (url.endsWith("/model-summary")) {
+        const id = url.includes("first-workflow") ? "first-workflow" : "next-workflow";
+        return Promise.resolve(jsonResponse({ ...readyModelSummary, workflow_id: id }));
+      }
+      if (url.endsWith("/validate")) {
+        const id = url.includes("first-workflow") ? "first-workflow" : "next-workflow";
+        return Promise.resolve(jsonResponse({ ...validWorkflow, workflow_id: id }));
+      }
+      if (url.endsWith("/runs/active-and-queued")) {
+        return Promise.resolve(jsonResponse({ active_count: 0, queued_count: 0, total_count: 0 }));
+      }
+      if (url.endsWith("/api/workflows/first-workflow/user-state")) {
+        if (method === "PUT") return Promise.resolve(jsonResponse(JSON.parse(String(init?.body))));
+        firstUserStateRequestCount += 1;
+        return firstUserStateRequestCount === 1
+          ? Promise.resolve(jsonResponse(stateFor("first-workflow", firstPackage, "first saved value")))
+          : firstUserStateRefresh.promise;
+      }
+      if (url.endsWith("/api/workflows/next-workflow/user-state")) {
+        if (method === "PUT") return Promise.resolve(jsonResponse(JSON.parse(String(init?.body))));
+        return Promise.resolve(jsonResponse(stateFor("next-workflow", nextPackage, "next saved value")));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<WorkflowTabSwitchRunHarness />);
+
+    const firstPrompt = await screen.findByDisplayValue("first saved value");
+    fireEvent.change(firstPrompt, { target: { value: "first unsaved value" } });
+    expect(screen.getByDisplayValue("first unsaved value")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Next Workflow" }));
+    expect(await screen.findByDisplayValue("next saved value")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "First Workflow" }));
+
+    expect(screen.getByDisplayValue("first unsaved value")).toBeInTheDocument();
+    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+    expect(firstPackageRequestCount).toBeGreaterThan(1);
+    expect(firstUserStateRequestCount).toBeGreaterThan(1);
   });
 
   it("shows the compact resource monitor in the top bar while idle", async () => {

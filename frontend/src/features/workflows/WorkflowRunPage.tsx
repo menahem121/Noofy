@@ -230,6 +230,8 @@ const initialState: RunPageState = {
   packageLoadError: null,
 };
 
+const workflowRunPageStateCache = new Map<string, RunPageState>();
+
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const activeWorkflowProgressStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 const preparationFailureStatuses = new Set([
@@ -261,7 +263,7 @@ export function WorkflowRunPage({
   onConfigureDashboard,
   onNavigate,
 }: WorkflowRunPageProps) {
-  const [state, setState] = useState<RunPageState>(initialState);
+  const [state, setState] = useState<RunPageState>(() => cachedRunPageState(workflowId));
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [inputErrorDialog, setInputErrorDialog] = useState<RunInputErrorDialogState | null>(null);
@@ -305,6 +307,12 @@ export function WorkflowRunPage({
   useEffect(() => {
     livePreviewRef.current = livePreview;
   }, [livePreview]);
+
+  useEffect(() => {
+    if (state.firstLoadedWorkflowId === workflowId) {
+      workflowRunPageStateCache.set(workflowId, state);
+    }
+  }, [state, workflowId]);
 
   const { viewMode, setViewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
@@ -621,16 +629,22 @@ export function WorkflowRunPage({
       ) {
         return;
       }
-      setState((current) => ({
-        ...current,
-        firstLoadedWorkflowId: targetWorkflowId,
-        workflowStatus,
-        modelSummary,
-        packageData: packageResult.packageData,
-        apiKeySettings,
-        validation,
-        packageLoadError: packageResult.error,
-      }));
+      setState((current) => {
+        const next = {
+          ...current,
+          firstLoadedWorkflowId: targetWorkflowId,
+          workflowStatus,
+          modelSummary,
+          packageData:
+            packageResult.packageData ??
+            (current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null),
+          apiKeySettings,
+          validation,
+          packageLoadError: packageResult.error,
+        };
+        workflowRunPageStateCache.set(targetWorkflowId, next);
+        return next;
+      });
     } catch (error) {
       if (
         loadSequence !== requirementsLoadSequenceRef.current ||
@@ -638,33 +652,29 @@ export function WorkflowRunPage({
       ) {
         return;
       }
-      setState((current) => ({
-        ...current,
-        firstLoadedWorkflowId: targetWorkflowId,
-        workflowStatus: null,
-        modelSummary: null,
-        packageData: null,
-        apiKeySettings: null,
-        validation: null,
-        error: error instanceof Error ? error.message : String(error),
-        packageLoadError: null,
-      }));
+      setState((current) => {
+        const next = {
+          ...current,
+          firstLoadedWorkflowId: targetWorkflowId,
+          workflowStatus: current.firstLoadedWorkflowId === targetWorkflowId ? current.workflowStatus : null,
+          modelSummary: current.firstLoadedWorkflowId === targetWorkflowId ? current.modelSummary : null,
+          packageData: current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null,
+          apiKeySettings: current.firstLoadedWorkflowId === targetWorkflowId ? current.apiKeySettings : null,
+          validation: current.firstLoadedWorkflowId === targetWorkflowId ? current.validation : null,
+          error: error instanceof Error ? error.message : String(error),
+          packageLoadError: null,
+        };
+        if (next.packageData) {
+          workflowRunPageStateCache.set(targetWorkflowId, next);
+        }
+        return next;
+      });
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     void runtimeStatus.refreshRuntime({ silent: true });
-    setState((current) => ({
-      ...current,
-      firstLoadedWorkflowId: null,
-      workflowStatus: null,
-      modelSummary: null,
-      packageData: null,
-      apiKeySettings: null,
-      validation: null,
-      error: null,
-      packageLoadError: null,
-    }));
+    setState(cachedRunPageState(workflowId));
     void loadRequirements();
     setRequiredModelsModalOpen(false);
     setModelDownloadJob(null);
@@ -4756,6 +4766,14 @@ function buildDashboardSchemaForEditing(
     },
     presentation: actionBarPosition ? { actionBar: actionBarPosition } : undefined,
   };
+}
+
+function cachedRunPageState(workflowId: string): RunPageState {
+  return workflowRunPageStateCache.get(workflowId) ?? initialState;
+}
+
+export function __resetWorkflowRunPageCacheForTests() {
+  workflowRunPageStateCache.clear();
 }
 
 function hiddenBuilderWidgetForInput(
