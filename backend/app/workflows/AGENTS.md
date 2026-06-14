@@ -22,6 +22,7 @@ Workflow package domain: everything about what a workflow *is* and how it is imp
 | `authoring.py` | Dashboard authoring: bindable inputs, unresolved inputs, dashboard schema validation |
 | `user_state.py` | Per-workflow user state (input values, layout) |
 | `assets.py` | Dashboard asset management (uploaded images bound to workflows) |
+| `removal_cleanup.py` | Best-effort workflow-owned state and conservative dashboard asset cleanup |
 | `exporter.py` | Export workflow as .noofy archive or ComfyUI JSON |
 | `store_paths.py` | Filesystem path conventions for the workflow store |
 | `validator.py` | Workflow package validation rules |

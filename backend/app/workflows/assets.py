@@ -83,6 +83,26 @@ class DashboardAssetService:
     def assets_dir(self) -> Path:
         return self._dir
 
+    def list_asset_ids(self) -> set[str]:
+        if not self._dir.exists():
+            return set()
+        return {
+            path.name
+            for path in self._dir.iterdir()
+            if path.is_file() and not path.name.endswith(".meta.json")
+        }
+
+    def delete(self, asset_id: str) -> bool:
+        safe = _validate_asset_id(asset_id)
+        removed = False
+        for path in (self._dir / safe, self._dir / f"{safe}.meta.json"):
+            try:
+                path.unlink()
+                removed = True
+            except FileNotFoundError:
+                continue
+        return removed
+
     def store(self, data: bytes, content_type: str, original_filename: str) -> dict[str, str]:
         if len(data) > MAX_ASSET_BYTES:
             raise AssetUploadError("File exceeds the 25 MB size limit.")

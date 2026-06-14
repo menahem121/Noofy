@@ -420,6 +420,7 @@ class HistoryService:
         error: str | None,
         snapshot: RunSubmissionSnapshot | None,
         gallery_items: list[GalleryItem],
+        can_open_workflow: bool = True,
     ) -> None:
         normalized_status: HistoryEventStatus
         if status == "canceled":
@@ -446,7 +447,7 @@ class HistoryService:
                 gallery_item_id=primary_gallery_item.id if primary_gallery_item else None,
                 gallery_item_ids=[item.id for item in gallery_items],
                 error_summary=_redact_text(error) if error else None,
-                can_open_workflow=True,
+                can_open_workflow=can_open_workflow,
                 prompt=_prompt_from_settings(used_settings),
                 used_settings=used_settings,
                 source_event_id=f"run:{job_id}",

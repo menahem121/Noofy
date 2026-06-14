@@ -1104,6 +1104,23 @@ class RunnerSupervisor:
                 return None
             return self._close_workflow_lease_locked(lease_id, lease)
 
+    def close_workflow_leases(self, workflow_id: str) -> list[RunnerDescriptor]:
+        with self._lock:
+            lease_ids = [
+                lease_id
+                for lease_id, lease in self._workflow_leases.items()
+                if lease.workflow_id == workflow_id
+            ]
+            updated: list[RunnerDescriptor] = []
+            for lease_id in lease_ids:
+                lease = self._workflow_leases.get(lease_id)
+                if lease is None:
+                    continue
+                descriptor = self._close_workflow_lease_locked(lease_id, lease)
+                if descriptor is not None:
+                    updated.append(descriptor)
+            return updated
+
     def expire_stale_workflow_leases(
         self,
         ttl_seconds: float,

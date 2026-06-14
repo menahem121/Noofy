@@ -60,6 +60,16 @@ class RunResultService:
         self.progress_estimator = progress_estimator
         self._terminal_locks: dict[str, asyncio.Lock] = {}
         self._terminal_outcomes: dict[str, JobResult | EngineJob] = {}
+        self._suppressed_library_history_job_ids: set[str] = set()
+
+    def suppress_workflow_library_history(self, workflow_id: str) -> int:
+        job_ids = {
+            job_id
+            for job_id, job_workflow_id in self.job_workflows.items()
+            if job_workflow_id == workflow_id
+        }
+        self._suppressed_library_history_job_ids.update(job_ids)
+        return len(job_ids)
 
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
         canonical_job_id = self._canonical_job_id(job_id)
@@ -83,6 +93,7 @@ class RunResultService:
                 mark_job_finished(result.job_id)
             await self.finish_memory_sampling(result.job_id)
             self.record_memory_observation(result)
+            suppress_library_history = result.job_id in self._suppressed_library_history_job_ids
             retry_job = await self.maybe_retry_after_memory_cleanup(result)
             outcome: JobResult | EngineJob = retry_job or result
             if self.progress_estimator is not None:
@@ -94,6 +105,9 @@ class RunResultService:
                 self._register_gallery_run(result)
                 self._record_run_history_and_activity(result, [])
                 self._schedule_gallery_auto_saves(result)
+            elif suppress_library_history:
+                self._suppressed_library_history_job_ids.discard(result.job_id)
+                self._suppressed_library_history_job_ids.add(retry_job.job_id)
             self._terminal_outcomes[result.job_id] = outcome
             if self.workflow_run_queue_service is not None:
                 self.workflow_run_queue_service.mark_terminal(result.job_id)
@@ -182,12 +196,14 @@ class RunResultService:
     def _record_run_history_and_activity(self, result: JobResult, gallery_items: list[GalleryItem]) -> None:
         if result.status not in {"completed", "failed", "canceled"}:
             return
+        suppress_library_history = result.job_id in self._suppressed_library_history_job_ids
+        self._suppressed_library_history_job_ids.discard(result.job_id)
         workflow_id = self.job_workflows.get(result.job_id)
         started_at = self.job_started_at.pop(result.job_id, None)
         if workflow_id is None or started_at is None:
             return
         completed_at = datetime.now(UTC)
-        if self.workflow_library_store is not None:
+        if self.workflow_library_store is not None and not suppress_library_history:
             self.workflow_library_store.record_run_result(
                 workflow_id=workflow_id,
                 job_id=result.job_id,
@@ -208,4 +224,5 @@ class RunResultService:
                 error=result.error,
                 snapshot=snapshot,
                 gallery_items=gallery_items,
+                can_open_workflow=not suppress_library_history,
             )

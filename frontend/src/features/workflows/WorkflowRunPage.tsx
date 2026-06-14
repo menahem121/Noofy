@@ -4776,6 +4776,10 @@ export function __resetWorkflowRunPageCacheForTests() {
   workflowRunPageStateCache.clear();
 }
 
+export function invalidateWorkflowRunPageCache(workflowId: string) {
+  workflowRunPageStateCache.delete(workflowId);
+}
+
 function hiddenBuilderWidgetForInput(
   input: WorkflowInputDef,
 ): DashboardWidget | null {

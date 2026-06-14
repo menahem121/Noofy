@@ -241,5 +241,32 @@ def test_run_result_service_records_run_activity_with_safe_dashboard_settings(tm
     assert library.run_history_summary("wf").run_count == 1
 
 
+def test_run_result_service_preserves_activity_but_not_deleted_workflow_library_history(
+    tmp_path: Path,
+) -> None:
+    library = WorkflowLibraryStore(tmp_path / "library")
+    history = HistoryService(store=ActivityLogStore(tmp_path / "history.db"))
+    service = RunResultService(
+        job_service=FakeJobService(),
+        log_store=None,
+        job_workflows={"job-1": "wf"},
+        job_started_at={"job-1": datetime(2026, 5, 13, 9, 59, tzinfo=UTC)},
+        job_run_snapshots={},
+        finish_memory_sampling=lambda job_id: _async_none(),
+        record_memory_observation=lambda result: None,
+        maybe_retry_after_memory_cleanup=lambda result: _async_none(),
+        workflow_library_store=library,
+        history_service=history,
+    )
+
+    assert service.suppress_workflow_library_history("wf") == 1
+    asyncio.run(service.get_result("job-1"))
+
+    assert library.run_history_summary("wf").run_count == 0
+    events = history.list_events(HistoryQuery())
+    assert events.total == 1
+    assert events.events[0].can_open_workflow is False
+
+
 async def _async_none(*args, **kwargs):
     return None

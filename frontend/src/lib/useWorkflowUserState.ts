@@ -605,3 +605,7 @@ function stableRecordKey(values: Record<string, unknown>): string {
 export function __resetWorkflowUserStateCacheForTests() {
   workflowUserStateCache.clear();
 }
+
+export function invalidateWorkflowUserStateCache(workflowId: string) {
+  workflowUserStateCache.delete(workflowId);
+}

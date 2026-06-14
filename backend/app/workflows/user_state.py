@@ -45,6 +45,10 @@ class UserStateService:
     def __init__(self, user_state_dir: Path) -> None:
         self._dir = user_state_dir
 
+    @property
+    def user_state_dir(self) -> Path:
+        return self._dir
+
     def _path(self, workflow_id: str) -> Path:
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in workflow_id)
         return self._dir / f"{safe}.json"

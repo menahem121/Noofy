@@ -30,6 +30,7 @@ import {
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
+import { useOptionalWorkflowTabs } from "../app/WorkflowTabs";
 import {
   clearDashboardDraft,
   loadDashboardDraft,
@@ -63,6 +64,7 @@ import {
   type PendingImportedSetup,
 } from "./pendingSetupBanners";
 import { useWorkflowLibrary } from "./WorkflowLibraryProvider";
+import { cleanupRemovedWorkflowFrontendState } from "../workflows/workflowRemoval";
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debounced, setDebounced] = useState(value);
@@ -352,6 +354,7 @@ export function HomePage({
   onEditDashboard,
   onNavigate,
 }: HomePageProps) {
+  const workflowTabs = useOptionalWorkflowTabs();
   const {
     state: homeData,
     startWorkflowImport,
@@ -595,9 +598,7 @@ export function HomePage({
     setCardActionError(null);
     try {
       await removeWorkflow(workflowId);
-      // Drop the local builder draft so a future reimport (same deterministic
-      // workflow id) does not resurrect stale, possibly-duplicated widgets.
-      clearDashboardDraft(workflowId);
+      cleanupRemovedWorkflowFrontendState(workflowId, workflowTabs);
       setPendingImportedSetups((current) => {
         return current.filter((item) => item.workflowId !== workflowId);
       });

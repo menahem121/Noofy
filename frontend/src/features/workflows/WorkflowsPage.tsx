@@ -36,14 +36,15 @@ import { workflowDisplayName } from "../../lib/workflowNames";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
-import { clearDashboardDraft, type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
-import { removePendingImportedSetupReminder } from "../home/pendingSetupBanners";
+import { useOptionalWorkflowTabs } from "../app/WorkflowTabs";
+import { type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
 import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
+import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
 import {
   hardwareWarningBasis,
   hardwareWarningDeveloperDetailsText,
@@ -112,6 +113,7 @@ export function WorkflowsPage({
 }: WorkflowsPageProps) {
   const runtimeStatus = useRuntimeStatus();
   const workflowLibrary = useWorkflowLibrary();
+  const workflowTabs = useOptionalWorkflowTabs();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const detailsPanelFrameRef = useRef<number | null>(null);
   const detailsPanelCloseTimerRef = useRef<number | null>(null);
@@ -281,22 +283,23 @@ export function WorkflowsPage({
     if (!workflow.can_remove) return;
     const confirmed = window.confirm(`Remove "${workflowDisplayName(workflow)}" from Noofy?`);
     if (!confirmed) return;
-    await removeWorkflow(workflow.id);
-    // Drop the local builder draft so a future reimport (which reuses the same
-    // deterministic workflow id) starts from the freshly imported dashboard
-    // instead of resurrecting stale, possibly-duplicated widgets.
-    clearDashboardDraft(workflow.id);
-    removePendingImportedSetupReminder(workflow.id);
-    if (selectedWorkflowId === workflow.id) {
-      setDetailsPanelOpen(false);
-      setSelectedWorkflowId(null);
+    setActionError(null);
+    try {
+      await removeWorkflow(workflow.id);
+      cleanupRemovedWorkflowFrontendState(workflow.id, workflowTabs);
+      if (selectedWorkflowId === workflow.id) {
+        setDetailsPanelOpen(false);
+        setSelectedWorkflowId(null);
+      }
+      setDetails((current) => {
+        const next = { ...current };
+        delete next[workflow.id];
+        return next;
+      });
+      await workflowLibrary.refreshWorkflows();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
     }
-    setDetails((current) => {
-      const next = { ...current };
-      delete next[workflow.id];
-      return next;
-    });
-    await workflowLibrary.refreshWorkflows();
   }
 
   function handleToggleCheck(id: string, checked: boolean) {
@@ -347,8 +350,7 @@ export function WorkflowsPage({
       for (const workflow of selectedRemovableWorkflows) {
         try {
           await removeWorkflow(workflow.id);
-          clearDashboardDraft(workflow.id);
-          removePendingImportedSetupReminder(workflow.id);
+          cleanupRemovedWorkflowFrontendState(workflow.id, workflowTabs);
           removedIds.add(workflow.id);
         } catch {
           failedIds.add(workflow.id);

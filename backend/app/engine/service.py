@@ -73,6 +73,7 @@ from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector, Runti
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
     JobRunnerNotFoundError,
+    QueuedRunnerStartStatus,
     RunnerDescriptor,
     RunnerStatus,
     RunnerSupervisor,
@@ -100,6 +101,7 @@ from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import WorkflowPackage
+from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -140,6 +142,7 @@ class EngineService:
         workflow_run_queue_service: WorkflowRunQueueService | None = None,
         run_lifecycle_service: RunLifecycleService | None = None,
         progress_estimator: WorkflowProgressEstimator | None = None,
+        workflow_removal_cleanup_service: WorkflowRemovalCleanupService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -167,6 +170,7 @@ class EngineService:
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
+        self.workflow_removal_cleanup_service = workflow_removal_cleanup_service
         self.model_ownership_store = None
         if self.dashboard_authoring is not None:
             self.dashboard_authoring.object_info_provider = self._fetch_core_object_info_for_authoring
@@ -395,7 +399,49 @@ class EngineService:
 
     def remove_workflow(self, workflow_id: str) -> dict[str, object]:
         capsule_fingerprint = self._capsule_fingerprint_for_workflow(workflow_id)
+        asset_candidates: set[str] = set()
+        if self.workflow_removal_cleanup_service is not None:
+            try:
+                asset_candidates = self.workflow_removal_cleanup_service.snapshot_asset_candidates(
+                    workflow_id
+                )
+            except Exception as exc:
+                self._log_workflow_removal_cleanup_warning(
+                    workflow_id,
+                    "Workflow removal could not snapshot dashboard asset references",
+                    exc,
+                )
         result = self.workflow_library_service.remove_workflow(workflow_id)
+        self._clear_workflow_runtime_references(workflow_id)
+        if self.workflow_removal_cleanup_service is not None:
+            try:
+                cleanup = (
+                    self.workflow_removal_cleanup_service.cleanup_after_package_removal(
+                        workflow_id,
+                        asset_candidates,
+                    )
+                )
+                self.log_store.add(
+                    "info",
+                    "Workflow-linked local state removed",
+                    "workflow.cleanup",
+                    workflow_id=workflow_id,
+                    details={"removed_dashboard_asset_ids": cleanup.removed_asset_ids},
+                )
+                if cleanup.failures:
+                    self.log_store.add(
+                        "warning",
+                        "Workflow removal completed with local cleanup warnings",
+                        "workflow.cleanup",
+                        workflow_id=workflow_id,
+                        details={"failures": cleanup.failures},
+                    )
+            except Exception as exc:
+                self._log_workflow_removal_cleanup_warning(
+                    workflow_id,
+                    "Workflow removal could not finish local state cleanup",
+                    exc,
+                )
         install_state_removed = self._remove_install_state_for_capsule(
             workflow_id,
             capsule_fingerprint,
@@ -405,6 +451,69 @@ class EngineService:
             install_state_removed=install_state_removed,
         )
         return result
+
+    def _clear_workflow_runtime_references(self, workflow_id: str) -> None:
+        try:
+            suppressed_history_jobs = self.run_result_service.suppress_workflow_library_history(
+                workflow_id
+            )
+            closed = self.runner_supervisor.close_workflow_leases(workflow_id)
+            queued_runner_starts = [
+                queued
+                for queued in self.runner_supervisor.list_queued_runner_starts(status=None)
+                if queued.workflow_id == workflow_id
+                and queued.status
+                in {
+                    QueuedRunnerStartStatus.QUEUED,
+                    QueuedRunnerStartStatus.HANDING_OFF,
+                    QueuedRunnerStartStatus.REQUEUED,
+                }
+            ]
+            for queued in queued_runner_starts:
+                self.runner_supervisor.cancel_queued_runner_start(queued.queue_id)
+            canceled_queued_runs = 0
+            for record in self.workflow_run_queue_service.list_records_for_workflow(workflow_id):
+                if record.status not in {
+                    WorkflowRunQueueStatus.QUEUED,
+                    WorkflowRunQueueStatus.HANDING_OFF,
+                    WorkflowRunQueueStatus.REQUEUED,
+                }:
+                    continue
+                self.workflow_run_queue_service.cancel(record.queue_id)
+                canceled_queued_runs += 1
+            self.runner_supervisor.unbind_workflow_runner(workflow_id)
+            self.log_store.add(
+                "info",
+                "Workflow runner references cleared for removed workflow",
+                "workflow.cleanup",
+                workflow_id=workflow_id,
+                details={
+                    "closed_lease_count": len(closed),
+                    "suppressed_library_history_job_count": suppressed_history_jobs,
+                    "canceled_queued_run_count": canceled_queued_runs,
+                    "canceled_runner_start_count": len(queued_runner_starts),
+                },
+            )
+        except Exception as exc:
+            self._log_workflow_removal_cleanup_warning(
+                workflow_id,
+                "Workflow removal could not clear runtime references",
+                exc,
+            )
+
+    def _log_workflow_removal_cleanup_warning(
+        self,
+        workflow_id: str,
+        message: str,
+        exc: Exception,
+    ) -> None:
+        self.log_store.add(
+            "warning",
+            message,
+            "workflow.cleanup",
+            workflow_id=workflow_id,
+            details={"error": str(exc), "error_type": type(exc).__name__},
+        )
 
     def _capsule_fingerprint_for_workflow(self, workflow_id: str) -> str | None:
         if self.capsule_loader is None:

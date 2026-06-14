@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarProvider } from "../app/AppLayout";
 import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
 import { PENDING_IMPORTED_SETUP_STORAGE_KEY } from "../home/pendingSetupBanners";
+import { dashboardDraftKey } from "../dashboard-builder/dashboardBuilderContent";
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
 import { WorkflowsPage } from "./WorkflowsPage";
 import { WORKFLOW_CATEGORY_OPTIONS } from "./workflowMetadataOptions";
@@ -815,6 +816,7 @@ describe("WorkflowsPage", () => {
 
   it("clears the imported setup reminder when an imported workflow is removed", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    window.localStorage.setItem(dashboardDraftKey("imported_cleanup"), "stale draft");
     window.localStorage.setItem(
       PENDING_IMPORTED_SETUP_STORAGE_KEY,
       JSON.stringify([{ workflowId: "imported_cleanup", workflowName: "Cleanup Flow", dismissed: false }]),
@@ -831,7 +833,21 @@ describe("WorkflowsPage", () => {
         expect.objectContaining({ method: "DELETE" }),
       );
     });
+    expect(window.localStorage.getItem(dashboardDraftKey("imported_cleanup"))).toBeNull();
     expect(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY)).toBeNull();
+  });
+
+  it("shows a warning and keeps the workflow visible when removal fails", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+
+    await screen.findByText("Cleanup Flow");
+    fetchMock.mockRejectedValueOnce(new Error("Workflow removal failed."));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+
+    expect(await screen.findByText("Workflow removal failed.")).toBeInTheDocument();
+    expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
   });
 
   it("removes selected imported workflows and skips native workflows", async () => {

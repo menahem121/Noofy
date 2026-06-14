@@ -36,6 +36,7 @@ from app.workflows.import_orchestrator import WorkflowImportOrchestrator
 from app.workflows.library_service import WorkflowLibraryService
 from app.runs.media_staging import MediaInputStagingResolver
 from app.workflows.user_state import UserStateService
+from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,15 @@ def create_api_services(
         settings.paths.dashboard_assets_dir,
         log_store=getattr(engine_service, "log_store", None),
     )
+    workflow_loader = getattr(engine_service, "workflow_loader", None)
+    if workflow_loader is not None:
+        engine_service.workflow_removal_cleanup_service = WorkflowRemovalCleanupService(
+            workflow_loader=workflow_loader,
+            user_state_service=user_state,
+            asset_service=assets,
+            workflow_library_store=getattr(engine_service, "workflow_library_store", None),
+            dashboard_overrides_dir=settings.paths.workflow_dashboard_overrides_dir,
+        )
     if workflow_import_orchestrator is not None:
         workflow_import_orchestrator.user_state_service = user_state
     folders = model_folder_service or ModelFolderSettingsService(

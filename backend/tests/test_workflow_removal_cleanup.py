@@ -22,12 +22,22 @@ from app.runtime.dependencies.isolation import (
     SmokeTestStatus,
 )
 from app.runtime.install_state import InstallStateStore
-from app.runtime.runners.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus, RunnerSupervisor
+from app.runtime.runners.supervisor import (
+    QueuedRunnerStartKind,
+    QueuedRunnerStartStatus,
+    RunnerDescriptor,
+    RunnerKind,
+    RunnerStatus,
+    RunnerSupervisor,
+)
 from app.workflows.capsule import CapsuleLockLoader
+from app.workflows.assets import DashboardAssetService
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 from app.workflows.store_paths import imported_workflow_id
+from app.workflows.user_state import UserStateService, WorkflowUserState
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -171,20 +181,26 @@ def test_remove_workflow_gc_keeps_active_runner_runtime_artifacts(
             kind=RunnerKind.ISOLATED_COMFYUI,
             base_url="http://127.0.0.1:9100",
             fingerprint=runner_fp,
-            status=RunnerStatus.IDLE_WARM,
+            status=RunnerStatus.RUNNING,
+            current_workflow_id=workflow_id,
+            current_job_id="job-active",
             dependency_env_fingerprint=dep_fp,
             runner_workspace_fingerprint=runner_fp,
             model_view_fingerprint=model_view_fp,
-            open_workflow_lease_count=1,
-            open_workflow_lease_ids=["lease-1"],
         ),
         _Adapter(),
     )
+    supervisor.open_workflow_lease(workflow_id, "runner-active", lease_id="lease-1")
+    supervisor.bind_workflow_runner(workflow_id, "runner-active")
     service = _service(paths, state_store, supervisor=supervisor)
+    service.run_result_service.job_workflows["job-active"] = workflow_id
 
     service.remove_workflow(workflow_id)
 
     assert state_store.get(capsule) is None
+    assert "job-active" in service.run_result_service._suppressed_library_history_job_ids
+    assert supervisor.get_runner("runner-active").open_workflow_lease_count == 0
+    assert supervisor.runner_for_workflow(workflow_id) is None
     assert dep_path.exists()
     assert runner_path.exists()
     assert view.exists()
@@ -227,6 +243,201 @@ def test_user_local_models_are_not_deleted_when_workflow_install_state_is_remove
 
     assert state_store.get(capsule) is None
     assert source.exists()
+
+
+def test_remove_workflow_removes_user_state_library_history_and_orphan_dashboard_asset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(engine_service_module, "settings", _settings(paths))
+    workflow_id = _write_imported_workflow(
+        paths, "publisher", "local-cleanup", "0.1.0", "capsule-cleanup", _fp("1"), _fp("2")
+    )
+    asset_id = "00000000-0000-0000-0000-000000000001.png"
+    asset_path = paths.dashboard_assets_dir / asset_id
+    asset_path.write_bytes(b"dashboard asset")
+    (paths.dashboard_assets_dir / f"{asset_id}.meta.json").write_text(
+        json.dumps({"asset_id": asset_id, "original_filename": "input.png"}),
+        encoding="utf-8",
+    )
+    user_state = UserStateService(paths.user_state_dir)
+    user_state.save(WorkflowUserState(workflow_id=workflow_id, values={"image": asset_id}))
+    library = WorkflowLibraryStore(paths.workflow_store_dir / "library")
+    library._write_json(library._metadata_path(workflow_id), {"workflow_id": workflow_id})
+    library.record_workflow_opened(workflow_id)
+    library.record_run_result(
+        workflow_id=workflow_id,
+        job_id="job-1",
+        status="completed",
+        started_at=datetime.now(UTC),
+    )
+    service = _service(paths, InstallStateStore(paths.workflow_store_dir / "install-state"))
+    package_dir = paths.workflow_packages_store_dir / "publisher" / "local-cleanup" / "0.1.0"
+
+    service.remove_workflow(workflow_id)
+
+    assert not package_dir.exists()
+    assert not user_state._path(workflow_id).exists()
+    assert not library._metadata_path(workflow_id).exists()
+    assert not library._open_history_path(workflow_id).exists()
+    assert not library._run_history_path(workflow_id).exists()
+    assert not asset_path.exists()
+    assert not (paths.dashboard_assets_dir / f"{asset_id}.meta.json").exists()
+
+    reimported_id = _write_imported_workflow(
+        paths, "publisher", "local-cleanup", "0.1.0", "capsule-cleanup-new", _fp("7"), _fp("8")
+    )
+    assert reimported_id == workflow_id
+    assert service.workflow_loader.get_package(workflow_id).metadata.id == workflow_id
+    assert user_state.get(workflow_id).values == {}
+
+
+def test_remove_workflow_keeps_shared_dashboard_assets_and_non_dashboard_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(engine_service_module, "settings", _settings(paths))
+    workflow_a = _write_imported_workflow(
+        paths, "publisher", "asset-a", "0.1.0", "capsule-asset-a", _fp("3"), _fp("4")
+    )
+    workflow_b = _write_imported_workflow(
+        paths, "publisher", "asset-b", "0.1.0", "capsule-asset-b", _fp("5"), _fp("6")
+    )
+    shared_asset_id = "00000000-0000-0000-0000-000000000002.png"
+    shared_asset = paths.dashboard_assets_dir / shared_asset_id
+    shared_asset.write_bytes(b"shared dashboard asset")
+    (paths.dashboard_assets_dir / f"{shared_asset_id}.meta.json").write_text(
+        json.dumps({"asset_id": shared_asset_id, "original_filename": "shared.png"}),
+        encoding="utf-8",
+    )
+    gallery_file = tmp_path / "gallery" / "saved-result.png"
+    user_local_file = tmp_path / "user-files" / "input.png"
+    gallery_file.parent.mkdir()
+    user_local_file.parent.mkdir()
+    gallery_file.write_bytes(b"gallery")
+    user_local_file.write_bytes(b"user local")
+    user_state = UserStateService(paths.user_state_dir)
+    user_state.save(
+        WorkflowUserState(
+            workflow_id=workflow_a,
+            values={
+                "shared": shared_asset_id,
+                "gallery": {"source": "gallery", "path": str(gallery_file)},
+                "local": {"source": "local", "path": str(user_local_file)},
+            },
+        )
+    )
+    user_state.save(WorkflowUserState(workflow_id=workflow_b, values={"shared": shared_asset_id}))
+    service = _service(paths, InstallStateStore(paths.workflow_store_dir / "install-state"))
+
+    service.remove_workflow(workflow_a)
+
+    assert shared_asset.exists()
+    assert gallery_file.exists()
+    assert user_local_file.exists()
+    assert user_state._path(workflow_b).exists()
+
+
+def test_remove_workflow_keeps_asset_referenced_by_remaining_library_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(engine_service_module, "settings", _settings(paths))
+    workflow_a = _write_imported_workflow(
+        paths, "publisher", "library-asset-a", "0.1.0", "capsule-library-a", _fp("1"), _fp("2")
+    )
+    workflow_b = _write_imported_workflow(
+        paths, "publisher", "library-asset-b", "0.1.0", "capsule-library-b", _fp("3"), _fp("4")
+    )
+    asset_id = "00000000-0000-0000-0000-000000000004.png"
+    asset_path = paths.dashboard_assets_dir / asset_id
+    asset_path.write_bytes(b"shared icon")
+    (paths.dashboard_assets_dir / f"{asset_id}.meta.json").write_text(
+        json.dumps({"asset_id": asset_id}),
+        encoding="utf-8",
+    )
+    user_state = UserStateService(paths.user_state_dir)
+    user_state.save(WorkflowUserState(workflow_id=workflow_a, values={"image": asset_id}))
+    library = WorkflowLibraryStore(paths.workflow_store_dir / "library")
+    library._write_json(library._metadata_path(workflow_b), {"icon": f"asset:{asset_id}"})
+    service = _service(paths, InstallStateStore(paths.workflow_store_dir / "install-state"))
+
+    service.remove_workflow(workflow_a)
+
+    assert asset_path.exists()
+
+
+def test_remove_workflow_preserves_assets_when_remaining_reference_state_is_unreadable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(engine_service_module, "settings", _settings(paths))
+    workflow_id = _write_imported_workflow(
+        paths, "publisher", "unreadable-state", "0.1.0", "capsule-unreadable", _fp("3"), _fp("4")
+    )
+    asset_id = "00000000-0000-0000-0000-000000000003.png"
+    asset_path = paths.dashboard_assets_dir / asset_id
+    asset_path.write_bytes(b"candidate")
+    (paths.dashboard_assets_dir / f"{asset_id}.meta.json").write_text(
+        json.dumps({"asset_id": asset_id}),
+        encoding="utf-8",
+    )
+    user_state = UserStateService(paths.user_state_dir)
+    user_state.save(WorkflowUserState(workflow_id=workflow_id, values={"image": asset_id}))
+    (paths.user_state_dir / "other-workflow.json").write_text("{not-json", encoding="utf-8")
+    service = _service(paths, InstallStateStore(paths.workflow_store_dir / "install-state"))
+
+    service.remove_workflow(workflow_id)
+
+    assert asset_path.exists()
+    events = service.log_store.list_events().events
+    assert any(
+        event.level == "warning"
+        and event.message == "Workflow removal completed with local cleanup warnings"
+        and any(
+            failure.get("operation") == "scan_dashboard_asset_references"
+            for failure in event.details.get("failures", [])
+        )
+        for event in events
+    )
+
+
+def test_remove_workflow_cancels_all_pending_runner_starts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(engine_service_module, "settings", _settings(paths))
+    workflow_id = _write_imported_workflow(
+        paths, "publisher", "queued-starts", "0.1.0", "capsule-queued", _fp("5"), _fp("6")
+    )
+    supervisor = RunnerSupervisor()
+    for queue_id in ("queue-1", "queue-2"):
+        supervisor.enqueue_runner_start(
+            workflow_id=workflow_id,
+            kind=QueuedRunnerStartKind.PENDING_MEMORY,
+            queue_id=queue_id,
+        )
+    supervisor.enqueue_runner_start(
+        workflow_id="other-workflow",
+        kind=QueuedRunnerStartKind.PENDING_MEMORY,
+        queue_id="queue-other",
+    )
+    service = _service(
+        paths,
+        InstallStateStore(paths.workflow_store_dir / "install-state"),
+        supervisor=supervisor,
+    )
+
+    service.remove_workflow(workflow_id)
+
+    assert supervisor.get_queued_runner_start("queue-1").status is QueuedRunnerStartStatus.CANCELED
+    assert supervisor.get_queued_runner_start("queue-2").status is QueuedRunnerStartStatus.CANCELED
+    assert supervisor.get_queued_runner_start("queue-other").status is QueuedRunnerStartStatus.QUEUED
 
 
 def test_remove_workflow_logs_and_continues_when_install_state_root_cannot_be_removed(
@@ -320,7 +531,11 @@ def _service(
     loader = WorkflowPackageLoader(
         paths.bundled_workflows_dir,
         imported_packages_dir=paths.workflow_packages_store_dir,
+        dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
     )
+    user_state_service = UserStateService(paths.user_state_dir)
+    asset_service = DashboardAssetService(paths.dashboard_assets_dir, log_store=log_store)
+    workflow_library_store = WorkflowLibraryStore(paths.workflow_store_dir / "library")
     return EngineService(
         loader,
         WorkflowPackageValidator(),
@@ -334,7 +549,14 @@ def _service(
         capsule_installer=_CapsuleInstaller(state_store),
         imported_package_store=imported_store,
         model_availability_service=_AvailabilityService(),
-        workflow_library_store=WorkflowLibraryStore(paths.workflow_store_dir / "library"),
+        workflow_library_store=workflow_library_store,
+        workflow_removal_cleanup_service=WorkflowRemovalCleanupService(
+            workflow_loader=loader,
+            user_state_service=user_state_service,
+            asset_service=asset_service,
+            workflow_library_store=workflow_library_store,
+            dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
+        ),
     )
 
 
