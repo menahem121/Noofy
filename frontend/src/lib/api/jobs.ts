@@ -27,6 +27,7 @@ export interface EngineJob {
   status: JobStatus;
   queue_id?: string | null;
   message?: string | null;
+  error_code?: "insufficient_memory" | "memory_oom" | null;
   memory_decision?: Record<string, unknown> | null;
   memory_status?: MemoryStatus | null;
 }
@@ -39,6 +40,8 @@ export interface JobProgress {
   max: number | null;
   current_node: string | null;
   message: string | null;
+  error_code?: "insufficient_memory" | "memory_oom" | null;
+  developer_details?: Record<string, unknown>;
   live_preview_sequence?: number | null;
   live_preview?: JobLivePreview | null;
   estimate?: JobProgressEstimate | null;
@@ -71,6 +74,9 @@ export interface JobResult {
   status: JobStatus;
   outputs: Array<Record<string, unknown>>;
   error: string | null;
+  error_code?: "insufficient_memory" | "memory_oom" | null;
+  user_message?: string | null;
+  developer_details?: Record<string, unknown>;
 }
 
 export interface DiagnosticEvent {

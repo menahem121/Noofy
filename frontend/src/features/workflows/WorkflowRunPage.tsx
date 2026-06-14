@@ -153,11 +153,16 @@ interface RunPageState {
 
 interface RunFailureDialogState {
   errorMessage: string;
+  userMessage: string | null;
+  errorCode: JobResult["error_code"];
+  developerDetails: Record<string, unknown>;
   jobId: string | null;
   logsLoading: boolean;
+  logsLoaded: boolean;
   logError: string | null;
   comfyuiLogs: DiagnosticEvent[];
   noofyLogs: DiagnosticEvent[];
+  detailsOpen: boolean;
   copied: boolean;
 }
 
@@ -176,6 +181,9 @@ interface FailedTrackedRun {
   handle: string;
   jobId: string | null;
   message: string;
+  userMessage?: string | null;
+  errorCode?: JobResult["error_code"];
+  developerDetails?: Record<string, unknown>;
 }
 
 type StoredLivePreview = JobLivePreview & { handle: string };
@@ -1096,17 +1104,38 @@ export function WorkflowRunPage({
     }
   }
 
-  async function openFailureDialog(errorMessage: string, jobId: string | null) {
+  async function openFailureDialog(
+    errorMessage: string,
+    jobId: string | null,
+    errorCode: JobResult["error_code"] = null,
+    userMessage: string | null = null,
+    developerDetails: Record<string, unknown> = {},
+  ) {
+    const memoryFailure = isMemoryFailureCode(errorCode);
     setFailureDialog({
       errorMessage,
+      userMessage,
+      errorCode,
+      developerDetails,
       jobId,
-      logsLoading: true,
+      logsLoading: !memoryFailure,
+      logsLoaded: false,
       logError: null,
       comfyuiLogs: [],
       noofyLogs: [],
+      detailsOpen: false,
       copied: false,
     });
+    if (memoryFailure) return;
+    await loadFailureLogsFor(errorMessage, jobId);
+  }
 
+  async function loadFailureLogsFor(errorMessage: string, jobId: string | null) {
+    setFailureDialog((current) =>
+      current && current.errorMessage === errorMessage && current.jobId === jobId
+        ? { ...current, logsLoading: true, logError: null, detailsOpen: true }
+        : current,
+    );
     try {
       const response = jobId ? await fetchJobLogs(jobId, { limit: logLimit }) : await fetchLogs({ limit: logLimit });
       const splitLogs = splitDiagnosticLogs(response.events);
@@ -1115,6 +1144,7 @@ export function WorkflowRunPage({
           ? {
               ...current,
               logsLoading: false,
+              logsLoaded: true,
               comfyuiLogs: splitLogs.comfyuiLogs,
               noofyLogs: splitLogs.noofyLogs,
             }
@@ -1131,6 +1161,11 @@ export function WorkflowRunPage({
           : current,
       );
     }
+  }
+
+  async function loadFailureLogs() {
+    if (!failureDialog || failureDialog.logsLoading) return;
+    await loadFailureLogsFor(failureDialog.errorMessage, failureDialog.jobId);
   }
 
   async function handleCopyFailureLogs() {
@@ -1349,7 +1384,14 @@ export function WorkflowRunPage({
       setState((current) => ({ ...current, result }));
     } else if (result.status === "failed") {
       setState((current) => ({ ...current, result }));
-      recordTrackedFailure(trackedRunHandle(nextRun), result.job_id, result.error ?? "The local engine could not finish this run.");
+      recordTrackedFailure(
+        trackedRunHandle(nextRun),
+        result.job_id,
+        result.error ?? "The local engine could not finish this run.",
+        result.error_code,
+        result.user_message,
+        result.developer_details,
+      );
     }
     if (livePreviewRef.current?.handle === trackedRunHandle(nextRun)) {
       clearLivePreview();
@@ -1366,12 +1408,19 @@ export function WorkflowRunPage({
     }
   }
 
-  function recordTrackedFailure(handle: string, jobId: string | null, message: string) {
+  function recordTrackedFailure(
+    handle: string,
+    jobId: string | null,
+    message: string,
+    errorCode: JobResult["error_code"] = null,
+    userMessage: string | null = null,
+    developerDetails: Record<string, unknown> = {},
+  ) {
     setFailedTrackedRuns((current) => {
       if (current.some((item) => item.handle === handle)) return current;
-      const next = [...current, { handle, jobId, message }];
+      const next = [...current, { handle, jobId, message, errorCode, userMessage, developerDetails }];
       if (next.length === 1) {
-        void openFailureDialog(message, jobId ?? handle);
+        void openFailureDialog(message, jobId ?? handle, errorCode, userMessage, developerDetails);
       } else if (next.length > 1) {
         setFailureDialog(null);
       }
@@ -1909,6 +1958,7 @@ export function WorkflowRunPage({
           <div>
             <strong>{memoryNotice?.title ?? memoryStatusTitle(memoryStatus.state)}</strong>
             <span>{memoryNotice?.message ?? memoryStatus.message}</span>
+            {isBlockingMemoryState(memoryStatus.state) ? <MemoryFailureSteps /> : null}
             {memoryDiagnostics ? (
               <details className="memory-status-developer-details">
                 <summary>Developer details</summary>
@@ -1926,6 +1976,8 @@ export function WorkflowRunPage({
       dialog={failureDialog}
       workflowId={workflowId}
       onClose={() => setFailureDialog(null)}
+      onToggleDetails={() => setFailureDialog((current) => current ? { ...current, detailsOpen: !current.detailsOpen } : current)}
+      onViewLogs={() => void loadFailureLogs()}
       onCopy={() => void handleCopyFailureLogs()}
     />
   ) : null;
@@ -1945,7 +1997,13 @@ export function WorkflowRunPage({
       failedRuns={failedTrackedRuns}
       expanded={failedRunSummaryOpen}
       onToggle={() => setFailedRunSummaryOpen((open) => !open)}
-      onOpenLogs={(run) => void openFailureDialog(run.message, run.jobId ?? run.handle)}
+      onOpenLogs={(run) => void openFailureDialog(
+        run.message,
+        run.jobId ?? run.handle,
+        run.errorCode,
+        run.userMessage ?? null,
+        run.developerDetails ?? {},
+      )}
     />
   ) : null;
   const workflowCancelConfirmationElement = workflowCancelConfirmation ? (
@@ -2074,6 +2132,7 @@ export function WorkflowRunPage({
               disabledReason: runDisabledReason,
               disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
               developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
+              showMemoryFailureSteps: Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state)),
             }}
             batchCount={batchCount}
             exportNoofyUrl={exportWorkflowUrl(workflowId)}
@@ -2514,21 +2573,28 @@ function WorkflowFailureDialog({
   dialog,
   workflowId,
   onClose,
+  onToggleDetails,
+  onViewLogs,
   onCopy,
 }: {
   dialog: RunFailureDialogState;
   workflowId: string;
   onClose: () => void;
+  onToggleDetails: () => void;
+  onViewLogs: () => void;
   onCopy: () => void;
 }) {
+  const memoryFailure = isMemoryFailureCode(dialog.errorCode);
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-failure-title">
       <section className="workflow-failure-modal">
         <header className="workflow-failure-modal__header">
           <div>
             <p className="eyebrow">Workflow run</p>
-            <h2 id="workflow-failure-title">Workflow failed</h2>
-            <p>{dialog.errorMessage}</p>
+            <h2 id="workflow-failure-title">
+              {memoryFailure ? "Not enough memory to run this workflow" : "Workflow failed"}
+            </h2>
+            <p>{memoryFailure ? dialog.userMessage ?? MEMORY_FAILURE_MESSAGE : dialog.errorMessage}</p>
           </div>
           <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>
             <X size={18} aria-hidden="true" />
@@ -2540,6 +2606,30 @@ function WorkflowFailureDialog({
             <span>Workflow: {workflowId}</span>
             {dialog.jobId ? <span>Job: {dialog.jobId}</span> : <span>Job: not created yet</span>}
           </div>
+          {memoryFailure ? <MemoryFailureSteps /> : null}
+          {memoryFailure ? (
+            <section className="workflow-input-error-details" aria-label="Developer details">
+              <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
+                {dialog.detailsOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+                Developer details
+              </button>
+              {dialog.detailsOpen ? (
+                <pre className="workflow-log-section__content workflow-input-error-details__content">
+                  {JSON.stringify(
+                    {
+                      error_code: dialog.errorCode,
+                      original_error: dialog.developerDetails.original_error ?? null,
+                      job_id: dialog.jobId,
+                      workflow_id: workflowId,
+                      developer_details: dialog.developerDetails,
+                    },
+                    null,
+                    2,
+                  )}
+                </pre>
+              ) : null}
+            </section>
+          ) : null}
           {dialog.logError ? (
             <div className="notice notice--warning notice--compact" role="status">
               <AlertCircle size={16} aria-hidden="true" />
@@ -2549,28 +2639,39 @@ function WorkflowFailureDialog({
               </div>
             </div>
           ) : null}
-          <DiagnosticLogSection
-            title="ComfyUI engine logs"
-            events={dialog.comfyuiLogs}
-            loading={dialog.logsLoading}
-            emptyMessage="No ComfyUI engine logs were returned for this failure."
-          />
-          <DiagnosticLogSection
-            title="Noofy logs"
-            events={dialog.noofyLogs}
-            loading={dialog.logsLoading}
-            emptyMessage="No Noofy logs were returned for this failure."
-          />
+          {!memoryFailure || dialog.logsLoaded || dialog.logsLoading ? (
+            <>
+              <DiagnosticLogSection
+                title="ComfyUI engine logs"
+                events={dialog.comfyuiLogs}
+                loading={dialog.logsLoading}
+                emptyMessage="No ComfyUI engine logs were returned for this failure."
+              />
+              <DiagnosticLogSection
+                title="Noofy logs"
+                events={dialog.noofyLogs}
+                loading={dialog.logsLoading}
+                emptyMessage="No Noofy logs were returned for this failure."
+              />
+            </>
+          ) : null}
         </div>
 
         <footer className="workflow-failure-modal__footer">
           <button className="secondary-button" type="button" onClick={onClose}>
             Close
           </button>
-          <button className="primary-button" type="button" onClick={onCopy}>
-            <Clipboard size={16} aria-hidden="true" />
-            {dialog.copied ? "Copied" : "Copy logs"}
-          </button>
+          <div className="workflow-input-error-modal__actions">
+            {memoryFailure ? (
+              <button className="secondary-button" type="button" onClick={onViewLogs}>
+                {dialog.logsLoaded ? "Refresh logs" : "Show details"}
+              </button>
+            ) : null}
+            <button className={memoryFailure ? "secondary-button" : "primary-button"} type="button" onClick={onCopy}>
+              <Clipboard size={16} aria-hidden="true" />
+              {dialog.copied ? "Copied" : memoryFailure ? "Copy details" : "Copy logs"}
+            </button>
+          </div>
         </footer>
       </section>
     </div>
@@ -3475,13 +3576,18 @@ function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) 
     `Workflow: ${workflowId}`,
     `Job: ${dialog.jobId ?? "not created yet"}`,
     `Error: ${dialog.errorMessage}`,
+    `Error code: ${dialog.errorCode ?? "none"}`,
+    dialog.userMessage ? `User message: ${dialog.userMessage}` : null,
+    "",
+    "Developer details",
+    JSON.stringify(dialog.developerDetails, null, 2),
     "",
     "ComfyUI engine logs",
-    formatDiagnosticEvents(dialog.comfyuiLogs) || "No ComfyUI engine logs were returned for this failure.",
+    formatDiagnosticEvents(dialog.comfyuiLogs) || (dialog.logsLoaded ? "No ComfyUI engine logs were returned for this failure." : "Logs were not loaded."),
     "",
     "Noofy logs",
-    formatDiagnosticEvents(dialog.noofyLogs) || "No Noofy logs were returned for this failure.",
-  ].join("\n");
+    formatDiagnosticEvents(dialog.noofyLogs) || (dialog.logsLoaded ? "No Noofy logs were returned for this failure." : "Logs were not loaded."),
+  ].filter((line): line is string => line !== null).join("\n");
 }
 
 function formatInputErrorReport(workflowId: string, dialog: RunInputErrorDialogState) {
@@ -3561,7 +3667,34 @@ interface MemoryStatusDisplay {
   message: string;
 }
 
+const MEMORY_FAILURE_MESSAGE =
+  "Your computer does not have enough available RAM or GPU memory for this workflow right now.";
+
+function isMemoryFailureCode(code: JobResult["error_code"]) {
+  return code === "memory_oom" || code === "insufficient_memory";
+}
+
+function MemoryFailureSteps() {
+  return (
+    <section className="workflow-memory-failure-steps" aria-label="Ways to free memory">
+      <strong>Try one of these:</strong>
+      <ul>
+        <li>Close other apps that may be using memory.</li>
+        <li>If available, reduce resolution, batch size, or video length.</li>
+        <li>Use a lighter model or workflow.</li>
+        <li>Free memory, then try again.</li>
+      </ul>
+    </section>
+  );
+}
+
 function memoryStatusDisplay(status: MemoryStatus): MemoryStatusDisplay {
+  if (isBlockingMemoryState(status.state)) {
+    return {
+      title: "Not enough memory to run this workflow",
+      message: MEMORY_FAILURE_MESSAGE,
+    };
+  }
   const fallback = memoryStatusFallback(status.state);
   const backendMessage = typeof status.message === "string" ? status.message.trim() : "";
   return {

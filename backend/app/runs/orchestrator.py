@@ -595,6 +595,7 @@ class RunOrchestrator:
                 engine="noofy",
                 status="blocked_by_memory",
                 message=memory_decision.user_message,
+                error_code="insufficient_memory",
                 memory_decision=memory_decision.model_dump(mode="json"),
                 memory_status=self.memory_status_payload(memory_decision),
             )

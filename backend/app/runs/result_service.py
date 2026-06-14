@@ -11,7 +11,13 @@ from app.history import HistoryService
 from app.runs.job_service import RunJobService
 from app.runs.progress_estimator import WorkflowProgressEstimator, progress_ready_for_result_fetch
 from app.runs.queue_service import WorkflowRunQueueService
+from app.runtime.memory.memory_governor import likely_memory_error
 from app.workflows.library import WorkflowLibraryStore
+
+MEMORY_FAILURE_TITLE = "Not enough memory to run this workflow"
+MEMORY_FAILURE_MESSAGE = (
+    "Your computer does not have enough available RAM or GPU memory for this workflow right now."
+)
 
 FinishMemorySampling = Callable[[str], Awaitable[None]]
 RecordMemoryObservation = Callable[[JobResult], None]
@@ -95,16 +101,17 @@ class RunResultService:
             self.record_memory_observation(result)
             suppress_library_history = result.job_id in self._suppressed_library_history_job_ids
             retry_job = await self.maybe_retry_after_memory_cleanup(result)
-            outcome: JobResult | EngineJob = retry_job or result
+            public_result = self._public_terminal_result(result)
+            outcome: JobResult | EngineJob = retry_job or public_result
             if self.progress_estimator is not None:
                 if retry_job is None:
-                    self.progress_estimator.finalize_result(result)
+                    self.progress_estimator.finalize_result(public_result)
                 else:
                     self.progress_estimator.discard_job(result.job_id)
             if retry_job is None:
-                self._register_gallery_run(result)
-                self._record_run_history_and_activity(result, [])
-                self._schedule_gallery_auto_saves(result)
+                self._register_gallery_run(public_result)
+                self._record_run_history_and_activity(public_result, [])
+                self._schedule_gallery_auto_saves(public_result)
             elif suppress_library_history:
                 self._suppressed_library_history_job_ids.discard(result.job_id)
                 self._suppressed_library_history_job_ids.add(retry_job.job_id)
@@ -114,6 +121,29 @@ class RunResultService:
             if self.request_run_dispatch is not None:
                 self.request_run_dispatch("job_finalized")
             return outcome
+
+    def _public_terminal_result(self, result: JobResult) -> JobResult:
+        if result.status != "failed" or not likely_memory_error(result.error):
+            return result
+        return result.model_copy(
+            update={
+                "error": MEMORY_FAILURE_TITLE,
+                "error_code": "memory_oom",
+                "user_message": MEMORY_FAILURE_MESSAGE,
+                "developer_details": {
+                    **result.developer_details,
+                    "error_code": "memory_oom",
+                    "original_error": result.error,
+                    "job_id": result.job_id,
+                    "workflow_id": self.job_workflows.get(result.job_id),
+                    "memory_status": {
+                        "state": "runtime_memory_oom",
+                        "message": MEMORY_FAILURE_MESSAGE,
+                    },
+                    "memory_decision": None,
+                },
+            }
+        )
 
     def _decorate_queue_id(self, result: JobResult | EngineJob, handle: str):
         queue_id = self._queue_id_for(handle)
@@ -144,7 +174,9 @@ class RunResultService:
             job_id=result.job_id,
             queue_id=result.queue_id,
             status=result.status,
-            message=result.error,
+            message=result.user_message or result.error,
+            error_code=result.error_code,
+            developer_details=result.developer_details,
         )
 
     async def stream_progress_events(self, job_id: str):

@@ -3134,6 +3134,7 @@ async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() ->
     assert coordinator is not None
     assert isinstance(job, EngineJob)
     assert job.status == "blocked_by_memory"
+    assert job.error_code == "insufficient_memory"
     assert job.memory_status is not None
     assert job.memory_status["state"] == "memory_cleanup_failed"
     assert job.memory_decision is not None
@@ -3449,6 +3450,9 @@ async def test_get_result_does_not_repeat_memory_retry(tmp_path: Path) -> None:
     assert isinstance(retry_job, EngineJob)
     assert isinstance(repeated_result, JobResult)
     assert repeated_result.status == "failed"
+    assert repeated_result.error_code == "memory_oom"
+    assert repeated_result.error == "Not enough memory to run this workflow"
+    assert repeated_result.developer_details["original_error"] == "CUDA out of memory"
     assert adapter.run_calls == [("job-1", {}), ("job-2", {})]
     assert service.memory_governor_metrics()["memory_retry_attempted"] == 1
     assert service.memory_governor_metrics()["memory_retry_blocked"] == 1

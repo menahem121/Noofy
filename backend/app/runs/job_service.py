@@ -6,12 +6,16 @@ from typing import cast
 from app.diagnostics import DiagnosticsStore
 from app.engine.adapter import EngineAdapter
 from app.engine.models import DiagnosticLogResponse, EngineOutputStream, JobProgress, LogLevel
+from app.runtime.memory.memory_governor import likely_memory_error
 from app.runtime.runners.supervisor import JobRunnerNotFoundError, RunnerStatus, RunnerSupervisor
 from app.runs.progress_estimator import WorkflowProgressEstimator
 from app.runs.queue_service import WorkflowRunQueueService, WorkflowRunQueueStatus
 from app.workflows.loader import WorkflowPackageLoader
 
 terminal_statuses = {"completed", "failed", "canceled"}
+MEMORY_FAILURE_MESSAGE = (
+    "Your computer does not have enough available RAM or GPU memory for this workflow right now."
+)
 
 
 class RunJobService:
@@ -58,7 +62,9 @@ class RunJobService:
             resolved.job_id,
             since_preview_sequence=since_preview_sequence,
         )
-        return self._decorate_progress(progress.model_copy(update={"queue_id": resolved.queue_id}))
+        return self._decorate_progress(
+            self._public_progress(progress).model_copy(update={"queue_id": resolved.queue_id})
+        )
 
     async def cancel_job(self, job_id: str) -> JobProgress:
         self.log_store.add("info", "Cancel requested", "runs.job_service", job_id=job_id)
@@ -131,6 +137,28 @@ class RunJobService:
                     reason=progress.message,
                 )
         return progress.model_copy(update={"queue_id": resolved.queue_id})
+
+    @staticmethod
+    def _public_progress(progress: JobProgress) -> JobProgress:
+        if progress.status != "failed" or not likely_memory_error(progress.message):
+            return progress
+        return progress.model_copy(
+            update={
+                "message": MEMORY_FAILURE_MESSAGE,
+                "error_code": "memory_oom",
+                "developer_details": {
+                    **progress.developer_details,
+                    "error_code": "memory_oom",
+                    "original_error": progress.message,
+                    "job_id": progress.job_id,
+                    "memory_status": {
+                        "state": "runtime_memory_oom",
+                        "message": MEMORY_FAILURE_MESSAGE,
+                    },
+                    "memory_decision": None,
+                },
+            }
+        )
 
     async def cancel_workflow_active_and_queued(self, workflow_id: str) -> dict[str, int]:
         summary = {

@@ -241,6 +241,25 @@
   background: rgba(8, 8, 10, 0.34);
 }
 
+.workflow-memory-failure-steps {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.workflow-memory-failure-steps strong {
+  color: var(--text-primary);
+}
+
+.workflow-memory-failure-steps ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.workflow-memory-failure-steps li + li {
+  margin-top: 4px;
+}
+
 .workflow-input-error-modal__actions {
   display: flex;
   flex-wrap: wrap;

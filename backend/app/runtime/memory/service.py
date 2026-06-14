@@ -1157,6 +1157,7 @@ def _memory_cleanup_failed_job(
         engine="noofy",
         status="blocked_by_memory",
         message="Noofy could not confirm that enough memory was released for this workflow.",
+        error_code="insufficient_memory",
         memory_decision=memory_decision,
         memory_status={
             **memory_user_status_for_decision(decision).model_dump(mode="json"),

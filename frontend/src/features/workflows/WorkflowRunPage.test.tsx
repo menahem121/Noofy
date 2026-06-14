@@ -2507,6 +2507,86 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByText(/Started best-effort job memory sampling/)).toBeInTheDocument();
   });
 
+  it("shows a friendly runtime memory error and loads logs only on request", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) return Promise.resolve(jsonResponse(workflowStatus));
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-memory",
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        }));
+      }
+      if (url.endsWith("/api/jobs/job-memory/progress")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-memory",
+          status: "failed",
+          value: null,
+          max: null,
+          current_node: "1",
+          message: "Not enough memory to run this workflow",
+          error_code: "memory_oom",
+        }));
+      }
+      if (url.endsWith("/api/jobs/job-memory/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-memory",
+          status: "failed",
+          outputs: [],
+          error: "Not enough memory to run this workflow",
+          error_code: "memory_oom",
+          user_message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
+          developer_details: {
+            original_error: "CUDA out of memory. Tried to allocate 1.19 GiB.",
+            workflow_id: "text_to_image_v0",
+            job_id: "job-memory",
+          },
+        }));
+      }
+      if (url.endsWith("/api/jobs/job-memory/logs?limit=200")) {
+        return Promise.resolve(jsonResponse({
+          events: [
+            { ...diagnosticEvent("comfyui.adapter", "ComfyUI execution failed", { message: "CUDA out of memory" }), job_id: "job-memory" },
+            { ...diagnosticEvent("memory_governor", "Recorded local workflow memory observation"), job_id: "job-memory" },
+          ],
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Not enough memory to run this workflow" });
+    expect(within(dialog).getByText("Your computer does not have enough available RAM or GPU memory for this workflow right now.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Close other apps that may be using memory.")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "ComfyUI engine logs" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/CUDA out of memory/)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/jobs/job-memory/logs?limit=200"))).toBe(false);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Developer details" }));
+    expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "ComfyUI engine logs" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show details" }));
+    expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy details" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).toContain("CUDA out of memory");
+  });
+
   it("shows a memory waiting state and tracks the queue id", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -2643,26 +2723,26 @@ describe("WorkflowRunPage", () => {
     {
       state: "memory_cleanup_failed",
       status: "blocked_by_memory",
-      title: "Memory cleanup did not finish",
-      message: "Noofy tried to free memory, but could not confirm that enough was released.",
+      title: "Not enough memory to run this workflow",
+      message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
     },
     {
       state: "blocked_external_pressure",
       status: "blocked_by_memory",
-      title: "Other GPU work is using memory",
-      message: "Another process is using GPU memory that Noofy cannot reclaim.",
+      title: "Not enough memory to run this workflow",
+      message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
     },
     {
       state: "blocked_exceeds_capacity",
       status: "blocked_by_memory",
-      title: "Workflow exceeds this machine's memory",
-      message: "This workflow appears to need more RAM or VRAM than this machine can safely provide.",
+      title: "Not enough memory to run this workflow",
+      message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
     },
     {
       state: "blocked_unattributed_pressure",
       status: "blocked_by_memory",
-      title: "Memory is in use but not reclaimable",
-      message: "Noofy sees memory pressure, but cannot safely attribute enough of it to memory it owns.",
+      title: "Not enough memory to run this workflow",
+      message: "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
     },
   ])("shows distinct memory copy for $state", async ({ state, status, title, message }) => {
     mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, {
@@ -2705,7 +2785,9 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
-    expect(screen.queryByText("Not enough memory")).not.toBeInTheDocument();
+    if (status === "blocked_by_memory") {
+      expect(screen.getByText("Close other apps that may be using memory.")).toBeInTheDocument();
+    }
     expect(screen.getByText("Developer details")).toBeInTheDocument();
     expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
   });

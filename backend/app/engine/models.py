@@ -20,6 +20,7 @@ JobStatus = Literal[
 ]
 LogLevel = Literal["debug", "info", "warning", "error"]
 RuntimeMode = Literal["external", "managed"]
+MemoryFailureCode = Literal["insufficient_memory", "memory_oom"]
 
 
 @dataclass
@@ -265,6 +266,7 @@ class EngineJob(BaseModel):
     status: JobStatus
     queue_id: str | None = None
     message: str | None = None
+    error_code: MemoryFailureCode | None = None
     memory_decision: dict[str, Any] | None = None
     memory_status: dict[str, Any] | None = None
 
@@ -303,6 +305,8 @@ class JobProgress(BaseModel):
     max: int | None = None
     current_node: str | None = None
     message: str | None = None
+    error_code: MemoryFailureCode | None = None
+    developer_details: dict[str, Any] = Field(default_factory=dict)
     live_preview_sequence: int | None = None
     live_preview: JobLivePreview | None = None
     estimate: JobProgressEstimate | None = None
@@ -314,6 +318,9 @@ class JobResult(BaseModel):
     status: JobStatus
     outputs: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+    error_code: MemoryFailureCode | None = None
+    user_message: str | None = None
+    developer_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class DiagnosticEvent(BaseModel):

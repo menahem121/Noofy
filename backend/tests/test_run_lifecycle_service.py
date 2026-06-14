@@ -189,6 +189,36 @@ async def test_job_service_routes_queue_alias_to_submitted_job() -> None:
 
 
 @pytest.mark.anyio
+async def test_job_service_returns_user_safe_memory_failure_progress() -> None:
+    class MemoryFailureProgressAdapter(_Adapter):
+        async def get_progress(
+            self,
+            job_id: str,
+            since_preview_sequence: int | None = None,
+        ) -> JobProgress:
+            del since_preview_sequence
+            self.progress_calls.append(job_id)
+            return JobProgress(
+                job_id=job_id,
+                status="failed",
+                current_node="1",
+                message="MPS backend out of memory",
+            )
+
+    adapter = MemoryFailureProgressAdapter()
+    service = RunJobService(runner_supervisor=_supervisor(adapter), log_store=LogStore())
+
+    progress = await service.get_progress("job-1")
+
+    assert progress.status == "failed"
+    assert progress.error_code == "memory_oom"
+    assert progress.message == (
+        "Your computer does not have enough available RAM or GPU memory for this workflow right now."
+    )
+    assert progress.developer_details["original_error"] == "MPS backend out of memory"
+
+
+@pytest.mark.anyio
 async def test_result_service_routes_submitted_queue_alias_to_real_job() -> None:
     adapter = _Adapter()
     supervisor = _supervisor(adapter)
@@ -340,6 +370,109 @@ async def test_run_result_service_finalizes_concurrent_terminal_reads_once() -> 
     assert adapter.result_calls == ["job-1", "job-1"]
     assert adapter.cancel_calls == []
     assert canceled.status == "completed"
+
+
+@pytest.mark.anyio
+async def test_run_result_service_returns_user_safe_memory_failure_and_preserves_details() -> None:
+    class MemoryFailureAdapter(_Adapter):
+        async def get_result(self, job_id: str) -> JobResult:
+            self.result_calls.append(job_id)
+            return JobResult(
+                job_id=job_id,
+                status="failed",
+                error="CUDA out of memory. Tried to allocate 1.19 GiB.",
+            )
+
+    adapter = MemoryFailureAdapter()
+    supervisor = _supervisor(adapter)
+    job_service = RunJobService(runner_supervisor=supervisor, log_store=LogStore())
+
+    async def finish_sampling(job_id: str) -> None:
+        return None
+
+    def record_observation(result: JobResult) -> None:
+        assert result.error == "CUDA out of memory. Tried to allocate 1.19 GiB."
+
+    async def maybe_retry(result: JobResult):
+        assert result.error == "CUDA out of memory. Tried to allocate 1.19 GiB."
+        return None
+
+    service = RunResultService(
+        job_service=job_service,
+        log_store=LogStore(),
+        job_workflows={"job-1": "wf"},
+        job_started_at={"job-1": datetime.now(UTC)},
+        job_run_snapshots={"job-1": _snapshot()},
+        finish_memory_sampling=finish_sampling,
+        record_memory_observation=record_observation,
+        maybe_retry_after_memory_cleanup=maybe_retry,
+    )
+    job_service.terminal_job_progress = service.terminal_progress
+
+    result = await service.get_result("job-1")
+    progress = service.terminal_progress("job-1")
+
+    assert isinstance(result, JobResult)
+    assert result.error_code == "memory_oom"
+    assert result.error == "Not enough memory to run this workflow"
+    assert result.user_message == (
+        "Your computer does not have enough available RAM or GPU memory for this workflow right now."
+    )
+    assert result.developer_details == {
+        "error_code": "memory_oom",
+        "original_error": "CUDA out of memory. Tried to allocate 1.19 GiB.",
+        "job_id": "job-1",
+        "workflow_id": "wf",
+        "memory_status": {
+            "state": "runtime_memory_oom",
+            "message": "Your computer does not have enough available RAM or GPU memory for this workflow right now.",
+        },
+        "memory_decision": None,
+    }
+    assert progress is not None
+    assert progress.error_code == "memory_oom"
+    assert progress.message == result.user_message
+    assert progress.developer_details["original_error"] == (
+        "CUDA out of memory. Tried to allocate 1.19 GiB."
+    )
+
+
+@pytest.mark.anyio
+async def test_run_result_service_keeps_non_memory_failure_unchanged() -> None:
+    class RuntimeFailureAdapter(_Adapter):
+        async def get_result(self, job_id: str) -> JobResult:
+            self.result_calls.append(job_id)
+            return JobResult(job_id=job_id, status="failed", error="Custom node failed")
+
+    adapter = RuntimeFailureAdapter()
+    supervisor = _supervisor(adapter)
+    job_service = RunJobService(runner_supervisor=supervisor, log_store=LogStore())
+
+    async def finish_sampling(job_id: str) -> None:
+        return None
+
+    service = RunResultService(
+        job_service=job_service,
+        log_store=LogStore(),
+        job_workflows={"job-1": "wf"},
+        job_started_at={"job-1": datetime.now(UTC)},
+        job_run_snapshots={"job-1": _snapshot()},
+        finish_memory_sampling=finish_sampling,
+        record_memory_observation=lambda result: None,
+        maybe_retry_after_memory_cleanup=lambda result: _no_retry(),
+    )
+
+    result = await service.get_result("job-1")
+
+    assert isinstance(result, JobResult)
+    assert result.error == "Custom node failed"
+    assert result.error_code is None
+    assert result.user_message is None
+    assert result.developer_details == {}
+
+
+async def _no_retry():
+    return None
 
 
 @pytest.mark.anyio

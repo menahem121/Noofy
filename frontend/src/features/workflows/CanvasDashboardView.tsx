@@ -104,6 +104,7 @@ export interface CanvasRunState {
   disabledReason?: string | null;
   disabledActionLabel?: string | null;
   developerDetails?: string | null;
+  showMemoryFailureSteps?: boolean;
 }
 
 export interface CanvasActionBarPosition {
@@ -752,6 +753,17 @@ export function CanvasDashboardView({
                   <div className="canvas-action-cluster__reason-content">
                     {runState.statusTitle ? <strong>{runState.statusTitle}</strong> : null}
                     <span>{runState.statusMessage ?? runState.disabledReason}</span>
+                    {runState.showMemoryFailureSteps ? (
+                      <section className="workflow-memory-failure-steps" aria-label="Ways to free memory">
+                        <strong>Try one of these:</strong>
+                        <ul>
+                          <li>Close other apps that may be using memory.</li>
+                          <li>If available, reduce resolution, batch size, or video length.</li>
+                          <li>Use a lighter model or workflow.</li>
+                          <li>Free memory, then try again.</li>
+                        </ul>
+                      </section>
+                    ) : null}
                     {runState.developerDetails ? (
                       <details className="memory-status-developer-details">
                         <summary>Developer details</summary>
