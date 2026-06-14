@@ -2208,6 +2208,8 @@ button.dashboard-image-input__surface {
 .mask-editor {
   display: grid;
   width: min(1120px, 100%);
+  /* Give the measured canvas stage a definite viewport-bounded height. */
+  height: min(820px, calc(100vh - 48px));
   max-height: min(820px, calc(100vh - 48px));
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -2348,6 +2350,7 @@ button.dashboard-image-input__surface {
 
 @media (max-width: 820px) {
   .mask-editor {
+    height: calc(100vh - 24px);
     max-height: calc(100vh - 24px);
   }
 

@@ -13,30 +13,51 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
-function mockMaskEditorCanvas() {
+function mockMaskEditorCanvas({
+  imageWidth = 2,
+  imageHeight = 1,
+  stageWidth = 100,
+  stageHeight = 50,
+}: {
+  imageWidth?: number;
+  imageHeight?: number;
+  stageWidth?: number;
+  stageHeight?: number;
+} = {}) {
   const calls: string[] = [];
   const contexts = new WeakMap<HTMLCanvasElement, any>();
   vi.stubGlobal("Image", class {
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
-    naturalWidth = 2;
-    naturalHeight = 1;
-    width = 2;
-    height = 1;
+    naturalWidth = imageWidth;
+    naturalHeight = imageHeight;
+    width = imageWidth;
+    height = imageHeight;
 
     set src(_value: string) {
       queueMicrotask(() => this.onload?.());
     }
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: stageWidth,
+    bottom: stageHeight,
+    width: stageWidth,
+    height: stageHeight,
+    toJSON: () => ({}),
   });
   vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
     left: 0,
     top: 0,
-    right: 100,
-    bottom: 50,
-    width: 100,
-    height: 50,
+    right: stageWidth,
+    bottom: stageHeight,
+    width: stageWidth,
+    height: stageHeight,
     toJSON: () => ({}),
   });
   Object.defineProperty(HTMLCanvasElement.prototype, "hasPointerCapture", {
@@ -532,6 +553,55 @@ describe("DashboardInputControl", () => {
     await waitFor(() => {
       expect(prepareGalleryMask).toHaveBeenCalledWith("image", "gallery-image-1");
       expect(screen.getByRole("dialog", { name: "Mask" })).toBeInTheDocument();
+    });
+  });
+
+  it("contains a square image within the available mask editor stage", async () => {
+    mockMaskEditorCanvas({
+      imageWidth: 1000,
+      imageHeight: 1000,
+      stageWidth: 800,
+      stageHeight: 500,
+    });
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(jsonResponse({
+          asset_id: "12345678-1234-1234-1234-123456789abc.png",
+          original_filename: "square.png",
+          content_type: "image/png",
+          kind: "image",
+        }));
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onImageMaskApply={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
+    await waitFor(() => {
+      const canvases = document.querySelectorAll<HTMLCanvasElement>(".mask-editor__canvas");
+      expect(canvases).toHaveLength(3);
+      canvases.forEach((canvas) => {
+        expect(canvas.style.width).toBe("500px");
+        expect(canvas.style.height).toBe("500px");
+      });
     });
   });
 

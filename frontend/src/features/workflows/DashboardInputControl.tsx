@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -1215,6 +1216,7 @@ function ImageMaskEditorModal({
   onApply: (mask: Blob) => Promise<void>;
   onClose: () => void;
 }) {
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1227,11 +1229,47 @@ function ImageMaskEditorModal({
   const [opacity, setOpacity] = useState(1);
   const [ready, setReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [sourceImageSize, setSourceImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
+  const fittedCanvasSize = sourceImageSize && stageSize
+    ? fitContainedSize(sourceImageSize, stageSize)
+    : null;
+  const canvasStyle: CSSProperties = fittedCanvasSize
+    ? { width: fittedCanvasSize.width, height: fittedCanvasSize.height }
+    : { visibility: "hidden" };
+
+  useLayoutEffect(() => {
+    function measureStage() {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const rect = stage.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      setStageSize((current) => (
+        current?.width === rect.width && current.height === rect.height
+          ? current
+          : { width: rect.width, height: rect.height }
+      ));
+    }
+
+    measureStage();
+    const stage = stageRef.current;
+    if (!stage) return undefined;
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measureStage);
+      observer.observe(stage);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", measureStage);
+    return () => window.removeEventListener("resize", measureStage);
+  }, []);
 
   useEffect(() => {
     let canceled = false;
     setReady(false);
     setLocalError(null);
+    setSourceImageSize(null);
 
     async function loadCanvases() {
       const sourceImage = await loadCanvasImage(sourceUrl);
@@ -1285,6 +1323,7 @@ function ImageMaskEditorModal({
       }
 
       initialMaskRef.current = maskContext.getImageData(0, 0, width, height);
+      setSourceImageSize({ width, height });
       setReady(true);
     }
 
@@ -1472,11 +1511,12 @@ function ImageMaskEditorModal({
         </header>
 
         <div className="mask-editor__body">
-          <div className="mask-editor__stage" aria-busy={!ready}>
-            <canvas className="mask-editor__canvas mask-editor__canvas--image" ref={baseCanvasRef} />
+          <div className="mask-editor__stage" ref={stageRef} aria-busy={!ready}>
+            <canvas className="mask-editor__canvas mask-editor__canvas--image" ref={baseCanvasRef} style={canvasStyle} />
             <canvas
               className="mask-editor__canvas mask-editor__canvas--mask"
               ref={maskCanvasRef}
+              style={canvasStyle}
               aria-label="Mask drawing area"
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
@@ -1484,7 +1524,7 @@ function ImageMaskEditorModal({
               onPointerCancel={stopDrawing}
               onPointerLeave={stopDrawing}
             />
-            <canvas className="mask-editor__canvas mask-editor__canvas--preview" ref={previewCanvasRef} aria-hidden="true" />
+            <canvas className="mask-editor__canvas mask-editor__canvas--preview" ref={previewCanvasRef} style={canvasStyle} aria-hidden="true" />
             {!ready ? <span className="mask-editor__loading">Loading image...</span> : null}
           </div>
 
@@ -1539,6 +1579,17 @@ function ImageMaskEditorModal({
     </div>,
     document.body,
   );
+}
+
+function fitContainedSize(
+  source: { width: number; height: number },
+  container: { width: number; height: number },
+) {
+  const scale = Math.min(1, container.width / source.width, container.height / source.height);
+  return {
+    width: Math.max(1, source.width * scale),
+    height: Math.max(1, source.height * scale),
+  };
 }
 
 function loadCanvasImage(url: string): Promise<HTMLImageElement> {
