@@ -8,14 +8,10 @@ import {
   CheckCircle2,
   Download,
   File as FileIcon,
-  FileJson,
   Image,
   Loader2,
-  Play,
   RotateCcw,
-  Share2,
   SlidersHorizontal,
-  Square,
   X,
 } from "lucide-react";
 
@@ -112,6 +108,7 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { vanishedRunRecoveryMessage } from "../app/sessionRestore";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
+import { WorkflowActionBar, type WorkflowActionBarRunState } from "./WorkflowActionBar";
 import { GallerySaveAction } from "./GallerySaveAction";
 import { CivitaiLoraBrowserModal } from "./CivitaiLoraBrowserModal";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
@@ -119,7 +116,6 @@ import { RetainedImage } from "./RetainedImage";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
-import { ViewportMenu } from "./ViewportMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import {
   DashboardInputControl,
@@ -1858,6 +1854,20 @@ export function WorkflowRunPage({
     }
   }
 
+  const workflowActionBarRunState: WorkflowActionBarRunState = {
+    isRunning,
+    canRun,
+    canCancel,
+    memoryLoaded: showMemoryLoadedPill,
+    cancelTitle: cancelTooltip,
+    showStatusNotice: showUserFacingMemoryNotice,
+    statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
+    statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
+    disabledReason: memoryRefusesRun ? null : runDisabledReason,
+    disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
+    developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
+  };
+
   const pageHeader = (
     <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
       <div>
@@ -1880,29 +1890,34 @@ export function WorkflowRunPage({
             : "Describe the image you want, then let Noofy run the local workflow in the background."}
         </p>
       </div>
-      <div className="button-row">
-        <button
-          className="secondary-button"
-          type="button"
-          aria-label="Share / Save as .noofy"
-          onClick={() => setExportDialog({ extension: ".noofy", url: exportWorkflowUrl(workflowId) })}
-        >
-          <Share2 size={15} aria-hidden="true" />
-          Share
-        </button>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => setExportDialog({ extension: ".json", url: exportWorkflowComfyJsonUrl(workflowId) })}
-        >
-          <FileJson size={15} aria-hidden="true" />
-          Export JSON
-        </button>
-        <button className="secondary-button" type="button" onClick={() => void loadRequirements()}>
-          <RotateCcw size={16} aria-hidden="true" />
-          Check Again
-        </button>
-      </div>
+      <WorkflowActionBar
+        className="workflow-action-bar--inline"
+        runState={{
+          ...workflowActionBarRunState,
+          memoryLoaded: false,
+          showStatusNotice: false,
+          disabledReason: null,
+          disabledActionLabel: null,
+          developerDetails: null,
+        }}
+        batchCount={batchCount}
+        switchViewLabel="Switch to Canvas view"
+        onRun={() => void handleRun()}
+        onBatchCountChange={setBatchCount}
+        onCancel={() => void handleCancel()}
+        onSwitchView={() => setViewMode("canvas")}
+        onExportNoofy={() => setExportDialog({ extension: ".noofy", url: exportWorkflowUrl(workflowId) })}
+        onExportComfyJson={() => setExportDialog({ extension: ".json", url: exportWorkflowComfyJsonUrl(workflowId) })}
+        onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
+        onRestoreDefaults={() => void handleRestoreDefaults()}
+        onEnterEditLayout={() => {
+          handleEnterEditLayout();
+          setViewMode("canvas");
+        }}
+        onSaveLayout={() => void handleSaveLayout()}
+        onCancelLayoutEdit={handleCancelLayoutEdit}
+        onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
+      />
     </section>
   );
 
@@ -2176,19 +2191,7 @@ export function WorkflowRunPage({
             layoutOverrides={draftLayoutOverrides ?? layoutOverrides}
             actionBarPosition={canvasActionBarPosition}
             isEditingLayout={isEditingLayout}
-            runState={{
-              isRunning,
-              canRun,
-              canCancel,
-              memoryLoaded: showMemoryLoadedPill,
-              cancelTitle: cancelTooltip,
-              showStatusNotice: showUserFacingMemoryNotice,
-              statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
-              statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
-              disabledReason: memoryRefusesRun ? null : runDisabledReason,
-              disabledActionLabel: hasRequiredModelFixAction ? "Download" : null,
-              developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
-            }}
+            runState={workflowActionBarRunState}
             batchCount={batchCount}
             exportNoofyUrl={exportWorkflowUrl(workflowId)}
             exportComfyJsonUrl={exportWorkflowComfyJsonUrl(workflowId)}
@@ -2305,30 +2308,6 @@ export function WorkflowRunPage({
             />
           )}
 
-          <div className="button-row">
-            <BatchCountStepper value={batchCount} onChange={setBatchCount} />
-            <button
-              className="primary-button workflow-run-action-button"
-              type="button"
-              disabled={!canRun}
-              aria-label="Run Workflow"
-              title={isRunning ? "Queue another run behind the current one" : "Run Workflow"}
-              onClick={() => void handleRun()}
-            >
-              {isRunning ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-            </button>
-            <button
-              className="secondary-button workflow-run-action-button"
-              type="button"
-              disabled={!canCancel}
-              aria-label="Cancel Workflow"
-              title={cancelTooltip}
-              onClick={() => void handleCancel()}
-            >
-              <Square size={16} aria-hidden="true" />
-            </button>
-            <ClassicWorkflowOptionsMenu onSwitchView={() => setViewMode("canvas")} />
-          </div>
         </form>
 
         <aside className="preview-panel">
@@ -2437,71 +2416,6 @@ export function WorkflowRunPage({
   );
 }
 
-function ClassicWorkflowOptionsMenu({ onSwitchView }: { onSwitchView: () => void }) {
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const optionsRef = useRef<HTMLDivElement | null>(null);
-  const optionsTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const optionsMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!optionsOpen) return;
-
-    function handlePointerDown(event: globalThis.PointerEvent) {
-      const target = event.target;
-      if (
-        target instanceof Node
-        && (optionsRef.current?.contains(target) || optionsMenuRef.current?.contains(target))
-      ) return;
-      setOptionsOpen(false);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOptionsOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [optionsOpen]);
-
-  return (
-    <div className="canvas-options-menu" ref={optionsRef}>
-      <button
-        ref={optionsTriggerRef}
-        className="icon-button canvas-options-menu__trigger"
-        type="button"
-        aria-label="Workflow options"
-        aria-haspopup="menu"
-        aria-expanded={optionsOpen}
-        title="Workflow options"
-        onClick={() => setOptionsOpen((open) => !open)}
-      >
-        <SlidersHorizontal size={16} aria-hidden="true" />
-      </button>
-      <ViewportMenu
-        open={optionsOpen}
-        triggerRef={optionsTriggerRef}
-        menuRef={optionsMenuRef}
-      >
-        <button
-          className="canvas-options-menu__item"
-          role="menuitem"
-          type="button"
-          onClick={() => {
-            setOptionsOpen(false);
-            onSwitchView();
-          }}
-        >
-          Switch to Canvas view
-        </button>
-      </ViewportMenu>
-    </div>
-  );
-}
-
 function MemoryLoadedPill() {
   return (
     <div
@@ -2511,30 +2425,6 @@ function MemoryLoadedPill() {
     >
       <CheckCircle2 size={13} aria-hidden="true" />
       <span>Models loaded</span>
-    </div>
-  );
-}
-
-function BatchCountStepper({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  const normalized = clampBatchCount(value);
-  return (
-    <div className="batch-count-stepper" aria-label="Batch count">
-      <input
-        type="number"
-        min={1}
-        max={99}
-        value={normalized}
-        aria-label="Batch count"
-        onChange={(event) => onChange(clampBatchCount(Number(event.target.value)))}
-      />
-      <div className="batch-count-stepper__buttons">
-        <button type="button" aria-label="Increase batch count" onClick={() => onChange(clampBatchCount(normalized + 1))}>
-          <ChevronUp size={12} aria-hidden="true" />
-        </button>
-        <button type="button" aria-label="Decrease batch count" onClick={() => onChange(clampBatchCount(normalized - 1))}>
-          <ChevronDown size={12} aria-hidden="true" />
-        </button>
-      </div>
     </div>
   );
 }

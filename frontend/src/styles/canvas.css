@@ -68,6 +68,12 @@
   justify-content: flex-start;
 }
 
+.workflow-action-bar--inline {
+  position: static;
+  align-self: flex-start;
+  flex: 0 0 auto;
+}
+
 .canvas-action-cluster--dragging {
   cursor: grabbing;
 }

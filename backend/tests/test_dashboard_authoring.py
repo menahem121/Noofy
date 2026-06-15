@@ -1613,6 +1613,46 @@ def test_get_bindable_inputs_uses_object_info_options_for_dropdowns(tmp_path: Pa
     assert inputs_by_name["scheduler"]["options"] == ["normal", "karras"]
 
 
+def test_get_bindable_inputs_uses_modern_combo_metadata_for_custom_node_dropdowns() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "12": {
+                "class_type": "CustomStyleSelector",
+                "inputs": {
+                    "style": "cinematic",
+                },
+            }
+        },
+        object_info={
+            "CustomStyleSelector": {
+                "input": {
+                    "required": {
+                        "style": [
+                            "COMBO",
+                            {
+                                "options": ["cinematic", "illustration", "cinematic"],
+                                "display_name": "Rendering style",
+                                "tooltip": "Choose the custom-node rendering style.",
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    assert nodes[0]["inputs"][0] == {
+        "input_name": "style",
+        "current_value": "cinematic",
+        "kind": "select",
+        "suggested_widget_type": "select",
+        "widget_types": ["select", "string_field"],
+        "options": ["cinematic", "illustration"],
+        "hint": "Choose the custom-node rendering style.",
+        "suggested_label": "Rendering style",
+    }
+
+
 def test_get_bindable_inputs_suggests_generic_file_only_for_strong_file_signals() -> None:
     nodes = _classify_graph_inputs(
         {

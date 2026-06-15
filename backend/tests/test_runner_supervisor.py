@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
 from app.diagnostics import LogStore
@@ -1654,18 +1655,49 @@ def test_engine_service_runner_lease_reports_no_bound_runner() -> None:
     }
 
 
-def test_engine_service_uses_constructor_dashboard_dependencies() -> None:
+def test_engine_service_uses_constructor_dashboard_dependencies(monkeypatch) -> None:
+    seen_object_info: list[dict[str, object] | None] = []
+
     class DashboardAuthoring:
         def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
-            del kwargs
+            seen_object_info.append(kwargs.get("object_info"))
             return {"workflow_id": workflow_id, "inputs": []}
 
     class Exporter:
         def export_archive(self, workflow_id: str) -> tuple[bytes, str]:
             return b"archive", f"{workflow_id}.noofy"
 
+    requested_urls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"CustomStyleSelector": {"input": {}}}
+
+    class Client:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            del args
+
+        def get(self, url: str) -> Response:
+            requested_urls.append(url)
+            return Response()
+
+    monkeypatch.setattr("app.engine.service.httpx.Client", Client)
     supervisor = RunnerSupervisor()
     supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
         workflow_validator=WorkflowPackageValidator(),
@@ -1680,10 +1712,75 @@ def test_engine_service_uses_constructor_dashboard_dependencies() -> None:
         "workflow_id": "text_to_image_v0",
         "inputs": [],
     }
+    assert requested_urls == ["http://127.0.0.1:9001/object_info"]
+    assert seen_object_info == [{"CustomStyleSelector": {"input": {}}}]
     assert service.export_workflow_archive("text_to_image_v0") == (
         b"archive",
         "text_to_image_v0.noofy",
     )
+
+
+def test_engine_service_falls_back_to_core_object_info_when_bound_runner_is_unavailable(
+    monkeypatch,
+) -> None:
+    seen_object_info: list[dict[str, object] | None] = []
+
+    class DashboardAuthoring:
+        def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
+            seen_object_info.append(kwargs.get("object_info"))
+            return {"workflow_id": workflow_id, "inputs": []}
+
+    requested_urls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"KSampler": {"input": {}}}
+
+    class Client:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            del args
+
+        def get(self, url: str) -> Response:
+            requested_urls.append(url)
+            if url.startswith("http://127.0.0.1:9001"):
+                raise httpx.ConnectError("runner stopped")
+            return Response()
+
+    monkeypatch.setattr("app.engine.service.httpx.Client", Client)
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), RecordingAdapter())
+    supervisor.upsert_runner(
+        _isolated_descriptor(status=RunnerStatus.READY),
+        RecordingAdapter(),
+    )
+    supervisor.bind_workflow_runner("text_to_image_v0", "isolated-1")
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        dashboard_authoring=DashboardAuthoring(),
+    )
+
+    assert service.get_bindable_inputs("text_to_image_v0") == {
+        "workflow_id": "text_to_image_v0",
+        "inputs": [],
+    }
+    assert requested_urls == [
+        "http://127.0.0.1:9001/object_info",
+        "http://127.0.0.1:8188/object_info",
+    ]
+    assert seen_object_info == [{"KSampler": {"input": {}}}]
 
 
 @pytest.mark.anyio

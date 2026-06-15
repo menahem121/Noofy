@@ -715,6 +715,8 @@ def _classify_graph_inputs(
                 input_record["options"] = option_spec.options
             if option_spec.tooltip:
                 input_record["hint"] = option_spec.tooltip
+            if option_spec.display_name:
+                input_record["suggested_label"] = option_spec.display_name
             if node_type == "CLIPTextEncode" and input_name == "text":
                 input_record["suggested_label"] = _clip_text_prompt_label(
                     graph,
@@ -1320,9 +1322,15 @@ def _is_file_output_node_type(node_type: str) -> bool:
 
 
 class _ComfyInputOptionSpec:
-    def __init__(self, options: list[str] | None = None, tooltip: str | None = None) -> None:
+    def __init__(
+        self,
+        options: list[str] | None = None,
+        tooltip: str | None = None,
+        display_name: str | None = None,
+    ) -> None:
         self.options = options or []
         self.tooltip = tooltip
+        self.display_name = display_name
 
 
 def _options_for_node_input(
@@ -1355,31 +1363,42 @@ def _options_from_input_spec(input_spec: Any) -> _ComfyInputOptionSpec:
         return _ComfyInputOptionSpec()
 
     raw_options = input_spec[0]
+    metadata = _metadata_from_input_spec(input_spec)
     if not isinstance(raw_options, (list, tuple)):
-        return _ComfyInputOptionSpec(tooltip=_tooltip_from_input_spec(input_spec))
+        raw_options = metadata.get("options")
 
-    options = [
-        str(option)
-        for option in raw_options
-        if isinstance(option, (str, int, float, bool))
-    ]
+    options = (
+        [
+            str(option)
+            for option in raw_options
+            if isinstance(option, (str, int, float, bool))
+        ]
+        if isinstance(raw_options, (list, tuple))
+        else []
+    )
     if not options:
-        return _ComfyInputOptionSpec(tooltip=_tooltip_from_input_spec(input_spec))
+        return _ComfyInputOptionSpec(
+            tooltip=_metadata_string(metadata, "tooltip"),
+            display_name=_metadata_string(metadata, "display_name"),
+        )
 
     return _ComfyInputOptionSpec(
         options=_dedupe_preserving_order(options),
-        tooltip=_tooltip_from_input_spec(input_spec),
+        tooltip=_metadata_string(metadata, "tooltip"),
+        display_name=_metadata_string(metadata, "display_name"),
     )
 
 
-def _tooltip_from_input_spec(input_spec: Any) -> str | None:
+def _metadata_from_input_spec(input_spec: Any) -> Mapping[str, Any]:
     if not isinstance(input_spec, (list, tuple)) or len(input_spec) < 2:
-        return None
+        return {}
     metadata = input_spec[1]
-    if not isinstance(metadata, Mapping):
-        return None
-    tooltip = metadata.get("tooltip")
-    return tooltip if isinstance(tooltip, str) and tooltip.strip() else None
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _metadata_string(metadata: Mapping[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _dedupe_preserving_order(values: list[str]) -> list[str]:

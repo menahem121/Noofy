@@ -173,7 +173,7 @@ class EngineService:
         self.workflow_removal_cleanup_service = workflow_removal_cleanup_service
         self.model_ownership_store = None
         if self.dashboard_authoring is not None:
-            self.dashboard_authoring.object_info_provider = self._fetch_core_object_info_for_authoring
+            self.dashboard_authoring.object_info_provider = self._fetch_object_info_for_authoring
         self.workflow_library_service: WorkflowLibraryService = workflow_library_service or WorkflowLibraryService(
             workflow_loader=self.workflow_loader,
             model_availability_service=self.model_availability_service,
@@ -979,7 +979,7 @@ class EngineService:
         try:
             return self.dashboard_authoring.get_bindable_inputs(
                 workflow_id,
-                object_info=self._fetch_core_object_info_for_authoring(workflow_id),
+                object_info=self._fetch_object_info_for_authoring(workflow_id),
             )
         except DashboardAuthoringError as exc:
             raise KeyError(str(exc)) from exc
@@ -1299,56 +1299,72 @@ class EngineService:
     def _available_model_keys(self, models: list[ModelInfo]) -> set[tuple[str, str]]:
         return {(model.folder, model.filename) for model in models}
 
-    def _fetch_core_object_info_for_authoring(self, workflow_id: str) -> dict[str, Any] | None:
+    def _fetch_object_info_for_authoring(self, workflow_id: str) -> dict[str, Any] | None:
+        candidates: list[RunnerDescriptor] = []
+        bound_runner = self.runner_supervisor.runner_for_workflow(workflow_id)
+        if bound_runner is not None:
+            candidates.append(bound_runner)
         try:
-            adapter = self._core_adapter()
+            core_runner = self.runner_supervisor.core_runner()
         except Exception as exc:
+            if not candidates:
+                self.log_store.add(
+                    "debug",
+                    "ComfyUI object info unavailable for dashboard authoring",
+                    "workflow.authoring",
+                    workflow_id=workflow_id,
+                    details={"reason": str(exc)},
+                )
+                return None
+        else:
+            if all(candidate.runner_id != core_runner.runner_id for candidate in candidates):
+                candidates.append(core_runner)
+
+        for runner in candidates:
+            try:
+                with httpx.Client(timeout=2.0) as client:
+                    response = client.get(f"{runner.base_url.rstrip('/')}/object_info")
+                    response.raise_for_status()
+                    payload = response.json()
+            except Exception as exc:
+                self.log_store.add(
+                    "debug",
+                    "Failed to enrich bindable inputs from ComfyUI object info",
+                    "workflow.authoring",
+                    workflow_id=workflow_id,
+                    details={
+                        "runner_id": runner.runner_id,
+                        "base_url": runner.base_url,
+                        "error": str(exc),
+                    },
+                )
+                continue
+
+            if not isinstance(payload, dict):
+                self.log_store.add(
+                    "warning",
+                    "ComfyUI object info returned an unexpected payload",
+                    "workflow.authoring",
+                    workflow_id=workflow_id,
+                    details={
+                        "runner_id": runner.runner_id,
+                        "payload_type": type(payload).__name__,
+                    },
+                )
+                continue
+
             self.log_store.add(
                 "debug",
-                "ComfyUI object info unavailable for dashboard authoring",
+                "Enriched bindable inputs from ComfyUI object info",
                 "workflow.authoring",
                 workflow_id=workflow_id,
-                details={"reason": str(exc)},
+                details={
+                    "runner_id": runner.runner_id,
+                    "node_definition_count": len(payload),
+                },
             )
-            return None
-
-        base_url = getattr(adapter, "base_url", None)
-        if not isinstance(base_url, str) or not base_url:
-            return None
-
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                response = client.get(f"{base_url.rstrip('/')}/object_info")
-                response.raise_for_status()
-                payload = response.json()
-        except Exception as exc:
-            self.log_store.add(
-                "debug",
-                "Failed to enrich bindable inputs from ComfyUI object info",
-                "workflow.authoring",
-                workflow_id=workflow_id,
-                details={"base_url": base_url, "error": str(exc)},
-            )
-            return None
-
-        if not isinstance(payload, dict):
-            self.log_store.add(
-                "warning",
-                "ComfyUI object info returned an unexpected payload",
-                "workflow.authoring",
-                workflow_id=workflow_id,
-                details={"payload_type": type(payload).__name__},
-            )
-            return None
-
-        self.log_store.add(
-            "debug",
-            "Enriched bindable inputs from ComfyUI object info",
-            "workflow.authoring",
-            workflow_id=workflow_id,
-            details={"node_definition_count": len(payload)},
-        )
-        return payload
+            return payload
+        return None
 
     def _apply_input_bindings(self, package: WorkflowPackage, inputs: dict[str, Any]) -> dict[str, Any]:
         return apply_input_bindings(package, inputs)

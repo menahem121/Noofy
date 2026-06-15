@@ -5257,7 +5257,12 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Workflow actions")).toHaveClass("workflow-action-bar--inline");
+    expect(screen.getAllByRole("button", { name: /run workflow/i })).toHaveLength(1);
     expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share / Save as .noofy" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export JSON" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check Again" })).not.toBeInTheDocument();
   });
 
   it("switches immediately between Canvas and Classic views and persists the preference", async () => {
