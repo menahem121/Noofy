@@ -899,7 +899,7 @@ describe("HomePage", () => {
 
     renderHomePage();
 
-    expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
+    expect(await screen.findByText("Noofy is reconnecting")).toBeInTheDocument();
     expect(screen.getAllByText("Service offline")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Reconnect")).toBeInTheDocument();
@@ -980,7 +980,7 @@ describe("HomePage", () => {
     await act(async () => {});
   });
 
-  it("preserves cached workflows and shows a warning when workflow refresh fails", async () => {
+  it("preserves cached workflows without warning on a transient refresh failure", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -998,7 +998,10 @@ describe("HomePage", () => {
       },
     });
 
-    expect(await screen.findByText("Workflow library could not refresh")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/workflows", expect.any(Object));
+    });
+    expect(screen.queryByText("Workflow library could not refresh")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Cached Workflow" })).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });

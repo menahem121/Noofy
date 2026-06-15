@@ -503,15 +503,15 @@ export function HomePage({
   const searchQueryActive = debouncedHomeSearch.trim().length > 0;
   const showSearchDropdown = searchDropdownOpen && searchQueryActive;
   const homeWarning =
-    workflowLibrary.error
+    runtimeStatus.backendStatus === "unreachable"
       ? {
-          title: "Workflow library could not refresh",
-          message: "Noofy is keeping your last loaded workflows visible while it retries in the background.",
+          title: "Noofy is reconnecting",
+          message: "The page is keeping the last loaded workflows visible while the local app service returns.",
         }
-      : runtimeStatus.backendStatus === "unreachable"
+      : workflowLibrary.error
         ? {
-            title: "Noofy is reconnecting",
-            message: "The page is keeping the last loaded workflows visible while the local app service returns.",
+            title: "Workflow library could not load",
+            message: "Noofy will keep trying in the background. Check the local app service if this continues.",
           }
         : null;
 

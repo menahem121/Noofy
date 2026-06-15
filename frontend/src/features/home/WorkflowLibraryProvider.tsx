@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchWorkflows, type WorkflowSummary } from "../../lib/api/noofyApi";
 
@@ -26,6 +26,9 @@ const initialState: WorkflowLibraryState = {
   hasLoaded: false,
 };
 
+const REFRESH_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000];
+const VISIBLE_FAILURE_THRESHOLD = 2;
+
 export function WorkflowLibraryProvider({
   children,
   initialWorkflowState,
@@ -40,8 +43,40 @@ export function WorkflowLibraryProvider({
   const requestSeqRef = useRef(0);
   const latestRequestSeqRef = useRef(0);
   const inFlightRef = useRef<Promise<WorkflowSummary[] | null> | null>(null);
+  const retryAttemptRef = useRef(0);
+  const consecutiveFailureRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
+  const refreshWorkflowsRef = useRef<() => Promise<WorkflowSummary[] | null>>(async () => null);
+  const mountedRef = useRef(true);
+
+  const clearScheduledRetry = useCallback(() => {
+    if (retryTimerRef.current === null) return;
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+  }, []);
+
+  const scheduleRetry = useCallback(() => {
+    if (!mountedRef.current || retryTimerRef.current !== null) return;
+    const delayIndex = Math.min(retryAttemptRef.current, REFRESH_RETRY_DELAYS_MS.length - 1);
+    retryAttemptRef.current += 1;
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = null;
+      void refreshWorkflowsRef.current();
+    }, REFRESH_RETRY_DELAYS_MS[delayIndex]);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearScheduledRetry();
+    };
+  }, [clearScheduledRetry]);
 
   const setWorkflowsFromResponse = useCallback((workflows: WorkflowSummary[]) => {
+    clearScheduledRetry();
+    retryAttemptRef.current = 0;
+    consecutiveFailureRef.current = 0;
     setState((current) => ({
       ...current,
       workflows,
@@ -50,9 +85,12 @@ export function WorkflowLibraryProvider({
       lastLoadedAt: Date.now(),
       hasLoaded: true,
     }));
-  }, []);
+  }, [clearScheduledRetry]);
 
   const updateWorkflowFromResponse = useCallback((workflow: WorkflowSummary) => {
+    clearScheduledRetry();
+    retryAttemptRef.current = 0;
+    consecutiveFailureRef.current = 0;
     setState((current) => {
       const existingIndex = current.workflows.findIndex((item) => item.id === workflow.id);
       const workflows =
@@ -67,11 +105,12 @@ export function WorkflowLibraryProvider({
         hasLoaded: true,
       };
     });
-  }, []);
+  }, [clearScheduledRetry]);
 
   const refreshWorkflows = useCallback(async () => {
     if (inFlightRef.current) return inFlightRef.current;
 
+    clearScheduledRetry();
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
     latestRequestSeqRef.current = requestSeq;
@@ -80,6 +119,8 @@ export function WorkflowLibraryProvider({
     const request = fetchWorkflows()
       .then((workflows) => {
         if (requestSeq !== latestRequestSeqRef.current) return workflows;
+        retryAttemptRef.current = 0;
+        consecutiveFailureRef.current = 0;
         setState((current) => ({
           ...current,
           workflows,
@@ -92,11 +133,18 @@ export function WorkflowLibraryProvider({
       })
       .catch((error) => {
         if (requestSeq !== latestRequestSeqRef.current) return null;
+        consecutiveFailureRef.current += 1;
         setState((current) => ({
           ...current,
           refreshing: false,
-          error: error instanceof Error ? error.message : String(error),
+          error:
+            current.hasLoaded || consecutiveFailureRef.current < VISIBLE_FAILURE_THRESHOLD
+              ? null
+              : error instanceof Error
+                ? error.message
+                : String(error),
         }));
+        scheduleRetry();
         return null;
       })
       .finally(() => {
@@ -107,7 +155,9 @@ export function WorkflowLibraryProvider({
 
     inFlightRef.current = request;
     return request;
-  }, []);
+  }, [clearScheduledRetry, scheduleRetry]);
+
+  refreshWorkflowsRef.current = refreshWorkflows;
 
   const value = useMemo<WorkflowLibraryContextValue>(
     () => ({
